@@ -60,10 +60,8 @@ fn validate_setting_value(setting_type: i32, value: &str) -> Result<(), &'static
                 return Err("value 必须是有效的数字");
             }
         }
-        Ok(setting::SettingType::Bool) => {
-            if !matches!(value, "true" | "false") {
-                return Err("value 必须是 true 或 false");
-            }
+        Ok(setting::SettingType::Bool) if !matches!(value, "true" | "false") => {
+            return Err("value 必须是 true 或 false");
         }
         _ => {}
     }
