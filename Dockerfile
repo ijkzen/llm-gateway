@@ -1,5 +1,3 @@
-#check=skip=SecretsUsedInArgOrEnv
-
 ARG BUILD_IMAGE=192.168.31.100:2080/ijkzen/build-rs:v0.5
 ARG RUNTIME_IMAGE=192.168.31.100:2080/ijkzen/base-ffmpeg:v0.8
 
