@@ -276,3 +276,17 @@ Dockerfile 为多阶段构建：
 4. **日志清理**: 后端启动后会启动一个后台任务，每天清理一次日志目录中超过 30 天的文件（按修改时间判断，不区分文件类型，不要往日志目录放其他文件）。
 5. **Biome 配置**: `web/biome.json` 已存在，`pnpm lint` 与 `pnpm format` 使用该配置（tab 缩进、双引号、100 列最大宽度）。
 6. **健康检查**: `/api/healthz` 只表示进程存活，不检查数据库等依赖。
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as markdown files under `.scratch/<feature-slug>/` in this repo. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Five canonical roles with default label strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` + `docs/adr/`. See `docs/agents/domain.md`.
