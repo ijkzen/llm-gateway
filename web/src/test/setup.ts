@@ -1,0 +1,39 @@
+import "@testing-library/jest-dom/vitest";
+
+// Node 26 提供了实验性的全局 localStorage（未传 --localstorage-file 时为 undefined），
+// 导致 Vitest jsdom 环境跳过注入 jsdom 自己的 localStorage，这里用一个内存实现补齐
+class LocalStorageMock {
+	private store = new Map<string, string>();
+
+	get length() {
+		return this.store.size;
+	}
+
+	clear() {
+		this.store.clear();
+	}
+
+	getItem(key: string) {
+		return this.store.get(key) ?? null;
+	}
+
+	setItem(key: string, value: string) {
+		this.store.set(key, String(value));
+	}
+
+	removeItem(key: string) {
+		this.store.delete(key);
+	}
+
+	key(index: number) {
+		return [...this.store.keys()][index] ?? null;
+	}
+}
+
+if (typeof window !== "undefined" && typeof window.localStorage === "undefined") {
+	Object.defineProperty(window, "localStorage", {
+		value: new LocalStorageMock(),
+		configurable: true,
+		writable: true,
+	});
+}

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 提前声明支持的配色方案，避免暗色主题下原生 UI（滚动条、表单控件）与首屏画布闪白 -->
+    <meta name="color-scheme" content="light dark" />
+    <title>RS Template</title>
+    <script>
+      (function () {
+        try {
+          const stored = localStorage.getItem("llm-gateway-theme");
+          const theme = stored ? JSON.parse(stored).state?.theme : null;
+          const resolved =
+            theme === "dark" ||
+            (theme === "system" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches)
+              ? "dark"
+              : "light";
+          if (resolved === "dark") {
+            document.documentElement.classList.add("dark");
+          }
+          document.querySelector('meta[name="color-scheme"]').content = resolved;
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	:root {
+		/* 让浏览器原生 UI（滚动条、表单控件等）跟随当前主题配色 */
+		color-scheme: light;
+		--background: 210 40% 98%;
+		--foreground: 215 25% 17%;
+		--card: 0 0% 100%;
+		--card-foreground: 215 25% 17%;
+		--popover: 0 0% 100%;
+		--popover-foreground: 215 25% 17%;
+		--primary: 243 75% 59%;
+		--primary-foreground: 0 0% 100%;
+		--secondary: 210 40% 96%;
+		--secondary-foreground: 215 25% 17%;
+		--muted: 210 40% 96%;
+		--muted-foreground: 215 16% 47%;
+		--accent: 243 75% 97%;
+		--accent-foreground: 243 75% 35%;
+		--destructive: 0 72% 51%;
+		--destructive-foreground: 0 0% 100%;
+		--success: 160 84% 39%;
+		--success-foreground: 0 0% 100%;
+		--warning: 38 92% 50%;
+		--warning-foreground: 0 0% 100%;
+		--border: 214 32% 91%;
+		--input: 214 32% 91%;
+		--ring: 243 75% 59%;
+		--radius: 0.75rem;
+		--sidebar-background: 0 0% 100%;
+		--sidebar-foreground: 215 25% 17%;
+		--sidebar-primary: 243 75% 59%;
+		--sidebar-primary-foreground: 0 0% 100%;
+		--sidebar-accent: 243 75% 97%;
+		--sidebar-accent-foreground: 243 75% 35%;
+		--sidebar-border: 214 32% 91%;
+		--sidebar-ring: 243 75% 59%;
+	}
+
+	.dark {
+		color-scheme: dark;
+		--background: 222 47% 6%;
+		--foreground: 210 40% 98%;
+		--card: 222 47% 8%;
+		--card-foreground: 210 40% 98%;
+		--popover: 222 47% 8%;
+		--popover-foreground: 210 40% 98%;
+		--primary: 243 75% 65%;
+		--primary-foreground: 222 47% 6%;
+		--secondary: 217 33% 17%;
+		--secondary-foreground: 210 40% 98%;
+		--muted: 217 33% 17%;
+		--muted-foreground: 215 20% 65%;
+		--accent: 243 50% 18%;
+		--accent-foreground: 243 75% 90%;
+		--destructive: 0 63% 31%;
+		--destructive-foreground: 210 40% 98%;
+		--success: 160 84% 45%;
+		--success-foreground: 222 47% 6%;
+		--warning: 38 92% 55%;
+		--warning-foreground: 222 47% 6%;
+		--border: 217 33% 17%;
+		--input: 217 33% 17%;
+		--ring: 243 75% 65%;
+		--sidebar-background: 222 47% 8%;
+		--sidebar-foreground: 210 40% 98%;
+		--sidebar-primary: 243 75% 65%;
+		--sidebar-primary-foreground: 0 0% 100%;
+		--sidebar-accent: 243 50% 18%;
+		--sidebar-accent-foreground: 243 75% 90%;
+		--sidebar-border: 217 33% 17%;
+		--sidebar-ring: 243 75% 65%;
+	}
+}
+
+@layer base {
+	* {
+		@apply border-border;
+	}
+	body {
+		@apply bg-background text-foreground;
+	}
+}
+
+/* View Transition animation for theme toggle — controlled by JS-injected <style> */
+
+/* Sticky header 吸顶样式见 sticky-header.css（由 main.tsx 引入）：
+   使用 scroll-state 容器查询替代 JS 滚动监听，Biome 1.9 不支持该语法故单独抽离 */

@@ -1,0 +1,11 @@
+/target
+/logs
+/db
+/static/web/
+/.worktrees
+/.superpowers
+/web/node_modules
+/web/dist
+web/tsconfig.tsbuildinfo
+.DS_Store
+/.codegraph

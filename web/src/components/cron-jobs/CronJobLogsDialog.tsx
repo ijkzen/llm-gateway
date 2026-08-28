@@ -1,0 +1,255 @@
+import { StatusBadge } from "@/components/status-badge";
+import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
+import {
+	type CronJobLog,
+	type CronJobLogLevel,
+	type CronJobRun,
+	useCronJobLogStream,
+	useCronJobRunLogs,
+	useCronJobRuns,
+} from "@/hooks/use-cron-job-logs";
+import type { CronJob } from "@/hooks/use-cron-jobs";
+import { cn } from "@/lib/utils";
+import { ArrowDown, ChevronDown, ChevronRight, ScrollText } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+
+interface CronJobLogsDialogProps {
+	job: CronJob | null;
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+}
+
+/** 距底部小于该值视为“已在底部”，恢复自动跟随。 */
+const SCROLL_BOTTOM_THRESHOLD = 24;
+
+const LEVEL_CLASS: Record<CronJobLogLevel, string> = {
+	INFO: "text-sky-500",
+	WARN: "text-amber-500",
+	ERROR: "text-red-500",
+};
+
+function formatDateTime(ts: string) {
+	if (!ts) return "—";
+	const date = new Date(ts);
+	if (Number.isNaN(date.getTime())) return "—";
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function LogLine({ log }: { log: CronJobLog }) {
+	return (
+		<div className="flex gap-2 px-3 py-0.5 font-mono text-xs leading-relaxed">
+			<span className="shrink-0 whitespace-nowrap text-muted-foreground">
+				{formatDateTime(log.ts)}
+			</span>
+			<span className={cn("w-12 shrink-0", LEVEL_CLASS[log.level] ?? "text-muted-foreground")}>
+				{log.level}
+			</span>
+			<span className="min-w-0 whitespace-pre-wrap break-all">{log.message}</span>
+		</div>
+	);
+}
+
+function runStatusBadge(run: CronJobRun) {
+	if (run.status === "running") {
+		return <StatusBadge status="warning" label="执行中" />;
+	}
+	if (run.status === "failed") {
+		return <StatusBadge status="error" label="失败" />;
+	}
+	return <StatusBadge status="success" label="成功" />;
+}
+
+function RunItem({
+	name,
+	run,
+	expanded,
+	onToggle,
+}: {
+	name: string;
+	run: CronJobRun;
+	expanded: boolean;
+	onToggle: () => void;
+}) {
+	const { data: logs, isLoading } = useCronJobRunLogs(name, expanded ? run.run_id : null);
+
+	return (
+		<li>
+			<button
+				type="button"
+				onClick={onToggle}
+				className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
+			>
+				{expanded ? (
+					<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
+				) : (
+					<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
+				)}
+				{runStatusBadge(run)}
+				<span className="text-xs text-muted-foreground">
+					{formatDateTime(run.started_at)} ~ {run.ended_at ? formatDateTime(run.ended_at) : "—"}
+				</span>
+				<span className="ml-auto shrink-0 text-xs text-muted-foreground">
+					{run.log_count} 条日志{run.truncated && "（已截断）"}
+				</span>
+			</button>
+			{expanded && (
+				<div className="border-t bg-muted/30 py-1">
+					{isLoading ? (
+						<p className="px-3 py-1 font-mono text-xs text-muted-foreground">加载中…</p>
+					) : logs && logs.length > 0 ? (
+						logs.map((log) => <LogLine key={log.seq} log={log} />)
+					) : (
+						<p className="px-3 py-1 font-mono text-xs text-muted-foreground">该次执行未输出日志</p>
+					)}
+				</div>
+			)}
+		</li>
+	);
+}
+
+export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialogProps) {
+	const name = job?.name ?? "";
+	const stream = useCronJobLogStream(open ? name : "");
+	const { data: runs } = useCronJobRuns(open ? name : "");
+
+	const [expandedRunId, setExpandedRunId] = useState<string | null>(null);
+	const liveRef = useRef<HTMLDivElement>(null);
+	const [autoFollow, setAutoFollow] = useState(true);
+
+	// 切换任务时收起历史展开项。
+	// biome-ignore lint/correctness/useExhaustiveDependencies: 切换任务（name 变化）即重置展开状态
+	useEffect(() => {
+		setExpandedRunId(null);
+	}, [name]);
+
+	// 处于跟随状态时，新日志到达即滚动到底部。
+	// biome-ignore lint/correctness/useExhaustiveDependencies: 日志更新是滚动到底部的触发条件
+	useEffect(() => {
+		if (autoFollow && liveRef.current) {
+			liveRef.current.scrollTop = liveRef.current.scrollHeight;
+		}
+	}, [stream.logs, autoFollow]);
+
+	const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+		const el = e.currentTarget;
+		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_BOTTOM_THRESHOLD;
+		if (atBottom) {
+			// 回到底部立即对齐最新日志，并恢复自动跟随。
+			el.scrollTop = el.scrollHeight;
+			setAutoFollow(true);
+		} else {
+			// 用户向上滚动：暂停自动跟随。
+			setAutoFollow(false);
+		}
+	};
+
+	const scrollToLatest = () => {
+		const el = liveRef.current;
+		if (el) {
+			el.scrollTop = el.scrollHeight;
+		}
+		setAutoFollow(true);
+	};
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="flex max-h-[85vh] w-full max-w-3xl flex-col gap-0 p-0">
+				<DialogHeader className="px-6 pb-4 pt-6">
+					<DialogTitle className="flex items-center gap-2">
+						<ScrollText className="size-5" />
+						任务日志 · {job?.name}
+					</DialogTitle>
+					<DialogDescription>当前执行日志实时刷新，历史保留最近 30 次执行</DialogDescription>
+				</DialogHeader>
+
+				<div className="flex min-h-0 flex-1 flex-col gap-4 px-6 pb-6">
+					{/* 实时日志区 */}
+					<div className="relative flex h-64 shrink-0 flex-col overflow-hidden rounded-md border">
+						<div className="flex items-center justify-between border-b bg-muted/50 px-3 py-2">
+							<div className="flex items-center gap-2 text-sm font-medium">
+								实时日志
+								{stream.currentRun && !stream.ended && (
+									<span className="text-xs text-muted-foreground">执行中…</span>
+								)}
+							</div>
+							{stream.connection === "reconnecting" && (
+								<span className="text-xs text-amber-500">连接断开，正在重连…</span>
+							)}
+						</div>
+						<div
+							ref={liveRef}
+							onScroll={handleScroll}
+							className="min-h-0 flex-1 overflow-y-auto bg-background py-1"
+						>
+							{!stream.currentRun ? (
+								<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+									当前没有正在执行的任务
+								</div>
+							) : (
+								<>
+									{stream.logs.map((log) => (
+										<LogLine key={log.seq} log={log} />
+									))}
+									{stream.ended && (
+										<div className="mt-1 border-t px-3 py-2 text-xs text-muted-foreground">
+											执行{stream.ended.status === "success" ? "成功" : "失败"} · 结束于{" "}
+											{formatDateTime(stream.ended.ended_at)}
+											{stream.ended.truncated && " · 日志已达上限被截断"}
+										</div>
+									)}
+								</>
+							)}
+						</div>
+						{!autoFollow && stream.logs.length > 0 && (
+							<Button
+								variant="secondary"
+								size="sm"
+								className="absolute bottom-3 right-3 shadow-md"
+								onClick={scrollToLatest}
+							>
+								<ArrowDown className="mr-1 size-3.5" />
+								回到最新
+							</Button>
+						)}
+					</div>
+
+					{/* 历史执行区 */}
+					<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border">
+						<div className="border-b bg-muted/50 px-3 py-2 text-sm font-medium">
+							历史执行（最近 30 次）
+						</div>
+						<div className="min-h-0 flex-1 overflow-y-auto">
+							{!runs || runs.length === 0 ? (
+								<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+									该定时任务未输出日志
+								</div>
+							) : (
+								<ul className="divide-y">
+									{runs.map((run) => (
+										<RunItem
+											key={run.run_id}
+											name={name}
+											run={run}
+											expanded={expandedRunId === run.run_id}
+											onToggle={() =>
+												setExpandedRunId(expandedRunId === run.run_id ? null : run.run_id)
+											}
+										/>
+									))}
+								</ul>
+							)}
+						</div>
+					</div>
+				</div>
+			</DialogContent>
+		</Dialog>
+	);
+}

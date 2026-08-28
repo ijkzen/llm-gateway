@@ -1,0 +1,86 @@
+name: Build
+
+"on":
+  push:
+
+env:
+  REGISTRY: 192.168.31.100:2080
+  IMAGE_REPO: 192.168.31.100:2080/ijkzen/llm-gateway
+  BUILD_PLATFORM: linux/amd64
+  SCCACHE_S3_ENDPOINT: http://192.168.31.100:2041
+  SCCACHE_S3_USE_SSL: "false"
+  SCCACHE_REGION: us-east-1
+  SCCACHE_PROJECT: llm-gateway
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to registry
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          set -eu
+          docker info && \
+          hostname && \
+          echo "${HARBOR_PASSWORD}" | docker login "${REGISTRY}" \
+            --username "${HARBOR_USERNAME}" \
+            --password-stdin
+
+      - name: Build and push image
+        id: build-push
+        env:
+          GITEA_REF: ${{ gitea.ref }}
+          GITEA_SHA: ${{ gitea.sha }}
+          AWS_ACCESS_KEY_ID: admin
+          AWS_SECRET_ACCESS_KEY: password
+        run: |
+          set -eu
+          SHORT_SHA="$(printf '%s' "${GITEA_SHA}" | cut -c1-7)"
+          TAG_ARGS="--tag ${IMAGE_REPO}:latest --tag ${IMAGE_REPO}:${GITEA_SHA}"
+          BUILD_OS="${BUILD_PLATFORM%%/*}"
+          BUILD_ARCH="${BUILD_PLATFORM##*/}"
+          SCCACHE_BACKEND="s3://rust_build_cache/${SCCACHE_PROJECT}/${BUILD_OS}/${BUILD_ARCH}"
+          METADATA_FILE="build-metadata.json"
+          trap 'rm -f "${METADATA_FILE}"' EXIT
+
+          docker buildx build \
+            --platform "${BUILD_PLATFORM}" \
+            --pull=false \
+            -f Dockerfile \
+            --build-arg SCCACHE_BACKEND="${SCCACHE_BACKEND}" \
+            --build-arg SCCACHE_S3_ENDPOINT="${SCCACHE_S3_ENDPOINT}" \
+            --build-arg SCCACHE_S3_USE_SSL="${SCCACHE_S3_USE_SSL}" \
+            --build-arg SCCACHE_REGION="${SCCACHE_REGION}" \
+            --build-arg AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+            --build-arg AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+            ${TAG_ARGS} \
+            --output type=registry \
+            --metadata-file "${METADATA_FILE}" \
+            --push \
+            .
+
+          if command -v jq >/dev/null 2>&1; then
+            IMAGE_DIGEST="$(jq -r '."containerimage.digest"' "${METADATA_FILE}")"
+          else
+            IMAGE_DIGEST="$(python3 -c "import json; print(json.load(open('${METADATA_FILE}')).get('containerimage.digest', ''))")"
+          fi
+
+          if [ -z "${IMAGE_DIGEST}" ] || [ "${IMAGE_DIGEST}" = "null" ]; then
+            echo "ERROR: Failed to extract valid image digest from ${METADATA_FILE}" >&2
+            exit 1
+          fi
+
+          echo "Image digest: ${IMAGE_DIGEST}"
+
+          if [ -n "${GITEA_OUTPUT:-}" ]; then
+            echo "digest=${IMAGE_DIGEST}" >> "${GITEA_OUTPUT}"
+          elif [ -n "${GITHUB_OUTPUT:-}" ]; then
+            echo "digest=${IMAGE_DIGEST}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "WARNING: GITEA_OUTPUT and GITHUB_OUTPUT are both unset; digest not written to step outputs" >&2
+          fi
