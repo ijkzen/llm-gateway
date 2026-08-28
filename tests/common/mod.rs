@@ -1,11 +1,11 @@
 //! Shared bootstrap helpers for the HTTP integration tests.
 
-use rs_template::cron::log_capture::JobLogEvent;
-use rs_template::cron::scheduler::SchedulerRuntime;
-use rs_template::cron::worker::JobWorker;
-use rs_template::db;
-use rs_template::routes;
-use rs_template::state::AppState;
+use llm_gateway::cron::log_capture::JobLogEvent;
+use llm_gateway::cron::scheduler::SchedulerRuntime;
+use llm_gateway::cron::worker::JobWorker;
+use llm_gateway::db;
+use llm_gateway::routes;
+use llm_gateway::state::AppState;
 
 /// Creates an in-memory database, starts a job worker, and builds the
 /// scheduler on top of it. The scheduler is returned unstarted so each test

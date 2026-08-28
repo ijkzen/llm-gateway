@@ -6,8 +6,8 @@ use axum::body::Body;
 use axum::http::Request;
 use tower::ServiceExt;
 
-use rs_template::cron::JobContext;
-use rs_template::cron::repository::{CronJobRepository, JobDefinition, SeaOrmCronJobRepository};
+use llm_gateway::cron::JobContext;
+use llm_gateway::cron::repository::{CronJobRepository, JobDefinition, SeaOrmCronJobRepository};
 
 async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;

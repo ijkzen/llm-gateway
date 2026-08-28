@@ -12,8 +12,8 @@ use axum::body::Body;
 use axum::http::Request;
 use tower::ServiceExt;
 
-use rs_template::cron::JobContext;
-use rs_template::cron::repository::{CronJobRepository, JobDefinition, SeaOrmCronJobRepository};
+use llm_gateway::cron::JobContext;
+use llm_gateway::cron::repository::{CronJobRepository, JobDefinition, SeaOrmCronJobRepository};
 
 async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
@@ -66,7 +66,7 @@ async fn get_json(app: &axum::Router, uri: &str) -> (u16, String) {
 
 /// 手动触发任务并轮询等待执行完成，返回该次执行的 run_id。
 async fn run_job_and_wait(app: &axum::Router, db: &sea_orm::DatabaseConnection) -> String {
-    use rs_template::cron::log_repository::{CronJobLogRepository, SeaOrmCronJobLogRepository};
+    use llm_gateway::cron::log_repository::{CronJobLogRepository, SeaOrmCronJobLogRepository};
 
     let request: Request<Body> = Request::builder()
         .method("POST")

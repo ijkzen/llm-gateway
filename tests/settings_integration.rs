@@ -5,7 +5,7 @@ use axum::http::Request;
 use sea_orm::{ActiveModelTrait, ConnectionTrait, EntityTrait, Set};
 use tower::ServiceExt;
 
-use rs_template::entity::setting;
+use llm_gateway::entity::setting;
 
 async fn setup_app_with_setting() -> (axum::Router, sea_orm::DatabaseConnection) {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
