@@ -102,17 +102,26 @@ function renderDialog() {
 	);
 }
 
+/** 取最近一次创建的 EventSource 实例；未创建时给出明确失败信息。 */
+function instance() {
+	const es = MockEventSource.instances[0];
+	if (!es) {
+		throw new Error("MockEventSource instance not found");
+	}
+	return es;
+}
+
 /** 连接建立时无执行中的任务。 */
 function emitIdle() {
 	act(() => {
-		MockEventSource.instances[0]!.emit("idle", {});
+		instance().emit("idle", {});
 	});
 }
 
 /** 连接建立时有执行中的任务，回放其日志。 */
 function emitSnapshot(runId: string, logs: CronJobLog[]) {
 	act(() => {
-		MockEventSource.instances[0]!.emit("snapshot", {
+		instance().emit("snapshot", {
 			run_id: runId,
 			started_at: "2026-08-13T08:00:00Z",
 			logs,
@@ -123,7 +132,7 @@ function emitSnapshot(runId: string, logs: CronJobLog[]) {
 /** 推送一条实时日志事件。 */
 function emitLog(runId: string, log: CronJobLog) {
 	act(() => {
-		MockEventSource.instances[0]!.emit("log", {
+		instance().emit("log", {
 			kind: "log",
 			job_name: "example",
 			run_id: runId,
@@ -138,7 +147,7 @@ function emitLog(runId: string, log: CronJobLog) {
 /** 推送执行结束事件。 */
 function emitRunEnded(runId: string, status: "success" | "failed", truncated: boolean) {
 	act(() => {
-		MockEventSource.instances[0]!.emit("run_ended", {
+		instance().emit("run_ended", {
 			kind: "run_ended",
 			job_name: "example",
 			run_id: runId,
@@ -239,9 +248,9 @@ describe("CronJobLogsDialog", () => {
 	it("弹窗卸载时关闭 SSE 连接", () => {
 		const { unmount } = renderDialog();
 		expect(MockEventSource.instances).toHaveLength(1);
-		expect(MockEventSource.instances[0]!.url).toContain("/api/cron-jobs/example/logs/stream");
+		expect(instance().url).toContain("/api/cron-jobs/example/logs/stream");
 
 		unmount();
-		expect(MockEventSource.instances[0]!.closed).toBe(true);
+		expect(instance().closed).toBe(true);
 	});
 });

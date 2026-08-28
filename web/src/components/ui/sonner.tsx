@@ -17,6 +17,12 @@ export function Toaster({ ...props }: ToasterProps) {
 					"--normal-border": "hsl(var(--border))",
 				} as React.CSSProperties
 			}
+			toastOptions={{
+				classNames: {
+					toast:
+						"!rounded-xl !border-white/70 !bg-white/90 !shadow-[0_16px_36px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.9)] !backdrop-blur-xl dark:!border-white/12 dark:!bg-[#151823]/95",
+				},
+			}}
 			{...props}
 		/>
 	);

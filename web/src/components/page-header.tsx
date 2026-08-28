@@ -12,7 +12,7 @@ export function PageHeader({ icon: Icon, title, description, children }: PageHea
 		<div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 			<div className="flex items-start gap-3">
 				{Icon && (
-					<div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+					<div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-foreground/5 text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] dark:bg-white/5">
 						<Icon className="size-5" />
 					</div>
 				)}

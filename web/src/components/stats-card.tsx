@@ -12,7 +12,7 @@ export function StatsCard({ icon: Icon, label, value, subLabel }: StatsCardProps
 	return (
 		<Card>
 			<CardContent className="flex items-start gap-4 p-6">
-				<div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+				<div className="flex size-11 items-center justify-center rounded-2xl bg-foreground/5 text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] dark:bg-white/5">
 					<Icon className="size-5" />
 				</div>
 				<div className="min-w-0">

@@ -43,14 +43,14 @@ interface SettingsTableProps {
 
 const TYPE_BADGE_VARIANTS: Record<SettingType, string> = {
 	String:
-		"bg-indigo-100 text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-900/30 dark:text-indigo-400",
-	Int: "bg-blue-100 text-blue-700 hover:bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400",
-	Float: "bg-amber-100 text-amber-700 hover:bg-amber-100 dark:bg-amber-900/30 dark:text-amber-400",
-	Bool: "bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400",
+		"bg-indigo-50 text-indigo-600 hover:bg-indigo-50 dark:bg-indigo-500/15 dark:text-indigo-400",
+	Int: "bg-blue-50 text-blue-600 hover:bg-blue-50 dark:bg-blue-500/15 dark:text-blue-400",
+	Float: "bg-amber-50 text-amber-600 hover:bg-amber-50 dark:bg-amber-500/15 dark:text-amber-400",
+	Bool: "bg-emerald-50 text-emerald-600 hover:bg-emerald-50 dark:bg-emerald-500/15 dark:text-emerald-400",
 };
 
 const FALLBACK_TYPE_BADGE_VARIANT =
-	"bg-slate-100 text-slate-700 hover:bg-slate-100 dark:bg-slate-800 dark:text-slate-400";
+	"bg-slate-100 text-slate-600 hover:bg-slate-100 dark:bg-white/5 dark:text-slate-400";
 
 function getTypeBadgeVariant(type: SettingType) {
 	// 后端对无法映射的存储类型会返回 "Unknown"（见 SettingResponse），运行时兜底不可省
@@ -171,7 +171,7 @@ export function SettingsTable({ settings, onEdit }: SettingsTableProps) {
 			<div className="flex justify-end">
 				<DataTableViewOptions table={table} />
 			</div>
-			<div className="overflow-x-auto rounded-xl border bg-card shadow-sm">
+			<div className="overflow-x-auto rounded-2xl border border-white/70 bg-white/65 shadow-[0_4px_16px_rgba(15,23,42,0.05),inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.06)]">
 				<Table>
 					<TableHeader>
 						{table.getHeaderGroups().map((headerGroup) => (

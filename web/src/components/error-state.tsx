@@ -9,7 +9,7 @@ interface ErrorStateProps {
 
 export function ErrorState({ title = "加载失败", description, onRetry }: ErrorStateProps) {
 	return (
-		<div className="rounded-xl border border-destructive/50 bg-destructive/10 p-6 text-center">
+		<div className="rounded-2xl border border-destructive/30 bg-destructive/[0.06] p-6 text-center backdrop-blur-xl dark:bg-destructive/10">
 			<AlertCircle className="mx-auto size-10 text-destructive" />
 			<h3 className="mt-4 text-lg font-semibold">{title}</h3>
 			{description && <p className="mt-2 text-muted-foreground">{description}</p>}

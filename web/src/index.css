@@ -6,73 +6,74 @@
 	:root {
 		/* 让浏览器原生 UI（滚动条、表单控件等）跟随当前主题配色 */
 		color-scheme: light;
-		--background: 210 40% 98%;
-		--foreground: 215 25% 17%;
+
+		--background: 220 13% 96%;
+		--foreground: 222 47% 8%;
 		--card: 0 0% 100%;
-		--card-foreground: 215 25% 17%;
+		--card-foreground: 222 47% 8%;
 		--popover: 0 0% 100%;
-		--popover-foreground: 215 25% 17%;
-		--primary: 243 75% 59%;
+		--popover-foreground: 222 47% 8%;
+		--primary: 222 47% 8%;
 		--primary-foreground: 0 0% 100%;
-		--secondary: 210 40% 96%;
-		--secondary-foreground: 215 25% 17%;
-		--muted: 210 40% 96%;
-		--muted-foreground: 215 16% 47%;
-		--accent: 243 75% 97%;
-		--accent-foreground: 243 75% 35%;
+		--secondary: 210 20% 96%;
+		--secondary-foreground: 215 28% 17%;
+		--muted: 210 20% 94%;
+		--muted-foreground: 215 16% 40%;
+		--accent: 210 20% 95%;
+		--accent-foreground: 222 47% 8%;
 		--destructive: 0 72% 51%;
 		--destructive-foreground: 0 0% 100%;
 		--success: 160 84% 39%;
 		--success-foreground: 0 0% 100%;
 		--warning: 38 92% 50%;
 		--warning-foreground: 0 0% 100%;
-		--border: 214 32% 91%;
-		--input: 214 32% 91%;
-		--ring: 243 75% 59%;
-		--radius: 0.75rem;
+		--border: 214 24% 88%;
+		--input: 214 24% 88%;
+		--ring: 222 47% 8%;
+		--radius: 1rem;
 		--sidebar-background: 0 0% 100%;
-		--sidebar-foreground: 215 25% 17%;
-		--sidebar-primary: 243 75% 59%;
+		--sidebar-foreground: 222 47% 8%;
+		--sidebar-primary: 222 47% 8%;
 		--sidebar-primary-foreground: 0 0% 100%;
-		--sidebar-accent: 243 75% 97%;
-		--sidebar-accent-foreground: 243 75% 35%;
-		--sidebar-border: 214 32% 91%;
-		--sidebar-ring: 243 75% 59%;
+		--sidebar-accent: 210 20% 95%;
+		--sidebar-accent-foreground: 222 47% 8%;
+		--sidebar-border: 214 24% 88%;
+		--sidebar-ring: 222 47% 8%;
 	}
 
 	.dark {
 		color-scheme: dark;
-		--background: 222 47% 6%;
-		--foreground: 210 40% 98%;
-		--card: 222 47% 8%;
-		--card-foreground: 210 40% 98%;
-		--popover: 222 47% 8%;
-		--popover-foreground: 210 40% 98%;
-		--primary: 243 75% 65%;
+		--background: 220 15% 6%;
+		--foreground: 210 20% 96%;
+		--card: 222 20% 10%;
+		--card-foreground: 210 20% 96%;
+		--popover: 222 20% 10%;
+		--popover-foreground: 210 20% 96%;
+		--primary: 210 20% 96%;
 		--primary-foreground: 222 47% 6%;
-		--secondary: 217 33% 17%;
-		--secondary-foreground: 210 40% 98%;
-		--muted: 217 33% 17%;
-		--muted-foreground: 215 20% 65%;
-		--accent: 243 50% 18%;
-		--accent-foreground: 243 75% 90%;
-		--destructive: 0 63% 31%;
-		--destructive-foreground: 210 40% 98%;
-		--success: 160 84% 45%;
+		--secondary: 217 15% 16%;
+		--secondary-foreground: 210 20% 96%;
+		--muted: 217 15% 16%;
+		--muted-foreground: 215 12% 62%;
+		--accent: 217 15% 18%;
+		--accent-foreground: 210 20% 96%;
+		--destructive: 0 63% 45%;
+		--destructive-foreground: 210 20% 96%;
+		--success: 160 60% 45%;
 		--success-foreground: 222 47% 6%;
 		--warning: 38 92% 55%;
 		--warning-foreground: 222 47% 6%;
-		--border: 217 33% 17%;
-		--input: 217 33% 17%;
-		--ring: 243 75% 65%;
-		--sidebar-background: 222 47% 8%;
-		--sidebar-foreground: 210 40% 98%;
-		--sidebar-primary: 243 75% 65%;
-		--sidebar-primary-foreground: 0 0% 100%;
-		--sidebar-accent: 243 50% 18%;
-		--sidebar-accent-foreground: 243 75% 90%;
-		--sidebar-border: 217 33% 17%;
-		--sidebar-ring: 243 75% 65%;
+		--border: 217 15% 18%;
+		--input: 217 15% 18%;
+		--ring: 210 20% 96%;
+		--sidebar-background: 220 15% 8%;
+		--sidebar-foreground: 210 20% 96%;
+		--sidebar-primary: 210 20% 96%;
+		--sidebar-primary-foreground: 222 47% 6%;
+		--sidebar-accent: 217 15% 16%;
+		--sidebar-accent-foreground: 210 20% 96%;
+		--sidebar-border: 217 15% 18%;
+		--sidebar-ring: 210 20% 96%;
 	}
 }
 
@@ -80,8 +81,227 @@
 	* {
 		@apply border-border;
 	}
+
+	html {
+		-webkit-font-smoothing: antialiased;
+		-moz-osx-font-smoothing: grayscale;
+	}
+
 	body {
 		@apply bg-background text-foreground;
+	}
+}
+
+/* ---------- macOS 拟态玻璃（nyro 浅色风格） ---------- */
+
+html {
+	font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+		"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+/* 页面背景：浅色顶部高光 + 浅灰渐变 */
+body {
+	margin: 0;
+	background: radial-gradient(50rem 28rem at 12% 0%, rgba(255, 255, 255, 0.72), transparent 70%),
+		radial-gradient(44rem 28rem at 88% 0%, rgba(255, 255, 255, 0.48), transparent 70%),
+		linear-gradient(180deg, #f8f8fa 0%, #f1f1f3 100%);
+}
+
+.dark body {
+	background: radial-gradient(58rem 32rem at 8% -12%, rgba(105, 130, 255, 0.1), transparent 72%),
+		radial-gradient(44rem 26rem at 92% -8%, rgba(56, 189, 248, 0.08), transparent 70%),
+		linear-gradient(180deg, #11131a 0%, #0c0d12 100%);
+}
+
+/* 内容区的玻璃质感表面（毛玻璃、半透明白、柔和阴影、内高光） */
+.content-surface {
+	border: 1px solid rgba(255, 255, 255, 0.65);
+	background: rgba(255, 255, 255, 0.56);
+	box-shadow: 0 8px 28px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+	backdrop-filter: blur(20px) saturate(118%);
+	-webkit-backdrop-filter: blur(20px) saturate(118%);
+}
+
+.dark .content-surface {
+	border-color: rgba(255, 255, 255, 0.11);
+	background: linear-gradient(180deg, rgba(20, 22, 30, 0.88), rgba(13, 14, 20, 0.86));
+	box-shadow: 0 26px 44px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.09), inset 0 -1px
+		0 rgba(0, 0, 0, 0.34);
+}
+
+/* 表单控件：微妙的白色渐变 + 内高光 + 柔和描边 */
+.content-surface
+	:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) {
+	border-color: rgba(148, 163, 184, 0.32);
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.86));
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 1px 2px rgba(15, 23, 42, 0.05);
+	transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease, transform
+		0.12s ease;
+}
+
+.content-surface
+	:is(
+		input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+		select,
+		textarea
+	)::placeholder {
+	color: #94a3b8;
+}
+
+.content-surface
+	:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):hover {
+	border-color: rgba(100, 116, 139, 0.42);
+}
+
+.content-surface
+	:is(
+		input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+		select,
+		textarea
+	):focus-visible {
+	outline: none;
+	border-color: rgba(71, 85, 105, 0.68);
+	box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.content-surface
+	:is(
+		input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+		select,
+		textarea
+	):disabled {
+	opacity: 0.62;
+	cursor: not-allowed;
+}
+
+.content-surface select {
+	min-height: 42px;
+	padding-right: 2.35rem !important;
+	appearance: none;
+	-webkit-appearance: none;
+	-moz-appearance: none;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none'%3E%3Cpath d='M3.5 5.25L7 8.75L10.5 5.25' stroke='%23334155' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+	background-repeat: no-repeat;
+	background-position: right 0.85rem center;
+	background-size: 14px 14px;
+}
+
+.content-surface select::-ms-expand {
+	display: none;
+}
+
+.content-surface textarea {
+	resize: vertical;
+	min-height: 96px;
+}
+
+.content-surface input[type="checkbox"] {
+	accent-color: #0f172a;
+	border-color: rgba(100, 116, 139, 0.52);
+}
+
+.content-surface button:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.24);
+}
+
+.content-surface button:enabled:active {
+	transform: translateY(1px) scale(0.99);
+}
+
+.dark
+	.content-surface
+	:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) {
+	color: #e4e8f1;
+	border-color: rgba(255, 255, 255, 0.14);
+	background: linear-gradient(180deg, rgba(33, 36, 49, 0.88), rgba(24, 26, 37, 0.82));
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0 -1px 0 rgba(0, 0, 0, 0.32);
+}
+
+.dark
+	.content-surface
+	:is(
+		input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+		select,
+		textarea
+	)::placeholder {
+	color: #7f8799;
+}
+
+.dark
+	.content-surface
+	:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):hover {
+	border-color: rgba(176, 189, 216, 0.25);
+}
+
+.dark
+	.content-surface
+	:is(
+		input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+		select,
+		textarea
+	):focus-visible {
+	border-color: rgba(155, 178, 224, 0.5);
+	box-shadow: 0 0 0 3px rgba(96, 124, 190, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.dark .content-surface select {
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none'%3E%3Cpath d='M3.5 5.25L7 8.75L10.5 5.25' stroke='%23c8d1e6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+.dark .content-surface input[type="checkbox"] {
+	accent-color: #8aa2db;
+	border-color: rgba(255, 255, 255, 0.2);
+}
+
+.dark .content-surface button:focus-visible {
+	box-shadow: 0 0 0 3px rgba(96, 124, 190, 0.28);
+}
+
+/* 玻璃 utility：毛玻璃卡片表面（浅色） */
+@layer utilities {
+	.glass {
+		background: linear-gradient(170deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.5));
+		border: 1px solid rgba(255, 255, 255, 0.74);
+		box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+		backdrop-filter: blur(18px) saturate(116%);
+		-webkit-backdrop-filter: blur(18px) saturate(116%);
+	}
+
+	.glass-strong {
+		background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.62));
+		border: 1px solid rgba(255, 255, 255, 0.8);
+		box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+		backdrop-filter: blur(20px) saturate(118%);
+		-webkit-backdrop-filter: blur(20px) saturate(118%);
+	}
+
+	.sidebar-surface {
+		background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.52));
+		border: 1px solid rgba(255, 255, 255, 0.74);
+		box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+		backdrop-filter: blur(18px) saturate(116%);
+		-webkit-backdrop-filter: blur(18px) saturate(116%);
+	}
+
+	.dark .glass,
+	.dark .glass-strong,
+	.dark .sidebar-surface {
+		background: linear-gradient(180deg, rgba(23, 25, 34, 0.86), rgba(17, 18, 26, 0.8));
+		border-color: rgba(255, 255, 255, 0.1);
+		box-shadow: 0 16px 30px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0
+			-1px 0 rgba(0, 0, 0, 0.35);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
 	}
 }
 

@@ -30,14 +30,14 @@ export default function AppLayout() {
 	return (
 		<SidebarProvider>
 			<SkipToMain />
-			<Sidebar>
+			<Sidebar className="sidebar-shell sidebar-surface left-2 top-2 bottom-2 z-30 my-2 ml-2 rounded-[1.5rem]">
 				<SidebarHeader>
 					<SidebarMenu>
 						<SidebarMenuItem>
 							<SidebarMenuButton size="lg" asChild>
 								<Link to="/">
-									<div className="flex aspect-square size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-										<Settings className="size-5" />
+									<div className="flex aspect-square size-9 items-center justify-center rounded-xl bg-foreground text-background shadow-[inset_0_1px_0_rgba(255,255,255,0.15),0_4px_10px_rgba(15,23,42,0.18)] dark:bg-primary dark:text-primary-foreground">
+										<Settings className="size-4" />
 									</div>
 									<div className="flex flex-col gap-0.5 leading-none">
 										<span className="font-semibold">RS Template</span>
@@ -73,10 +73,10 @@ export default function AppLayout() {
 					</div>
 				</SidebarFooter>
 			</Sidebar>
-			<SidebarInset className="[overflow-anchor:none]">
-				{/* 吸顶样式由 CSS scroll-state 查询驱动，见 index.css 的 .app-header */}
-				<header className="app-header sticky top-0 z-10 shrink-0 border-b">
-					<div className="app-header-inner flex h-16 items-center gap-4 bg-card px-6">
+			<SidebarInset className="overflow-hidden">
+				{/* 吸顶样式由 CSS scroll-state 查询驱动，见 sticky-header.css 的 .app-header */}
+				<header className="app-header sticky top-0 z-10 shrink-0">
+					<div className="app-header-inner flex h-14 items-center gap-4 px-6">
 						<SidebarTrigger className="-ml-2" aria-label="切换侧边栏" />
 						<Separator orientation="vertical" className="h-6" />
 						<div className="flex flex-1 items-center justify-end gap-2">

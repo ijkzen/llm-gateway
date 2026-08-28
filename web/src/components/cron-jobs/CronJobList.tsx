@@ -47,12 +47,23 @@ export function CronJobList({ jobs, selectedName, onSelect }: CronJobListProps) 
 										onClick={() => onSelect(job)}
 										className={cn(
 											"flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors",
-											selectedName === job.name ? "bg-primary/10" : "hover:bg-muted/50",
+											selectedName === job.name
+												? "bg-foreground text-background dark:bg-primary dark:text-primary-foreground"
+												: "hover:bg-slate-100/60 dark:hover:bg-white/5",
 										)}
 									>
 										<div className="min-w-0">
 											<p className="truncate font-medium">{job.name}</p>
-											<p className="truncate text-xs text-muted-foreground">{job.title}</p>
+											<p
+												className={cn(
+													"truncate text-xs",
+													selectedName === job.name
+														? "text-background/60 dark:text-primary-foreground/60"
+														: "text-muted-foreground",
+												)}
+											>
+												{job.title}
+											</p>
 										</div>
 										<StatusBadge status={job.enabled ? "enabled" : "disabled"} />
 									</button>

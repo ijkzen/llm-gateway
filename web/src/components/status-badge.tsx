@@ -7,11 +7,12 @@ interface StatusBadgeProps {
 }
 
 const variants: Record<StatusBadgeProps["status"], string> = {
-	enabled: "bg-success/10 text-success hover:bg-success/10",
-	disabled: "bg-muted text-muted-foreground hover:bg-muted",
-	success: "bg-success/10 text-success hover:bg-success/10",
-	error: "bg-destructive/10 text-destructive hover:bg-destructive/10",
-	warning: "bg-warning/10 text-warning hover:bg-warning/10",
+	enabled: "bg-green-50 text-green-600 hover:bg-green-50 dark:bg-green-500/15 dark:text-green-400",
+	disabled:
+		"bg-slate-100/70 text-slate-500 hover:bg-slate-100/70 dark:bg-white/5 dark:text-slate-400",
+	success: "bg-green-50 text-green-600 hover:bg-green-50 dark:bg-green-500/15 dark:text-green-400",
+	error: "bg-red-50 text-red-500 hover:bg-red-50 dark:bg-red-500/15 dark:text-red-400",
+	warning: "bg-amber-50 text-amber-600 hover:bg-amber-50 dark:bg-amber-500/15 dark:text-amber-400",
 };
 
 const defaultLabels: Record<StatusBadgeProps["status"], string> = {

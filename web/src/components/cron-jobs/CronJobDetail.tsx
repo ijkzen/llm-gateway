@@ -139,12 +139,7 @@ export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDeta
 						</DropdownMenuContent>
 					</DropdownMenu>
 					{/* 日志入口固定在操作区右下角 */}
-					<Button
-						variant="outline"
-						size="sm"
-						className="ml-auto"
-						onClick={() => onViewLogs(job)}
-					>
+					<Button variant="outline" size="sm" className="ml-auto" onClick={() => onViewLogs(job)}>
 						<ScrollText className="mr-2 size-4" />
 						查看日志
 					</Button>

@@ -1,6 +1,6 @@
 /* Sticky header：通过容器滚动状态查询在「吸顶」时切换为毛玻璃背景，
    替代 JS 滚动监听。不支持 scroll-state 查询的浏览器（Firefox/Safari）
-   保持静态 bg-card 背景，仅失去吸顶时的视觉变化（渐进增强）。
+   保持静态背景，仅失去吸顶时的视觉变化（渐进增强）。
    注意：Biome 1.9 的 CSS 解析器不支持该语法，此文件已在 biome.json 中忽略。 */
 .app-header {
 	container-type: scroll-state;
@@ -15,8 +15,19 @@
 
 @container app-header scroll-state(stuck: top) {
 	.app-header-inner {
-		background-color: hsl(var(--background) / 0.8);
+		background-color: rgba(255, 255, 255, 0.72);
 		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-		backdrop-filter: blur(12px);
+		backdrop-filter: blur(14px) saturate(118%);
+	}
+}
+
+.dark .app-header-inner {
+	background-color: rgba(255, 255, 255, 0.045);
+}
+
+@container app-header scroll-state(stuck: top) {
+	.dark .app-header-inner {
+		background-color: rgba(17, 19, 26, 0.72);
+		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.28);
 	}
 }
