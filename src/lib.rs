@@ -4,6 +4,7 @@ pub mod db;
 pub mod entity;
 pub mod logs_cleanup;
 pub mod middleware;
+pub mod provider_template;
 pub mod response;
 pub mod routes;
 pub mod state;
@@ -93,6 +94,12 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
     tracing::info!("Starting llm-gateway");
 
     let db = db::connect(&config.database_url).await?;
+
+    // 初始化 provider 模板：批量 upsert 种子数据（已存在则更新）。
+    if let Err(e) = crate::provider_template::upsert_templates(&db).await {
+        tracing::warn!("Failed to seed provider templates: {e}");
+    }
+
     let repo = SeaOrmCronJobRepository::new(db.clone());
 
     // 进程重启会中断执行中的任务，把残留的 running 执行标记为 failed。
