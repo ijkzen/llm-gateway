@@ -2,7 +2,6 @@ import { Button } from "@/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
-	DialogDescription,
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
@@ -90,7 +89,6 @@ export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialog
 			<DialogContent className="sm:max-w-[500px]">
 				<DialogHeader className="space-y-3">
 					<DialogTitle>编辑任务</DialogTitle>
-					<DialogDescription>修改定时任务的基本信息</DialogDescription>
 				</DialogHeader>
 				<Form {...form}>
 					<form onSubmit={form.handleSubmit(onSubmit)}>

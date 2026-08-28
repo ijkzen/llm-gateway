@@ -48,7 +48,7 @@ export default function OverviewPage() {
 	if (isError) {
 		return (
 			<div className="space-y-6">
-				<PageHeader title={OVERVIEW_PAGE.title} description={OVERVIEW_PAGE.description} />
+				<PageHeader title={OVERVIEW_PAGE.title} />
 				<ErrorState
 					description="无法获取总览数据，请检查网络或稍后重试。"
 					onRetry={() => {
@@ -62,7 +62,7 @@ export default function OverviewPage() {
 
 	return (
 		<div className="space-y-6">
-			<PageHeader title={OVERVIEW_PAGE.title} description={OVERVIEW_PAGE.description} />
+			<PageHeader title={OVERVIEW_PAGE.title} />
 
 			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 				<StatsCard icon={Clock} label="定时任务总数" value={stats.total} subLabel="全部任务" />
@@ -93,7 +93,7 @@ export default function OverviewPage() {
 							))}
 						</ul>
 					) : (
-						<EmptyState title="暂无设置更新" description="还没有任何设置项被更新过" />
+						<EmptyState title="暂无设置更新" />
 					)}
 				</CardContent>
 			</Card>

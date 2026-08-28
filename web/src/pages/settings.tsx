@@ -51,11 +51,7 @@ export default function SettingsPage() {
 	if (isError) {
 		return (
 			<div className="space-y-6">
-				<PageHeader
-					icon={SETTINGS_PAGE.icon}
-					title={SETTINGS_PAGE.title}
-					description={SETTINGS_PAGE.description}
-				/>
+				<PageHeader icon={SETTINGS_PAGE.icon} title={SETTINGS_PAGE.title} />
 				<ErrorState
 					description="无法获取系统设置数据，请检查网络或稍后重试。"
 					onRetry={() => refetch()}
@@ -66,11 +62,7 @@ export default function SettingsPage() {
 
 	return (
 		<div className="space-y-6">
-			<PageHeader
-				icon={SETTINGS_PAGE.icon}
-				title={SETTINGS_PAGE.title}
-				description={SETTINGS_PAGE.description}
-			/>
+			<PageHeader icon={SETTINGS_PAGE.icon} title={SETTINGS_PAGE.title} />
 
 			<DataTableToolbar>
 				<SearchInput value={searchQuery} onChange={setSearchQuery} placeholder="搜索键或值..." />

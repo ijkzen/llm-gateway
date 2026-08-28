@@ -2,7 +2,6 @@ import { Button } from "@/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
-	DialogDescription,
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
@@ -81,7 +80,6 @@ export function SettingEditDialog({ setting, open, onOpenChange }: SettingEditDi
 			<DialogContent className="sm:max-w-[500px]">
 				<DialogHeader className="space-y-3">
 					<DialogTitle>编辑设置</DialogTitle>
-					<DialogDescription>修改 {setting?.key} 的值</DialogDescription>
 				</DialogHeader>
 				<Form {...form}>
 					<form onSubmit={form.handleSubmit(onSubmit)}>

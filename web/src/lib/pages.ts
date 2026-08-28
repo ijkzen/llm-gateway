@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Clock, LayoutDashboard, Settings } from "lucide-react";
+import { Clock, LayoutDashboard, Server, Settings } from "lucide-react";
 
 export interface PageConfig {
 	path: string;
@@ -29,4 +29,16 @@ export const SETTINGS_PAGE: PageConfig = {
 	icon: Settings,
 };
 
-export const PAGES: readonly PageConfig[] = [OVERVIEW_PAGE, CRON_JOBS_PAGE, SETTINGS_PAGE];
+export const PROVIDERS_PAGE: PageConfig = {
+	path: "/providers",
+	title: "模型提供商",
+	description: "管理模型提供商接入实例，支持创建、编辑与删除",
+	icon: Server,
+};
+
+export const PAGES: readonly PageConfig[] = [
+	OVERVIEW_PAGE,
+	CRON_JOBS_PAGE,
+	PROVIDERS_PAGE,
+	SETTINGS_PAGE,
+];

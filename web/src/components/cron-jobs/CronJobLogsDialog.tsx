@@ -1,12 +1,6 @@
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogHeader,
-	DialogTitle,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
 	type CronJobLog,
 	type CronJobLogLevel,
@@ -167,7 +161,6 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 						<ScrollText className="size-5" />
 						任务日志 · {job?.name}
 					</DialogTitle>
-					<DialogDescription>当前执行日志实时刷新，历史保留最近 30 次执行</DialogDescription>
 				</DialogHeader>
 
 				<div className="flex min-h-0 flex-1 flex-col gap-4 px-6 pb-6">

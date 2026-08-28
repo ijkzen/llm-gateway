@@ -44,11 +44,7 @@ export default function CronJobsPage() {
 	if (isError) {
 		return (
 			<div className="space-y-6">
-				<PageHeader
-					icon={CRON_JOBS_PAGE.icon}
-					title={CRON_JOBS_PAGE.title}
-					description={CRON_JOBS_PAGE.description}
-				/>
+				<PageHeader icon={CRON_JOBS_PAGE.icon} title={CRON_JOBS_PAGE.title} />
 				<ErrorState
 					description="无法获取定时任务数据，请检查网络或稍后重试。"
 					onRetry={() => refetch()}
@@ -59,11 +55,7 @@ export default function CronJobsPage() {
 
 	return (
 		<div className="flex h-full min-h-0 flex-col space-y-6">
-			<PageHeader
-				icon={CRON_JOBS_PAGE.icon}
-				title={CRON_JOBS_PAGE.title}
-				description={CRON_JOBS_PAGE.description}
-			>
+			<PageHeader icon={CRON_JOBS_PAGE.icon} title={CRON_JOBS_PAGE.title}>
 				<Button variant="outline" size="sm" onClick={() => refetch()}>
 					<RefreshCw className="mr-2 size-4" />
 					刷新

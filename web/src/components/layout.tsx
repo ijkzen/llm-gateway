@@ -30,7 +30,7 @@ export default function AppLayout() {
 	return (
 		<SidebarProvider>
 			<SkipToMain />
-			<Sidebar className="sidebar-shell sidebar-surface left-2 top-2 bottom-2 z-30 my-2 ml-2 rounded-[1.5rem]">
+			<Sidebar variant="floating" className="sidebar-surface z-30">
 				<SidebarHeader>
 					<SidebarMenu>
 						<SidebarMenuItem>

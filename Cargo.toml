@@ -33,5 +33,5 @@ tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "tracing-log", "json", "local-time"] }
 
 [dev-dependencies]
-temp-env = "0.3"
+temp-env = { version = "0.3", features = ["async_closure"] }
 tempfile = "3"

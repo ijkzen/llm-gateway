@@ -1,0 +1,103 @@
+import { ErrorState } from "@/components/error-state";
+import { PageHeader } from "@/components/page-header";
+import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
+import { ProviderDeleteDialog } from "@/components/providers/ProviderDeleteDialog";
+import { ProviderDetail } from "@/components/providers/ProviderDetail";
+import { ProviderEditDialog } from "@/components/providers/ProviderEditDialog";
+import { ProviderList } from "@/components/providers/ProviderList";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { type Provider, useProviders } from "@/hooks/use-providers";
+import { PROVIDERS_PAGE } from "@/lib/pages";
+import { Plus, RefreshCw } from "lucide-react";
+import { useState } from "react";
+
+export default function ProvidersPage() {
+	const [selectedId, setSelectedId] = useState<number | null>(null);
+	const [creating, setCreating] = useState(false);
+	const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
+	const [deletingProvider, setDeletingProvider] = useState<Provider | null>(null);
+
+	const { data: providers, isLoading, isError, refetch } = useProviders();
+
+	const selectedProvider = providers?.find((p) => p.id === selectedId) ?? undefined;
+
+	if (isLoading) {
+		return (
+			<div className="flex h-full min-h-0 flex-col space-y-6">
+				<PageHeaderSkeleton />
+				<div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-3">
+					<div className="space-y-4">
+						<Skeleton className="h-24 w-full" />
+						<Skeleton className="h-24 w-full" />
+						<Skeleton className="h-24 w-full" />
+					</div>
+					<div className="lg:col-span-2">
+						<Skeleton className="h-full w-full" />
+					</div>
+				</div>
+			</div>
+		);
+	}
+
+	if (isError) {
+		return (
+			<div className="space-y-6">
+				<PageHeader icon={PROVIDERS_PAGE.icon} title={PROVIDERS_PAGE.title} />
+				<ErrorState
+					description="无法获取模型提供商数据，请检查网络或稍后重试。"
+					onRetry={() => refetch()}
+				/>
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex h-full min-h-0 flex-col space-y-6">
+			<PageHeader icon={PROVIDERS_PAGE.icon} title={PROVIDERS_PAGE.title}>
+				<Button variant="outline" size="sm" onClick={() => refetch()}>
+					<RefreshCw className="mr-2 size-4" />
+					刷新
+				</Button>
+				<Button size="sm" onClick={() => setCreating(true)}>
+					<Plus className="mr-2 size-4" />
+					创建 Provider
+				</Button>
+			</PageHeader>
+
+			<div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 gap-6 lg:grid-cols-3">
+				<div className="h-full min-h-0 overflow-auto lg:col-span-1">
+					<ProviderList
+						providers={providers}
+						selectedId={selectedId}
+						onSelect={(provider) => setSelectedId(provider.id)}
+					/>
+				</div>
+				<div className="h-full min-h-0 lg:col-span-2">
+					<ProviderDetail
+						provider={selectedProvider}
+						onEdit={setEditingProvider}
+						onDelete={setDeletingProvider}
+					/>
+				</div>
+			</div>
+
+			<ProviderEditDialog
+				open={creating || !!editingProvider}
+				onOpenChange={(open) => {
+					if (!open) {
+						setCreating(false);
+						setEditingProvider(null);
+					}
+				}}
+				provider={editingProvider}
+			/>
+
+			<ProviderDeleteDialog
+				provider={deletingProvider}
+				open={!!deletingProvider}
+				onOpenChange={(open) => !open && setDeletingProvider(null)}
+			/>
+		</div>
+	);
+}

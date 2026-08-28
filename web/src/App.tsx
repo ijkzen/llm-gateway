@@ -6,6 +6,7 @@ import { Route, Routes } from "react-router-dom";
 
 const OverviewPage = lazy(() => import("./pages/overview"));
 const CronJobsPage = lazy(() => import("./pages/cron-jobs"));
+const ProvidersPage = lazy(() => import("./pages/providers"));
 const SettingsPage = lazy(() => import("./pages/settings"));
 const NotFoundPage = lazy(() => import("./pages/not-found"));
 
@@ -18,6 +19,7 @@ function App() {
 				<Route element={<AppLayout />}>
 					<Route path="/" element={<OverviewPage />} />
 					<Route path="/cron-jobs" element={<CronJobsPage />} />
+					<Route path="/providers" element={<ProvidersPage />} />
 					<Route path="/settings" element={<SettingsPage />} />
 					<Route path="*" element={<NotFoundPage />} />
 				</Route>

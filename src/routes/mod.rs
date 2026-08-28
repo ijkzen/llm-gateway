@@ -1,4 +1,6 @@
 mod cron_jobs;
+mod provider_templates;
+mod providers;
 mod settings;
 
 use axum::Json;
@@ -15,6 +17,8 @@ pub fn create_app() -> Router<AppState> {
         .route("/api/healthz", get(healthz))
         .nest("/api/cron-jobs", cron_jobs::routes())
         .nest("/api/settings", settings::routes())
+        .nest("/api/providers", providers::routes())
+        .nest("/api/provider-templates", provider_templates::routes())
         .fallback(crate::static_assets::serve_asset)
         .layer(DefaultBodyLimit::max(5 * 1024 * 1024));
 

@@ -4,10 +4,9 @@ import { Clock } from "lucide-react";
 import { describe, expect, it } from "vitest";
 
 describe("PageHeader", () => {
-	it("renders title and description", () => {
-		render(<PageHeader title="定时任务" description="管理定时任务" />);
+	it("renders title", () => {
+		render(<PageHeader title="定时任务" />);
 		expect(screen.getByText("定时任务")).toBeInTheDocument();
-		expect(screen.getByText("管理定时任务")).toBeInTheDocument();
 	});
 
 	it("renders icon and children", () => {

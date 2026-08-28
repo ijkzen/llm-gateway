@@ -81,8 +81,8 @@ FormItem.displayName = "FormItem";
 
 const FormLabel = React.forwardRef<
 	React.ElementRef<typeof LabelPrimitive.Root>,
-	React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root>
->(({ className, ...props }, ref) => {
+	React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root> & { required?: boolean }
+>(({ className, required, children, ...props }, ref) => {
 	const { error, formItemId } = useFormField();
 
 	return (
@@ -91,7 +91,18 @@ const FormLabel = React.forwardRef<
 			className={cn(error && "text-destructive", className)}
 			htmlFor={formItemId}
 			{...props}
-		/>
+		>
+			{children}
+			{required && (
+				<span className="ml-0.5 text-destructive" aria-hidden="true">
+					*
+				</span>
+			)}
+			{/* 必填字段的错误提示直接跟在红星右边，不再在字段下方重复展示 */}
+			{required && error && (
+				<span className="ml-2 text-sm font-medium text-destructive">{String(error.message)}</span>
+			)}
+		</Label>
 	);
 });
 FormLabel.displayName = "FormLabel";
