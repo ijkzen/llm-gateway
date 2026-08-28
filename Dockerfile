@@ -3,13 +3,6 @@
 ARG BUILD_IMAGE=192.168.31.100:2080/ijkzen/build-rs:v0.5
 ARG RUNTIME_IMAGE=192.168.31.100:2080/ijkzen/base-ffmpeg:v0.8
 
-ARG SCCACHE_BACKEND=s3://rust_build_cache/llm-gateway/linux/amd64
-ARG SCCACHE_S3_ENDPOINT=http://192.168.31.100:2041
-ARG SCCACHE_S3_USE_SSL=false
-ARG SCCACHE_REGION=us-east-1
-ARG AWS_ACCESS_KEY_ID=admin
-ARG AWS_SECRET_ACCESS_KEY=password
-
 FROM node:22-slim AS web-builder
 
 WORKDIR /app
@@ -22,84 +15,30 @@ FROM ${BUILD_IMAGE} AS planner
 
 WORKDIR /app
 
-ARG SCCACHE_BACKEND
-ARG SCCACHE_S3_ENDPOINT
-ARG SCCACHE_S3_USE_SSL
-ARG SCCACHE_REGION
-ARG AWS_ACCESS_KEY_ID
-ARG AWS_SECRET_ACCESS_KEY
-
-ENV SCCACHE_BACKEND=${SCCACHE_BACKEND}
-ENV SCCACHE_S3_ENDPOINT=${SCCACHE_S3_ENDPOINT}
-ENV SCCACHE_ENDPOINT=${SCCACHE_S3_ENDPOINT}
-ENV SCCACHE_S3_USE_SSL=${SCCACHE_S3_USE_SSL}
-ENV SCCACHE_REGION=${SCCACHE_REGION}
-ENV AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-ENV AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-
 COPY Cargo.toml Cargo.lock ./
-COPY .cargo ./.cargo
-COPY scripts ./scripts
 COPY src ./src
 
-RUN chmod +x /app/scripts/sccache-env.sh /app/scripts/rustc-wrapper.sh
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM ${BUILD_IMAGE} AS rust-deps
 
 WORKDIR /app
 
-ARG SCCACHE_BACKEND
-ARG SCCACHE_S3_ENDPOINT
-ARG SCCACHE_S3_USE_SSL
-ARG SCCACHE_REGION
-ARG AWS_ACCESS_KEY_ID
-ARG AWS_SECRET_ACCESS_KEY
-
-ENV SCCACHE_BACKEND=${SCCACHE_BACKEND}
-ENV SCCACHE_S3_ENDPOINT=${SCCACHE_S3_ENDPOINT}
-ENV SCCACHE_ENDPOINT=${SCCACHE_S3_ENDPOINT}
-ENV SCCACHE_S3_USE_SSL=${SCCACHE_S3_USE_SSL}
-ENV SCCACHE_REGION=${SCCACHE_REGION}
-ENV AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-ENV AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-
 COPY Cargo.toml Cargo.lock ./
-COPY .cargo ./.cargo
-COPY scripts ./scripts
 COPY --from=planner /app/recipe.json ./recipe.json
 
-RUN chmod +x /app/scripts/sccache-env.sh /app/scripts/rustc-wrapper.sh
 RUN cargo chef cook --release --recipe-path recipe.json
 
 FROM ${BUILD_IMAGE} AS builder
 
 WORKDIR /app
 
-ARG SCCACHE_BACKEND
-ARG SCCACHE_S3_ENDPOINT
-ARG SCCACHE_S3_USE_SSL
-ARG SCCACHE_REGION
-ARG AWS_ACCESS_KEY_ID
-ARG AWS_SECRET_ACCESS_KEY
-
-ENV SCCACHE_BACKEND=${SCCACHE_BACKEND}
-ENV SCCACHE_S3_ENDPOINT=${SCCACHE_S3_ENDPOINT}
-ENV SCCACHE_ENDPOINT=${SCCACHE_S3_ENDPOINT}
-ENV SCCACHE_S3_USE_SSL=${SCCACHE_S3_USE_SSL}
-ENV SCCACHE_REGION=${SCCACHE_REGION}
-ENV AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-ENV AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-
 COPY Cargo.toml Cargo.lock ./
-COPY .cargo ./.cargo
-COPY scripts ./scripts
 COPY src ./src
 COPY --from=rust-deps /app/target ./target
 COPY --from=web-builder /app/dist ./web/dist
 RUN test -d /app/web/dist && test -f /app/web/dist/index.html
 
-RUN chmod +x /app/scripts/sccache-env.sh /app/scripts/rustc-wrapper.sh
 RUN cargo build --release
 
 FROM ${RUNTIME_IMAGE} AS runtime

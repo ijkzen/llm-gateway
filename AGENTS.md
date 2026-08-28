@@ -48,8 +48,6 @@
 ├── Cargo.lock              # Rust 依赖锁定
 ├── Dockerfile              # 多阶段构建镜像
 ├── .env.example            # 环境变量示例
-├── .cargo/config.toml      # Cargo 配置：使用 scripts/rustc-wrapper.sh 包装 rustc
-├── scripts/                # sccache 包装脚本与环境变量脚本
 ├── src/                    # 后端源码
 │   ├── main.rs             # 入口：加载配置并启动服务
 │   ├── lib.rs              # 模块导出与 run() 生命周期（含优雅关闭）
@@ -257,7 +255,6 @@ Dockerfile 为多阶段构建：
   1. 检出代码。
   2. 登录内部 Harbor 镜像仓库 `192.168.31.100:2080`。
   3. 使用 `docker buildx` 构建 `linux/amd64` 镜像，推送到 `192.168.31.100:2080/ijkzen/llm-gateway:latest`。
-- 构建过程中使用 sccache + S3（`s3://rust_build_cache/llm-gateway/linux/amd64`）加速 Rust 编译。
 - 生产容器：
   - 暴露端口 `4007`。
   - 需要挂载 `/config/db` 与 `/config/logs` 以保证数据与日志持久化。
