@@ -1,5 +1,6 @@
 pub mod config;
 pub mod cron;
+pub mod crypto;
 pub mod db;
 pub mod entity;
 pub mod logs_cleanup;

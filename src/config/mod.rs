@@ -31,6 +31,8 @@ pub struct Config {
     pub database_url: String,
     pub cron_job_queue_size: usize,
     pub cron_job_max_concurrent: usize,
+    /// API 密钥加密密钥;为空时敏感字段以明文存储(开发环境)。
+    pub api_key_encryption_key: Option<String>,
 }
 
 impl Config {
@@ -47,12 +49,17 @@ impl Config {
         });
         let cron_job_queue_size = parse_positive_usize_env("CRON_JOB_QUEUE_SIZE", 1000)?;
         let cron_job_max_concurrent = parse_positive_usize_env("CRON_JOB_MAX_CONCURRENT", 10)?;
+        let api_key_encryption_key = std::env::var("API_KEY_ENCRYPTION_KEY")
+            .ok()
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty());
         Ok(Self {
             bind_address,
             env,
             database_url,
             cron_job_queue_size,
             cron_job_max_concurrent,
+            api_key_encryption_key,
         })
     }
 }
