@@ -18,6 +18,11 @@ vi.mock("@/hooks/use-virtual-models", () => ({
 vi.mock("@/hooks/use-api-keys", () => ({
 	useApiKeys: mocks.useApiKeys,
 }));
+vi.mock("@/hooks/use-providers", () => ({
+	useProviderDetail: (id: number | null) => ({
+		data: id ? { id, name: "Provider Beta" } : undefined,
+	}),
+}));
 
 function makeRow(overrides: Partial<Parameters<typeof mocks.useRequestLogs>[0]> = {}) {
 	return {
@@ -79,6 +84,8 @@ describe("RequestLogsTable", () => {
 		// 弹窗包含失败原因等字段。
 		expect(screen.getByText("网络延迟")).toBeInTheDocument();
 		expect(screen.getByText("缓存命中率")).toBeInTheDocument();
+		// 供应商名称通过详情接口查询展示。
+		expect(screen.getAllByText("Provider Beta").length).toBeGreaterThan(0);
 	});
 
 	it("空数据显示空态", () => {

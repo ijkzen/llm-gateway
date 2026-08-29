@@ -6,6 +6,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
+import { useProviderDetail } from "@/hooks/use-providers";
 import type { RequestLogRow } from "@/hooks/use-request-logs";
 
 interface RequestLogDetailDialogProps {
@@ -44,6 +45,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 /** 请求日志详情弹窗：点击表格行后展示该请求的全部字段。 */
 export function RequestLogDetailDialog({ row, onOpenChange }: RequestLogDetailDialogProps) {
+	// 供应商名称通过详情接口按 providerId 查询（request 表不存名称，不新增字段）。
+	const { data: provider } = useProviderDetail(row?.providerId ?? null);
+	const providerLabel = provider?.name ?? (row ? `#${row.providerId}` : "");
+
 	return (
 		<Dialog open={row !== null} onOpenChange={onOpenChange}>
 			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[640px]">
@@ -62,6 +67,7 @@ export function RequestLogDetailDialog({ row, onOpenChange }: RequestLogDetailDi
 							{row.virtualModelDisplayId && (
 								<Badge variant="secondary">{row.virtualModelDisplayId}</Badge>
 							)}
+							{provider && <Badge variant="secondary">{provider.name}</Badge>}
 						</div>
 
 						<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -69,7 +75,7 @@ export function RequestLogDetailDialog({ row, onOpenChange }: RequestLogDetailDi
 								{fmt(row.virtualModelDisplayId ?? row.virtualModelId)}
 							</Field>
 							<Field label="API Key">{fmt(row.apiKeyName)}</Field>
-							<Field label="供应商 ID">{fmt(row.providerId)}</Field>
+							<Field label="供应商">{fmt(providerLabel)}</Field>
 							<Field label="上游模型">{fmt(row.modelId)}</Field>
 							<Field label="开始时间">{fmtTime(row.startTime)}</Field>
 							<Field label="结束时间">{fmtTime(row.endTime)}</Field>
