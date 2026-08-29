@@ -1,4 +1,5 @@
 mod cron_jobs;
+mod provider_models;
 mod provider_templates;
 mod providers;
 mod settings;
@@ -19,6 +20,7 @@ pub fn create_app() -> Router<AppState> {
         .nest("/api/settings", settings::routes())
         .nest("/api/providers", providers::routes())
         .nest("/api/provider-templates", provider_templates::routes())
+        .nest("/api/provider-models", provider_models::global_routes())
         .fallback(crate::static_assets::serve_asset)
         .layer(DefaultBodyLimit::max(5 * 1024 * 1024));
 

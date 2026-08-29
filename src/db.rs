@@ -94,7 +94,7 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
 }
 
 pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
-    use crate::entity::{cron_job, cron_job_log, cron_job_run, provider, provider_template, setting};
+    use crate::entity::{cron_job, cron_job_log, cron_job_run, provider, provider_model, provider_template, setting};
     use sea_orm::ConnectionTrait;
 
     let backend = db.get_database_backend();
@@ -120,6 +120,10 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     db.execute(&stmt).await?;
 
     let mut stmt = Schema::new(backend).create_table_from_entity(provider::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(provider_model::Entity);
     stmt.if_not_exists();
     db.execute(&stmt).await?;
 
@@ -168,6 +172,17 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         &[
             "CREATE INDEX IF NOT EXISTS idx_cron_job_runs_job_name ON cron_job_runs (job_name)",
             "CREATE INDEX IF NOT EXISTS idx_cron_job_logs_run_id ON cron_job_logs (run_id)",
+        ],
+    )
+    .await?;
+
+    // Migration 5: 供应商模型的供应商索引与 (provider_id, provider_model_id) 复合唯一约束。
+    changed |= ensure_migration(
+        db,
+        5,
+        &[
+            "CREATE INDEX IF NOT EXISTS idx_provider_models_provider_id ON provider_model (provider_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_models_provider_model_id ON provider_model (provider_id, provider_model_id)",
         ],
     )
     .await?;

@@ -5,6 +5,7 @@ pub mod db;
 pub mod entity;
 pub mod logs_cleanup;
 pub mod middleware;
+pub mod provider_model;
 pub mod provider_template;
 pub mod response;
 pub mod routes;

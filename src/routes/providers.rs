@@ -6,13 +6,15 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use sea_orm::{
-    ActiveModelTrait, DatabaseConnection, DbErr, EntityTrait, QueryOrder, Set,
+    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
+    Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::crypto;
 use crate::entity::provider::{self, ActiveModel, Entity};
+use crate::entity::provider_model;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -23,6 +25,10 @@ pub fn routes() -> Router<AppState> {
         .route("/{id}", get(get_provider_detail))
         .route("/{id}", put(update_provider))
         .route("/{id}", delete(delete_provider))
+        .nest(
+            "/{provider_id}/models",
+            crate::routes::provider_models::scoped_routes(),
+        )
 }
 
 /// 模板 extra 中用于标记"是否支持用量查询"的字段与取值。
@@ -343,10 +349,23 @@ async fn delete_provider(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> impl IntoResponse {
-    match Entity::delete_by_id(id).exec(&state.db).await {
-        Ok(result) if result.rows_affected > 0 => {
-            (StatusCode::OK, Json(Response::success(())))
-        }
+    // 级联硬删：同一事务内先删该供应商名下全部模型，再删供应商本身。
+    let txn = match state.db.begin().await {
+        Ok(txn) => txn,
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    if let Err(e) = provider_model::Entity::delete_many()
+        .filter(provider_model::Column::ProviderId.eq(id))
+        .exec(&txn)
+        .await
+    {
+        return response::db_error(e.to_string());
+    }
+    match Entity::delete_by_id(id).exec(&txn).await {
+        Ok(result) if result.rows_affected > 0 => match txn.commit().await {
+            Ok(()) => (StatusCode::OK, Json(Response::success(()))),
+            Err(e) => response::db_error(e.to_string()),
+        },
         Ok(_) => response::not_found(format!("Provider {id} 不存在")),
         Err(e) => response::db_error(e.to_string()),
     }

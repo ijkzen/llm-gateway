@@ -1,0 +1,440 @@
+mod common;
+
+use axum::body::Body;
+use axum::http::Request;
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use serde_json::{Value, json};
+use tower::ServiceExt;
+
+use llm_gateway::crypto;
+use llm_gateway::entity::provider;
+use llm_gateway::entity::provider_model;
+
+/// 建一个测试 Provider（api_key 加密存储），返回其 id。
+async fn seed_provider(db: &sea_orm::DatabaseConnection, name: &str) -> i32 {
+    let active = provider::ActiveModel {
+        name: Set(name.to_string()),
+        enable: Set(true),
+        base_url: Set("https://api.example.com/v1".to_string()),
+        api_key: Set(crypto::encrypt("sk-test")),
+        custom_header: Set("{}".to_string()),
+        status: Set(0),
+        protocol_type: Set(0),
+        billing_mode: Set(0),
+        extra: Set("{}".to_string()),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    active.insert(db).await.unwrap().id
+}
+
+async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    scheduler.start().await.unwrap();
+    let app = common::build_app(db.clone(), scheduler, log_tx);
+    (app, db)
+}
+
+async fn send_json(app: axum::Router, method: &str, uri: &str, body: Value) -> (u16, Value) {
+    let request: Request<Body> = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let parsed: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
+    (status, parsed)
+}
+
+fn model_payload(id: &str) -> Value {
+    json!({
+        "providerModelId": id,
+        "contextLength": 128000,
+        "maxOutputTokens": 4096,
+        "reasoning": true,
+        "toolUse": true,
+        "imageUnderstand": false,
+        "videoUnderstand": false,
+    })
+}
+
+#[tokio::test]
+async fn test_create_and_list_provider_models() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p1").await;
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        model_payload("gpt-4o"),
+    )
+    .await;
+    assert_eq!(status, 201);
+    assert_eq!(body["code"], "0");
+    assert_eq!(body["data"]["providerModelId"], "gpt-4o");
+    assert_eq!(body["data"]["contextLength"], 128000);
+    assert_eq!(body["data"]["reasoning"], true);
+
+    let (status, body) = send_json(
+        app,
+        "GET",
+        &format!("/api/providers/{provider_id}/models"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["data"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_create_model_validations() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p1").await;
+
+    let mut empty_id = model_payload("  ");
+    empty_id["providerModelId"] = json!("  ");
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        empty_id,
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert!(body["msg"].as_str().unwrap().contains("模型 ID"));
+
+    let mut zero_context = model_payload("gpt-4o");
+    zero_context["contextLength"] = json!(0);
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        zero_context,
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert!(body["msg"].as_str().unwrap().contains("上下文长度"));
+
+    let mut zero_output = model_payload("gpt-4o");
+    zero_output["maxOutputTokens"] = json!(-1);
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        zero_output,
+    )
+    .await;
+    assert_eq!(status, 400);
+}
+
+#[tokio::test]
+async fn test_create_model_returns_404_for_missing_provider() {
+    let (app, _db) = setup_app().await;
+    let (status, _) = send_json(app, "POST", "/api/providers/999/models", model_payload("gpt-4o"))
+        .await;
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn test_duplicate_model_id_rejected_within_provider_allowed_across_providers() {
+    let (app, db) = setup_app().await;
+    let p1 = seed_provider(&db, "p1").await;
+    let p2 = seed_provider(&db, "p2").await;
+
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{p1}/models"),
+        model_payload("gpt-4o"),
+    )
+    .await;
+    assert_eq!(status, 201);
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{p1}/models"),
+        model_payload("gpt-4o"),
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert!(body["msg"].as_str().unwrap().contains("已存在"));
+
+    let (status, _) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{p2}/models"),
+        model_payload("gpt-4o"),
+    )
+    .await;
+    assert_eq!(status, 201);
+}
+
+#[tokio::test]
+async fn test_update_and_delete_provider_model() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p1").await;
+    let (status, created) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        model_payload("gpt-4o"),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let model_id = created["data"]["modelId"].as_i64().unwrap();
+
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{provider_id}/models/{model_id}"),
+        json!({
+            "providerModelId": "gpt-4o-2024",
+            "contextLength": 256000,
+            "maxOutputTokens": 8192,
+            "reasoning": false,
+            "toolUse": true,
+            "imageUnderstand": true,
+            "videoUnderstand": false,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["data"]["contextLength"], 256000);
+    assert_eq!(body["data"]["providerModelId"], "gpt-4o-2024");
+
+    let stored = provider_model::Entity::find_by_id(model_id as i32)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.max_output_tokens, 8192);
+    assert!(stored.image_understand);
+    assert!(!stored.reasoning);
+
+    let (status, _) = send_json(
+        app.clone(),
+        "DELETE",
+        &format!("/api/providers/{provider_id}/models/{model_id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert!(provider_model::Entity::find_by_id(model_id as i32)
+        .one(&db)
+        .await
+        .unwrap()
+        .is_none());
+
+    let (status, _) = send_json(
+        app,
+        "DELETE",
+        &format!("/api/providers/{provider_id}/models/{model_id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn test_update_model_unique_conflict() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p1").await;
+    for id in ["a", "b"] {
+        let (status, _) = send_json(
+            app.clone(),
+            "POST",
+            &format!("/api/providers/{provider_id}/models"),
+            model_payload(id),
+        )
+        .await;
+        assert_eq!(status, 201, "create {id}");
+    }
+    let models = provider_model::Entity::find()
+        .filter(provider_model::Column::ProviderId.eq(provider_id))
+        .all(&db)
+        .await
+        .unwrap();
+    let a = models.iter().find(|m| m.provider_model_id == "a").unwrap();
+
+    let (status, _) = send_json(
+        app,
+        "PUT",
+        &format!("/api/providers/{provider_id}/models/{}", a.model_id),
+        model_payload("b"),
+    )
+    .await;
+    assert_eq!(status, 400);
+}
+
+#[tokio::test]
+async fn test_batch_create_skips_existing_and_dedupes() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p1").await;
+
+    // 预置已存在的 gpt-4o。
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        model_payload("gpt-4o"),
+    )
+    .await;
+    assert_eq!(status, 201);
+
+    let payload = json!({
+        "models": [
+            model_payload("gpt-4o"),                    // 已存在 → 跳过
+            model_payload("gpt-5"),                     // 新增
+            model_payload("GPT-5"),                     // 批内尾段重复（忽略大小写）→ 去重
+            model_payload("openai/o3"),                 // 新增（含厂商前缀）
+        ],
+    });
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models/batch"),
+        payload,
+    )
+    .await;
+    assert_eq!(status, 201);
+    let created = body["data"].as_array().unwrap();
+    assert_eq!(created.len(), 2, "只应插入 gpt-5 与 openai/o3");
+
+    let all = provider_model::Entity::find()
+        .filter(provider_model::Column::ProviderId.eq(provider_id))
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(all.len(), 3, "预置 1 + 新增 2");
+}
+
+#[tokio::test]
+async fn test_batch_create_rejects_invalid_and_empty() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p1").await;
+
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models/batch"),
+        json!({"models": []}),
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    let mut bad = model_payload("x");
+    bad["maxOutputTokens"] = json!(0);
+    let (status, _) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/batch"),
+        json!({"models": [bad]}),
+    )
+    .await;
+    assert_eq!(status, 400);
+}
+
+#[tokio::test]
+async fn test_list_all_provider_models_contains_provider_id() {
+    let (app, db) = setup_app().await;
+    let p1 = seed_provider(&db, "p1").await;
+    let p2 = seed_provider(&db, "p2").await;
+    for (pid, mid) in [(p1, "a"), (p1, "b"), (p2, "c")] {
+        let (status, _) = send_json(
+            app.clone(),
+            "POST",
+            &format!("/api/providers/{pid}/models"),
+            model_payload(mid),
+        )
+        .await;
+        assert_eq!(status, 201, "create {mid}");
+    }
+
+    let (status, body) = send_json(app, "GET", "/api/provider-models", Value::Null).await;
+    assert_eq!(status, 200);
+    let data = body["data"].as_array().unwrap();
+    assert_eq!(data.len(), 3);
+    assert!(data.iter().all(|m| m["providerId"].is_i64()));
+}
+
+#[tokio::test]
+async fn test_delete_provider_cascades_models() {
+    let (app, db) = setup_app().await;
+    let p1 = seed_provider(&db, "p1").await;
+    for mid in ["a", "b"] {
+        let (status, _) = send_json(
+            app.clone(),
+            "POST",
+            &format!("/api/providers/{p1}/models"),
+            model_payload(mid),
+        )
+        .await;
+        assert_eq!(status, 201, "create {mid}");
+    }
+
+    let (status, _) = send_json(app.clone(), "DELETE", &format!("/api/providers/{p1}"), Value::Null)
+        .await;
+    assert_eq!(status, 200);
+
+    let remaining = provider_model::Entity::find()
+        .filter(provider_model::Column::ProviderId.eq(p1))
+        .all(&db)
+        .await
+        .unwrap();
+    assert!(remaining.is_empty(), "供应商删除后模型应级联硬删");
+
+    let (status, body) = send_json(app, "GET", &format!("/api/providers/{p1}/models"), Value::Null)
+        .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["data"].as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_refresh_returns_502_for_unreachable_provider() {
+    let (app, db) = setup_app().await;
+    // 端口 1 的连接会立即被拒绝，用于验证错误透传路径（不做真实网络依赖）。
+    let active = provider::ActiveModel {
+        name: Set("unreachable".to_string()),
+        enable: Set(true),
+        base_url: Set("http://127.0.0.1:1".to_string()),
+        api_key: Set(crypto::encrypt("sk-test")),
+        custom_header: Set("{}".to_string()),
+        status: Set(0),
+        protocol_type: Set(0),
+        billing_mode: Set(0),
+        extra: Set("{}".to_string()),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    let provider_id = active.insert(&db).await.unwrap().id;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/refresh"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 502);
+    assert!(body["msg"].as_str().unwrap().contains("Models 接口"));
+}
+
+#[tokio::test]
+async fn test_refresh_returns_404_for_missing_provider() {
+    let (app, _db) = setup_app().await;
+    let (status, _) = send_json(app, "POST", "/api/providers/999/models/refresh", Value::Null).await;
+    assert_eq!(status, 404);
+}
