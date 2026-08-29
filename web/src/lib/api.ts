@@ -1,4 +1,4 @@
-import ky, { type BeforeErrorHook, type HTTPError } from "ky";
+import ky, { type AfterResponseHook, type BeforeErrorHook, type HTTPError } from "ky";
 
 export interface ApiResponse<T> {
 	code: string;
@@ -52,11 +52,28 @@ const beforeErrorHook: BeforeErrorHook = async (error) => {
 	return new ApiError(error.message, "NETWORK_ERROR") as unknown as HTTPError;
 };
 
+/**
+ * 全局 401 处理：会话过期时跳转登录页。
+ * 认证接口本身（/api/auth/*）与登录页内的请求不触发跳转，避免死循环。
+ */
+const afterResponseHook: AfterResponseHook = async (request, _options, response) => {
+	if (response.status === 401 && typeof window !== "undefined") {
+		const url = new URL(request.url);
+		const isAuthEndpoint = url.pathname.startsWith("/api/auth/");
+		const onLoginPage = window.location.pathname.startsWith("/login");
+		if (!isAuthEndpoint && !onLoginPage) {
+			window.location.assign("/login");
+		}
+	}
+	return response;
+};
+
 export const api = ky.create({
 	prefixUrl: "/api",
 	timeout: 10000,
 	retry: 1,
 	hooks: {
+		afterResponse: [afterResponseHook],
 		beforeError: [beforeErrorHook],
 	},
 });

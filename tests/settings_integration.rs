@@ -20,7 +20,7 @@ async fn setup_app_with_setting() -> (axum::Router, sea_orm::DatabaseConnection)
 
     scheduler.start().await.unwrap();
 
-    let app = common::build_app(db.clone(), scheduler, log_tx);
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
     (app, db)
 }
 

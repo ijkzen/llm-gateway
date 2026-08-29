@@ -12,7 +12,7 @@ const TEST_KEY: &str = "integration-test-key";
 
 async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
-    let app = common::build_app(db.clone(), scheduler, log_tx);
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
     (app, db)
 }
 
@@ -91,7 +91,13 @@ async fn test_list_api_keys_masks_key() {
 
         let (status, body) = send_json(&app, "GET", "/api/api-keys", "").await;
         assert_eq!(status, StatusCode::OK);
-        let items = body["data"].as_array().unwrap();
+        // 列表包含公共种子的 itest-key，这里只断言本测试创建的两个。
+        let items: Vec<&Value> = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| matches!(item["name"].as_str(), Some("key-a") | Some("key-b")))
+            .collect();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["name"], "key-a");
         assert_eq!(items[1]["name"], "key-b");

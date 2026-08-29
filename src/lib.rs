@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod config;
 pub mod cron;
 pub mod crypto;
@@ -7,6 +8,7 @@ pub mod logs_cleanup;
 pub mod middleware;
 pub mod provider_model;
 pub mod provider_template;
+pub mod proxy;
 pub mod response;
 pub mod routes;
 pub mod state;
@@ -97,6 +99,9 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
 
     let db = db::connect(&config.database_url).await?;
 
+    // 回填历史 api_key 的 key_hash（migration 7 新增列，无法在 SQL 内解密计算）。
+    auth::backfill_api_key_hashes(&db).await;
+
     // 初始化 provider 模板：批量 upsert 种子数据（已存在则更新）。
     if let Err(e) = crate::provider_template::upsert_templates(&db).await {
         tracing::warn!("Failed to seed provider templates: {e}");
@@ -148,6 +153,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         db: db.clone(),
         scheduler,
         log_tx,
+        lb_state: crate::proxy::LbState::default(),
     };
 
     Ok(AppContext {
@@ -160,7 +166,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
 pub async fn run(config: Config) -> anyhow::Result<()> {
     let ctx = init(config.clone()).await?;
 
-    let app = routes::create_app().with_state(ctx.state.clone());
+    let app = routes::create_app(&ctx.state);
 
     let listener = tokio::net::TcpListener::bind(&config.bind_address).await?;
     tracing::info!("Listening on {}", config.bind_address);

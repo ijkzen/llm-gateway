@@ -34,7 +34,7 @@ async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
     scheduler.load_from_db(&repo).await.unwrap();
     scheduler.start().await.unwrap();
 
-    let app = common::build_app(db.clone(), scheduler, log_tx);
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
     (app, db)
 }
 

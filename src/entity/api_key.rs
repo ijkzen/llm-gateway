@@ -13,6 +13,10 @@ pub struct Model {
     pub name: String,
     /// 密钥,服务端生成,加密保存(见 crypto 模块)。
     pub key: String,
+    /// 明文密钥的 SHA-256 摘要,用于 /v1 Bearer 鉴权的 O(1) 查找;
+    /// 历史数据为 NULL,启动时回填。
+    #[sea_orm(nullable)]
+    pub key_hash: Option<String>,
     /// 是否启用。
     #[sea_orm(default_value = "1")]
     pub enable: bool,

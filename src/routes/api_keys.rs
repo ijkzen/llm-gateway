@@ -9,6 +9,7 @@ use rand::RngCore;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, DbErr, EntityTrait, QueryOrder, Set};
 use serde::{Deserialize, Serialize};
 
+use crate::auth::hash_token;
 use crate::crypto;
 use crate::entity::api_key::{self, ActiveModel, Entity};
 use crate::response::{self, Response};
@@ -103,6 +104,7 @@ async fn create_api_key(
     let active = ActiveModel {
         name: Set(name.to_string()),
         key: Set(crypto::encrypt(&plain)),
+        key_hash: Set(Some(hash_token(&plain))),
         enable: Set(true),
         created_at: Set(now),
         updated_at: Set(now),

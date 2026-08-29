@@ -96,7 +96,7 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
 pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     use crate::entity::{
         api_key, cron_job, cron_job_log, cron_job_run, provider, provider_model, provider_template,
-        setting, virtual_model, virtual_model_item,
+        request, session, setting, user, virtual_model, virtual_model_item,
     };
     use sea_orm::ConnectionTrait;
 
@@ -139,6 +139,18 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     db.execute(&stmt).await?;
 
     let mut stmt = Schema::new(backend).create_table_from_entity(api_key::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(user::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(session::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(request::Entity);
     stmt.if_not_exists();
     db.execute(&stmt).await?;
 
@@ -213,6 +225,25 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         ],
     )
     .await?;
+
+    // Migration 7: 登录认证与请求指标。
+    // - api_key.key_hash：明文密钥的 SHA-256 摘要，供 /v1 Bearer 鉴权 O(1) 查找
+    //   （数据回填由 auth::backfill_api_key_hashes 在启动时完成）。
+    //   新建的 api_key 表已由实体携带该列，因此仅对历史库执行 ALTER。
+    // - request 表查询索引与会话过期清理索引。
+    let key_hash_exists = column_exists(db, "api_key", "key_hash").await?;
+    let mut migration_7_statements: Vec<&str> = Vec::new();
+    if !key_hash_exists {
+        migration_7_statements.push("ALTER TABLE api_key ADD COLUMN key_hash TEXT");
+    }
+    migration_7_statements.extend([
+        "CREATE INDEX IF NOT EXISTS idx_api_key_key_hash ON api_key (key_hash)",
+        "CREATE INDEX IF NOT EXISTS idx_request_start_time ON request (start_time)",
+        "CREATE INDEX IF NOT EXISTS idx_request_virtual_model_id ON request (virtual_model_id)",
+        "CREATE INDEX IF NOT EXISTS idx_request_provider_id ON request (provider_id)",
+        "CREATE INDEX IF NOT EXISTS idx_session_expires_at ON session (expires_at)",
+    ]);
+    changed |= ensure_migration(db, 7, &migration_7_statements).await?;
 
     tracing::info!("Database tables migrated");
 

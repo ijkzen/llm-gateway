@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 /// Error codes used in `Response::error`.
 pub const INVALID_INPUT: &str = "INVALID_INPUT";
 pub const NOT_FOUND: &str = "NOT_FOUND";
+pub const UNAUTHORIZED: &str = "UNAUTHORIZED";
 pub const DB_ERROR: &str = "DB_ERROR";
 pub const SCHEDULER_ERROR: &str = "SCHEDULER_ERROR";
 pub const INTERNAL_ERROR: &str = "INTERNAL_ERROR";
@@ -55,6 +56,11 @@ pub fn bad_request<T>(message: impl Into<String>) -> ErrorResponse<T> {
 /// 404 Not Found with code `NOT_FOUND`.
 pub fn not_found<T>(message: impl Into<String>) -> ErrorResponse<T> {
     error_response(StatusCode::NOT_FOUND, NOT_FOUND, message)
+}
+
+/// 401 Unauthorized with code `UNAUTHORIZED`.
+pub fn unauthorized<T>(message: impl Into<String>) -> ErrorResponse<T> {
+    error_response(StatusCode::UNAUTHORIZED, UNAUTHORIZED, message)
 }
 
 /// 500 Internal Server Error with code `DB_ERROR`.

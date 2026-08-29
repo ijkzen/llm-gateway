@@ -50,7 +50,7 @@ async fn seed_provider_model(db: &sea_orm::DatabaseConnection, provider_id: i32,
 async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
     scheduler.start().await.unwrap();
-    let app = common::build_app(db.clone(), scheduler, log_tx);
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
     (app, db)
 }
 

@@ -1,6 +1,14 @@
 import { SkipToMain } from "@/components/skip-to-main";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import {
 	Sidebar,
@@ -17,15 +25,28 @@ import {
 	SidebarProvider,
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { useLogout, useMe } from "@/hooks/use-auth";
 import { PAGES } from "@/lib/pages";
 import { useQueryClient } from "@tanstack/react-query";
-import { RefreshCw, Settings } from "lucide-react";
+import { ChevronUp, LogOut, RefreshCw, Settings } from "lucide-react";
 import { Suspense } from "react";
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 export default function AppLayout() {
 	const location = useLocation();
+	const navigate = useNavigate();
 	const queryClient = useQueryClient();
+	const { data: me } = useMe();
+	const logout = useLogout();
+
+	const handleLogout = () => {
+		logout.mutate(undefined, {
+			onSettled: () => {
+				queryClient.clear();
+				navigate("/login", { replace: true });
+			},
+		});
+	};
 
 	return (
 		<SidebarProvider>
@@ -68,6 +89,36 @@ export default function AppLayout() {
 					</SidebarGroup>
 				</SidebarContent>
 				<SidebarFooter>
+					<SidebarMenu>
+						<SidebarMenuItem>
+							<DropdownMenu>
+								<DropdownMenuTrigger asChild>
+									<SidebarMenuButton size="lg" aria-label="用户菜单">
+										<div className="flex aspect-square size-8 items-center justify-center rounded-full bg-foreground/10 text-sm font-semibold uppercase text-foreground">
+											{(me?.username ?? "?").slice(0, 1)}
+										</div>
+										<div className="flex min-w-0 flex-col leading-none">
+											<span className="truncate font-medium">{me?.username ?? "..."}</span>
+											<span className="text-xs text-muted-foreground">已登录</span>
+										</div>
+										<ChevronUp className="ml-auto size-4" />
+									</SidebarMenuButton>
+								</DropdownMenuTrigger>
+								<DropdownMenuContent side="top" align="start" className="min-w-[180px]">
+									<DropdownMenuLabel className="truncate">{me?.username}</DropdownMenuLabel>
+									<DropdownMenuSeparator />
+									<DropdownMenuItem onClick={() => navigate("/settings")}>
+										<Settings className="size-4" />
+										设置
+									</DropdownMenuItem>
+									<DropdownMenuItem variant="destructive" onClick={handleLogout}>
+										<LogOut className="size-4" />
+										退出登录
+									</DropdownMenuItem>
+								</DropdownMenuContent>
+							</DropdownMenu>
+						</SidebarMenuItem>
+					</SidebarMenu>
 					<div className="px-4 py-2 text-xs text-muted-foreground">
 						<div>RS Template v0.1.0</div>
 					</div>

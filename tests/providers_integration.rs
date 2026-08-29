@@ -12,7 +12,7 @@ const TEST_KEY: &str = "integration-test-key";
 
 async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
-    let app = common::build_app(db.clone(), scheduler, log_tx);
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
     (app, db)
 }
 
@@ -238,7 +238,7 @@ async fn test_match_template_found_and_not_found() {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
     // 集成测试用内存库，需要先种入模板种子数据。
     llm_gateway::provider_template::upsert_templates(&db).await.unwrap();
-    let app = common::build_app(db.clone(), scheduler, log_tx);
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
     // 命中：种子模板中存在 DeepSeek。
     let (status, body) = send_json(
         &app,

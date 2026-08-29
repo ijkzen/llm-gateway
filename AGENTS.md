@@ -11,6 +11,10 @@
   - 定时任务（Cron Job）调度管理：列出、启用/禁用、立即执行、编辑、软删除。
   - 定时任务执行日志查看：捕获 handler 内的 tracing 日志，历史保留最近 30 次执行（单次上限 2000 条），SSE 实时推送执行中日志。
   - 系统设置管理：列出、按声明类型校验并修改键值。
+  - 登录认证（单用户）：首次启动走初始化流程创建管理员（argon2 哈希），Cookie Session（7 天）保护 `/api/*`；设置页可修改密码（吊销其他会话）。
+  - 供应商 API Key 管理：服务端生成 `lg-` 密钥，AES-256-GCM 加密存储（含 SHA-256 `key_hash` 供鉴权查找）。
+  - `/v1` OpenAI 兼容转发：对外仅提供 `POST /v1/chat/completions`（Bearer API Key 鉴权），按虚拟模型 LB 策略选成员转发到 OpenAI Compatible / OpenAI Responses / Anthropic / Gemini 四种上游协议（转换逻辑参考 nyro 与 LiteLLM），支持流式与非流式、failover 重试（408/429/500/502/503/529）。
+  - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率、TCP+TLS 建连耗时 `network_latency` 等 20 个字段），供后续指标展示。
 - **运行方式**: 后端启动后监听 `0.0.0.0:4007`，前端 SPA 以静态资源形式内嵌在后端中，通过 `/api/*` 与后端通信。
 
 ## 技术栈
@@ -23,6 +27,8 @@
 - **定时调度**: `tokio-cron-scheduler` 触发 + 自研 `src/cron/` 模块（解析、持久化、工作池）；`croner` 解析 Cron 表达式，同时支持 `@every <duration>` 语法。
 - **日志捕获与实时推送**: 自定义 `JobLogLayer`（tracing-subscriber Layer）捕获任务 span 内日志，经 std 通道桥接到 `tokio::sync::broadcast`（容量 8192）；SSE 用 axum 自带 `response::sse`（0.8 默认可用，无需 feature）+ `tokio-stream` 的 `BroadcastStream`。
 - **日志**: `tracing` + `tracing-subscriber`（JSON 格式输出到 stdout 与按日滚动的日志文件）。
+- **认证**: `argon2`（密码哈希）；会话存 `session` 表（只存令牌 SHA-256），HttpOnly Cookie；`src/auth/` 提供 `/api/*` 会话中间件与 `/v1/*` Bearer 中间件。
+- **转发上游客户端**: 自研 `src/proxy/upstream.rs`（hyper 1 + tokio-rustls + webpki-roots，仅 HTTP/1.1）：每请求独立建连（不池化），精确计时 TCP 建连 + TLS 握手作为 `network_latency`；协议转换在 `src/proxy/convert/`。
 - **静态资源**: `rust-embed` 将 `web/dist` 打包进二进制。
 - **配置**: 仅通过环境变量读取，无额外配置框架。
 
@@ -53,11 +59,18 @@
 │   ├── lib.rs              # 模块导出与 run() 生命周期（含优雅关闭）
 │   ├── config/mod.rs       # 环境变量与 Config 结构
 │   ├── db.rs               # SeaORM 连接、连接池与自动建表/迁移
-│   ├── state.rs            # AppState（db + scheduler）
+│   ├── state.rs            # AppState（db + scheduler + lb_state）
 │   ├── logs_cleanup.rs     # 日志过期清理
 │   ├── response.rs         # 统一 API 响应结构
 │   ├── static_assets/mod.rs# rust-embed 内嵌前端 dist
 │   ├── middleware/mod.rs   # CORS、Trace、CatchPanic 中间件
+│   ├── auth/mod.rs         # 登录认证：argon2 密码哈希、session 表、/api 与 /v1 拦截中间件
+│   ├── proxy/              # /v1 转发核心模块
+│   │   ├── mod.rs          # 转发管线：虚拟模型路由、LB 选路、failover、request 表落库
+│   │   ├── upstream.rs     # 上游 HTTP 客户端（hyper + tokio-rustls，每请求独立建连并计时 TCP/TLS）
+│   │   ├── convert/        # 协议转换：openai(直通)/responses/anthropic/gemini（请求+响应+流式+usage 归一）
+│   │   ├── metrics.rs      # request 表记录与流式指标（ttft/输出耗时）
+│   │   └── sse.rs          # SSE 拆分/写出工具
 │   ├── cron/               # 定时任务核心模块
 │   │   ├── mod.rs          # JobContext/JobHandler/JobInfo/SchedulerError 定义
 │   │   ├── parser.rs       # 表达式解析、下次运行时间与频率计算（本地时区）
@@ -69,17 +82,24 @@
 │   │   ├── log_repository.rs # 执行日志持久化（runs/logs 表、30 次清理、启动恢复）
 │   │   └── test_utils.rs   # #[cfg(test)] 单元测试共享辅助（setup_db/sample_job）
 │   ├── routes/             # Axum 路由
-│   │   ├── mod.rs
+│   │   ├── mod.rs          # create_app(state)：路由组装 + 登录拦截中间件
+│   │   ├── auth.rs         # status/init/login/logout/me/change-password
 │   │   ├── cron_jobs.rs    # 任务 CRUD + logs 列表/单次日志/SSE 实时流
+│   │   ├── openai_compat.rs# /v1/models 元数据 + /v1/chat/completions 转发入口
 │   │   └── settings.rs
 │   └── entity/             # SeaORM 实体
 │       ├── mod.rs
 │       ├── cron_job.rs
 │       ├── cron_job_run.rs # 一次执行的元信息（status/起止时间/日志统计）
 │       ├── cron_job_log.rs # 单条日志（run_id + seq + level + message）
+│       ├── user.rs         # 管理后台用户（单用户，argon2 哈希）
+│       ├── session.rs      # 登录会话（主键为令牌 SHA-256）
+│       ├── request.rs      # /v1 每次转发的指标记录（20 字段）
 │       └── setting.rs
 ├── tests/                  # 集成测试
-│   ├── common/mod.rs       # 集成测试共享引导（内存库 + worker + scheduler）
+│   ├── common/mod.rs       # 集成测试共享引导（内存库 + worker + scheduler；build_authed_app 自动注入测试凭证）
+│   ├── auth_integration.rs # 认证：init/登录/拦截/改密踢会话/登出/Bearer
+│   ├── proxy_integration.rs# 转发：四协议转换、include_usage 注入、failover、落库
 │   ├── cron_jobs_integration.rs
 │   ├── cron_job_logs_integration.rs
 │   └── settings_integration.rs
@@ -181,10 +201,10 @@ Dockerfile 为多阶段构建：
 
 ## 测试说明
 
-- **Rust 测试**: `cargo test`。当前共 96 个测试：74 个单元测试（`config`、`cron::log_capture`、`cron::log_repository`、`cron::parser`、`cron::repository`、`cron::scheduler`、`cron::worker`、`db`、`logs_cleanup` 模块）+ 22 个集成测试（`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`）。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。
+- **Rust 测试**: `cargo test`。当前共 137 个单元测试（`auth`、`config`、`cron::*`、`crypto`、`db`、`logs_cleanup`、`proxy::convert`（四协议转换）、`proxy::sse`、`proxy::upstream` 等模块）+ 集成测试（`tests/auth_integration.rs`、`tests/proxy_integration.rs`（本地 mock 上游）、`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`、`tests/providers_integration.rs`、`tests/provider_models_integration.rs`、`tests/api_keys_integration.rs`、`tests/virtual_models_integration.rs`、`tests/virtual_models_openai_integration.rs`）。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
 - 环境变量隔离使用 `temp-env`，临时目录使用 `tempfile`。
 - 调度器测试包含关键行为回归：禁用的任务不会触发（`set_stop` 在 tokio-cron-scheduler 内存存储下无效，禁用必须走移除）、启用后恢复触发、禁用任务仍可手动执行。
-- **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 16 个测试文件 42 个用例，位于 `web/src/__tests__/` 与 `web/src/components/__tests__/`。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
+- **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 24 个测试文件 88 个用例，位于 `web/src/__tests__/` 与 `web/src/components/__tests__/`（含 login 页、RequireAuth 守卫、ChangePasswordDialog）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
 - 没有 E2E 测试。
 
 ## 代码风格与开发约定
@@ -261,8 +281,8 @@ Dockerfile 为多阶段构建：
 
 ## 安全注意事项
 
-- **无身份验证**: 当前后端没有登录、权限或 API Token 机制，默认对外开放所有接口，仅限可信局域网使用。
-- **CORS**: `middleware/mod.rs` 中使用了 `CorsLayer::permissive()`，允许任意来源跨域访问 API（包括浏览器中任意网页）。已知风险，部署在不可信网络前务必收敛。
+- **认证**: 管理接口（`/api/*`，除 auth/status|login|init 与 healthz）需要 Cookie Session；`/v1/*` 需要 Bearer API Key（api_key 表校验）。密码 argon2id 哈希，session 表只存令牌摘要。SPA 静态资源不做服务端拦截（前端路由守卫负责跳转）。
+- **CORS**: `middleware/mod.rs` 中使用了 `CorsLayer::permissive()`，允许任意来源跨域访问 API（包括浏览器中任意网页）。已知风险，部署在不可信网络前务必收敛。Cookie 为 SameSite=Lax，跨站请求不会携带会话。
 - **Panic 处理**: 通过 `CatchPanicLayer` 捕获 panic，返回 HTTP 500 与中文提示“服务器内部错误”。
 - **敏感信息**: Dockerfile 与 CI 工作流中硬编码了内部镜像仓库地址、S3 端点与访问密钥，生产部署前应改为 Secret/环境变量注入。
 - **文件权限**: 生产数据库目录 `/config/db` 与日志目录 `/config/logs` 在 Dockerfile 中创建并设置 `755`。
