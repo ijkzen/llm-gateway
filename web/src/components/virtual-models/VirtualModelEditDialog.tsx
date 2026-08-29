@@ -38,7 +38,7 @@ import {
 import { FALLBACK_STRATEGIES, LOAD_BALANCING_STRATEGIES } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -321,13 +321,17 @@ export function VirtualModelEditDialog({
 												<Button
 													type="button"
 													variant="outline"
-													size="sm"
+													size="icon"
+													className="size-8"
 													onClick={() => toggleAddGroup(group.provider.id)}
 													disabled={!addOpen && candidates.length === 0}
 													aria-label={`在 ${group.provider.name} 中添加模型`}
 												>
-													<Plus className="mr-1.5 size-4" />
-													添加
+													{addOpen ? (
+														<ChevronUp className="size-4" />
+													) : (
+														<ChevronDown className="size-4" />
+													)}
 												</Button>
 											</div>
 
