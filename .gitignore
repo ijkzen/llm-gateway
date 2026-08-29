@@ -9,3 +9,5 @@
 web/tsconfig.tsbuildinfo
 .DS_Store
 /.codegraph
+/.zcode
+/web/logs
