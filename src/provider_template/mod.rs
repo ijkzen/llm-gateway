@@ -72,24 +72,36 @@ pub(crate) fn host_of(base_url: &str) -> Option<String> {
     Some(host.to_ascii_lowercase())
 }
 
-/// 根据域名匹配 provider 模板。
+/// 根据域名匹配 provider 模板（返回全部命中，保留种子顺序）。
 ///
-/// 按 base_url 的 host（忽略协议/路径/端口/大小写）匹配，返回第一条命中的
-/// 模板；无匹配返回 None。含 `${VAR}` 占位符的 base_url 无法匹配，跳过。
-pub async fn find_by_domain(
+/// 按 base_url 的 host（忽略协议/路径/端口/大小写）匹配；同一 host 下可能有
+/// 多个模板（如 Alibaba 的按量/订阅、MiniMax 的国内外、Coding Plan 变体等），
+/// 前端展示全部候选让用户选择。含 `${VAR}` 占位符的 base_url 无法匹配，跳过。
+pub async fn find_by_domain_all(
     db: &DatabaseConnection,
     domain: &str,
-) -> Result<Option<provider_template::Model>, DbErr> {
+) -> Result<Vec<provider_template::Model>, DbErr> {
     let domain = domain.trim().to_ascii_lowercase();
     if domain.is_empty() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    // 入参可能带端口或路径，统一提取 host 再比较。
     let domain_host = host_of(&domain).unwrap_or(domain);
 
     let templates = Entity::find().all(db).await?;
     Ok(templates
         .into_iter()
-        .find(|t| host_of(&t.base_url).as_deref() == Some(domain_host.as_str())))
+        .filter(|t| host_of(&t.base_url).as_deref() == Some(domain_host.as_str()))
+        .collect())
+}
+
+/// 按域名匹配 provider 模板（返回第一条命中，兼容旧调用方）。
+///
+/// 按 base_url 的 host（忽略协议/路径/端口/大小写）匹配；无匹配返回 None。
+/// 含 `${VAR}` 占位符的 base_url 无法匹配，跳过。
+pub async fn find_by_domain(
+    db: &DatabaseConnection,
+    domain: &str,
+) -> Result<Option<provider_template::Model>, DbErr> {
+    Ok(find_by_domain_all(db, domain).await?.into_iter().next())
 }
 

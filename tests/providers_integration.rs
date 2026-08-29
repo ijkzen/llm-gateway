@@ -239,7 +239,7 @@ async fn test_match_template_found_and_not_found() {
     // 集成测试用内存库，需要先种入模板种子数据。
     llm_gateway::provider_template::upsert_templates(&db).await.unwrap();
     let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
-    // 命中：种子模板中存在 DeepSeek。
+    // 命中：种子模板中存在 DeepSeek，data 是模板列表。
     let (status, body) = send_json(
         &app,
         "POST",
@@ -248,7 +248,19 @@ async fn test_match_template_found_and_not_found() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["data"]["name"], "DeepSeek");
+    assert!(body["data"].is_array());
+    assert_eq!(body["data"][0]["name"], "DeepSeek");
+
+    // 同一 host 返回全部命中（api.stepfun.com 有按量与 Step Plan 两个模板）。
+    let (status, body) = send_json(
+        &app,
+        "POST",
+        "/api/provider-templates/match",
+        r#"{"baseUrl":"https://api.stepfun.com/v1"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["data"].as_array().unwrap().len() >= 2);
 
     // 未命中。
     let (status, body) = send_json(

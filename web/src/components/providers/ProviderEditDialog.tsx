@@ -132,7 +132,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 	const baseUrl = form.watch("baseUrl");
 	const usageEnabled = form.watch("usageEnabled");
 
-	const { data: matchedTemplate } = useMatchTemplate(isEdit || !open ? "" : baseUrl);
+	const { data: matchedTemplates } = useMatchTemplate(isEdit || !open ? "" : baseUrl);
 
 	// 已应用的模板（用户点击「使用 XXX 模板」后设置）；应用后下拉框消失。
 	const [appliedTemplate, setAppliedTemplate] = useState<ProviderTemplate | null>(null);
@@ -264,19 +264,22 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 									<FormControl>
 										<Input placeholder="https://api.deepseek.com" {...field} />
 									</FormControl>
-									{/* 搜索框联想下拉：匹配到模板后，输入框下方浮出「应用 XXX 模板」结果项，点击即应用 */}
-									{!isEdit && !appliedTemplate && matchedTemplate && (
-										<div className="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-lg border border-input bg-popover shadow-lg backdrop-blur-xl">
-											<button
-												type="button"
-												onClick={() => applyTemplate(matchedTemplate)}
-												className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/60"
-											>
-												<Sparkles className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-												<span>
-													应用 <span className="font-medium">{matchedTemplate.name}</span> 模板
-												</span>
-											</button>
+									{/* 搜索框联想下拉：匹配到模板后，输入框下方浮出候选列表，点击某项即应用 */}
+									{!isEdit && !appliedTemplate && (matchedTemplates?.length ?? 0) > 0 && (
+										<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
+											{matchedTemplates?.map((template) => (
+												<button
+													key={template.name}
+													type="button"
+													onClick={() => applyTemplate(template)}
+													className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/60"
+												>
+													<Sparkles className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+													<span className="truncate">
+														应用 <span className="font-medium">{template.name}</span> 模板
+													</span>
+												</button>
+											))}
 										</div>
 									)}
 									<FormMessage />

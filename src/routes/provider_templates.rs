@@ -2,7 +2,7 @@ use axum::{Json, Router, extract::State, response::IntoResponse, routing::post};
 use serde::{Deserialize, Serialize};
 
 use crate::entity::provider_template;
-use crate::provider_template::find_by_domain;
+use crate::provider_template::find_by_domain_all;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -38,7 +38,8 @@ impl From<provider_template::Model> for TemplateResponse {
     }
 }
 
-/// 按 Base URL 匹配 provider 模板；未命中返回 404 与中文提示。
+/// 按 Base URL 匹配 provider 模板，返回全部命中（同一 host 可能有多个模板）；
+/// 未命中返回 404 与中文提示。
 async fn match_template(
     State(state): State<AppState>,
     Json(req): Json<MatchTemplateRequest>,
@@ -47,11 +48,13 @@ async fn match_template(
     if base_url.is_empty() {
         return response::bad_request("Base URL 不能为空");
     }
-    match find_by_domain(&state.db, base_url).await {
-        Ok(Some(template)) => {
-            (axum::http::StatusCode::OK, Json(Response::success(TemplateResponse::from(template))))
+    match find_by_domain_all(&state.db, base_url).await {
+        Ok(templates) if !templates.is_empty() => {
+            let list: Vec<TemplateResponse> =
+                templates.into_iter().map(TemplateResponse::from).collect();
+            (axum::http::StatusCode::OK, Json(Response::success(list)))
         }
-        Ok(None) => response::not_found("未找到匹配的模板"),
+        Ok(_) => response::not_found("未找到匹配的模板"),
         Err(e) => response::db_error(e.to_string()),
     }
 }

@@ -3,7 +3,7 @@ use sea_orm::{
     QueryFilter,
 };
 
-use super::{find_by_domain, seed, upsert_templates};
+use super::{find_by_domain, find_by_domain_all, seed, upsert_templates};
 use crate::entity::provider_template::{self, Entity};
 
 /// 建一个内存 SQLite 连接（表由 migrate 建好）。
@@ -125,6 +125,26 @@ async fn test_find_by_domain_ignores_case_and_path() {
     let found = find_by_domain(&db, "https://api.deepseek.com/v1/chat").await.unwrap();
     assert!(found.is_some());
     assert_eq!(found.unwrap().name, "DeepSeek");
+}
+
+#[tokio::test]
+async fn test_find_by_domain_all_returns_all_hits() {
+    let db = setup_db().await.unwrap();
+    upsert_templates(&db).await.unwrap();
+
+    // api.stepfun.com host 下有按量 StepFun (China) 与订阅 StepFun Step Plan (China) 两个模板。
+    let all = find_by_domain_all(&db, "api.stepfun.com").await.unwrap();
+    assert!(all.len() >= 2, "同一 host 应返回全部命中，实际 {}", all.len());
+    assert!(all.iter().any(|t| t.name == "StepFun (China)"));
+    assert!(all.iter().any(|t| t.name == "StepFun Step Plan (China)"));
+
+    // find_by_domain 是第一条命中，行为不变。
+    let first = find_by_domain(&db, "api.stepfun.com").await.unwrap();
+    assert!(first.is_some());
+
+    // 无命中返回空列表。
+    assert!(find_by_domain_all(&db, "nonexistent.example.com").await.unwrap().is_empty());
+    assert!(find_by_domain_all(&db, "").await.unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -78,18 +78,18 @@ export function useProviderDetail(id: number | null) {
 	});
 }
 
-/** 按 Base URL 匹配模板；未命中时返回 null（后端 404 在此吞掉）。 */
+/** 按 Base URL 匹配模板，返回全部命中（同一 host 可能有多个模板）；未命中返回空数组（后端 404 在此吞掉）。 */
 export function useMatchTemplate(baseUrl: string) {
-	return useQuery<ProviderTemplate | null>({
+	return useQuery<ProviderTemplate[]>({
 		queryKey: [...providerKeys.templateMatch, baseUrl],
 		queryFn: async () => {
 			const res = await api
 				.post("provider-templates/match", { json: { baseUrl } })
-				.json<ApiResponse<ProviderTemplate | null>>();
+				.json<ApiResponse<ProviderTemplate[]>>();
 			try {
 				return unwrap(res);
 			} catch {
-				return null;
+				return [];
 			}
 		},
 		enabled: baseUrl.trim().length > 0,
