@@ -26,7 +26,7 @@ import {
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { useLogout, useMe } from "@/hooks/use-auth";
-import { PAGES } from "@/lib/pages";
+import { CRON_JOBS_PAGE, PAGES, SETTINGS_PAGE } from "@/lib/pages";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronUp, LogOut, RefreshCw, Settings } from "lucide-react";
 import { Suspense } from "react";
@@ -61,7 +61,7 @@ export default function AppLayout() {
 										<Settings className="size-4" />
 									</div>
 									<div className="flex flex-col gap-0.5 leading-none">
-										<span className="font-semibold">RS Template</span>
+										<span className="font-semibold">llm-gateway</span>
 										<span className="text-xs text-muted-foreground">管理后台</span>
 									</div>
 								</Link>
@@ -74,22 +74,35 @@ export default function AppLayout() {
 						<SidebarGroupLabel>导航</SidebarGroupLabel>
 						<SidebarGroupContent>
 							<SidebarMenu>
-								{PAGES.map((page) => (
-									<SidebarMenuItem key={page.path}>
-										<SidebarMenuButton asChild isActive={location.pathname === page.path}>
-											<Link to={page.path}>
-												<page.icon />
-												<span>{page.title}</span>
-											</Link>
-										</SidebarMenuButton>
-									</SidebarMenuItem>
-								))}
+								{PAGES.filter((page) => page !== CRON_JOBS_PAGE && page !== SETTINGS_PAGE).map(
+									(page) => (
+										<SidebarMenuItem key={page.path}>
+											<SidebarMenuButton asChild isActive={location.pathname === page.path}>
+												<Link to={page.path}>
+													<page.icon />
+													<span>{page.title}</span>
+												</Link>
+											</SidebarMenuButton>
+										</SidebarMenuItem>
+									),
+								)}
 							</SidebarMenu>
 						</SidebarGroupContent>
 					</SidebarGroup>
 				</SidebarContent>
 				<SidebarFooter>
 					<SidebarMenu>
+						{/* 管理类入口：定时任务 / 系统设置，置于用户区块上方 */}
+						{[CRON_JOBS_PAGE, SETTINGS_PAGE].map((page) => (
+							<SidebarMenuItem key={page.path}>
+								<SidebarMenuButton asChild isActive={location.pathname === page.path}>
+									<Link to={page.path}>
+										<page.icon />
+										<span>{page.title}</span>
+									</Link>
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+						))}
 						<SidebarMenuItem>
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
@@ -107,10 +120,6 @@ export default function AppLayout() {
 								<DropdownMenuContent side="top" align="start" className="min-w-[180px]">
 									<DropdownMenuLabel className="truncate">{me?.username}</DropdownMenuLabel>
 									<DropdownMenuSeparator />
-									<DropdownMenuItem onClick={() => navigate("/settings")}>
-										<Settings className="size-4" />
-										设置
-									</DropdownMenuItem>
 									<DropdownMenuItem variant="destructive" onClick={handleLogout}>
 										<LogOut className="size-4" />
 										退出登录
@@ -120,7 +129,7 @@ export default function AppLayout() {
 						</SidebarMenuItem>
 					</SidebarMenu>
 					<div className="px-4 py-2 text-xs text-muted-foreground">
-						<div>RS Template v0.1.0</div>
+						<div>llm-gateway v0.1.0</div>
 					</div>
 				</SidebarFooter>
 			</Sidebar>

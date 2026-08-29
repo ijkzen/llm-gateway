@@ -24,6 +24,7 @@ import {
 import type { ApiKey } from "@/hooks/use-api-keys";
 import { useToggleApiKey } from "@/hooks/use-api-keys";
 import { useToastActions } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 import {
 	type ColumnDef,
 	type PaginationState,
@@ -163,7 +164,12 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 
 	return (
 		<div className="space-y-4">
-			<div className="overflow-x-auto rounded-2xl border border-white/70 bg-white/65 shadow-[0_4px_16px_rgba(15,23,42,0.05),inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.06)]">
+			<div
+				className={cn(
+					"overflow-x-auto rounded-2xl border border-white/70 bg-white/65 shadow-[0_4px_16px_rgba(15,23,42,0.05),inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.06)]",
+					rows.length === 0 && "border-0 bg-transparent shadow-none dark:bg-transparent",
+				)}
+			>
 				<Table>
 					<TableHeader>
 						{table.getHeaderGroups().map((headerGroup) => (
