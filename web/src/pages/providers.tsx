@@ -20,7 +20,10 @@ export default function ProvidersPage() {
 
 	const { data: providers, isLoading, isError, refetch } = useProviders();
 
-	const selectedProvider = providers?.find((p) => p.id === selectedId) ?? undefined;
+	// 默认选中第一个供应商（数据加载后尚未手动选择时）。
+	const [hasUserSelected, setHasUserSelected] = useState(false);
+	const effectiveSelectedId = hasUserSelected ? selectedId : (providers?.[0]?.id ?? null);
+	const effectiveProvider = providers?.find((p) => p.id === effectiveSelectedId) ?? undefined;
 
 	if (isLoading) {
 		return (
@@ -69,13 +72,16 @@ export default function ProvidersPage() {
 				<div className="h-full min-h-0 overflow-auto lg:col-span-1">
 					<ProviderList
 						providers={providers}
-						selectedId={selectedId}
-						onSelect={(provider) => setSelectedId(provider.id)}
+						selectedId={effectiveSelectedId}
+						onSelect={(provider) => {
+							setSelectedId(provider.id);
+							setHasUserSelected(true);
+						}}
 					/>
 				</div>
 				<div className="h-full min-h-0 lg:col-span-2">
 					<ProviderDetail
-						provider={selectedProvider}
+						provider={effectiveProvider}
 						onEdit={setEditingProvider}
 						onDelete={setDeletingProvider}
 					/>

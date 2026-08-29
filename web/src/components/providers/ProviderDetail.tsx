@@ -1,6 +1,5 @@
 import { EmptyState } from "@/components/empty-state";
 import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
-import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,6 +10,8 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { type Provider, useProviderDetail, useUpdateProvider } from "@/hooks/use-providers";
@@ -101,7 +102,6 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 							aria-label={`切换 Provider ${provider.name} 状态`}
 							onCheckedChange={toggleEnable}
 						/>
-						<StatusBadge status={provider.enable ? "enabled" : "disabled"} />
 					</div>
 				</div>
 			</CardHeader>
@@ -145,9 +145,16 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
 							额外配置
 						</p>
-						<pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-3 font-mono text-xs">
-							{JSON.stringify(JSON.parse(provider.extra), null, 2)}
-						</pre>
+						<div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
+							{Object.entries(JSON.parse(provider.extra) as Record<string, unknown>).map(
+								([key, value]) => (
+									<div key={key} className="space-y-1">
+										<Label className="text-xs text-muted-foreground">{key}</Label>
+										<Input readOnly value={String(value)} className="h-8 font-mono text-xs" />
+									</div>
+								),
+							)}
+						</div>
 					</div>
 				)}
 

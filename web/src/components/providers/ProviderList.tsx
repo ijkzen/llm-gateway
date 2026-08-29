@@ -23,7 +23,7 @@ export function ProviderList({ providers, selectedId, onSelect }: ProviderListPr
 	return (
 		<Card className="p-0">
 			<CardContent className="p-0">
-				<ul className="divide-y">
+				<ul className="space-y-1 p-1.5">
 					{providers.map((provider) => (
 						<li key={provider.id}>
 							<button
@@ -31,7 +31,7 @@ export function ProviderList({ providers, selectedId, onSelect }: ProviderListPr
 								onClick={() => onSelect(provider)}
 								title={`${provider.name}（${provider.enable ? "已启用" : "已停用"}）`}
 								className={cn(
-									"flex w-full items-center gap-3 px-4 py-3 text-left transition-colors",
+									"flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition-colors",
 									selectedId === provider.id
 										? "bg-foreground text-background dark:bg-primary dark:text-primary-foreground"
 										: "hover:bg-slate-100/60 dark:hover:bg-white/5",
