@@ -25,6 +25,7 @@ vi.mock("@/hooks/use-provider-models", async () => {
 		useCreateProviderModel: () => ({ mutate: mocks.createMutate, isPending: false }),
 		useUpdateProviderModel: () => ({ mutate: mocks.updateMutate, isPending: false }),
 		useDeleteProviderModel: () => ({ mutate: mocks.deleteMutate, isPending: false }),
+		useCatalogSearch: () => ({ data: [] }),
 	};
 });
 

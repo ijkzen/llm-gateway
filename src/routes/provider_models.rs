@@ -107,7 +107,9 @@ pub fn scoped_routes() -> Router<AppState> {
 
 /// 挂载在 `/api/provider-models` 下的全局路由（页面按供应商分组渲染用）。
 pub fn global_routes() -> Router<AppState> {
-    Router::new().route("/", get(list_all_provider_models))
+    Router::new()
+        .route("/", get(list_all_provider_models))
+        .route("/catalog/search", get(search_catalog))
 }
 
 /// 校验创建/更新字段，返回第一个错误消息（None 表示通过）。
@@ -164,6 +166,56 @@ async fn list_all_provider_models(State(state): State<AppState>) -> impl IntoRes
         }
         Err(e) => response::db_error(e.to_string()),
     }
+}
+
+/// 关键词搜索内嵌模型目录（手动添加时的联想下拉）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogSearchResponse {
+    id: String,
+    name: String,
+    family: String,
+    context_length: Option<i64>,
+    max_output_tokens: Option<i64>,
+    reasoning: bool,
+    tool_use: bool,
+    image_understand: bool,
+    video_understand: bool,
+}
+
+impl From<catalog::CatalogCandidate> for CatalogSearchResponse {
+    fn from(c: catalog::CatalogCandidate) -> Self {
+        Self {
+            id: c.id,
+            name: c.name,
+            family: c.family,
+            context_length: c.entry.context_length,
+            max_output_tokens: c.entry.max_output_tokens,
+            reasoning: c.entry.reasoning,
+            tool_use: c.entry.tool_use,
+            image_understand: c.entry.image_understand,
+            video_understand: c.entry.video_understand,
+        }
+    }
+}
+
+/// `GET /api/provider-models/catalog/search?q=<关键词>&limit=<N>`
+async fn search_catalog(
+    axum::extract::Query(query): axum::extract::Query<SearchCatalogQuery>,
+) -> impl IntoResponse {
+    let q = query.q.unwrap_or_default();
+    let limit = query.limit.unwrap_or(8).clamp(1, 30);
+    let hits: Vec<CatalogSearchResponse> = catalog::search(&q, limit)
+        .into_iter()
+        .map(CatalogSearchResponse::from)
+        .collect();
+    (StatusCode::OK, Json(Response::success(hits)))
+}
+
+#[derive(Deserialize)]
+struct SearchCatalogQuery {
+    q: Option<String>,
+    limit: Option<usize>,
 }
 
 async fn create_provider_model(

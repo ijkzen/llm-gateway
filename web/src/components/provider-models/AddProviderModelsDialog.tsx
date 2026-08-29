@@ -20,18 +20,20 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import {
+	type CatalogCandidate,
 	type MatchState,
 	type ProviderModelPayload,
 	type RefreshCandidate,
 	useBatchCreateProviderModels,
+	useCatalogSearch,
 	useCreateProviderModel,
 	useRefreshProviderModels,
 } from "@/hooks/use-provider-models";
 import type { Provider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { RefreshCw, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -101,6 +103,41 @@ export function AddProviderModelsDialog({
 	const [candidates, setCandidates] = useState<RefreshCandidate[] | null>(null);
 	const [numberEdits, setNumberEdits] = useState<Record<string, NumberEdits>>({});
 	const [selected, setSelected] = useState<Set<string>>(new Set());
+	// 手动添加的模型 ID 联想：防抖后的搜索关键词（空 = 不搜索）。
+	const [modelSearchQuery, setModelSearchQuery] = useState("");
+	const [modelSearchDebounced, setModelSearchDebounced] = useState("");
+	const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	const { data: catalogHits } = useCatalogSearch(modelSearchDebounced);
+
+	// 弹窗打开时清空联想。
+	useEffect(() => {
+		if (!open) return;
+		setModelSearchQuery("");
+		setModelSearchDebounced("");
+		if (searchTimer.current) clearTimeout(searchTimer.current);
+	}, [open]);
+	// 弹窗打开或手动添加成功后清空联想。
+
+	// 输入防抖：停顿 300ms 后触发搜索。
+	const handleModelIdChange = (value: string) => {
+		setModelSearchQuery(value);
+		if (searchTimer.current) clearTimeout(searchTimer.current);
+		searchTimer.current = setTimeout(() => setModelSearchDebounced(value), 300);
+	};
+
+	/** 点击候选：自动填充模型 ID 与全部字段（能力开关按目录预置）。 */
+	const applyCatalogCandidate = (hit: CatalogCandidate) => {
+		form.setValue("providerModelId", hit.id);
+		form.setValue("contextLength", hit.contextLength ?? 0);
+		form.setValue("maxOutputTokens", hit.maxOutputTokens ?? 0);
+		form.setValue("reasoning", hit.reasoning);
+		form.setValue("toolUse", hit.toolUse);
+		form.setValue("imageUnderstand", hit.imageUnderstand);
+		form.setValue("videoUnderstand", hit.videoUnderstand);
+		setModelSearchQuery(hit.id);
+		setModelSearchDebounced("");
+	};
 
 	const form = useForm<ManualFormValues>({
 		resolver: zodResolver(manualFormSchema),
@@ -216,6 +253,8 @@ export function AddProviderModelsDialog({
 						imageUnderstand: false,
 						videoUnderstand: false,
 					});
+					setModelSearchQuery("");
+					setModelSearchDebounced("");
 				},
 				onError: (error) => toastError("添加失败", error),
 			},
@@ -355,11 +394,41 @@ export function AddProviderModelsDialog({
 							control={form.control}
 							name="providerModelId"
 							render={({ field }) => (
-								<FormItem>
+								<FormItem className="relative">
 									<FormLabel required>模型 ID</FormLabel>
 									<FormControl>
-										<Input placeholder="如 gpt-4o" {...field} />
+										<Input
+											placeholder="如 gpt-4o"
+											{...field}
+											value={modelSearchQuery}
+											onChange={(e) => {
+												field.onChange(e);
+												handleModelIdChange(e.target.value);
+											}}
+										/>
 									</FormControl>
+									{/* 关键词搜索联想下拉：点击候选自动填充全部字段 */}
+									{(catalogHits?.length ?? 0) > 0 && modelSearchQuery.trim().length > 0 && (
+										<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
+											{catalogHits?.map((hit) => (
+												<button
+													key={hit.id}
+													type="button"
+													onClick={() => applyCatalogCandidate(hit)}
+													className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60"
+												>
+													<Sparkles className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+													<span className="min-w-0">
+														<span className="block truncate font-mono">{hit.id}</span>
+														<span className="block truncate text-xs text-muted-foreground">
+															{hit.name}
+															{hit.family ? ` · ${hit.family}` : ""}
+														</span>
+													</span>
+												</button>
+											))}
+										</div>
+									)}
 									<FormMessage />
 								</FormItem>
 							)}

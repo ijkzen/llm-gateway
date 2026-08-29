@@ -42,7 +42,37 @@ export interface ProviderModelPayload {
 
 export const providerModelKeys = {
 	all: ["provider-models"] as const,
+	catalogSearch: (q: string) => ["provider-models", "catalog-search", q] as const,
 };
+
+/** 模型目录关键词搜索候选（手动添加时的联想下拉）。 */
+export interface CatalogCandidate {
+	id: string;
+	name: string;
+	family: string;
+	contextLength: number | null;
+	maxOutputTokens: number | null;
+	reasoning: boolean;
+	toolUse: boolean;
+	imageUnderstand: boolean;
+	videoUnderstand: boolean;
+}
+
+/** 搜索内嵌模型目录；关键词为空时禁用。 */
+export function useCatalogSearch(q: string) {
+	const query = q.trim();
+	return useQuery<CatalogCandidate[]>({
+		queryKey: providerModelKeys.catalogSearch(query),
+		queryFn: async () => {
+			const res = await api
+				.get(`provider-models/catalog/search?q=${encodeURIComponent(query)}&limit=8`)
+				.json<ApiResponse<CatalogCandidate[]>>();
+			return unwrap(res);
+		},
+		enabled: query.length > 0,
+		placeholderData: (prev) => prev,
+	});
+}
 
 export function useProviderModels() {
 	return useQuery<ProviderModel[]>({
