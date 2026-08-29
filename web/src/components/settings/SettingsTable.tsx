@@ -22,7 +22,6 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Setting } from "@/hooks/use-settings";
 import type { SettingType } from "@/lib/constants";
-import { cn } from "@/lib/utils";
 import {
 	type ColumnDef,
 	type PaginationState,
@@ -172,29 +171,30 @@ export function SettingsTable({ settings, onEdit }: SettingsTableProps) {
 			<div className="flex justify-end">
 				<DataTableViewOptions table={table} />
 			</div>
-			<div
-				className={cn(
-					"overflow-x-auto rounded-2xl border border-white/70 bg-white/65 shadow-[0_4px_16px_rgba(15,23,42,0.05),inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.06)]",
-					rows.length === 0 && "border-0 bg-transparent shadow-none dark:bg-transparent",
-				)}
-			>
-				<Table>
-					<TableHeader>
-						{table.getHeaderGroups().map((headerGroup) => (
-							<TableRow key={headerGroup.id} className="hover:bg-transparent">
-								{headerGroup.headers.map((header) => (
-									<TableHead key={header.id}>
-										{header.isPlaceholder
-											? null
-											: flexRender(header.column.columnDef.header, header.getContext())}
-									</TableHead>
-								))}
-							</TableRow>
-						))}
-					</TableHeader>
-					<TableBody>
-						{rows.length > 0 ? (
-							rows.map((row) => (
+			{rows.length === 0 ? (
+				<EmptyState
+					title="暂无设置项"
+					description="没有找到任何系统配置项"
+					className="border-0 bg-transparent shadow-none"
+				/>
+			) : (
+				<div className="overflow-x-auto rounded-2xl border border-white/70 bg-white/65 shadow-[0_4px_16px_rgba(15,23,42,0.05),inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.06)]">
+					<Table>
+						<TableHeader>
+							{table.getHeaderGroups().map((headerGroup) => (
+								<TableRow key={headerGroup.id} className="hover:bg-transparent">
+									{headerGroup.headers.map((header) => (
+										<TableHead key={header.id}>
+											{header.isPlaceholder
+												? null
+												: flexRender(header.column.columnDef.header, header.getContext())}
+										</TableHead>
+									))}
+								</TableRow>
+							))}
+						</TableHeader>
+						<TableBody>
+							{rows.map((row) => (
 								<TableRow key={row.id} className="transition-colors hover:bg-muted/50">
 									{row.getVisibleCells().map((cell) => (
 										<TableCell key={cell.id}>
@@ -202,21 +202,11 @@ export function SettingsTable({ settings, onEdit }: SettingsTableProps) {
 										</TableCell>
 									))}
 								</TableRow>
-							))
-						) : (
-							<TableRow>
-								<TableCell colSpan={columns.length} className="py-0">
-									<EmptyState
-										title="暂无设置项"
-										description="没有找到任何系统配置项"
-										className="border-0 bg-transparent shadow-none"
-									/>
-								</TableCell>
-							</TableRow>
-						)}
-					</TableBody>
-				</Table>
-			</div>
+							))}
+						</TableBody>
+					</Table>
+				</div>
+			)}
 			<DataTablePagination table={table} />
 		</div>
 	);
