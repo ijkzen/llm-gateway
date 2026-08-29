@@ -16,6 +16,7 @@
   - `/v1` OpenAI 兼容转发：对外仅提供 `POST /v1/chat/completions`（Bearer API Key 鉴权），按虚拟模型 LB 策略选成员转发到 OpenAI Compatible / OpenAI Responses / Anthropic / Gemini 四种上游协议（转换逻辑参考 nyro 与 LiteLLM），支持流式与非流式、failover 重试（408/429/500/502/503/529）。
   - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率、TCP+TLS 建连耗时 `network_latency` 等 20 个字段），供后续指标展示。
   - 数据面板：`/api/stats/summary`（全量历史累计：请求数/成功率/总 token/加权缓存命中率）+ `/api/stats/charts`（过去 24 小时：按小时分桶趋势 + 按上游 `model_id` 分布）；前端 overview 页（侧边栏「数据面板」）用 Recharts + shadcn chart 展示 4 指标卡与两组三态图表（折线/饼图/降序条形图，Top 10 + 其他）。
+  - 供应商用量查询：`GET /api/providers/{id}/usage?refresh=1`（`src/usage/`）。对 `extra.usage=true` 的供应商按 base_url host 分发到各厂商 fetcher（API key 直查 / Copilot OAuth / 火山 AK/SK 签名 / CookieCloud cookie 系），归一化为订阅制窗口（5h/周/月，厂商不提供的窗口 `available=false`）或按量余额条目；成功结果内存缓存 60s（更新/删除供应商时失效），详情页内嵌「用量信息」卡片（进度条按剩余百分比着色）。
 - **运行方式**: 后端启动后监听 `0.0.0.0:4007`，前端 SPA 以静态资源形式内嵌在后端中，通过 `/api/*` 与后端通信。
 
 ## 技术栈
@@ -61,7 +62,7 @@
 │   ├── lib.rs              # 模块导出与 run() 生命周期（含优雅关闭）
 │   ├── config/mod.rs       # 环境变量与 Config 结构
 │   ├── db.rs               # SeaORM 连接、连接池与自动建表/迁移
-│   ├── state.rs            # AppState（db + scheduler + lb_state）
+│   ├── state.rs            # AppState（db + scheduler + lb_state + usage_cache）
 │   ├── logs_cleanup.rs     # 日志过期清理
 │   ├── response.rs         # 统一 API 响应结构
 │   ├── static_assets/mod.rs# rust-embed 内嵌前端 dist
@@ -73,6 +74,12 @@
 │   │   ├── convert/        # 协议转换：openai(直通)/responses/anthropic/gemini（请求+响应+流式+usage 归一）
 │   │   ├── metrics.rs      # request 表记录与流式指标（ttft/输出耗时）
 │   │   └── sse.rs          # SSE 拆分/写出工具
+│   ├── usage/              # 供应商用量查询：按 base_url host 分发 fetcher，归一化输出 + 60s 缓存
+│   │   ├── types.rs        # UsageData/QuotaWindow（available 标记三窗）/BalanceItem
+│   │   ├── http.rs         # reqwest 封装（15s 超时；LLM_GATEWAY_USAGE_HTTP_OVERRIDE 供测试重定向）
+│   │   ├── cookiecloud.rs  # CookieCloud 解密（MD5 材料 + EVP_BytesToKey + AES-256-CBC）
+│   │   ├── volcengine_sign.rs # 火山 V4 签名（service=ark，scope 以 /request 结尾）
+│   │   └── fetchers/       # 各厂商：api_key/balance/copilot/volcengine/xiaomi/stepfun/alibaba
 │   ├── cron/               # 定时任务核心模块
 │   │   ├── mod.rs          # JobContext/JobHandler/JobInfo/SchedulerError 定义
 │   │   ├── parser.rs       # 表达式解析、下次运行时间与频率计算（本地时区）
@@ -204,10 +211,10 @@ Dockerfile 为多阶段构建：
 
 ## 测试说明
 
-- **Rust 测试**: `cargo test`。当前共 137 个单元测试（`auth`、`config`、`cron::*`、`crypto`、`db`、`logs_cleanup`、`proxy::convert`（四协议转换）、`proxy::sse`、`proxy::upstream` 等模块）+ 集成测试（`tests/auth_integration.rs`、`tests/proxy_integration.rs`（本地 mock 上游）、`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`、`tests/providers_integration.rs`、`tests/provider_models_integration.rs`、`tests/api_keys_integration.rs`、`tests/virtual_models_integration.rs`、`tests/virtual_models_openai_integration.rs`、`tests/stats_integration.rs`）。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
+- **Rust 测试**: `cargo test`。当前共 184 个单元测试（`auth`、`config`、`cron::*`、`crypto`、`db`、`logs_cleanup`、`proxy::convert`（四协议转换）、`proxy::sse`、`proxy::upstream`、`usage::*`（各厂商用量解析/签名/CookieCloud 解密）等模块）+ 集成测试（`tests/auth_integration.rs`、`tests/proxy_integration.rs`（本地 mock 上游）、`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`、`tests/providers_integration.rs`、`tests/provider_models_integration.rs`、`tests/api_keys_integration.rs`、`tests/virtual_models_integration.rs`、`tests/virtual_models_openai_integration.rs`、`tests/stats_integration.rs`、`tests/provider_usage_integration.rs`（用量查询：404/未开启/不支持 host + 经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向到本地 mock 的成功/缓存/refresh 链路））。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
 - 环境变量隔离使用 `temp-env`，临时目录使用 `tempfile`。
 - 调度器测试包含关键行为回归：禁用的任务不会触发（`set_stop` 在 tokio-cron-scheduler 内存存储下无效，禁用必须走移除）、启用后恢复触发、禁用任务仍可手动执行。
-- **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 24 个测试文件 88 个用例，位于 `web/src/__tests__/` 与 `web/src/components/__tests__/`（含 login 页、RequireAuth 守卫、ChangePasswordDialog）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
+- **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 27 个测试文件 109 个用例，位于 `web/src/__tests__/` 与 `web/src/components/__tests__/`（含 login 页、RequireAuth 守卫、ChangePasswordDialog、ProviderUsageCard）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
 - 没有 E2E 测试。
 
 ## 代码风格与开发约定

@@ -60,7 +60,7 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
 /// 示例：`https://api.deepseek.com` → `api.deepseek.com`；
 /// `https://api.302.ai/v1` → `api.302.ai`；
 /// `https://${CLOUDFLARE_ACCOUNT_ID}/ai/v1` → 含占位符，返回 None。
-fn host_of(base_url: &str) -> Option<String> {
+pub(crate) fn host_of(base_url: &str) -> Option<String> {
     let rest = base_url.split("://").nth(1).unwrap_or(base_url);
     // 去掉路径部分（保留 host 段）
     let host = rest.split(['/', '?', '#']).next().unwrap_or(rest);

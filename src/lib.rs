@@ -13,6 +13,7 @@ pub mod response;
 pub mod routes;
 pub mod state;
 pub mod static_assets;
+pub mod usage;
 
 use std::sync::Arc;
 
@@ -154,6 +155,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         scheduler,
         log_tx,
         lb_state: crate::proxy::LbState::default(),
+        usage_cache: crate::usage::UsageCache::default(),
     };
 
     Ok(AppContext {

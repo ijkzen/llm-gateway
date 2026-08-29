@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post, put},
@@ -26,6 +26,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{id}", get(get_provider_detail))
         .route("/{id}", put(update_provider))
         .route("/{id}", delete(delete_provider))
+        .route("/{id}/usage", get(get_provider_usage))
         .nest(
             "/{provider_id}/models",
             crate::routes::provider_models::scoped_routes(),
@@ -327,6 +328,8 @@ async fn update_provider(
 
     match active.update(&state.db).await {
         Ok(model) => {
+            // 凭据/字段可能变化，失效用量缓存避免展示旧结果。
+            state.usage_cache.invalidate(id).await;
             let response = ProviderResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }
@@ -372,7 +375,10 @@ async fn delete_provider(
     }
     match Entity::delete_by_id(id).exec(&txn).await {
         Ok(result) if result.rows_affected > 0 => match txn.commit().await {
-            Ok(()) => (StatusCode::OK, Json(Response::success(()))),
+            Ok(()) => {
+                state.usage_cache.invalidate(id).await;
+                (StatusCode::OK, Json(Response::success(())))
+            }
             Err(e) => response::db_error(e.to_string()),
         },
         Ok(_) => response::not_found(format!("Provider {id} 不存在")),
@@ -388,6 +394,35 @@ async fn get_provider_detail(
         Ok(Some(detail)) => (StatusCode::OK, Json(Response::success(detail))),
         Ok(None) => response::not_found(format!("Provider {id} 不存在")),
         Err(e) => response::db_error(e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct ProviderUsageQuery {
+    /// `?refresh=1` 绕过服务端 60s 缓存，强制重新拉取上游。
+    refresh: Option<String>,
+}
+
+/// 查询供应商用量（余额/订阅窗口额度）。
+async fn get_provider_usage(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    Query(query): Query<ProviderUsageQuery>,
+) -> impl IntoResponse {
+    let exists = match Entity::find_by_id(id).one(&state.db).await {
+        Ok(model) => model.is_some(),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    if !exists {
+        return response::not_found(format!("Provider {id} 不存在"));
+    }
+    let force_refresh = query.refresh.as_deref().is_some_and(|v| v == "1" || v == "true");
+    match crate::usage::query_provider_usage(&state.db, &state.usage_cache, id, force_refresh)
+        .await
+    {
+        Ok(data) => (StatusCode::OK, Json(Response::success(data))),
+        Err(e) if e.is_client_error() => response::bad_request(e.to_string()),
+        Err(e) => response::bad_gateway(e.to_string()),
     }
 }
 

@@ -8,6 +8,7 @@ pub const UNAUTHORIZED: &str = "UNAUTHORIZED";
 pub const DB_ERROR: &str = "DB_ERROR";
 pub const SCHEDULER_ERROR: &str = "SCHEDULER_ERROR";
 pub const INTERNAL_ERROR: &str = "INTERNAL_ERROR";
+pub const UPSTREAM_ERROR: &str = "UPSTREAM_ERROR";
 
 /// Error return type of HTTP handlers: `(StatusCode, Json<Response<T>>)`.
 pub type ErrorResponse<T> = (StatusCode, Json<Response<T>>);
@@ -76,4 +77,9 @@ pub fn scheduler_error<T>(status: StatusCode, message: impl Into<String>) -> Err
 /// 500 Internal Server Error with code `INTERNAL_ERROR`.
 pub fn internal_error<T>(message: impl Into<String>) -> ErrorResponse<T> {
     error_response(StatusCode::INTERNAL_SERVER_ERROR, INTERNAL_ERROR, message)
+}
+
+/// 502 Bad Gateway with code `UPSTREAM_ERROR`（上游厂商接口错误）。
+pub fn bad_gateway<T>(message: impl Into<String>) -> ErrorResponse<T> {
+    error_response(StatusCode::BAD_GATEWAY, UPSTREAM_ERROR, message)
 }

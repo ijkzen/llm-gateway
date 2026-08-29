@@ -51,6 +51,7 @@ pub fn build_app(
         scheduler,
         log_tx,
         lb_state: llm_gateway::proxy::LbState::default(),
+        usage_cache: llm_gateway::usage::UsageCache::default(),
     };
     routes::create_app(&state)
 }

@@ -4,6 +4,7 @@ use tokio::sync::broadcast;
 use crate::cron::log_capture::JobLogEvent;
 use crate::cron::scheduler::SchedulerRuntime;
 use crate::proxy::LbState;
+use crate::usage::UsageCache;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -13,4 +14,6 @@ pub struct AppState {
     pub log_tx: broadcast::Sender<JobLogEvent>,
     /// 虚拟模型 RoundRobin 负载均衡的轮转计数。
     pub lb_state: LbState,
+    /// 供应商用量查询结果缓存（60s TTL，仅缓存成功结果）。
+    pub usage_cache: UsageCache,
 }

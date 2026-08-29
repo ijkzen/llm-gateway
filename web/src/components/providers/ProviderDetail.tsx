@@ -1,4 +1,5 @@
 import { EmptyState } from "@/components/empty-state";
+import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
 import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -136,6 +137,8 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 					<DetailRow label="创建时间">{formatDate(provider.createdAt)}</DetailRow>
 					<DetailRow label="更新时间">{formatDate(provider.updatedAt)}</DetailRow>
 				</div>
+
+				{usageEnabled(provider.extra) && <ProviderUsageCard providerId={provider.id} />}
 
 				{provider.extra && provider.extra !== "{}" && (
 					<div>
