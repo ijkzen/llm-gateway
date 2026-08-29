@@ -182,6 +182,35 @@ describe("AddProviderModelsDialog 候选三态", () => {
 });
 
 describe("AddProviderModelsDialog 手动添加", () => {
+	it("manual 候选卡片点击后预填模型 ID 并滚动到手动表单", async () => {
+		mocks.refreshMutate.mockImplementation((_args, opts) => {
+			opts.onSuccess([
+				makeCandidate({
+					providerModelId: "manual/only-model",
+					matchState: "manual",
+					contextLength: null,
+					maxOutputTokens: null,
+					reasoning: false,
+					toolUse: false,
+				}),
+			]);
+		});
+		// scrollIntoView 在 jsdom 未实现，打桩避免报错。
+		Element.prototype.scrollIntoView = vi.fn();
+
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
+
+		const input = screen.getByPlaceholderText("如 gpt-4o") as HTMLInputElement;
+		expect(input.value).toBe("");
+
+		fireEvent.click(screen.getByText("manual/only-model"));
+
+		expect(input.value).toBe("manual/only-model");
+		expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+		await waitFor(() => expect(document.activeElement).toBe(input));
+	});
+
 	it("填写完整后提交触发单条创建", async () => {
 		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
 
