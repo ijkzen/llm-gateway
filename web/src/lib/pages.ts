@@ -1,5 +1,14 @@
 import type { LucideIcon } from "lucide-react";
-import { Boxes, Clock, KeyRound, Layers, LayoutDashboard, Server, Settings } from "lucide-react";
+import {
+	Boxes,
+	Clock,
+	KeyRound,
+	Layers,
+	LayoutDashboard,
+	ScrollText,
+	Server,
+	Settings,
+} from "lucide-react";
 
 export interface PageConfig {
 	path: string;
@@ -57,6 +66,13 @@ export const API_KEYS_PAGE: PageConfig = {
 	icon: KeyRound,
 };
 
+export const REQUEST_LOGS_PAGE: PageConfig = {
+	path: "/request-logs",
+	title: "请求日志",
+	description: "查看网关转发的请求日志，支持时间段/虚拟模型/API Key 过滤",
+	icon: ScrollText,
+};
+
 export const PAGES: readonly PageConfig[] = [
 	OVERVIEW_PAGE,
 	CRON_JOBS_PAGE,
@@ -64,5 +80,6 @@ export const PAGES: readonly PageConfig[] = [
 	PROVIDER_MODELS_PAGE,
 	VIRTUAL_MODELS_PAGE,
 	API_KEYS_PAGE,
+	REQUEST_LOGS_PAGE,
 	SETTINGS_PAGE,
 ];

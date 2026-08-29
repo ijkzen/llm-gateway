@@ -5,6 +5,7 @@ mod openai_compat;
 mod provider_models;
 mod provider_templates;
 mod providers;
+mod request_logs;
 mod settings;
 mod stats;
 mod virtual_models;
@@ -32,6 +33,7 @@ pub fn create_app(state: &AppState) -> Router {
         .nest("/api/virtual-models", virtual_models::routes())
         .nest("/api/api-keys", api_keys::routes())
         .nest("/api/stats", stats::routes())
+        .nest("/api/request-logs", request_logs::routes())
         .nest("/v1", openai_compat::routes())
         .fallback(crate::static_assets::serve_asset)
         .layer(DefaultBodyLimit::max(5 * 1024 * 1024))

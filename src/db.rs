@@ -245,6 +245,14 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     ]);
     changed |= ensure_migration(db, 7, &migration_7_statements).await?;
 
+    // Migration 8: 请求日志查询索引（按 API Key 名称过滤加速）。
+    changed |= ensure_migration(
+        db,
+        8,
+        &["CREATE INDEX IF NOT EXISTS idx_request_api_key_name ON request (api_key_name)"],
+    )
+    .await?;
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)
