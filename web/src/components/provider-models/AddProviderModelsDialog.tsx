@@ -106,6 +106,8 @@ export function AddProviderModelsDialog({
 	// 手动添加的模型 ID 联想：防抖后的搜索关键词（空 = 不搜索）。
 	const [modelSearchQuery, setModelSearchQuery] = useState("");
 	const [modelSearchDebounced, setModelSearchDebounced] = useState("");
+	// 已从目录选中的模型 ID：应用后隐藏下拉，直到用户重新输入。
+	const [appliedModelId, setAppliedModelId] = useState<string | null>(null);
 	const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const { data: catalogHits } = useCatalogSearch(modelSearchDebounced);
@@ -115,12 +117,13 @@ export function AddProviderModelsDialog({
 		if (!open) return;
 		setModelSearchQuery("");
 		setModelSearchDebounced("");
+		setAppliedModelId(null);
 		if (searchTimer.current) clearTimeout(searchTimer.current);
 	}, [open]);
-	// 弹窗打开或手动添加成功后清空联想。
 
-	// 输入防抖：停顿 300ms 后触发搜索。
+	// 输入防抖：停顿 300ms 后触发搜索；用户重新输入时恢复联想。
 	const handleModelIdChange = (value: string) => {
+		if (appliedModelId) setAppliedModelId(null);
 		setModelSearchQuery(value);
 		if (searchTimer.current) clearTimeout(searchTimer.current);
 		searchTimer.current = setTimeout(() => setModelSearchDebounced(value), 300);
@@ -137,6 +140,7 @@ export function AddProviderModelsDialog({
 		form.setValue("videoUnderstand", hit.videoUnderstand);
 		setModelSearchQuery(hit.id);
 		setModelSearchDebounced("");
+		setAppliedModelId(hit.id);
 	};
 
 	const form = useForm<ManualFormValues>({
@@ -255,6 +259,7 @@ export function AddProviderModelsDialog({
 					});
 					setModelSearchQuery("");
 					setModelSearchDebounced("");
+					setAppliedModelId(null);
 				},
 				onError: (error) => toastError("添加失败", error),
 			},
@@ -407,28 +412,30 @@ export function AddProviderModelsDialog({
 											}}
 										/>
 									</FormControl>
-									{/* 关键词搜索联想下拉：点击候选自动填充全部字段 */}
-									{(catalogHits?.length ?? 0) > 0 && modelSearchQuery.trim().length > 0 && (
-										<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
-											{catalogHits?.map((hit) => (
-												<button
-													key={hit.id}
-													type="button"
-													onClick={() => applyCatalogCandidate(hit)}
-													className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60"
-												>
-													<Sparkles className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
-													<span className="min-w-0">
-														<span className="block truncate font-mono">{hit.id}</span>
-														<span className="block truncate text-xs text-muted-foreground">
-															{hit.name}
-															{hit.family ? ` · ${hit.family}` : ""}
+									{/* 关键词搜索联想下拉：点击候选自动填充全部字段；应用后隐藏 */}
+									{(catalogHits?.length ?? 0) > 0 &&
+										modelSearchQuery.trim().length > 0 &&
+										!appliedModelId && (
+											<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
+												{catalogHits?.map((hit) => (
+													<button
+														key={hit.id}
+														type="button"
+														onClick={() => applyCatalogCandidate(hit)}
+														className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60"
+													>
+														<Sparkles className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+														<span className="min-w-0">
+															<span className="block truncate font-mono">{hit.id}</span>
+															<span className="block truncate text-xs text-muted-foreground">
+																{hit.name}
+																{hit.family ? ` · ${hit.family}` : ""}
+															</span>
 														</span>
-													</span>
-												</button>
-											))}
-										</div>
-									)}
+													</button>
+												))}
+											</div>
+										)}
 									<FormMessage />
 								</FormItem>
 							)}
