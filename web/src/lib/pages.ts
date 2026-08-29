@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Clock, LayoutDashboard, Server, Settings } from "lucide-react";
+import { Boxes, Clock, LayoutDashboard, Server, Settings } from "lucide-react";
 
 export interface PageConfig {
 	path: string;
@@ -31,14 +31,22 @@ export const SETTINGS_PAGE: PageConfig = {
 
 export const PROVIDERS_PAGE: PageConfig = {
 	path: "/providers",
-	title: "模型提供商",
-	description: "管理模型提供商接入实例，支持创建、编辑与删除",
+	title: "供应商",
+	description: "管理供应商接入实例，支持创建、编辑与删除",
 	icon: Server,
+};
+
+export const PROVIDER_MODELS_PAGE: PageConfig = {
+	path: "/provider-models",
+	title: "供应商模型",
+	description: "管理各供应商名下的模型清单与能力，支持刷新智能填充",
+	icon: Boxes,
 };
 
 export const PAGES: readonly PageConfig[] = [
 	OVERVIEW_PAGE,
 	CRON_JOBS_PAGE,
 	PROVIDERS_PAGE,
+	PROVIDER_MODELS_PAGE,
 	SETTINGS_PAGE,
 ];

@@ -17,7 +17,8 @@ export default defineConfig({
 	server: {
 		proxy: {
 			"/api": {
-				target: "http://localhost:4007",
+				// 后端端口可用环境变量覆盖（默认 4007），便于本机多服务共存时换端口调试。
+				target: process.env.LLM_GATEWAY_BACKEND ?? "http://localhost:4007",
 				changeOrigin: true,
 			},
 		},

@@ -1,0 +1,132 @@
+import { ErrorState } from "@/components/error-state";
+import { PageHeader } from "@/components/page-header";
+import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
+import { AddProviderModelsDialog } from "@/components/provider-models/AddProviderModelsDialog";
+import { ProviderModelDetailDialog } from "@/components/provider-models/ProviderModelDetailDialog";
+import { ProviderModelSection } from "@/components/provider-models/ProviderModelSection";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { type ProviderModel, useProviderModels } from "@/hooks/use-provider-models";
+import { type Provider, useProviders } from "@/hooks/use-providers";
+import { PROVIDER_MODELS_PAGE } from "@/lib/pages";
+import { RefreshCw } from "lucide-react";
+import { useState } from "react";
+import { Link } from "react-router-dom";
+
+interface SelectedModel {
+	provider: Provider;
+	model: ProviderModel;
+}
+
+export default function ProviderModelsPage() {
+	const [addingProvider, setAddingProvider] = useState<Provider | null>(null);
+	const [selectedModel, setSelectedModel] = useState<SelectedModel | null>(null);
+
+	const {
+		data: providers,
+		isLoading: providersLoading,
+		isError: providersError,
+		refetch: refetchProviders,
+	} = useProviders();
+	const {
+		data: models,
+		isLoading: modelsLoading,
+		isError: modelsError,
+		refetch: refetchModels,
+	} = useProviderModels();
+
+	if (providersLoading || modelsLoading) {
+		return (
+			<div className="flex h-full min-h-0 flex-col space-y-6">
+				<PageHeaderSkeleton />
+				<div className="space-y-6">
+					<Skeleton className="h-16 w-full" />
+					<Skeleton className="h-16 w-full" />
+					<Skeleton className="h-16 w-full" />
+				</div>
+			</div>
+		);
+	}
+
+	if (providersError || modelsError) {
+		return (
+			<div className="space-y-6">
+				<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={PROVIDER_MODELS_PAGE.title} />
+				<ErrorState
+					description="无法获取供应商模型数据，请检查网络或稍后重试。"
+					onRetry={() => {
+						refetchProviders();
+						refetchModels();
+					}}
+				/>
+			</div>
+		);
+	}
+
+	if (!providers || providers.length === 0) {
+		return (
+			<div className="flex h-full min-h-0 flex-col space-y-6">
+				<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={PROVIDER_MODELS_PAGE.title} />
+				<Card>
+					<CardContent className="flex flex-col items-center gap-3 p-10 text-center">
+						<p className="text-sm text-muted-foreground">
+							还没有供应商，先创建一个供应商，再回来登记它的模型。
+						</p>
+						<Button asChild variant="outline" size="sm">
+							<Link to="/providers">去创建供应商</Link>
+						</Button>
+					</CardContent>
+				</Card>
+			</div>
+		);
+	}
+
+	return (
+		<div className="flex h-full min-h-0 flex-col space-y-6 overflow-auto">
+			<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={PROVIDER_MODELS_PAGE.title}>
+				<Button
+					variant="outline"
+					size="sm"
+					onClick={() => {
+						refetchProviders();
+						refetchModels();
+					}}
+				>
+					<RefreshCw className="mr-2 size-4" />
+					刷新
+				</Button>
+			</PageHeader>
+
+			<div className="space-y-6 pb-6">
+				{providers.map((provider) => (
+					<ProviderModelSection
+						key={provider.id}
+						provider={provider}
+						models={(models ?? []).filter((m) => m.providerId === provider.id)}
+						onAdd={setAddingProvider}
+						onOpenModel={(p, m) => setSelectedModel({ provider: p, model: m })}
+					/>
+				))}
+			</div>
+
+			<AddProviderModelsDialog
+				open={addingProvider !== null}
+				onOpenChange={(open) => {
+					if (!open) setAddingProvider(null);
+				}}
+				provider={addingProvider}
+			/>
+
+			<ProviderModelDetailDialog
+				open={selectedModel !== null}
+				onOpenChange={(open) => {
+					if (!open) setSelectedModel(null);
+				}}
+				providerId={selectedModel?.provider.id ?? 0}
+				providerName={selectedModel?.provider.name ?? ""}
+				model={selectedModel?.model ?? null}
+			/>
+		</div>
+	);
+}

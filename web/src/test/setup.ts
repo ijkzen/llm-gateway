@@ -37,3 +37,14 @@ if (typeof window !== "undefined" && typeof window.localStorage === "undefined")
 		writable: true,
 	});
 }
+
+// jsdom 未实现 ResizeObserver，Radix 弹窗类组件（Dialog/Checkbox 等）渲染时需要。
+class ResizeObserverMock {
+	observe() {}
+	unobserve() {}
+	disconnect() {}
+}
+
+if (typeof window !== "undefined" && typeof window.ResizeObserver === "undefined") {
+	window.ResizeObserver = ResizeObserverMock as unknown as typeof ResizeObserver;
+}
