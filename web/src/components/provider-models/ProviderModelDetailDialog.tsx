@@ -244,39 +244,39 @@ export function ProviderModelDetailDialog({
 									))}
 								</dd>
 							</div>
-							</dl>
-						)}
+						</dl>
+					)}
 
-						<DialogFooter className="gap-2 pt-2">
-							{editing ? (
-								<>
-									<Button
-										type="button"
-										variant="outline"
-										size="sm"
-										className="text-destructive hover:text-destructive"
-										onClick={() => setConfirmingDelete(true)}
-									>
-										<Trash2 className="mr-1.5 size-4" />
-										删除
-									</Button>
-									<Button
-										type="submit"
-										size="sm"
-										form="provider-model-detail-form"
-										disabled={updateModel.isPending}
-									>
-										更新
-									</Button>
-								</>
-							) : (
-								<Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
-									<Pencil className="mr-1.5 size-4" />
-									编辑
+					<DialogFooter className="gap-2 pt-2">
+						{editing ? (
+							<>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									className="text-destructive hover:text-destructive"
+									onClick={() => setConfirmingDelete(true)}
+								>
+									<Trash2 className="mr-1.5 size-4" />
+									删除
 								</Button>
-							)}
-						</DialogFooter>
-					</DialogContent>
+								<Button
+									type="submit"
+									size="sm"
+									form="provider-model-detail-form"
+									disabled={updateModel.isPending}
+								>
+									更新
+								</Button>
+							</>
+						) : (
+							<Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
+								<Pencil className="mr-1.5 size-4" />
+								编辑
+							</Button>
+						)}
+					</DialogFooter>
+				</DialogContent>
 			</Dialog>
 
 			<ConfirmDialog

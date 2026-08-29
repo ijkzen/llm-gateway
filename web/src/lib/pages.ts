@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Boxes, Clock, LayoutDashboard, Server, Settings } from "lucide-react";
+import { Boxes, Clock, Layers, LayoutDashboard, Server, Settings } from "lucide-react";
 
 export interface PageConfig {
 	path: string;
@@ -43,10 +43,18 @@ export const PROVIDER_MODELS_PAGE: PageConfig = {
 	icon: Boxes,
 };
 
+export const VIRTUAL_MODELS_PAGE: PageConfig = {
+	path: "/virtual-models",
+	title: "虚拟模型",
+	description: "将多个供应商模型聚合为对外统一的虚拟模型",
+	icon: Layers,
+};
+
 export const PAGES: readonly PageConfig[] = [
 	OVERVIEW_PAGE,
 	CRON_JOBS_PAGE,
 	PROVIDERS_PAGE,
 	PROVIDER_MODELS_PAGE,
+	VIRTUAL_MODELS_PAGE,
 	SETTINGS_PAGE,
 ];

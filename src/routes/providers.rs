@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::crypto;
 use crate::entity::provider::{self, ActiveModel, Entity};
 use crate::entity::provider_model;
+use crate::entity::virtual_model_item;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -349,11 +350,28 @@ async fn delete_provider(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> impl IntoResponse {
-    // 级联硬删：同一事务内先删该供应商名下全部模型，再删供应商本身。
+    // 级联硬删：同一事务内先删引用该供应商模型的虚拟模型成员（释放成员），
+    // 再删该供应商名下全部模型，最后删供应商本身，避免 virtual_model_item 悬空。
     let txn = match state.db.begin().await {
         Ok(txn) => txn,
         Err(e) => return response::db_error(e.to_string()),
     };
+    let model_ids: Vec<i32> = match provider_model::Entity::find()
+        .filter(provider_model::Column::ProviderId.eq(id))
+        .all(&txn)
+        .await
+    {
+        Ok(models) => models.into_iter().map(|pm| pm.model_id).collect(),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    if !model_ids.is_empty()
+        && let Err(e) = virtual_model_item::Entity::delete_many()
+            .filter(virtual_model_item::Column::ModelId.is_in(model_ids))
+            .exec(&txn)
+            .await
+    {
+        return response::db_error(e.to_string());
+    }
     if let Err(e) = provider_model::Entity::delete_many()
         .filter(provider_model::Column::ProviderId.eq(id))
         .exec(&txn)

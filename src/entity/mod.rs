@@ -5,3 +5,5 @@ pub mod provider;
 pub mod provider_model;
 pub mod provider_template;
 pub mod setting;
+pub mod virtual_model;
+pub mod virtual_model_item;

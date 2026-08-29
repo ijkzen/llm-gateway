@@ -1,0 +1,228 @@
+import type { ProviderModel } from "@/hooks/use-provider-models";
+import type { Provider } from "@/hooks/use-providers";
+import type { VirtualModel, VirtualModelItem } from "@/hooks/use-virtual-models";
+import VirtualModelsPage from "@/pages/virtual-models";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => {
+	return {
+		virtualModels: undefined as VirtualModel[] | undefined,
+		providers: undefined as Provider[] | undefined,
+		providerModels: undefined as ProviderModel[] | undefined,
+		isLoading: false,
+		isError: false,
+		refetch: vi.fn(),
+		editDialogOpen: false,
+		deleteDialogOpen: false,
+	};
+});
+
+vi.mock("@/hooks/use-virtual-models", async () => {
+	const actual = await vi.importActual<typeof import("@/hooks/use-virtual-models")>(
+		"@/hooks/use-virtual-models",
+	);
+	return {
+		...actual,
+		useVirtualModels: () => ({
+			data: mocks.virtualModels,
+			isLoading: mocks.isLoading,
+			isError: mocks.isError,
+			refetch: mocks.refetch,
+		}),
+	};
+});
+
+vi.mock("@/hooks/use-providers", async () => {
+	const actual =
+		await vi.importActual<typeof import("@/hooks/use-providers")>("@/hooks/use-providers");
+	return {
+		...actual,
+		useProviders: () => ({
+			data: mocks.providers,
+			isLoading: false,
+			isError: false,
+			refetch: vi.fn(),
+		}),
+	};
+});
+
+vi.mock("@/hooks/use-provider-models", async () => {
+	const actual = await vi.importActual<typeof import("@/hooks/use-provider-models")>(
+		"@/hooks/use-provider-models",
+	);
+	return {
+		...actual,
+		useProviderModels: () => ({
+			data: mocks.providerModels,
+			isLoading: false,
+			isError: false,
+			refetch: vi.fn(),
+		}),
+	};
+});
+
+vi.mock("@/components/virtual-models/VirtualModelEditDialog", () => ({
+	VirtualModelEditDialog: (props: { open: boolean }) => {
+		mocks.editDialogOpen = props.open;
+		return null;
+	},
+}));
+
+vi.mock("@/components/virtual-models/VirtualModelDeleteDialog", () => ({
+	VirtualModelDeleteDialog: (props: { open: boolean }) => {
+		mocks.deleteDialogOpen = props.open;
+		return null;
+	},
+}));
+
+function makeItem(overrides: Partial<VirtualModelItem> = {}): VirtualModelItem {
+	return {
+		virtualModelItemId: 1,
+		modelId: 11,
+		enable: true,
+		providerId: 7,
+		providerName: "OpenAI",
+		providerEnable: true,
+		providerModelId: "gpt-4o@openai",
+		contextLength: 128000,
+		maxOutputTokens: 4096,
+		reasoning: true,
+		toolUse: false,
+		imageUnderstand: false,
+		videoUnderstand: false,
+		...overrides,
+	};
+}
+
+function makeVm(overrides: Partial<VirtualModel> = {}): VirtualModel {
+	return {
+		virtualModelId: 1,
+		displayId: "gpt-4o",
+		enable: true,
+		loadBalancingStrategy: 0,
+		fallbackStrategy: 0,
+		items: [],
+		createdAt: "",
+		updatedAt: "",
+		...overrides,
+	};
+}
+
+describe("VirtualModelsPage", () => {
+	beforeEach(() => {
+		mocks.virtualModels = undefined;
+		mocks.providers = undefined;
+		mocks.providerModels = undefined;
+		mocks.isLoading = false;
+		mocks.isError = false;
+		mocks.editDialogOpen = false;
+		mocks.deleteDialogOpen = false;
+	});
+
+	it("加载中渲染骨架屏，不渲染内容", () => {
+		mocks.isLoading = true;
+		render(
+			<MemoryRouter>
+				<VirtualModelsPage />
+			</MemoryRouter>,
+		);
+
+		expect(screen.queryByText(/暂无虚拟模型/)).toBeNull();
+		expect(screen.queryByRole("button", { name: "添加虚拟模型" })).toBeNull();
+	});
+
+	it("加载失败展示错误态", () => {
+		mocks.isError = true;
+		render(
+			<MemoryRouter>
+				<VirtualModelsPage />
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByText(/无法获取虚拟模型数据/)).toBeTruthy();
+	});
+
+	it("默认没有虚拟模型：空态文案 + 添加按钮打开创建弹窗", () => {
+		mocks.virtualModels = [];
+		render(
+			<MemoryRouter>
+				<VirtualModelsPage />
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByText(/暂无虚拟模型/)).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: "添加虚拟模型" }));
+		expect(mocks.editDialogOpen).toBe(true);
+	});
+
+	it("每个虚拟模型一个区块：名称 + 策略 + 平铺成员卡片（含停用标记）", () => {
+		mocks.virtualModels = [
+			makeVm({
+				virtualModelId: 1,
+				displayId: "gpt-4o",
+				items: [
+					makeItem(),
+					makeItem({
+						virtualModelItemId: 2,
+						modelId: 12,
+						providerModelId: "o3@openai",
+						enable: false,
+					}),
+				],
+			}),
+			makeVm({ virtualModelId: 2, displayId: "claude-sonnet" }),
+		];
+		render(
+			<MemoryRouter>
+				<VirtualModelsPage />
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByRole("heading", { name: "gpt-4o" })).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "claude-sonnet" })).toBeTruthy();
+		// 两个区块都是默认策略。
+		expect(screen.getAllByText("订阅制优先").length).toBe(2);
+		expect(screen.getAllByText("直接失败").length).toBe(2);
+		expect(screen.getByText("gpt-4o@openai")).toBeTruthy();
+		expect(screen.getAllByText("OpenAI").length).toBe(2);
+		expect(screen.getByText("o3@openai")).toBeTruthy();
+		expect(screen.getByText(/已停用/)).toBeTruthy();
+		// 无成员的虚拟模型区块显示占位提示。
+		expect(screen.getByText(/暂无成员模型/)).toBeTruthy();
+	});
+
+	it("区块菜单：点「编辑」打开编辑弹窗", async () => {
+		mocks.virtualModels = [makeVm()];
+		render(
+			<MemoryRouter>
+				<VirtualModelsPage />
+			</MemoryRouter>,
+		);
+
+		// Radix DropdownMenu 在 jsdom 下通过键盘事件打开。
+		fireEvent.keyDown(screen.getByRole("button", { name: "更多操作：gpt-4o" }), {
+			key: "Enter",
+		});
+
+		fireEvent.click(await screen.findByRole("menuitem", { name: "编辑" }));
+		await waitFor(() => expect(mocks.editDialogOpen).toBe(true));
+	});
+
+	it("区块菜单：点「删除」打开删除确认弹窗", async () => {
+		mocks.virtualModels = [makeVm()];
+		render(
+			<MemoryRouter>
+				<VirtualModelsPage />
+			</MemoryRouter>,
+		);
+
+		fireEvent.keyDown(screen.getByRole("button", { name: "更多操作：gpt-4o" }), {
+			key: "Enter",
+		});
+
+		fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
+		await waitFor(() => expect(mocks.deleteDialogOpen).toBe(true));
+	});
+});

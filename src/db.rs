@@ -94,7 +94,10 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
 }
 
 pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
-    use crate::entity::{cron_job, cron_job_log, cron_job_run, provider, provider_model, provider_template, setting};
+    use crate::entity::{
+        cron_job, cron_job_log, cron_job_run, provider, provider_model, provider_template, setting,
+        virtual_model, virtual_model_item,
+    };
     use sea_orm::ConnectionTrait;
 
     let backend = db.get_database_backend();
@@ -124,6 +127,14 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     db.execute(&stmt).await?;
 
     let mut stmt = Schema::new(backend).create_table_from_entity(provider_model::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(virtual_model::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(virtual_model_item::Entity);
     stmt.if_not_exists();
     db.execute(&stmt).await?;
 
@@ -183,6 +194,18 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         &[
             "CREATE INDEX IF NOT EXISTS idx_provider_models_provider_id ON provider_model (provider_id)",
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_models_provider_model_id ON provider_model (provider_id, provider_model_id)",
+        ],
+    )
+    .await?;
+
+    // Migration 6: 虚拟模型成员的全局唯一约束（一个供应商模型最多归属一个虚拟模型）
+    // 与按虚拟模型查成员的索引。
+    changed |= ensure_migration(
+        db,
+        6,
+        &[
+            "CREATE INDEX IF NOT EXISTS idx_virtual_model_items_virtual_model_id ON virtual_model_item (virtual_model_id)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_virtual_model_items_model_id ON virtual_model_item (model_id)",
         ],
     )
     .await?;
