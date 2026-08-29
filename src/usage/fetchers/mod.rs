@@ -6,6 +6,7 @@
 pub mod alibaba;
 pub mod api_key;
 pub mod balance;
+pub mod cloud_balance;
 pub mod copilot;
 pub mod stepfun;
 pub mod volcengine;

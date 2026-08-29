@@ -44,6 +44,7 @@ cipher = { version = "0.4", features = ["alloc", "block-padding"] }
 hmac = "0.12"
 hex = "0.4.3"
 aes = "0.8"
+sha1 = "0.10"
 
 [dev-dependencies]
 temp-env = { version = "0.3", features = ["async_closure"] }

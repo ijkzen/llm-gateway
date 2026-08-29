@@ -14,7 +14,7 @@ use crate::usage::types::{
 };
 use crate::usage::volcengine_sign;
 
-const GATEWAY: &str = "https://open.volcengineapi.com";
+const GATEWAY_HOST: &str = "open.volcengineapi.com";
 const VERSION: &str = "2024-01-01";
 const REGION: &str = "cn-beijing";
 
@@ -44,8 +44,10 @@ async fn call_action(
     sk: &str,
 ) -> Result<HttpReply, UsageError> {
     let body = "";
-    let sig = volcengine_sign::sign(action, VERSION, REGION, ak, sk, body.as_bytes(), chrono::Utc::now());
-    let url = format!("{GATEWAY}/?Action={action}&Version={VERSION}&Region={REGION}");
+    let sig = volcengine_sign::sign(
+        "POST", GATEWAY_HOST, "ark", action, VERSION, REGION, ak, sk, body.as_bytes(), chrono::Utc::now(),
+    );
+    let url = format!("https://{GATEWAY_HOST}/?Action={action}&Version={VERSION}&Region={REGION}");
     http.post_json(
         &url,
         &[

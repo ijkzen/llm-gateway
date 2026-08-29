@@ -169,9 +169,69 @@ fn parse_openrouter(body: &str) -> Result<FetchOutput, UsageError> {
     })
 }
 
+// ── 阶跃星辰（按量付费账户）─────────────────────────────────
+// GET https://{host}/v1/accounts（Bearer）
+// 响应 { object: "account", type: prepaid/postpaid, balance,
+//        total_cash_balance(累计充值), total_voucher_balance(赠送) }（数值为 float）。
+// 注意与 Step Plan（订阅制，走 stepfun.rs 的 cookie 通道）是两套体系。
+
+pub async fn fetch_stepfun_account(
+    http: &UsageHttp,
+    creds: &Credentials<'_>,
+    host: &str,
+) -> Result<FetchOutput, UsageError> {
+    let reply = http
+        .get(
+            &format!("https://{host}/v1/accounts"),
+            &[("Authorization", format!("Bearer {}", creds.api_key_required()?))],
+        )
+        .await?;
+    ensure_not_auth_error(&reply)?;
+    if reply.status != 200 {
+        return Err(UsageError::Upstream(reply.status, snippet(&reply.body)));
+    }
+    parse_stepfun_account(&reply.body)
+}
+
+fn parse_stepfun_account(body: &str) -> Result<FetchOutput, UsageError> {
+    let v: Value = serde_json::from_str(body)
+        .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
+    let cny = || Some("CNY".to_string());
+    let mut items = Vec::new();
+    for (key, label) in [
+        ("balance", "可用余额"),
+        ("total_cash_balance", "累计充值"),
+        ("total_voucher_balance", "赠送余额"),
+    ] {
+        if let Some(amount) = v.get(key).and_then(num) {
+            items.push(BalanceItem {
+                label: label.to_string(),
+                amount,
+                currency: cny(),
+            });
+        }
+    }
+    if items.is_empty() {
+        return Err(UsageError::Parse("响应中没有余额字段".to_string()));
+    }
+    Ok(FetchOutput::Balance { items })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stepfun_account_balances() {
+        let body = r#"{ "object": "account", "type": "prepaid", "balance": 850.0, "total_cash_balance": 1500.0, "total_voucher_balance": 200.0 }"#;
+        let FetchOutput::Balance { items } = parse_stepfun_account(body).unwrap() else {
+            panic!("expected balance")
+        };
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].label, "可用余额");
+        assert_eq!(items[0].amount, 850.0);
+        assert_eq!(items[0].currency.as_deref(), Some("CNY"));
+    }
 
     #[test]
     fn deepseek_multi_currency_string_amounts() {

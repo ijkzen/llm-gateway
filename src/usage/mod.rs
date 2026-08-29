@@ -91,11 +91,10 @@ pub async fn query_provider_usage(
     };
     let host = crate::provider_template::host_of(&model.base_url)
         .ok_or(UsageError::Unsupported)?;
-    let fetcher = fetcher_for_host(&host).ok_or(UsageError::Unsupported)?;
+    let fetcher = fetcher_for(&host, &path_of(&model.base_url)).ok_or(UsageError::Unsupported)?;
 
     let http = http::UsageHttp::new();
     let output = fetcher.fetch(&http, &creds).await?;
-
     let data = match output {
         FetchOutput::Quota { plan, windows } => UsageData {
             provider_id,
@@ -118,9 +117,20 @@ pub async fn query_provider_usage(
     Ok(data)
 }
 
-/// 按 base_url host 选择 fetcher。仅当 provider 开启了 usage 才会走到这里；
-/// host 未收录（自定义网关等）返回 None → Unsupported。
-fn fetcher_for_host(host: &str) -> Option<Fetcher> {
+/// 提取 base_url 的路径部分（小写，无路径返回 "/"）。
+fn path_of(base_url: &str) -> String {
+    let rest = base_url.split_once("://").map(|(_, r)| r).unwrap_or(base_url);
+    rest.find('/')
+        .map(|i| rest[i..].to_ascii_lowercase())
+        .unwrap_or_else(|| "/".to_string())
+}
+
+/// 按 base_url 的 host（必要时看 path）选择 fetcher。
+///
+/// 火山方舟与阶跃的「按量付费」和「订阅 Plan」共用 host，靠 path 区分：
+/// - ark：path 含 `/api/coding` → Coding Plan（额度窗口），否则 → 费用中心余额
+/// - stepfun：path 含 `/step_plan` → Step Plan（cookie 窗口），否则 → 账户余额
+fn fetcher_for(host: &str, path: &str) -> Option<Fetcher> {
     Some(match host {
         "opencode.ai" => Fetcher::OpenCodeGo,
         "api.kimi.com" => Fetcher::Kimi,
@@ -135,9 +145,24 @@ fn fetcher_for_host(host: &str) -> Option<Fetcher> {
         "api.moonshot.cn" => Fetcher::Moonshot { intl: false },
         "openrouter.ai" => Fetcher::Openrouter,
         "api.githubcopilot.com" => Fetcher::Copilot,
-        "ark.cn-beijing.volces.com" => Fetcher::Volcengine,
+        "ark.cn-beijing.volces.com" => {
+            if path.contains("/api/coding") {
+                Fetcher::Volcengine
+            } else {
+                Fetcher::VolcengineBilling
+            }
+        }
+        "dashscope.aliyuncs.com" | "dashscope-intl.aliyuncs.com" => Fetcher::AliyunBss,
         "api.xiaomimimo.com" => Fetcher::XiaomiBalance,
-        "api.stepfun.com" | "api.stepfun.ai" => Fetcher::Stepfun,
+        "api.stepfun.com" | "api.stepfun.ai" => {
+            if path.contains("/step_plan") {
+                Fetcher::Stepfun
+            } else {
+                Fetcher::StepfunBalance {
+                    intl: host.ends_with(".ai"),
+                }
+            }
+        }
         "coding.dashscope.aliyuncs.com" => Fetcher::AlibabaCoding { intl: false },
         "coding-intl.dashscope.aliyuncs.com" => Fetcher::AlibabaCoding { intl: true },
         "token-plan.cn-beijing.maas.aliyuncs.com" => Fetcher::AlibabaToken { intl: false },
@@ -161,9 +186,12 @@ enum Fetcher {
     Openrouter,
     Copilot,
     Volcengine,
+    VolcengineBilling,
+    AliyunBss,
     XiaomiBalance,
     XiaomiTokenPlan,
     Stepfun,
+    StepfunBalance { intl: bool },
     AlibabaCoding { intl: bool },
     AlibabaToken { intl: bool },
 }
@@ -174,7 +202,7 @@ impl Fetcher {
         http: &http::UsageHttp,
         creds: &Credentials<'_>,
     ) -> Result<FetchOutput, UsageError> {
-        use fetchers::{alibaba, api_key, balance, copilot, stepfun, volcengine, xiaomi};
+        use fetchers::{alibaba, api_key, balance, cloud_balance, copilot, stepfun, volcengine, xiaomi};
         match self {
             Fetcher::OpenCodeGo => api_key::fetch_opencode_go(http, creds).await,
             Fetcher::Kimi => api_key::fetch_kimi(http, creds).await,
@@ -196,9 +224,15 @@ impl Fetcher {
             Fetcher::Openrouter => balance::fetch_openrouter(http, creds).await,
             Fetcher::Copilot => copilot::fetch_copilot(http, creds).await,
             Fetcher::Volcengine => volcengine::fetch_volcengine(http, creds).await,
+            Fetcher::VolcengineBilling => cloud_balance::fetch_volcengine_billing(http, creds).await,
+            Fetcher::AliyunBss => cloud_balance::fetch_aliyun_bss(http, creds).await,
             Fetcher::XiaomiBalance => xiaomi::fetch_xiaomi_balance(http, creds).await,
             Fetcher::XiaomiTokenPlan => xiaomi::fetch_xiaomi_token_plan(http, creds).await,
             Fetcher::Stepfun => stepfun::fetch_stepfun(http, creds).await,
+            Fetcher::StepfunBalance { intl } => {
+                let host = if *intl { "api.stepfun.ai" } else { "api.stepfun.com" };
+                balance::fetch_stepfun_account(http, creds, host).await
+            }
             Fetcher::AlibabaCoding { intl } => alibaba::fetch_alibaba_coding(http, creds, *intl).await,
             Fetcher::AlibabaToken { intl } => alibaba::fetch_alibaba_token(http, creds, *intl).await,
         }
@@ -222,9 +256,12 @@ mod tests {
             ("api.commandcode.ai", true),
             ("api.deepseek.com", true),
             ("api.moonshot.ai", true),
+            ("api.moonshot.cn", true),
             ("openrouter.ai", true),
             ("api.githubcopilot.com", true),
             ("ark.cn-beijing.volces.com", true),
+            ("dashscope.aliyuncs.com", true),
+            ("dashscope-intl.aliyuncs.com", true),
             ("api.xiaomimimo.com", true),
             ("token-plan-cn.xiaomimimo.com", true),
             ("token-plan-ams.xiaomimimo.com", true),
@@ -236,10 +273,36 @@ mod tests {
             ("token-plan.cn-beijing.maas.aliyuncs.com", true),
             ("token-plan.ap-southeast-1.maas.aliyuncs.com", true),
             ("api.302.ai", false),
-            ("dashscope.aliyuncs.com", false),
+            ("dashscope.aliyuncs.com.evil.com", false),
         ] {
-            assert_eq!(fetcher_for_host(host).is_some(), expect_some, "host={host}");
+            assert_eq!(fetcher_for(host, "/").is_some(), expect_some, "host={host}");
         }
+    }
+
+    #[test]
+    fn volcengine_and_stepfun_dispatch_by_path() {
+        // 火山：coding 路径 → 订阅窗口；其余 → 账户余额
+        assert!(matches!(
+            fetcher_for("ark.cn-beijing.volces.com", "/api/coding/v3"),
+            Some(Fetcher::Volcengine)
+        ));
+        assert!(matches!(
+            fetcher_for("ark.cn-beijing.volces.com", "/api/v3"),
+            Some(Fetcher::VolcengineBilling)
+        ));
+        // 阶跃：step_plan 路径 → 订阅窗口（cookie）；其余 → 账户余额（API key）
+        assert!(matches!(
+            fetcher_for("api.stepfun.com", "/step_plan/v1"),
+            Some(Fetcher::Stepfun)
+        ));
+        assert!(matches!(
+            fetcher_for("api.stepfun.com", "/v1"),
+            Some(Fetcher::StepfunBalance { intl: false })
+        ));
+        assert!(matches!(
+            fetcher_for("api.stepfun.ai", "/v1"),
+            Some(Fetcher::StepfunBalance { intl: true })
+        ));
     }
 
     #[tokio::test]

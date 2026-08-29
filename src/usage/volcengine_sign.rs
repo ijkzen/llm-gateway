@@ -1,29 +1,34 @@
-//! 火山引擎 OpenAPI 签名 V4（HMAC-SHA256，service=`ark`）。
+//! 火山引擎 OpenAPI 签名 V4（HMAC-SHA256）。
 //!
 //! 与 AWS SigV4 的差异（实测/cc-switch 口径）：algorithm 串为 `HMAC-SHA256`（无
 //! `AWS4` 前缀）、credential scope 以 `/request` 结尾、签名密钥第一轮直接用 SK
 //! （不加前缀）。canonical query 与签名头按名称升序。
+//!
+//! 已知服务：方舟（service=`ark`，POST）与费用中心（service=`billing`，GET，
+//! host=billing.volcengineapi.com）。GET 请求不携带/不签名 content-type。
 
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
-const HOST: &str = "open.volcengineapi.com";
-const SERVICE: &str = "ark";
 const ALGORITHM: &str = "HMAC-SHA256";
 const CONTENT_TYPE: &str = "application/json; charset=utf-8";
-const SIGNED_HEADERS: &str = "content-type;host;x-content-sha256;x-date";
 
 pub struct VolcSignature {
     pub authorization: String,
     pub x_date: String,
     pub payload_hash: String,
+    /// 仅 POST 需要发送 Content-Type 头。
+    pub content_type: Option<&'static str>,
 }
 
-/// 对 `POST https://open.volcengineapi.com/?Action=...&Version=...&Region=...`
-/// 生成签名头（Authorization / X-Date / X-Content-Sha256）。
+/// 生成火山签名头（Authorization / X-Date / X-Content-Sha256）。
 /// `now` 作参数传入以便确定性单测。
+#[allow(clippy::too_many_arguments)]
 pub fn sign(
+    method: &str,
+    host: &str,
+    service: &str,
     action: &str,
     version: &str,
     region: &str,
@@ -32,11 +37,13 @@ pub fn sign(
     body: &[u8],
     now: DateTime<Utc>,
 ) -> VolcSignature {
+    let method = method.to_ascii_uppercase();
+    let is_post = method == "POST";
     let x_date = now.format("%Y%m%dT%H%M%SZ").to_string();
     let short_date = now.format("%Y%m%d").to_string();
     let payload_hash = hex::encode(Sha256::digest(body));
 
-    // canonical query：按 key 升序 + RFC3986 编码。
+    // canonical query：Action/Region/Version 按 key 升序 + RFC3986 编码。
     let mut pairs = [
         ("Action", action),
         ("Region", region),
@@ -49,14 +56,25 @@ pub fn sign(
         .collect::<Vec<_>>()
         .join("&");
 
-    let canonical_headers = format!(
-        "content-type:{CONTENT_TYPE}\nhost:{HOST}\nx-content-sha256:{payload_hash}\nx-date:{x_date}\n"
-    );
+    // GET 不签名 content-type（POST 按字母序 content-type 排最前）。
+    let (canonical_headers, signed_headers) = if is_post {
+        (
+            format!(
+                "content-type:{CONTENT_TYPE}\nhost:{host}\nx-content-sha256:{payload_hash}\nx-date:{x_date}\n"
+            ),
+            "content-type;host;x-content-sha256;x-date",
+        )
+    } else {
+        (
+            format!("host:{host}\nx-content-sha256:{payload_hash}\nx-date:{x_date}\n"),
+            "host;x-content-sha256;x-date",
+        )
+    };
     let canonical_request = format!(
-        "POST\n/\n{canonical_query}\n{canonical_headers}\n{SIGNED_HEADERS}\n{payload_hash}"
+        "{method}\n/\n{canonical_query}\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
     );
 
-    let scope = format!("{short_date}/{region}/{SERVICE}/request");
+    let scope = format!("{short_date}/{region}/{service}/request");
     let string_to_sign = format!(
         "{ALGORITHM}\n{x_date}\n{scope}\n{}",
         hex::encode(Sha256::digest(canonical_request.as_bytes()))
@@ -64,16 +82,17 @@ pub fn sign(
 
     let k_date = hmac(sk.as_bytes(), short_date.as_bytes());
     let k_region = hmac(&k_date, region.as_bytes());
-    let k_service = hmac(&k_region, SERVICE.as_bytes());
+    let k_service = hmac(&k_region, service.as_bytes());
     let k_signing = hmac(&k_service, b"request");
     let signature = hex::encode(hmac(&k_signing, string_to_sign.as_bytes()));
 
     VolcSignature {
         authorization: format!(
-            "{ALGORITHM} Credential={ak}/{scope}, SignedHeaders={SIGNED_HEADERS}, Signature={signature}"
+            "{ALGORITHM} Credential={ak}/{scope}, SignedHeaders={signed_headers}, Signature={signature}"
         ),
         x_date,
         payload_hash,
+        content_type: is_post.then_some(CONTENT_TYPE),
     }
 }
 
@@ -102,7 +121,7 @@ mod tests {
     use chrono::TimeZone;
 
     /// 用 python3 独立实现同一算法生成的期望签名（见下注释复现脚本）。
-    /// 输入：action=GetCodingPlanUsage version=2024-01-01 region=cn-beijing
+    /// 输入：POST ark GetCodingPlanUsage version=2024-01-01 region=cn-beijing
     ///       ak=AKID_EXAMPLE sk=SK_EXAMPLE body="" now=2026-08-30T12:00:00Z
     ///
     /// ```python
@@ -125,6 +144,9 @@ mod tests {
     fn known_answer_signature() {
         let now = Utc.with_ymd_and_hms(2026, 8, 30, 12, 0, 0).unwrap();
         let sig = sign(
+            "POST",
+            "open.volcengineapi.com",
+            "ark",
             "GetCodingPlanUsage",
             "2024-01-01",
             "cn-beijing",
@@ -142,6 +164,28 @@ mod tests {
             sig.authorization
                 .ends_with(&format!("Signature={EXPECTED_SIGNATURE}"))
         );
+        assert_eq!(sig.content_type, Some("application/json; charset=utf-8"));
+    }
+
+    #[test]
+    fn get_method_excludes_content_type() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 30, 12, 0, 0).unwrap();
+        let sig = sign(
+            "GET",
+            "billing.volcengineapi.com",
+            "billing",
+            "QueryBalanceAcct",
+            "2022-01-01",
+            "cn-beijing",
+            "AKID_EXAMPLE",
+            "SK_EXAMPLE",
+            b"",
+            now,
+        );
+        assert!(sig.authorization.contains("Credential=AKID_EXAMPLE/20260830/cn-beijing/billing/request"));
+        assert!(sig.authorization.contains("SignedHeaders=host;x-content-sha256;x-date"));
+        assert!(!sig.authorization.contains("content-type"));
+        assert_eq!(sig.content_type, None);
     }
 
     #[test]

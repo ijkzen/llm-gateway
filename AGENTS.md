@@ -16,7 +16,7 @@
   - `/v1` OpenAI 兼容转发：对外仅提供 `POST /v1/chat/completions`（Bearer API Key 鉴权），按虚拟模型 LB 策略选成员转发到 OpenAI Compatible / OpenAI Responses / Anthropic / Gemini 四种上游协议（转换逻辑参考 nyro 与 LiteLLM），支持流式与非流式、failover 重试（408/429/500/502/503/529）。
   - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率、TCP+TLS 建连耗时 `network_latency` 等 20 个字段），供后续指标展示。
   - 数据面板：`/api/stats/summary`（全量历史累计：请求数/成功率/总 token/加权缓存命中率）+ `/api/stats/charts`（过去 24 小时：按小时分桶趋势 + 按上游 `model_id` 分布）；前端 overview 页（侧边栏「数据面板」）用 Recharts + shadcn chart 展示 4 指标卡与两组三态图表（折线/饼图/降序条形图，Top 10 + 其他）。
-  - 供应商用量查询：`GET /api/providers/{id}/usage?refresh=1`（`src/usage/`）。对 `extra.usage=true` 的供应商按 base_url host 分发到各厂商 fetcher（API key 直查 / Copilot OAuth / 火山 AK/SK 签名 / CookieCloud cookie 系），归一化为订阅制窗口（5h/周/月，厂商不提供的窗口 `available=false`）或按量余额条目；成功结果内存缓存 60s（更新/删除供应商时失效），详情页内嵌「用量信息」卡片（进度条按剩余百分比着色）。
+  - 供应商用量查询：`GET /api/providers/{id}/usage?refresh=1`（`src/usage/`）。对 `extra.usage=true` 的供应商按 base_url host（火山/阶跃再看 path 区分订阅 Plan 与按量账户）分发到各厂商 fetcher（API key 直查 / Copilot OAuth / 火山与阿里 AK/SK 签名 / CookieCloud cookie 系），归一化为订阅制窗口（5h/周/月，厂商不提供的窗口 `available=false`）或按量余额条目；成功结果内存缓存 60s（更新/删除供应商时失效），详情页内嵌「用量信息」卡片（进度条按剩余百分比着色）。
 - **运行方式**: 后端启动后监听 `0.0.0.0:4007`，前端 SPA 以静态资源形式内嵌在后端中，通过 `/api/*` 与后端通信。
 
 ## 技术栈
@@ -79,7 +79,7 @@
 │   │   ├── http.rs         # reqwest 封装（15s 超时；LLM_GATEWAY_USAGE_HTTP_OVERRIDE 供测试重定向）
 │   │   ├── cookiecloud.rs  # CookieCloud 解密（MD5 材料 + EVP_BytesToKey + AES-256-CBC）
 │   │   ├── volcengine_sign.rs # 火山 V4 签名（service=ark，scope 以 /request 结尾）
-│   │   └── fetchers/       # 各厂商：api_key/balance/copilot/volcengine/xiaomi/stepfun/alibaba
+│   │   └── fetchers/       # 各厂商：api_key/balance/cloud_balance(阿里BSS+火山billing AK/SK)/copilot/volcengine/xiaomi/stepfun/alibaba
 │   ├── cron/               # 定时任务核心模块
 │   │   ├── mod.rs          # JobContext/JobHandler/JobInfo/SchedulerError 定义
 │   │   ├── parser.rs       # 表达式解析、下次运行时间与频率计算（本地时区）
