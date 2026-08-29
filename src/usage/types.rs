@@ -1,10 +1,10 @@
 //! 用量查询的统一数据类型（`GET /api/providers/{id}/usage` 的 data 字段）。
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// 归一化后的用量数据：订阅制走 `windows`，按量付费走 `balances`。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageData {
     pub provider_id: i32,
@@ -15,21 +15,21 @@ pub struct UsageData {
     pub plan: Option<String>,
     /// 订阅制窗口用量。固定输出 5h/周/月 三个元素，
     /// 厂商不提供的窗口 `available=false`（如 Kimi For Coding 无月窗）。
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<QuotaWindow>,
     /// 按量付费余额条目（可多币种/多账户）。
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub balances: Vec<BalanceItem>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UsageKind {
     Quota,
     Balance,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WindowKind {
     FiveHour,
@@ -37,7 +37,7 @@ pub enum WindowKind {
     Monthly,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuotaWindow {
     pub window: WindowKind,
@@ -58,6 +58,28 @@ pub struct QuotaWindow {
 }
 
 impl QuotaWindow {
+    /// 该窗口的剩余百分比（0-100）：优先取 remaining_percent，其次由
+    /// used_percent 推导，最后用 used/limit 直接算；窗口不可用或无法推导时
+    /// 返回 None。供订阅制排序（`src/proxy/usage_rank.rs`）与额度耗尽判定
+    /// （`src/usage/persist.rs`）共用。
+    pub fn remaining_percent_value(&self) -> Option<f64> {
+        if !self.available {
+            return None;
+        }
+        if let Some(p) = self.remaining_percent {
+            return Some(p);
+        }
+        if let Some(p) = self.used_percent {
+            return Some(100.0 - p);
+        }
+        match (self.used, self.limit) {
+            (Some(used), Some(limit)) if limit > 0.0 => {
+                Some(((limit - used) / limit * 100.0).clamp(0.0, 100.0))
+            }
+            _ => None,
+        }
+    }
+
     pub fn unavailable(window: WindowKind) -> Self {
         Self {
             window,
@@ -147,7 +169,7 @@ pub fn set_window(windows: &mut [QuotaWindow], w: QuotaWindow) {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BalanceItem {
     pub label: String,

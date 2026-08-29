@@ -3,6 +3,7 @@ pub mod log_repository;
 pub mod parser;
 pub mod repository;
 pub mod scheduler;
+pub mod seed;
 #[cfg(test)]
 mod test_utils;
 pub mod worker;

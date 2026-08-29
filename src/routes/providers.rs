@@ -328,8 +328,11 @@ async fn update_provider(
 
     match active.update(&state.db).await {
         Ok(model) => {
-            // 凭据/字段可能变化，失效用量缓存避免展示旧结果。
+            // 凭据/字段可能变化，失效（内存 + 数据库）用量缓存避免展示旧结果。
             state.usage_cache.invalidate(id).await;
+            if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {
+                tracing::warn!(provider_id = id, "用量缓存失效失败：{e}");
+            }
             let response = ProviderResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }
@@ -377,6 +380,9 @@ async fn delete_provider(
         Ok(result) if result.rows_affected > 0 => match txn.commit().await {
             Ok(()) => {
                 state.usage_cache.invalidate(id).await;
+                if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {
+                    tracing::warn!(provider_id = id, "用量缓存失效失败：{e}");
+                }
                 (StatusCode::OK, Json(Response::success(())))
             }
             Err(e) => response::db_error(e.to_string()),
@@ -399,27 +405,39 @@ async fn get_provider_detail(
 
 #[derive(Deserialize)]
 struct ProviderUsageQuery {
-    /// `?refresh=1` 绕过服务端 60s 缓存，强制重新拉取上游。
+    /// `?refresh=1` 绕过 10 分钟数据库缓存，强制重新拉取上游。
     refresh: Option<String>,
 }
 
 /// 查询供应商用量（余额/订阅窗口额度）。
+///
+/// 优先直出数据库缓存（10 分钟内新鲜），过期/缺失才真实抓取并重新落库。
 async fn get_provider_usage(
     State(state): State<AppState>,
     Path(id): Path<i32>,
     Query(query): Query<ProviderUsageQuery>,
 ) -> impl IntoResponse {
-    let exists = match Entity::find_by_id(id).one(&state.db).await {
-        Ok(model) => model.is_some(),
+    let model = match Entity::find_by_id(id).one(&state.db).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return response::not_found(format!("Provider {id} 不存在")),
         Err(e) => return response::db_error(e.to_string()),
     };
-    if !exists {
-        return response::not_found(format!("Provider {id} 不存在"));
+    let extra = match serde_json::from_str::<Value>(&model.extra) {
+        Ok(Value::Object(map)) => map,
+        _ => Default::default(),
+    };
+    let usage_enabled = extra.get("usage").and_then(Value::as_bool).unwrap_or(false);
+    if !usage_enabled {
+        return response::bad_request(crate::usage::error::UsageError::NotEnabled.to_string());
     }
+
     let force_refresh = query.refresh.as_deref().is_some_and(|v| v == "1" || v == "true");
-    match crate::usage::query_provider_usage(&state.db, &state.usage_cache, id, force_refresh)
-        .await
+    if !force_refresh
+        && let Ok(Some(data)) = crate::usage::persist::read_usage_cache(&state.db, id).await
     {
+        return (StatusCode::OK, Json(Response::success(data)));
+    }
+    match crate::usage::persist::fetch_and_store(&state.db, id).await {
         Ok(data) => (StatusCode::OK, Json(Response::success(data))),
         Err(e) if e.is_client_error() => response::bad_request(e.to_string()),
         Err(e) => response::bad_gateway(e.to_string()),

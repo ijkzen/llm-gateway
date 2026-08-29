@@ -11,3 +11,4 @@ web/tsconfig.tsbuildinfo
 /.codegraph
 /.zcode
 /web/logs
+/deploy/llm-gateway

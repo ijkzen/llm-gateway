@@ -8,6 +8,7 @@ pub mod convert;
 pub mod metrics;
 pub mod sse;
 pub mod upstream;
+pub mod usage_rank;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -34,6 +35,8 @@ use crate::proxy::convert::{
 use crate::proxy::metrics::{RequestRecord, StreamMetrics, Usage, now_ms};
 use crate::proxy::upstream::{UpstreamCall, UpstreamReply};
 use crate::state::AppState;
+use crate::usage::persist::{fetch_and_store, read_usage_cache};
+use crate::usage::types::UsageData;
 
 /// 上游协议（provider.protocol_type）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,17 +152,42 @@ async fn load_members(
 }
 
 /// 按虚拟模型的负载均衡策略排序成员。
-fn order_members(
+///
+/// 策略 0/1 分组后做组内用量感知排序（订阅制按 5h→周→月剩余百分比逐层比较、
+/// 全平随机；按量付费按剩余金额降序），用量优先取 10 分钟数据库缓存，缺失/
+/// 过期才真实抓取。排序结果即 failover 优先级（`forward_chat` 按 ordered 顺序
+/// 逐个重试）。策略 2/3 保持轮转/随机。
+async fn order_members(
+    state: &AppState,
     members: Vec<Member>,
     strategy: i32,
     lb_state: &LbState,
     virtual_model_id: i32,
 ) -> Vec<Member> {
     match strategy {
-        // 订阅制优先（billing_mode：0=按量，1=订阅制）
-        0 => stable_partition(members, |m| m.billing_mode == 1),
-        // 按量优先
-        1 => stable_partition(members, |m| m.billing_mode == 0),
+        // 订阅制优先 / 按量优先：先按付费模式分组，再组内按剩余用量排序。
+        0 | 1 => {
+            let subscription_first = strategy == 0;
+            let mut subs = Vec::new();
+            let mut payg = Vec::new();
+            for member in members {
+                let group = if member.billing_mode == 1 {
+                    &mut subs
+                } else {
+                    &mut payg
+                };
+                group.push(member);
+            }
+            let mut subs = rank_by_quota(state, subs).await;
+            let mut payg = rank_by_balance(state, payg).await;
+            if subscription_first {
+                subs.append(&mut payg);
+                subs
+            } else {
+                payg.append(&mut subs);
+                payg
+            }
+        }
         // RoundRobin
         2 => {
             let len = members.len();
@@ -181,21 +209,77 @@ fn order_members(
     }
 }
 
-fn stable_partition<F>(members: Vec<Member>, keep_first: F) -> Vec<Member>
-where
-    F: Fn(&Member) -> bool,
-{
-    let mut first = Vec::new();
-    let mut rest = Vec::new();
-    for member in members {
-        if keep_first(&member) {
-            first.push(member);
+/// 订阅制组内排序：剩余百分比 5h→周→月 降序。先 shuffle 再稳定排序，
+/// 三层全平的成员保持随机相对顺序（即“同等条件随机选一个”）。
+async fn rank_by_quota(state: &AppState, mut members: Vec<Member>) -> Vec<Member> {
+    if members.len() <= 1 {
+        return members;
+    }
+    let usage = resolve_usage_map(state, &members).await;
+    members.shuffle(&mut rand::thread_rng());
+    // 自然序比较器（a vs b）；sort_by 升序，因此交换参数实现「剩余多的在前」。
+    members.sort_by(|a, b| {
+        usage_rank::cmp_quota_remaining(
+            usage.get(&b.provider_id).and_then(Option::as_ref),
+            usage.get(&a.provider_id).and_then(Option::as_ref),
+        )
+    });
+    members
+}
+
+/// 按量付费组内排序：剩余金额合计降序（同额保持原序）。
+async fn rank_by_balance(state: &AppState, mut members: Vec<Member>) -> Vec<Member> {
+    if members.len() <= 1 {
+        return members;
+    }
+    let usage = resolve_usage_map(state, &members).await;
+    members.sort_by(|a, b| {
+        usage_rank::cmp_balance(
+            usage.get(&b.provider_id).and_then(Option::as_ref),
+            usage.get(&a.provider_id).and_then(Option::as_ref),
+        )
+    });
+    members
+}
+
+/// 收集成员用量：10 分钟数据库缓存新鲜即用；缺失/过期并发真实抓取并落库，
+/// 抓取失败按无数据处理（排在本组末尾）。
+async fn resolve_usage_map(
+    state: &AppState,
+    members: &[Member],
+) -> HashMap<i32, Option<UsageData>> {
+    let mut seen = HashSet::new();
+    let provider_ids: Vec<i32> = members
+        .iter()
+        .map(|m| m.provider_id)
+        .filter(|id| seen.insert(*id))
+        .collect();
+
+    let mut map = HashMap::new();
+    let mut stale = Vec::new();
+    for id in provider_ids {
+        let cached = read_usage_cache(&state.db, id).await.ok().flatten();
+        if let Some(data) = cached {
+            map.insert(id, Some(data));
         } else {
-            rest.push(member);
+            stale.push(id);
         }
     }
-    first.extend(rest);
-    first
+    if stale.is_empty() {
+        return map;
+    }
+
+    let mut set = tokio::task::JoinSet::new();
+    for id in stale {
+        let db = state.db.clone();
+        set.spawn(async move { (id, fetch_and_store(&db, id).await.ok()) });
+    }
+    while let Some(outcome) = set.join_next().await {
+        if let Ok((id, data)) = outcome {
+            map.insert(id, data);
+        }
+    }
+    map
 }
 
 /// 组装发往上游的请求。返回 (调用, Anthropic 是否注入了 JSON 模式合成工具)。
@@ -548,11 +632,13 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
     }
 
     let ordered = order_members(
+        state,
         members,
         virtual_model.load_balancing_strategy,
         &state.lb_state,
         virtual_model.virtual_model_id,
-    );
+    )
+    .await;
     let retry_enabled = virtual_model.fallback_strategy == 1;
 
     let mut last_failure: Option<(Member, String, StatusCode)> = None;

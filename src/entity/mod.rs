@@ -8,6 +8,7 @@ pub mod provider_template;
 pub mod request;
 pub mod session;
 pub mod setting;
+pub mod usage_cache;
 pub mod user;
 pub mod virtual_model;
 pub mod virtual_model_item;

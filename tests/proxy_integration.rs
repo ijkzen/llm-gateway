@@ -586,3 +586,85 @@ async fn common_setup_with_member(
     .unwrap();
     (app, db)
 }
+
+#[tokio::test]
+async fn subscription_first_ranks_by_remaining_five_hour_usage() {
+    use llm_gateway::usage::persist::write_usage_cache;
+    use llm_gateway::usage::types::{UsageData, UsageKind, WindowKind};
+
+    let captured_a = capture();
+    let captured_b = capture();
+    let base_a = spawn_mock(captured_a.clone()).await;
+    let base_b = spawn_mock(captured_b.clone()).await;
+
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    let provider_a = seed_provider(&db, "订阅-A-高5h余量", &base_a, 0, 1).await;
+    let provider_b = seed_provider(&db, "订阅-B-低5h余量", &base_b, 0, 1).await;
+    let model_a = seed_provider_model(&db, provider_a, "m-a").await;
+    let model_b = seed_provider_model(&db, provider_b, "m-b").await;
+
+    // 预置 10 分钟内的用量数据库缓存：A 的 5h 剩余（80%）高于 B（20%）。
+    for (pid, remaining) in [(provider_a, 80.0), (provider_b, 20.0)] {
+        let data = UsageData {
+            provider_id: pid,
+            fetched_at: chrono::Utc::now(),
+            kind: UsageKind::Quota,
+            plan: None,
+            windows: vec![
+                llm_gateway::usage::types::QuotaWindow::from_remaining_percent(
+                    WindowKind::FiveHour,
+                    remaining,
+                    None,
+                ),
+                llm_gateway::usage::types::QuotaWindow::from_remaining_percent(
+                    WindowKind::Weekly,
+                    50.0,
+                    None,
+                ),
+                llm_gateway::usage::types::QuotaWindow::unavailable(WindowKind::Monthly),
+            ],
+            balances: vec![],
+        };
+        write_usage_cache(&db, &data).await.unwrap();
+    }
+
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+
+    let vm = virtual_model::ActiveModel {
+        display_id: Set("vm-lb-q".to_string()),
+        enable: Set(true),
+        load_balancing_strategy: Set(0),
+        fallback_strategy: Set(1),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    let vm = vm.insert(&db).await.unwrap();
+    for model_id in [model_a, model_b] {
+        virtual_model_item::ActiveModel {
+            virtual_model_id: Set(vm.virtual_model_id),
+            model_id: Set(model_id),
+            enable: Set(true),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+    }
+
+    let (status, text) = send_chat(
+        &app,
+        json!({"model": "vm-lb-q", "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    assert_eq!(status, 200, "转发失败：{text}");
+    assert_eq!(
+        captured_a.lock().unwrap().len(),
+        1,
+        "订阅制优先应选择 5h 剩余更高的供应商 A"
+    );
+    assert_eq!(captured_b.lock().unwrap().len(), 0, "供应商 B 不应被选到");
+}

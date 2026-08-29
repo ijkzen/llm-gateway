@@ -96,7 +96,7 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
 pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     use crate::entity::{
         api_key, cron_job, cron_job_log, cron_job_run, provider, provider_model, provider_template,
-        request, session, setting, user, virtual_model, virtual_model_item,
+        request, session, setting, usage_cache, user, virtual_model, virtual_model_item,
     };
     use sea_orm::ConnectionTrait;
 
@@ -151,6 +151,10 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     db.execute(&stmt).await?;
 
     let mut stmt = Schema::new(backend).create_table_from_entity(request::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(usage_cache::Entity);
     stmt.if_not_exists();
     db.execute(&stmt).await?;
 
@@ -250,6 +254,15 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         db,
         8,
         &["CREATE INDEX IF NOT EXISTS idx_request_api_key_name ON request (api_key_name)"],
+    )
+    .await?;
+
+    // Migration 9: 供应商用量数据库缓存表（provider_usage_cache）的供应商唯一索引。
+    // 新库已由第一遍 create_table_from_entity 建表并带 UNIQUE 约束，此处兜底历史库。
+    changed |= ensure_migration(
+        db,
+        9,
+        &["CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_usage_cache_provider ON provider_usage_cache (provider_id)"],
     )
     .await?;
 

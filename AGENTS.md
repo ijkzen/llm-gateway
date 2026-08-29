@@ -16,7 +16,9 @@
   - `/v1` OpenAI 兼容转发：对外仅提供 `POST /v1/chat/completions`（Bearer API Key 鉴权），按虚拟模型 LB 策略选成员转发到 OpenAI Compatible / OpenAI Responses / Anthropic / Gemini 四种上游协议（转换逻辑参考 nyro 与 LiteLLM），支持流式与非流式、failover 重试（408/429/500/502/503/529）。
   - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率、TCP+TLS 建连耗时 `network_latency` 等 20 个字段），供后续指标展示。
   - 数据面板：`/api/stats/summary`（全量历史累计：请求数/成功率/总 token/加权缓存命中率）+ `/api/stats/charts`（过去 24 小时：按小时分桶趋势 + 按上游 `model_id` 分布）；前端 overview 页（侧边栏「数据面板」）用 Recharts + shadcn chart 展示 4 指标卡与两组三态图表（折线/饼图/降序条形图，Top 10 + 其他）。
-  - 供应商用量查询：`GET /api/providers/{id}/usage?refresh=1`（`src/usage/`）。对 `extra.usage=true` 的供应商按 base_url host（火山/阶跃再看 path 区分订阅 Plan 与按量账户）分发到各厂商 fetcher（API key 直查 / Copilot OAuth / 火山与阿里 AK/SK 签名 / CookieCloud cookie 系），归一化为订阅制窗口（5h/周/月，厂商不提供的窗口 `available=false`）或按量余额条目；成功结果内存缓存 60s（更新/删除供应商时失效），详情页内嵌「用量信息」卡片（进度条按剩余百分比着色）。
+  - 供应商用量查询：`GET /api/providers/{id}/usage?refresh=1`（`src/usage/`）。对 `extra.usage=true` 的供应商按 base_url host（火山/阶跃再看 path 区分订阅 Plan 与按量账户）分发到各厂商 fetcher（API key 直查 / Copilot OAuth / 火山与阿里 AK/SK 签名 / CookieCloud cookie 系），归一化为订阅制窗口（5h/周/月，厂商不提供的窗口 `available=false`）或按量余额条目；成功结果写**数据库缓存**（`provider_usage_cache` 表，10 分钟内直出，过期/缺失才真实抓取并重新落库；更新/删除供应商时失效；`?refresh=1` 强制重取），详情页内嵌「用量信息」卡片（进度条按剩余百分比着色）。
+  - 用量自动刷新与额度门控：内置定时任务 `usage_refresh`（`@every 5m`，`src/cron/seed.rs` 种子行）刷新全部用量供应商（**不含 enable 过滤**，停用的也持续监测）并落库；订阅制供应商额度耗尽（任一厂商已提供的窗口剩余为 0）时自动停用该 Provider 及名下全部虚拟模型子模型，恢复后自动启用（`src/usage/persist.rs::apply_usage_gate`）。
+  - 虚拟模型 LB 用量感知排序：策略 0/1（订阅制优先/按量优先）分组后组内排序——订阅制按 5h→周→月**剩余百分比**逐层比较、三层全平随机选一，按量付费按剩余金额合计降序；用量优先取 10 分钟数据库缓存，缺失/过期才真实抓取（`src/proxy/usage_rank.rs`）。
 - **运行方式**: 后端启动后监听 `0.0.0.0:4007`，前端 SPA 以静态资源形式内嵌在后端中，通过 `/api/*` 与后端通信。
 
 ## 技术栈
@@ -73,9 +75,11 @@
 │   │   ├── upstream.rs     # 上游 HTTP 客户端（hyper + tokio-rustls，每请求独立建连并计时 TCP/TLS）
 │   │   ├── convert/        # 协议转换：openai(直通)/responses/anthropic/gemini（请求+响应+流式+usage 归一）
 │   │   ├── metrics.rs      # request 表记录与流式指标（ttft/输出耗时）
-│   │   └── sse.rs          # SSE 拆分/写出工具
-│   ├── usage/              # 供应商用量查询：按 base_url host 分发 fetcher，归一化输出 + 60s 缓存
+│   │   ├── sse.rs          # SSE 拆分/写出工具
+│   │   └── usage_rank.rs   # 用量感知排序纯比较器（订阅 5h→周→月剩余百分比 / 按量余额合计）
+│   ├── usage/              # 供应商用量查询：按 base_url host 分发 fetcher，归一化输出
 │   │   ├── types.rs        # UsageData/QuotaWindow（available 标记三窗）/BalanceItem
+│   │   ├── persist.rs      # 用量数据库缓存（10 分钟新鲜度）+ 全量刷新 + 订阅额度耗尽自动停用/恢复
 │   │   ├── http.rs         # reqwest 封装（15s 超时；LLM_GATEWAY_USAGE_HTTP_OVERRIDE 供测试重定向）
 │   │   ├── cookiecloud.rs  # CookieCloud 解密（MD5 材料 + EVP_BytesToKey + AES-256-CBC）
 │   │   ├── volcengine_sign.rs # 火山 V4 签名（service=ark，scope 以 /request 结尾）
@@ -86,6 +90,7 @@
 │   │   ├── repository.rs   # CronJobRepository trait 与 SeaORM 实现
 │   │   ├── scheduler.rs    # SchedulerRuntime：任务加载、启停、增删改
 │   │   ├── scheduler/tests.rs # scheduler 单元测试（FailingRepo 用宏生成透传委托）
+│   │   ├── seed.rs         # 内置定时任务种子行（usage_refresh，@every 5m，启动幂等 upsert）
 │   │   ├── worker.rs       # JobWorker：有界队列 + 信号量并发池 + 优雅关闭 + 执行日志落库
 │   │   ├── log_capture.rs  # JobLogLayer：捕获任务 span 内 tracing 日志 → broadcast
 │   │   ├── log_repository.rs # 执行日志持久化（runs/logs 表、30 次清理、启动恢复）
@@ -105,13 +110,15 @@
 │       ├── user.rs         # 管理后台用户（单用户，argon2 哈希）
 │       ├── session.rs      # 登录会话（主键为令牌 SHA-256）
 │       ├── request.rs      # /v1 每次转发的指标记录（20 字段）
+│       ├── usage_cache.rs  # 供应商用量数据库缓存（provider_usage_cache：provider_id 唯一 + usage_json + fetched_at）
 │       └── setting.rs
 ├── tests/                  # 集成测试
 │   ├── common/mod.rs       # 集成测试共享引导（内存库 + worker + scheduler；build_authed_app 自动注入测试凭证）
 │   ├── auth_integration.rs # 认证：init/登录/拦截/改密踢会话/登出/Bearer
-│   ├── proxy_integration.rs# 转发：四协议转换、include_usage 注入、failover、落库
+│   ├── proxy_integration.rs# 转发：四协议转换、include_usage 注入、failover、落库、LB 用量排序
 │   ├── cron_jobs_integration.rs
 │   ├── cron_job_logs_integration.rs
+│   ├── provider_quota_gate_integration.rs # 订阅额度耗尽自动停用/恢复 + usage_refresh 种子任务被调度
 │   └── settings_integration.rs
 ├── web/                    # 前端源码
 │   ├── package.json
@@ -211,7 +218,7 @@ Dockerfile 为多阶段构建：
 
 ## 测试说明
 
-- **Rust 测试**: `cargo test`。当前共 184 个单元测试（`auth`、`config`、`cron::*`、`crypto`、`db`、`logs_cleanup`、`proxy::convert`（四协议转换）、`proxy::sse`、`proxy::upstream`、`usage::*`（各厂商用量解析/签名/CookieCloud 解密）等模块）+ 集成测试（`tests/auth_integration.rs`、`tests/proxy_integration.rs`（本地 mock 上游）、`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`、`tests/providers_integration.rs`、`tests/provider_models_integration.rs`、`tests/api_keys_integration.rs`、`tests/virtual_models_integration.rs`、`tests/virtual_models_openai_integration.rs`、`tests/stats_integration.rs`、`tests/provider_usage_integration.rs`（用量查询：404/未开启/不支持 host + 经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向到本地 mock 的成功/缓存/refresh 链路））。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
+- **Rust 测试**: `cargo test`。当前共 210 个单元测试（`auth`、`config`、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`、`logs_cleanup`、`proxy::convert`（四协议转换）、`proxy::sse`、`proxy::upstream`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词）等模块）+ 集成测试（`tests/auth_integration.rs`、`tests/proxy_integration.rs`（本地 mock 上游）、`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`、`tests/providers_integration.rs`、`tests/provider_models_integration.rs`、`tests/api_keys_integration.rs`、`tests/virtual_models_integration.rs`、`tests/virtual_models_openai_integration.rs`、`tests/stats_integration.rs`、`tests/provider_usage_integration.rs`（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>）、`tests/provider_quota_gate_integration.rs`（额度耗尽停用/恢复 + 种子任务被调度）、`tests/provider_usage_integration.rs` 经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向到本地 mock）。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
 - 环境变量隔离使用 `temp-env`，临时目录使用 `tempfile`。
 - 调度器测试包含关键行为回归：禁用的任务不会触发（`set_stop` 在 tokio-cron-scheduler 内存存储下无效，禁用必须走移除）、启用后恢复触发、禁用任务仍可手动执行。
 - **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 27 个测试文件 109 个用例，位于 `web/src/__tests__/` 与 `web/src/components/__tests__/`（含 login 页、RequireAuth 守卫、ChangePasswordDialog、ProviderUsageCard）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
@@ -255,7 +262,7 @@ Dockerfile 为多阶段构建：
 
 关键行为约定：
 
-- **Handler 注册**：业务 Handler 在 `src/lib.rs::init()` 中通过 `scheduler.register_handler(name, handler)` 注册，当前注册了一个 `example` 示例（多步间隔输出日志，用于演示实时日志）。Handler 类型：
+- **Handler 注册**：业务 Handler 在 `src/lib.rs::init()` 中通过 `scheduler.register_handler(name, handler)` 注册，当前注册了 `example` 示例（多步间隔输出日志，用于演示实时日志）与 `usage_refresh`（每 5 分钟刷新全部已开启用量展示的供应商用量并落库、执行订阅额度门控，见 `src/usage/persist.rs`）。内置周期任务在启动时经 `src/cron/seed.rs` 幂等插入种子行（`usage_refresh` / `@every 5m`），无创建任务的 API。Handler 类型：
 
   ```rust
   pub type JobHandler = Arc<

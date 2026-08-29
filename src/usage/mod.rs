@@ -7,6 +7,7 @@ pub mod cookiecloud;
 pub mod error;
 pub mod fetchers;
 pub mod http;
+pub mod persist;
 pub mod types;
 pub mod volcengine_sign;
 

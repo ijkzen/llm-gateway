@@ -145,6 +145,41 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         )
         .await;
 
+    // 用量刷新 handler：刷新全部已开启用量展示的供应商用量并落库，
+    // 同时执行订阅额度耗尽自动停用/恢复（见 src/usage/persist.rs）。
+    // 用 tokio Mutex try_lock 防止多次执行重叠（运行超 5 分钟时跳过本次）。
+    let usage_refresh_lock = Arc::new(tokio::sync::Mutex::new(()));
+    scheduler
+        .register_handler(
+            crate::cron::seed::USAGE_REFRESH_JOB,
+            {
+                let lock = usage_refresh_lock.clone();
+                Arc::new(move |ctx: JobContext| {
+                    let lock = lock.clone();
+                    Box::pin(async move {
+                        let Ok(_guard) = lock.try_lock() else {
+                            tracing::warn!("用量刷新上次仍在运行，本次跳过");
+                            return Ok(());
+                        };
+                        match crate::usage::persist::refresh_all_usage(&ctx.db).await {
+                            Ok(n) => {
+                                tracing::info!("用量刷新完成，成功刷新 {n} 家供应商");
+                                Ok(())
+                            }
+                            Err(e) => {
+                                tracing::error!("用量刷新失败：{e}");
+                                Ok(())
+                            }
+                        }
+                    })
+                })
+            },
+        )
+        .await;
+
+    // 内置定时任务种子：用量刷新（每 5 分钟），与上面的 handler 注册一一对应。
+    crate::cron::seed::ensure_usage_refresh_job(&db).await?;
+
     scheduler.load_from_db(&repo).await?;
     scheduler.start().await?;
 
