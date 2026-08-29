@@ -5,6 +5,31 @@ export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
 
+function trimTrailingZeros(text: string): string {
+	return text.replace(/\.?0+$/, "");
+}
+
+/** token 数量按中文计数习惯缩写：>= 1 亿用「亿」（两位小数），>= 1 万用「万」（一位小数）。 */
+export function formatTokenCount(value: number): string {
+	if (value >= 100_000_000) {
+		return `${trimTrailingZeros((value / 100_000_000).toFixed(2))} 亿`;
+	}
+	if (value >= 10_000) {
+		return `${trimTrailingZeros((value / 10_000).toFixed(1))} 万`;
+	}
+	return value.toLocaleString("zh-CN");
+}
+
+/** 按 value 降序取前 limit 名，其余合并为 other（value 求和）。 */
+export function topWithOther<T extends { value: number }>(items: T[], other: T, limit = 10): T[] {
+	const sorted = [...items].sort((a, b) => b.value - a.value);
+	if (sorted.length <= limit) {
+		return sorted;
+	}
+	const restValue = sorted.slice(limit).reduce((sum, item) => sum + item.value, 0);
+	return [...sorted.slice(0, limit), { ...other, value: restValue }];
+}
+
 // 计算分页页码序列，最多展示 5 个页码，超出部分用 "..." 折叠
 export function getPageNumbers(currentPage: number, totalPages: number): (number | "...")[] {
 	const maxVisiblePages = 5;

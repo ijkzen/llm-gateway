@@ -10,8 +10,8 @@ export interface PageConfig {
 
 export const OVERVIEW_PAGE: PageConfig = {
 	path: "/",
-	title: "总览",
-	description: "系统概览与最近动态",
+	title: "数据面板",
+	description: "请求指标概览与过去 24 小时调用/token 图表",
 	icon: LayoutDashboard,
 };
 

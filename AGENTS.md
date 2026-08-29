@@ -15,6 +15,7 @@
   - 供应商 API Key 管理：服务端生成 `lg-` 密钥，AES-256-GCM 加密存储（含 SHA-256 `key_hash` 供鉴权查找）。
   - `/v1` OpenAI 兼容转发：对外仅提供 `POST /v1/chat/completions`（Bearer API Key 鉴权），按虚拟模型 LB 策略选成员转发到 OpenAI Compatible / OpenAI Responses / Anthropic / Gemini 四种上游协议（转换逻辑参考 nyro 与 LiteLLM），支持流式与非流式、failover 重试（408/429/500/502/503/529）。
   - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率、TCP+TLS 建连耗时 `network_latency` 等 20 个字段），供后续指标展示。
+  - 数据面板：`/api/stats/summary`（全量历史累计：请求数/成功率/总 token/加权缓存命中率）+ `/api/stats/charts`（过去 24 小时：按小时分桶趋势 + 按上游 `model_id` 分布）；前端 overview 页（侧边栏「数据面板」）用 Recharts + shadcn chart 展示 4 指标卡与两组三态图表（折线/饼图/降序条形图，Top 10 + 其他）。
 - **运行方式**: 后端启动后监听 `0.0.0.0:4007`，前端 SPA 以静态资源形式内嵌在后端中，通过 `/api/*` 与后端通信。
 
 ## 技术栈
@@ -42,6 +43,7 @@
 - **UI 组件**: shadcn/ui 风格组件（Radix UI + Tailwind CSS 3.4），使用 `class-variance-authority`、`clsx`、`tailwind-merge`；动画类由 `tailwindcss-animate` 提供（`animate-in`/`fade-in`/`slide-in-from-*` 等）。
 - **通知**: `sonner`（`<Toaster />` 挂载在 App 根部，业务代码通过 `web/src/hooks/use-toast.ts` 的 `useToastActions()` 调用 `toastSuccess`/`toastError`）。
 - **图标**: `lucide-react`。
+- **图表**: Recharts 2 + shadcn chart 组件（`web/src/components/ui/chart.tsx`），配色走 `--chart-1..5` CSS 变量（亮暗两套，`index.css` 定义）。
 - **校验/表单**: Zod、React Hook Form、`@hookform/resolvers`，表单统一使用 `web/src/components/ui/form.tsx` 的 `FormField`/`FormItem`/`FormControl`/`FormMessage` 封装。
 - **代码检查/格式化**: Biome 1.9（`web/biome.json` 已配置为 tab 缩进、双引号、100 列最大宽度）。
 - **测试**: Vitest 2.1 + `@testing-library/react` + `jsdom`。
@@ -86,6 +88,7 @@
 │   │   ├── auth.rs         # status/init/login/logout/me/change-password
 │   │   ├── cron_jobs.rs    # 任务 CRUD + logs 列表/单次日志/SSE 实时流
 │   │   ├── openai_compat.rs# /v1/models 元数据 + /v1/chat/completions 转发入口
+│   │   ├── stats.rs        # 数据面板：/api/stats/summary 累计指标 + /api/stats/charts 24h 图表聚合
 │   │   └── settings.rs
 │   └── entity/             # SeaORM 实体
 │       ├── mod.rs
@@ -201,7 +204,7 @@ Dockerfile 为多阶段构建：
 
 ## 测试说明
 
-- **Rust 测试**: `cargo test`。当前共 137 个单元测试（`auth`、`config`、`cron::*`、`crypto`、`db`、`logs_cleanup`、`proxy::convert`（四协议转换）、`proxy::sse`、`proxy::upstream` 等模块）+ 集成测试（`tests/auth_integration.rs`、`tests/proxy_integration.rs`（本地 mock 上游）、`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`、`tests/providers_integration.rs`、`tests/provider_models_integration.rs`、`tests/api_keys_integration.rs`、`tests/virtual_models_integration.rs`、`tests/virtual_models_openai_integration.rs`）。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
+- **Rust 测试**: `cargo test`。当前共 137 个单元测试（`auth`、`config`、`cron::*`、`crypto`、`db`、`logs_cleanup`、`proxy::convert`（四协议转换）、`proxy::sse`、`proxy::upstream` 等模块）+ 集成测试（`tests/auth_integration.rs`、`tests/proxy_integration.rs`（本地 mock 上游）、`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`、`tests/providers_integration.rs`、`tests/provider_models_integration.rs`、`tests/api_keys_integration.rs`、`tests/virtual_models_integration.rs`、`tests/virtual_models_openai_integration.rs`、`tests/stats_integration.rs`）。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
 - 环境变量隔离使用 `temp-env`，临时目录使用 `tempfile`。
 - 调度器测试包含关键行为回归：禁用的任务不会触发（`set_stop` 在 tokio-cron-scheduler 内存存储下无效，禁用必须走移除）、启用后恢复触发、禁用任务仍可手动执行。
 - **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 24 个测试文件 88 个用例，位于 `web/src/__tests__/` 与 `web/src/components/__tests__/`（含 login 页、RequireAuth 守卫、ChangePasswordDialog）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
