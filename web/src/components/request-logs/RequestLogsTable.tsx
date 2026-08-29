@@ -59,7 +59,8 @@ function fmtMs(v: number | null | undefined): string {
 }
 
 export function RequestLogsTable() {
-	const [sorting, setSorting] = useState<SortingState>([]);
+	// 默认按时间降序（最新在前），列头显示排序指示，亦显式通知后端。
+	const [sorting, setSorting] = useState<SortingState>([{ id: "startTime", desc: true }]);
 	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
 	const [page, setPage] = useState(1);
 	const [pageSize, setPageSize] = useState(20);
