@@ -1,0 +1,36 @@
+# llm-gateway 生产部署（frp-ali）。
+#
+# 目录布局（部署机 /opt/llm-gateway）：
+#   docker-compose.yaml   本文件
+#   Dockerfile            运行时镜像（见同目录）
+#   llm-gateway           本地 zig 交叉编译的静态二进制（x86_64-unknown-linux-musl）
+#   .env                  API_KEY_ENCRYPTION_KEY=<openssl rand -hex 32 生成>
+#   data/db, data/logs    SQLite 数据库与日志（自动创建）
+#
+# 仅监听 127.0.0.1，由 Caddy 反代 gateway.ijkzen.cn。
+services:
+  llm-gateway:
+    build: .
+    image: llm-gateway:latest
+    container_name: llm-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4007:4007"
+    environment:
+      BIND_ADDRESS: 0.0.0.0:4007
+      APP_ENV: prod
+      DATABASE_URL: sqlite:///config/db/app.db?mode=rwc
+      RUST_LOG: info,sqlx::query=warn
+      CRON_JOB_QUEUE_SIZE: "1000"
+      CRON_JOB_MAX_CONCURRENT: "10"
+      # 供应商 API Key 的 AES-256-GCM 加密密钥（必配，否则明文落库）
+      API_KEY_ENCRYPTION_KEY: ${API_KEY_ENCRYPTION_KEY:?请在 .env 中配置 API_KEY_ENCRYPTION_KEY}
+    volumes:
+      - ./data/db:/config/db
+      - ./data/logs:/config/logs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4007/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
