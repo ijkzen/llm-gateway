@@ -183,7 +183,7 @@ pub const TEMPLATES: &[Template] = &[
     Template { name: "Vultr", base_url: "https://api.vultrinference.com/v1", protocol_type: 0, billing_mode: 0, extra: "{}" },
     Template { name: "Wafer", base_url: "https://pass.wafer.ai/v1", protocol_type: 0, billing_mode: 0, extra: "{}" },
     Template { name: "Weights & Biases", base_url: "https://api.inference.wandb.ai/v1", protocol_type: 0, billing_mode: 0, extra: "{}" },
-    Template { name: "Xiaomi", base_url: "https://api.xiaomimimo.com/v1", protocol_type: 0, billing_mode: 1, extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 0}" },
+    Template { name: "Xiaomi", base_url: "https://api.xiaomimimo.com/v1", protocol_type: 0, billing_mode: 0, extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 0}" },
     Template { name: "Xiaomi Token Plan (Europe)", base_url: "https://token-plan-ams.xiaomimimo.com/v1", protocol_type: 0, billing_mode: 1, extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 1}" },
     Template { name: "Xiaomi Token Plan (China)", base_url: "https://token-plan-cn.xiaomimimo.com/v1", protocol_type: 0, billing_mode: 1, extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 1}" },
     Template { name: "Xiaomi Token Plan (Singapore)", base_url: "https://token-plan-sgp.xiaomimimo.com/v1", protocol_type: 0, billing_mode: 1, extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 1}" },

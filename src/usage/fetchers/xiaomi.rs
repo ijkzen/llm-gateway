@@ -69,6 +69,9 @@ fn parse_xiaomi_balance(body: &str) -> Result<FetchOutput, UsageError> {
         ("balance", "余额"),
         ("cashBalance", "现金余额"),
         ("giftBalance", "赠送余额"),
+        ("frozenBalance", "冻结金额"),
+        ("overdraftLimit", "透支额度"),
+        ("remainingOverdraftLimit", "剩余透支额度"),
     ] {
         if let Some(amount) = data.get(key).and_then(num) {
             items.push(BalanceItem {
@@ -151,13 +154,16 @@ mod tests {
 
     #[test]
     fn balance_string_amounts() {
-        let body = r#"{ "code": 0, "data": { "balance": "123.45", "currency": "CNY", "cashBalance": "100.00", "giftBalance": "23.45" } }"#;
+        let body = r#"{ "code": 0, "data": { "balance": "123.45", "currency": "CNY", "cashBalance": "100.00", "giftBalance": "23.45", "frozenBalance": "1.00", "overdraftLimit": "10.00", "remainingOverdraftLimit": "9.00" } }"#;
         let FetchOutput::Balance { items } = parse_xiaomi_balance(body).unwrap() else {
             panic!("expected balance")
         };
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 6);
         assert_eq!(items[0].amount, 123.45);
         assert_eq!(items[0].currency.as_deref(), Some("CNY"));
+        assert_eq!(items[3].label, "冻结金额");
+        assert_eq!(items[4].label, "透支额度");
+        assert_eq!(items[5].label, "剩余透支额度");
     }
 
     #[test]
