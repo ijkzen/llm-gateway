@@ -19,7 +19,8 @@ import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-r
 import { useState } from "react";
 
 function formatPercent(rate: number): string {
-	return `${(rate * 100).toFixed(1)}%`;
+	// 如实展示（保留最多 5 位小数，去尾零），避免 99.789% 被舍入成 100%。
+	return `${Number.parseFloat((rate * 100).toFixed(5))}%`;
 }
 
 type CallView = "trend" | "distribution" | "rank";

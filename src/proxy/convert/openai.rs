@@ -88,11 +88,21 @@ impl OpenAiStreamScanner {
                     self.usage = Some(usage);
                 }
             }
+            // 内容判定与 chunk_has_content 对齐：content / reasoning_content / tool_calls
+            // 任一非空即视为首个内容 token（推理模型与纯函数调用流同样计入 ttft）。
             if !self.saw_content
-                && value
+                && (value
                     .pointer("/choices/0/delta/content")
                     .and_then(Value::as_str)
                     .is_some_and(|s| !s.is_empty())
+                    || value
+                        .pointer("/choices/0/delta/reasoning_content")
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.is_empty())
+                    || value
+                        .pointer("/choices/0/delta/tool_calls")
+                        .and_then(Value::as_array)
+                        .is_some_and(|calls| !calls.is_empty()))
             {
                 self.saw_content = true;
                 // 内容 token 时刻由调用方在 feed 时统一记录（见 StreamMetrics::on_token）。
@@ -160,5 +170,20 @@ mod tests {
         let usage = scanner.usage.expect("usage should be captured");
         assert_eq!(usage.input_tokens, Some(10));
         assert_eq!(usage.output_tokens, Some(2));
+    }
+
+    #[test]
+    fn scanner_detects_reasoning_and_tool_content() {
+        // 推理模型（reasoning_content）与纯函数调用（tool_calls）流同样应标记首 token。
+        let mut reasoning = OpenAiStreamScanner::default();
+        reasoning
+            .feed("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考\"}}]}\n\n");
+        assert!(reasoning.saw_content);
+
+        let mut tools = OpenAiStreamScanner::default();
+        tools.feed(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"f\"}}]}}]}\n\n",
+        );
+        assert!(tools.saw_content);
     }
 }

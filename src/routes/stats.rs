@@ -87,7 +87,9 @@ async fn summary(State(state): State<AppState>) -> impl IntoResponse {
         0.0
     };
     let cache_hit_rate = if input_tokens > 0 {
-        cache_tokens as f64 / input_tokens as f64
+        // 保留 5 位小数，与 request 表的 input_cache_rate 口径一致。
+        let rate = cache_tokens as f64 / input_tokens as f64;
+        (rate * 100_000.0).round() / 100_000.0
     } else {
         0.0
     };

@@ -99,7 +99,9 @@ export function RequestLogDetailDialog({ row, onOpenChange }: RequestLogDetailDi
 									: row.totalTokens.toLocaleString("zh-CN")}
 							</Field>
 							<Field label="缓存命中 Token">{row.inputCacheTokens.toLocaleString("zh-CN")}</Field>
-							<Field label="缓存命中率">{(row.inputCacheRate * 100).toFixed(1)}%</Field>
+							<Field label="缓存命中率">
+								{Number.parseFloat((row.inputCacheRate * 100).toFixed(5))}%
+							</Field>
 							<Field label="TPS">{row.tps.toFixed(2)}</Field>
 							<Field label="请求 ID">{fmt(row.requestId)}</Field>
 						</div>

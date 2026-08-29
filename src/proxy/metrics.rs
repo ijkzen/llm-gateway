@@ -94,7 +94,11 @@ impl RequestRecord {
     /// 计算派生字段（cache_rate / tps / total_tokens）并异步落库。
     pub fn insert(self, db: &DatabaseConnection) {
         let input_cache_rate = match self.usage.input_tokens {
-            Some(input) if input > 0 => self.usage.cache_tokens as f64 / input as f64,
+            // 保存到小数点后 5 位（如 0.99789），避免浮点长尾与展示端误舍入。
+            Some(input) if input > 0 => {
+                let rate = self.usage.cache_tokens as f64 / input as f64;
+                (rate * 100_000.0).round() / 100_000.0
+            }
             _ => 0.0,
         };
         let tps = match (self.usage.output_tokens, self.output_tokens_time) {
