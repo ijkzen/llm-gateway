@@ -28,7 +28,7 @@ import {
 import { useLogout, useMe } from "@/hooks/use-auth";
 import { CRON_JOBS_PAGE, PAGES, SETTINGS_PAGE } from "@/lib/pages";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronUp, LogOut, RefreshCw, Settings } from "lucide-react";
+import { ChevronUp, LogOut, RefreshCw, Waypoints } from "lucide-react";
 import { Suspense } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 
@@ -58,7 +58,7 @@ export default function AppLayout() {
 							<SidebarMenuButton size="lg" asChild>
 								<Link to="/">
 									<div className="flex aspect-square size-9 items-center justify-center rounded-xl bg-foreground text-background shadow-[inset_0_1px_0_rgba(255,255,255,0.15),0_4px_10px_rgba(15,23,42,0.18)] dark:bg-primary dark:text-primary-foreground">
-										<Settings className="size-4" />
+										<Waypoints className="size-4" />
 									</div>
 									<div className="flex flex-col gap-0.5 leading-none">
 										<span className="font-semibold">llm-gateway</span>

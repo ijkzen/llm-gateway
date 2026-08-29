@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- 圆角方形底，与侧边栏 logo 的圆角方块一致 -->
+  <rect width="64" height="64" rx="14" fill="#18181b" />
+  <!-- 网关分流：左入右出的双向箭头，中间节点 -->
+  <g fill="none" stroke="#fafafa" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 左入口箭头 -->
+    <path d="M10 26 L20 26 L20 18 L30 26 L20 34 L20 26" />
+    <!-- 右出口箭头 -->
+    <path d="M54 38 L44 38 L44 46 L34 38 L44 30 L44 38" />
+    <!-- 中心网关节点（菱形） -->
+    <path d="M32 24 L40 32 L32 40 L24 32 Z" fill="#6366f1" stroke="#6366f1" />
+  </g>
+</svg>
