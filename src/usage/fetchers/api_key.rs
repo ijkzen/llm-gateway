@@ -389,28 +389,70 @@ pub async fn fetch_command_code(
         return Err(UsageError::Upstream(credits.status, snippet(&credits.body)));
     }
 
-    // subscriptions 仅用于套餐名，失败不阻塞窗口数据。
-    let plan = match http
+    // subscriptions 用于套餐名与「本期已用」计算；失败不阻塞窗口数据。
+    let subscription = match http
         .get(
             &format!("{COMMAND_CODE_BASE}/alpha/billing/subscriptions{org_query}"),
-            &[("Authorization", auth)],
+            &[("Authorization", auth.clone())],
         )
         .await
     {
-        Ok(reply) if reply.status == 200 => parse_json(&reply)
-            .ok()
-            .and_then(|v| {
-                // 实测有 success/data 包装，文档样例为裸 data，两种都兼容。
-                let data = v.get("data").unwrap_or(&v);
-                data.get("planId").and_then(Value::as_str).map(str::to_string)
-            }),
+        Ok(reply) if reply.status == 200 => parse_json(&reply).ok().map(|v| {
+            // 实测有 success/data 包装，文档样例为裸 data，两种都兼容。
+            let data = v.get("data").unwrap_or(&v);
+            (
+                data.get("planId").and_then(Value::as_str).map(str::to_string),
+                data.get("currentPeriodStart").and_then(Value::as_str).map(str::to_string),
+            )
+        }),
         _ => None,
     };
+    let (plan, period_start) = match subscription {
+        Some((plan, start)) => (plan, start),
+        None => (None, None),
+    };
 
-    parse_command_code_credits(&credits.body, plan)
+    // 本期已用（USD）：以订阅周期起始作为 since；失败只影响月窗总额。
+    let total_cost = match &period_start {
+        Some(since) => match http
+            .get(
+                &format!(
+                    "{COMMAND_CODE_BASE}/alpha/usage/summary?since={}",
+                    urlencode(since)
+                ),
+                &[("Authorization", auth)],
+            )
+            .await
+        {
+            Ok(reply) if reply.status == 200 => parse_json(&reply)
+                .ok()
+                .and_then(|v| v.get("totalCost").and_then(num)),
+            _ => None,
+        },
+        None => None,
+    };
+
+    parse_command_code_credits(&credits.body, plan, total_cost)
 }
 
-fn parse_command_code_credits(body: &str, plan: Option<String>) -> Result<FetchOutput, UsageError> {
+/// usage/summary 的 since 必须是 ISO 8601；简单 query 编码即可。
+fn urlencode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b':' | b'Z' | b'T') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn parse_command_code_credits(
+    body: &str,
+    plan: Option<String>,
+    total_cost: Option<f64>,
+) -> Result<FetchOutput, UsageError> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
     let limits = v
@@ -432,6 +474,22 @@ fn parse_command_code_credits(body: &str, plan: Option<String>) -> Result<FetchO
             QuotaWindow::from_used_limit(kind, used, cap, resets_at, Some("USD")),
         );
     }
+
+    // 月窗：monthlyCredits 是「本月剩余」（USD），无总额字段；
+    // 月总额 = monthlyCredits + 本期已用（usage/summary.totalCost）。
+    if let Some(remaining) = v
+        .get("credits")
+        .and_then(|c| c.get("monthlyCredits"))
+        .and_then(num)
+        && let Some(total) = total_cost.map(|used| remaining + used)
+        && total > 0.0
+    {
+        set_window(
+            &mut windows,
+            QuotaWindow::from_used_limit(WindowKind::Monthly, total - remaining, total, None, Some("USD")),
+        );
+    }
+
     Ok(FetchOutput::Quota { plan, windows })
 }
 
@@ -575,13 +633,38 @@ mod tests {
           }
         }"#;
         let FetchOutput::Quota { plan, windows } =
-            parse_command_code_credits(body, Some("individual-goat".to_string())).unwrap()
+            parse_command_code_credits(body, Some("individual-goat".to_string()), Some(0.946)).unwrap()
         else {
             panic!("expected quota")
         };
         assert_eq!(plan.as_deref(), Some("individual-goat"));
         assert!(windows[0].available);
         assert_eq!(windows[0].limit, Some(14.0));
+        assert!(windows[1].available);
+        // 月窗：剩余 69.04 + 本期已用 0.946 = 总额 69.99（两位舍入），已用 0.95（≈1.36%）。
+        assert!(windows[2].available);
+        assert_eq!(windows[2].remaining_percent, Some(98.64));
+        assert_eq!(windows[2].limit, Some(69.99));
+        assert_eq!(windows[2].used, Some(0.95));
+        assert_eq!(windows[2].unit.as_deref(), Some("USD"));
+    }
+
+    #[test]
+    fn command_code_monthly_unavailable_without_summary() {
+        // summary 拉取失败（total_cost=None）时月窗不可用，5h/周照常展示。
+        let body = r#"{
+          "credits": { "monthlyCredits": 69.04 },
+          "windowLimits": {
+            "fiveHour": { "used": 0.96, "cap": 14, "resetAt": 1787817057032 },
+            "weekly":   { "used": 0.96, "cap": 35, "resetAt": 1788403857032 }
+          }
+        }"#;
+        let FetchOutput::Quota { windows, .. } =
+            parse_command_code_credits(body, None, None).unwrap()
+        else {
+            panic!("expected quota")
+        };
+        assert!(windows[0].available);
         assert!(windows[1].available);
         assert!(!windows[2].available);
     }

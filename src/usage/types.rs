@@ -111,6 +111,9 @@ impl QuotaWindow {
         resets_at: Option<DateTime<Utc>>,
         unit: Option<&str>,
     ) -> Self {
+        // 保留两位小数，避免 69.04+0.946=69.98599… 这类浮点噪声。
+        let used = round2(used);
+        let limit = round2(limit);
         let mut w = Self {
             available: true,
             used: Some(used),
@@ -170,8 +173,12 @@ fn clamp_percent(p: f64) -> f64 {
         0.0
     } else {
         // 保留两位小数，避免 0.58*100=57.999… 这类浮点噪声进入展示层。
-        (p.clamp(0.0, 100.0) * 100.0).round() / 100.0
+        round2(p.clamp(0.0, 100.0))
     }
+}
+
+fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
 }
 
 /// 毫秒时间戳转 UTC；非法值返回 None。
