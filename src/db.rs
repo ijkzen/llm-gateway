@@ -95,8 +95,8 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
 
 pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     use crate::entity::{
-        cron_job, cron_job_log, cron_job_run, provider, provider_model, provider_template, setting,
-        virtual_model, virtual_model_item,
+        api_key, cron_job, cron_job_log, cron_job_run, provider, provider_model, provider_template,
+        setting, virtual_model, virtual_model_item,
     };
     use sea_orm::ConnectionTrait;
 
@@ -135,6 +135,10 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     db.execute(&stmt).await?;
 
     let mut stmt = Schema::new(backend).create_table_from_entity(virtual_model_item::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(api_key::Entity);
     stmt.if_not_exists();
     db.execute(&stmt).await?;
 

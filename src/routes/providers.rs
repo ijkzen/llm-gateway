@@ -198,19 +198,10 @@ fn validate_json_field(label: &str, value: &str) -> Option<String> {
 /// 对 api_key 做掩码：保留前 3 位与后 4 位，中间用星号填充；
 /// 解密失败（密钥变更等原因）时返回空字符串。
 fn mask_api_key(stored: &str) -> String {
-    let Ok(plain) = crypto::decrypt(stored) else {
-        return String::new();
-    };
-    if plain.is_empty() {
-        return String::new();
+    match crypto::decrypt(stored) {
+        Ok(plain) => crypto::mask(&plain),
+        Err(_) => String::new(),
     }
-    let bytes = plain.as_bytes();
-    if bytes.len() <= 7 {
-        return "*".repeat(bytes.len());
-    }
-    let head: String = plain.chars().take(3).collect();
-    let tail: String = plain.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
-    format!("{head}****{tail}")
 }
 
 async fn load_detail(db: &DatabaseConnection, id: i32) -> Result<Option<ProviderDetailResponse>, DbErr> {

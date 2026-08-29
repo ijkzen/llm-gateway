@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Boxes, Clock, Layers, LayoutDashboard, Server, Settings } from "lucide-react";
+import { Boxes, Clock, KeyRound, Layers, LayoutDashboard, Server, Settings } from "lucide-react";
 
 export interface PageConfig {
 	path: string;
@@ -50,11 +50,19 @@ export const VIRTUAL_MODELS_PAGE: PageConfig = {
 	icon: Layers,
 };
 
+export const API_KEYS_PAGE: PageConfig = {
+	path: "/api-keys",
+	title: "API Key",
+	description: "管理调用方访问网关的 API Key，支持创建、禁用与删除",
+	icon: KeyRound,
+};
+
 export const PAGES: readonly PageConfig[] = [
 	OVERVIEW_PAGE,
 	CRON_JOBS_PAGE,
 	PROVIDERS_PAGE,
 	PROVIDER_MODELS_PAGE,
 	VIRTUAL_MODELS_PAGE,
+	API_KEYS_PAGE,
 	SETTINGS_PAGE,
 ];

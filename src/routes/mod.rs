@@ -1,3 +1,4 @@
+mod api_keys;
 mod cron_jobs;
 mod openai_compat;
 mod provider_models;
@@ -24,6 +25,7 @@ pub fn create_app() -> Router<AppState> {
         .nest("/api/provider-templates", provider_templates::routes())
         .nest("/api/provider-models", provider_models::global_routes())
         .nest("/api/virtual-models", virtual_models::routes())
+        .nest("/api/api-keys", api_keys::routes())
         .nest("/v1", openai_compat::routes())
         .fallback(crate::static_assets::serve_asset)
         .layer(DefaultBodyLimit::max(5 * 1024 * 1024));

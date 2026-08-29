@@ -103,6 +103,28 @@ pub fn decrypt(ciphertext: &str) -> anyhow::Result<String> {
     }
 }
 
+/// 对明文密钥做掩码:保留前 3 位与后 4 位,中间用星号填充;
+/// 长度不足(≤7 字符)时整体打码,空串返回空串。
+pub fn mask(plain: &str) -> String {
+    if plain.is_empty() {
+        return String::new();
+    }
+    let bytes = plain.as_bytes();
+    if bytes.len() <= 7 {
+        return "*".repeat(bytes.len());
+    }
+    let head: String = plain.chars().take(3).collect();
+    let tail: String = plain
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{head}****{tail}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +217,19 @@ mod tests {
         with_key(Some("key-b"), || {
             assert!(decrypt(&ciphertext).is_err());
         });
+    }
+
+    #[test]
+    fn mask_keeps_head_and_tail() {
+        assert_eq!(mask("sk-secret-1234"), "sk-****1234");
+        assert_eq!(mask("lg-0123456789abcdef0123456789abcdef"), "lg-****cdef");
+    }
+
+    #[test]
+    fn mask_short_and_empty_values() {
+        assert_eq!(mask(""), "");
+        assert_eq!(mask("abc"), "***");
+        assert_eq!(mask("1234567"), "*******");
+        assert_eq!(mask("12345678"), "123****5678");
     }
 }
