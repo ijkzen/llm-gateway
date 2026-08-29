@@ -483,6 +483,18 @@ async fn refresh_provider_models(
         candidates.push(candidate);
     }
 
+    // 排序：先按匹配状态（smart → partial → manual），组内再按尾段字典序。
+    candidates.sort_by(|a, b| {
+        let rank = |s: &str| match s {
+            "smart" => 0,
+            "partial" => 1,
+            _ => 2,
+        };
+        rank(&a.match_state)
+            .cmp(&rank(&b.match_state))
+            .then_with(|| tail_key(&a.provider_model_id).cmp(&tail_key(&b.provider_model_id)))
+    });
+
     (StatusCode::OK, Json(Response::success(candidates)))
 }
 
