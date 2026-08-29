@@ -25,15 +25,16 @@ pub fn now_ms() -> i64 {
 /// 流式响应的指标追踪（首/末 token 时刻）。
 #[derive(Debug, Default)]
 pub struct StreamMetrics {
-    upstream_started_at: Option<i64>,
+    /// 上游建连完成（TTFT 起点）。
+    connect_done_at: Option<i64>,
     first_token_at: Option<i64>,
     last_token_at: Option<i64>,
 }
 
 impl StreamMetrics {
-    pub fn new(upstream_started_at_ms: i64) -> Self {
+    pub fn new(connect_done_at_ms: i64) -> Self {
         Self {
-            upstream_started_at: Some(upstream_started_at_ms),
+            connect_done_at: Some(connect_done_at_ms),
             ..Default::default()
         }
     }
@@ -52,9 +53,10 @@ impl StreamMetrics {
         (body_done_ms - headers_at_ms).max(0)
     }
 
-    /// 首 token 耗时（ttft，毫秒）；未收到内容 token 时为 None。
+    /// 首 token 耗时（ttft，毫秒）：建连完成 → 首个内容 token。
+    /// 覆盖上游排队/处理等待与首个内容块，未收到内容 token 时为 None。
     pub fn ttft_ms(&self) -> Option<i64> {
-        match (self.upstream_started_at, self.first_token_at) {
+        match (self.connect_done_at, self.first_token_at) {
             (Some(start), Some(first)) => Some((first - start).max(0)),
             _ => None,
         }

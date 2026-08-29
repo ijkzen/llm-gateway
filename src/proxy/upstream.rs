@@ -225,6 +225,9 @@ pub struct UpstreamReply {
     pub status: StatusCode,
     pub body: Incoming,
     pub connect_ms: u64,
+    /// 成功建连（TCP+TLS 完成）的时刻（wall-clock 毫秒时间戳），
+    /// 作为 TTFT 与上游处理耗时的计时起点。
+    pub connect_done_at_ms: i64,
 }
 
 /// 发起上游调用：独立建连（计时）→ HTTP/1.1 请求 → 等待响应头。
@@ -232,6 +235,7 @@ pub struct UpstreamReply {
 pub async fn call(call: UpstreamCall) -> Result<UpstreamReply, UpstreamError> {
     let (scheme, host, port, path_query) = parse_url(&call.url)?;
     let (stream, timing) = connect_stream(&scheme, &host, port).await?;
+    let connect_done_at_ms = crate::proxy::metrics::now_ms();
 
     let (mut sender, conn) = http1::handshake(TokioIo::new(stream))
         .await
@@ -266,6 +270,7 @@ pub async fn call(call: UpstreamCall) -> Result<UpstreamReply, UpstreamError> {
         status: parts.status,
         body,
         connect_ms: timing.total_ms(),
+        connect_done_at_ms,
     })
 }
 

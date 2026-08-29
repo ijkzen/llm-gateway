@@ -729,7 +729,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
             let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
             let db = state.db.clone();
             let mut scanner = openai::OpenAiStreamScanner::default();
-            let mut stream_metrics = StreamMetrics::new(headers_at);
+            let mut stream_metrics = StreamMetrics::new(reply.connect_done_at_ms);
             tokio::spawn(async move {
                 let mut body = reply.body;
                 let mut disconnect = false;
@@ -780,7 +780,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 &request_id,
                 &requested_model,
             )));
-            let events = collect_stream_events(&mut reply.body, &mut converter, &mut StreamMetrics::new(headers_at)).await;
+            let events = collect_stream_events(&mut reply.body, &mut converter, &mut StreamMetrics::new(reply.connect_done_at_ms)).await;
             if let Some(error) = events.error {
                 record_failure(
                     &state.db, &request_id, virtual_model_id, &member, &api_key_name, start_time,
@@ -903,7 +903,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
             // 流式：逐事件转换并推送给客户端。
             let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
             let db = state.db.clone();
-            let mut stream_metrics = StreamMetrics::new(headers_at);
+            let mut stream_metrics = StreamMetrics::new(reply.connect_done_at_ms);
             let connect_ms = reply.connect_ms;
             tokio::spawn(async move {
                 let mut body = reply.body;

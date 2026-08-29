@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 /// Request: 每次 /v1 转发请求的指标记录（成功与失败均落一行）。
 ///
 /// 字段口径：
-/// - `ttft`：流式首个内容块耗时（毫秒），非流式为 NULL。
+/// - `ttft`：流式首 token 耗时（毫秒），从「上游建连完成」到「收到首个内容
+///   块」（含上游排队/处理等待），非流式为 NULL。
 /// - `input_tokens`：归一后的输入 token（含缓存命中部分）；上游未返回 usage 时为 NULL。
 /// - `input_cache_tokens`：缓存命中 token（Anthropic 的 cache_read + cache_creation）。
 /// - `output_tokens`：输出 token 总数（含推理/思考 token）；usage 缺失时为 NULL。
