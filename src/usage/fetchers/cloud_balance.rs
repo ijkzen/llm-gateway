@@ -20,11 +20,12 @@ use crate::usage::types::{BalanceItem, FetchOutput};
 use crate::usage::volcengine_sign;
 
 // ── 阿里云 BSS QueryAccountBalance ──────────────────────────
-// GET https://bssopenapi.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14&...
+// GET https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14&...
 // RPC V1 签名：StringToSign = GET&%2F&<percent_encode(升序 query)>，
 // Signature = base64(HMAC-SHA1(sk + "&", StringToSign))。
+// 注意：服务域名是 business.aliyuncs.com（bssopenapi.aliyuncs.com 不存在，DNS 解析失败）。
 
-const ALIYUN_BSS_HOST: &str = "bssopenapi.aliyuncs.com";
+const ALIYUN_BSS_HOST: &str = "business.aliyuncs.com";
 
 pub async fn fetch_aliyun_bss(
     http: &UsageHttp,
