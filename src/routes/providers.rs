@@ -624,9 +624,10 @@ async fn get_provider_usage_estimate(
     let now_ms = chrono::Utc::now().timestamp_millis();
     let window_end = qw.resets_at.map(|t| t.timestamp_millis()).unwrap_or(now_ms);
     let window_start = window_end - window_len_ms;
-    let total_days = window_len_ms / DAY_MS;
 
-    // 请求表统计：窗口内该供应商成功请求的 token 总量 + 覆盖天数（按天分桶）。
+    // 请求表统计：已过去时段内该供应商成功请求的 token 总量 + 覆盖天数（按天分桶）。
+    // 统计上限取 min(窗口终点, now)：未来时段不应计入已用 token 与覆盖检查。
+    let elapsed_end = window_end.min(now_ms);
     let sql = format!(
         "SELECT COALESCE(SUM(r.total_tokens), 0) AS used_tokens, \
                 COUNT(DISTINCT r.start_time / {DAY_MS}) AS covered_days \
@@ -639,7 +640,7 @@ async fn get_provider_usage_estimate(
         .query_one_raw(Statement::from_sql_and_values(
             DbBackend::Sqlite,
             sql,
-            [id.into(), window_start.into(), window_end.into()],
+            [id.into(), window_start.into(), elapsed_end.into()],
         ))
         .await
     {
@@ -650,7 +651,13 @@ async fn get_provider_usage_estimate(
     let used_tokens: i64 = row.try_get("", "used_tokens").unwrap_or(0);
     let covered_days: i64 = row.try_get("", "covered_days").unwrap_or(0);
 
-    // 覆盖检查：窗口内每天都有请求数据才可预估。
+    // 覆盖检查：只要求「已过去的时段」每天都有请求数据。
+    // 窗口终点可能在未来（如本周还没结束），未来的天数不应计入应覆盖天数，
+    // 否则会把「未来还没发生的请求」误判为数据缺口。
+    // 应覆盖天数按「整数天分桶」对齐 covered_days 的统计口径：
+    // 从 window_start 所在桶到 elapsed_end 所在桶的桶数（含两端）。
+    let elapsed_days = elapsed_end / DAY_MS - window_start / DAY_MS + 1;
+    let total_days = elapsed_days.max(1);
     let covered = covered_days >= total_days;
 
     // 折算基准：优先 used/limit 绝对值，其次 used_percent。

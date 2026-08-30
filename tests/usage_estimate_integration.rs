@@ -127,47 +127,57 @@ async fn seed_usage_cache(db: &DatabaseConnection, provider_id: i32, resets_at_m
     .unwrap();
 }
 
-/// 可预估：weekly 窗口（7 天）内每天都有请求数据，比例 0.5。
+/// 可预估：weekly 窗口已过去的天数每天都有请求数据，比例 0.5。
 #[tokio::test]
 async fn test_estimate_full_coverage() {
     let (app, db) = setup_app().await;
     seed_provider(&db, 1, "sub-provider", 1).await;
+    // 窗口 = [now-3天, now+4天]（resets_at 在未来 4 天，窗口起点 = now-3 天）。
+    // 已过去区间 = [now-3天, now]，共 4 天。
     let now = chrono::Utc::now().timestamp_millis();
-    let resets_at = now + 3 * DAY_MS; // 窗口起点 = resets_at - 7 天
+    let resets_at = now + 4 * DAY_MS;
     seed_usage_cache(&db, 1, resets_at).await;
 
-    // 窗口 = [resets_at-7天, resets_at]；now 在窗口内。每天种一条成功请求。
-    let window_start = resets_at - 7 * DAY_MS;
-    for day in 0..7 {
-        seed_request(&db, &format!("r-day-{day}"), 1, window_start + day * DAY_MS + 1000, 100).await;
+    let window_start = resets_at - 7 * DAY_MS; // = now - 3 天
+    // 已过去的 4 个整数天桶（now-3天 .. now）各有一条数据。
+    for day in 0..3 {
+        seed_request(
+            &db,
+            &format!("r-day-{day}"),
+            1,
+            window_start + day * DAY_MS + 1000,
+            100,
+        )
+        .await;
     }
-    // 再加一条今天的（窗口内）。
-    seed_request(&db, "r-today", 1, now, 200).await;
+    // 第 4 个桶（now 当天）的数据：明确在 now 之前。
+    seed_request(&db, "r-recent", 1, now - 3_600_000, 200).await;
 
     let (status, body) = send_get(&app, "/api/providers/1/usage/estimate").await;
     assert_eq!(status, StatusCode::OK);
     let data = &body["data"];
     assert_eq!(data["providerId"], 1);
     assert_eq!(data["window"], "weekly");
-    assert_eq!(data["estimatable"], true, "完整覆盖应可预估：{data}");
-    // 已用 token = 7*100 + 200 = 900；比例 0.5 → 预估总量 1800。
-    assert_eq!(data["usedTokens"], 900);
-    assert_eq!(data["estimatedTotalTokens"], 1800);
-    assert_eq!(data["coveredDays"], 7);
-    assert_eq!(data["totalDays"], 7);
+    assert_eq!(data["estimatable"], true, "已过去时段完整覆盖应可预估：{data}");
+    // 已用 token = 3*100 + 200 = 500；比例 0.5 → 预估总量 1000。
+    assert_eq!(data["usedTokens"], 500);
+    assert_eq!(data["estimatedTotalTokens"], 1000);
+    // 应覆盖天数 = 已过去天数 = 4（而非整个窗口 7 天）。
+    assert_eq!(data["coveredDays"], 4);
+    assert_eq!(data["totalDays"], 4);
 }
 
-/// 覆盖缺口：窗口内只有 3 天数据 → 无法预估。
+/// 覆盖缺口：已过去时段内只有 3 天数据（应覆盖 4 天）→ 无法预估。
 #[tokio::test]
 async fn test_estimate_gap_coverage_not_estimatable() {
     let (app, db) = setup_app().await;
     seed_provider(&db, 1, "sub-provider", 1).await;
     let now = chrono::Utc::now().timestamp_millis();
-    let resets_at = now + 3 * DAY_MS;
+    let resets_at = now + 4 * DAY_MS;
     seed_usage_cache(&db, 1, resets_at).await;
 
-    // 只有 3 天有数据（窗口共 7 天）。
-    let window_start = resets_at - 7 * DAY_MS;
+    // 已过去 4 天中只有 3 天有数据（缺第 4 天）。
+    let window_start = resets_at - 7 * DAY_MS; // = now - 3 天
     for day in 0..3 {
         seed_request(&db, &format!("r-{day}"), 1, window_start + day * DAY_MS, 100).await;
     }
@@ -177,7 +187,7 @@ async fn test_estimate_gap_coverage_not_estimatable() {
     let data = &body["data"];
     assert_eq!(data["estimatable"], false, "覆盖缺口应无法预估：{data}");
     assert_eq!(data["coveredDays"], 3);
-    assert_eq!(data["totalDays"], 7);
+    assert_eq!(data["totalDays"], 4);
     assert!(data["estimatedTotalTokens"].is_null(), "无预估值时该字段为 null");
 }
 
