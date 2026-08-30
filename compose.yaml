@@ -1,0 +1,37 @@
+# llm-gateway Docker Compose 示例
+#
+# 使用 GitHub Container Registry 上的官方镜像，一行启动：
+#   docker compose up -d
+#
+# 首次启动后访问 http://localhost:4007 完成管理员初始化。
+# 数据保存在 ./data/db 与 ./data/logs（可通过环境变量 DATA_DIR 修改）。
+#
+# 生产部署建议：
+#   - 将容器监听限制在回环地址或交由反向代理（Caddy/Nginx）处理 TLS
+#   - 用环境变量或 .env 文件注入 API_KEY_ENCRYPTION_KEY，切勿硬编码
+services:
+  llm-gateway:
+    image: ghcr.io/ijkzen/llm-gateway:latest
+    container_name: llm-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4007:4007"
+    environment:
+      BIND_ADDRESS: 0.0.0.0:4007
+      APP_ENV: prod
+      DATABASE_URL: sqlite:///config/db/app.db?mode=rwc
+      RUST_LOG: info,sqlx::query=warn
+      CRON_JOB_QUEUE_SIZE: "1000"
+      CRON_JOB_MAX_CONCURRENT: "10"
+      # 供应商 API Key 的 AES-256-GCM 加密密钥（必配，否则明文落库）
+      # 生成方式：openssl rand -hex 32
+      API_KEY_ENCRYPTION_KEY: ${API_KEY_ENCRYPTION_KEY:?请在 .env 中配置 API_KEY_ENCRYPTION_KEY}
+    volumes:
+      - ./data/db:/config/db
+      - ./data/logs:/config/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4007/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

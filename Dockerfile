@@ -1,6 +1,6 @@
-ARG BUILD_IMAGE=192.168.31.100:2080/ijkzen/build-rs:v0.5
-ARG RUNTIME_IMAGE=192.168.31.100:2080/ijkzen/base-ffmpeg:v0.8
-
+# llm-gateway 多阶段构建镜像（全公网依赖，GitHub Actions 可直接构建）
+#
+# 阶段 1：构建前端（Vite + React），产物 web/dist
 FROM node:22-slim AS web-builder
 
 WORKDIR /app
@@ -9,25 +9,32 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY web ./
 RUN pnpm build
 
-FROM ${BUILD_IMAGE} AS planner
+# 阶段 2：cargo-chef 分析依赖
+FROM rust:1-slim AS planner
 
 WORKDIR /app
+
+RUN cargo install cargo-chef --locked
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
 RUN cargo chef prepare --recipe-path recipe.json
 
-FROM ${BUILD_IMAGE} AS rust-deps
+# 阶段 3：预编译依赖
+FROM rust:1-slim AS rust-deps
 
 WORKDIR /app
+
+RUN cargo install cargo-chef --locked
 
 COPY Cargo.toml Cargo.lock ./
 COPY --from=planner /app/recipe.json ./recipe.json
 
 RUN cargo chef cook --release --recipe-path recipe.json
 
-FROM ${BUILD_IMAGE} AS builder
+# 阶段 4：正式构建（内嵌前端 dist）
+FROM rust:1-slim AS builder
 
 WORKDIR /app
 
@@ -39,24 +46,25 @@ RUN test -d /app/web/dist && test -f /app/web/dist/index.html
 
 RUN cargo build --release
 
-FROM ${RUNTIME_IMAGE} AS runtime
+# 阶段 5：运行时（debian slim；rustls 纯 Rust TLS，无 OpenSSL 系统依赖）
+FROM debian:bookworm-slim AS runtime
 
 WORKDIR /app
 
 ENV release=1
 ENV APP_ENV=prod
 
+# healthcheck 需要 curl（debian slim 默认没有）；建非 root 运行用户
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl passwd \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 app \
+    && mkdir -p /config/db /config/logs \
+    && chown -R app:app /config
+
 COPY --from=builder /app/target/release/llm-gateway /app/llm-gateway
 
-RUN mkdir -p /config/db /config/logs && chmod 755 /config/db /config/logs
-RUN chmod +x /app/llm-gateway
-
-# The runtime base image may not include curl, which the HEALTHCHECK needs.
-# Try Debian/Ubuntu first, then Alpine, to cover the most common base images.
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends curl && \
-    rm -rf /var/lib/apt/lists/* || \
-    apk add --no-cache curl
+USER app
 
 EXPOSE 4007
 
