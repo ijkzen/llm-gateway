@@ -38,7 +38,7 @@ function initialWindowFromUrl(searchParams: URLSearchParams): RaceWindowState {
 	};
 }
 
-/** 模型详情三级页：调用分析折线 + Token 折线 + 单模型指标卡片，三块独立时间段。 */
+/** 模型详情三级页：单模型指标卡片（置顶）+ 调用分析折线 + Token 折线，三块独立时间段。 */
 export default function ModelOverviewPage() {
 	const { providerId: providerIdParam, modelId: modelIdParam } = useParams();
 	const providerId = Number.parseInt(providerIdParam ?? "", 10);
@@ -106,72 +106,7 @@ export default function ModelOverviewPage() {
 				<h1 className="text-2xl font-bold tracking-tight">{title}</h1>
 			</div>
 
-			{/* 调用分析折线（仅折线）：独立时间段 */}
-			<Card>
-				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-					<div className="space-y-1">
-						<CardTitle>调用分析</CardTitle>
-						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.call)}</p>
-					</div>
-					<RaceWindowControl
-						state={windows.call}
-						now={now}
-						onChange={(patch) =>
-							setWindows((prev) => ({ ...prev, call: { ...prev.call, ...patch } }))
-						}
-					/>
-				</CardHeader>
-				<CardContent>
-					{callCharts.isLoading ? (
-						<Skeleton className="h-[260px] w-full" />
-					) : callCharts.isError || !callCharts.data ? (
-						<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-							数据加载失败
-						</div>
-					) : (
-						<TrendLineChart
-							data={callCharts.data.callTrend}
-							label="调用次数"
-							granularity={callGranularity}
-						/>
-					)}
-				</CardContent>
-			</Card>
-
-			{/* Token 折线（仅折线）：独立时间段 */}
-			<Card>
-				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-					<div className="space-y-1">
-						<CardTitle>Token 分析</CardTitle>
-						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.token)}</p>
-					</div>
-					<RaceWindowControl
-						state={windows.token}
-						now={now}
-						onChange={(patch) =>
-							setWindows((prev) => ({ ...prev, token: { ...prev.token, ...patch } }))
-						}
-					/>
-				</CardHeader>
-				<CardContent>
-					{tokenCharts.isLoading ? (
-						<Skeleton className="h-[260px] w-full" />
-					) : tokenCharts.isError || !tokenCharts.data ? (
-						<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-							数据加载失败
-						</div>
-					) : (
-						<TrendLineChart
-							data={tokenCharts.data.tokenTrend}
-							label="Token 数"
-							formatValue={formatTokenCount}
-							granularity={tokenGranularity}
-						/>
-					)}
-				</CardContent>
-			</Card>
-
-			{/* 单模型指标卡片：独立时间段 */}
+			{/* 单模型指标卡片：独立时间段（置顶，概览优先） */}
 			<Card>
 				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 					<div className="space-y-1">
@@ -236,6 +171,71 @@ export default function ModelOverviewPage() {
 								subLabel="缓存 / 输入 token"
 							/>
 						</div>
+					)}
+				</CardContent>
+			</Card>
+
+			{/* 调用分析折线（仅折线）：独立时间段 */}
+			<Card>
+				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+					<div className="space-y-1">
+						<CardTitle>调用分析</CardTitle>
+						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.call)}</p>
+					</div>
+					<RaceWindowControl
+						state={windows.call}
+						now={now}
+						onChange={(patch) =>
+							setWindows((prev) => ({ ...prev, call: { ...prev.call, ...patch } }))
+						}
+					/>
+				</CardHeader>
+				<CardContent>
+					{callCharts.isLoading ? (
+						<Skeleton className="h-[260px] w-full" />
+					) : callCharts.isError || !callCharts.data ? (
+						<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
+							数据加载失败
+						</div>
+					) : (
+						<TrendLineChart
+							data={callCharts.data.callTrend}
+							label="调用次数"
+							granularity={callGranularity}
+						/>
+					)}
+				</CardContent>
+			</Card>
+
+			{/* Token 折线（仅折线）：独立时间段 */}
+			<Card>
+				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+					<div className="space-y-1">
+						<CardTitle>Token 分析</CardTitle>
+						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.token)}</p>
+					</div>
+					<RaceWindowControl
+						state={windows.token}
+						now={now}
+						onChange={(patch) =>
+							setWindows((prev) => ({ ...prev, token: { ...prev.token, ...patch } }))
+						}
+					/>
+				</CardHeader>
+				<CardContent>
+					{tokenCharts.isLoading ? (
+						<Skeleton className="h-[260px] w-full" />
+					) : tokenCharts.isError || !tokenCharts.data ? (
+						<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
+							数据加载失败
+						</div>
+					) : (
+						<TrendLineChart
+							data={tokenCharts.data.tokenTrend}
+							label="Token 数"
+							formatValue={formatTokenCount}
+							granularity={tokenGranularity}
+						/>
 					)}
 				</CardContent>
 			</Card>
