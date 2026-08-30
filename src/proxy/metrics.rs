@@ -19,7 +19,7 @@ pub struct Usage {
 }
 
 pub fn now_ms() -> i64 {
-    i64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or(0)
+    chrono::Utc::now().timestamp_millis()
 }
 
 /// 流式响应的指标追踪（首/末 token 时刻）。

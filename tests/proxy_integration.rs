@@ -1,4 +1,6 @@
 //! /v1 转发集成测试：本地 mock 上游覆盖各协议转换、failover 与 request 表落库。
+//! mock 上游用 Mutex 记录请求体，锁跨 await 持有是测试有意为之；assert_eq 布尔比较改 assert 更清晰。
+#![allow(clippy::await_holding_lock, clippy::bool_assert_comparison)]
 
 mod common;
 
@@ -206,41 +208,6 @@ async fn seed_provider_model(
         ..Default::default()
     };
     active.insert(db).await.unwrap().model_id
-}
-
-/// 建虚拟模型并绑定成员，返回 (router, db)。
-async fn setup_virtual_model(
-    display_id: &str,
-    load_balancing_strategy: i32,
-    fallback_strategy: i32,
-    members: &[i32],
-) -> (axum::Router, sea_orm::DatabaseConnection) {
-    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
-    scheduler.start().await.unwrap();
-    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
-
-    let vm = virtual_model::ActiveModel {
-        display_id: Set(display_id.to_string()),
-        enable: Set(true),
-        load_balancing_strategy: Set(load_balancing_strategy),
-        fallback_strategy: Set(fallback_strategy),
-        created_at: Set(chrono::Utc::now()),
-        updated_at: Set(chrono::Utc::now()),
-        ..Default::default()
-    };
-    let vm = vm.insert(&db).await.unwrap();
-    for model_id in members {
-        let item = virtual_model_item::ActiveModel {
-            virtual_model_id: Set(vm.virtual_model_id),
-            model_id: Set(*model_id),
-            enable: Set(true),
-            created_at: Set(chrono::Utc::now()),
-            updated_at: Set(chrono::Utc::now()),
-            ..Default::default()
-        };
-        item.insert(&db).await.unwrap();
-    }
-    (app, db)
 }
 
 async fn send_chat(app: &axum::Router, body: Value) -> (u16, String) {

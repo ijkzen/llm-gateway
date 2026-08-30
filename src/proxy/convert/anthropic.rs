@@ -227,13 +227,10 @@ fn map_tool_choice(chat: &Value) -> Option<Value> {
             "none" => Some(json!({"type": "none"})),
             _ => None,
         },
-        Some(value) => {
-            let name = value.pointer("/function/name").and_then(Value::as_str);
-            match name {
-                Some(name) => Some(json!({"type": "tool", "name": name})),
-                None => None,
-            }
-        }
+        Some(value) => value
+            .pointer("/function/name")
+            .and_then(Value::as_str)
+            .map(|name| json!({"type": "tool", "name": name})),
         None => None,
     };
     let parallel = chat

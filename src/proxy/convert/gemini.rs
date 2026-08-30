@@ -265,8 +265,7 @@ fn sanitize_node(value: &mut Value, depth: usize) {
             if let Some(Value::Array(types)) = map.get("type")
                 && let Some(first) = types
                     .iter()
-                    .filter(|t| t.as_str().map(|s| s != "null").unwrap_or(false))
-                    .next()
+                    .find(|t| t.as_str().map(|s| s != "null").unwrap_or(false))
                     .cloned()
             {
                 map.insert("type".to_string(), first);

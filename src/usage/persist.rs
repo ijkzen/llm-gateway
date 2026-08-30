@@ -162,14 +162,11 @@ fn subscription_usable(data: &UsageData) -> Option<bool> {
     }
     let mut saw_available = false;
     for window in &data.windows {
-        match window.remaining_percent_value() {
-            Some(p) => {
-                saw_available = true;
-                if p <= 0.0 {
-                    return Some(false);
-                }
+        if let Some(p) = window.remaining_percent_value() {
+            saw_available = true;
+            if p <= 0.0 {
+                return Some(false);
             }
-            None => {}
         }
     }
     saw_available.then_some(true)

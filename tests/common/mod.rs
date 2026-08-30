@@ -1,4 +1,6 @@
 //! Shared bootstrap helpers for the HTTP integration tests.
+//! 共享辅助模块被多个 test 二进制引用，各自只用到一部分，故允许未使用项。
+#![allow(dead_code)]
 
 use axum::extract::Request;
 use axum::http::HeaderValue;

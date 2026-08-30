@@ -1274,10 +1274,10 @@ async fn collect_stream_events(
             }
         }
     }
-    if error.is_none() {
-        if let Some(converter_error) = converter.error() {
-            error = Some(converter_error);
-        }
+    if error.is_none()
+        && let Some(converter_error) = converter.error()
+    {
+        error = Some(converter_error);
     }
     if error.is_some() {
         disconnect = false;
