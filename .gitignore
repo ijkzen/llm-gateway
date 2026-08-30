@@ -12,3 +12,4 @@ web/tsconfig.tsbuildinfo
 /.zcode
 /web/logs
 /deploy/llm-gateway
+/.gitea

@@ -143,7 +143,7 @@
 │       └── pages/          # overview、cron-jobs、settings、not-found（404）页面
 ├── db/                     # 开发用 SQLite 数据库目录
 ├── logs/                   # 开发用日志目录
-└── .gitea/workflows/       # Gitea Actions CI 工作流
+└── .github/workflows/     # GitHub Actions CI（ci.yml 测试 / docker.yml 推 GHCR）
 ```
 
 ## 配置与环境变量
@@ -216,7 +216,7 @@ Dockerfile 为多阶段构建：
 2. `planner`: `cargo chef prepare` 生成 recipe。
 3. `rust-deps`: `cargo chef cook` 预编译 Rust 依赖。
 4. `builder`: 复制依赖缓存与前端 dist，校验 `web/dist/index.html` 存在后执行 `cargo build --release`。
-5. `runtime`: 从 `192.168.31.100:2080/ijkzen/base-ffmpeg:v0.8` 基础镜像运行二进制，暴露 `4007`；安装 `curl`（优先 `apt-get`，回退 `apk`）并配置 `HEALTHCHECK` 检查 `/api/healthz`。
+5. `runtime`: 基于 `debian:bookworm-slim` 运行二进制（rustls 纯 Rust TLS，无系统 OpenSSL 依赖），暴露 `4007`；安装 `curl` 并配置 `HEALTHCHECK` 检查 `/api/healthz`。
 
 ## 测试说明
 
@@ -289,11 +289,10 @@ Dockerfile 为多阶段构建：
 
 ## 部署与 CI/CD
 
-- CI 位于 `.gitea/workflows/build.yaml`，在每次 `push` 时触发。
-- 使用 Gitea Actions 在 `ubuntu-latest` 上执行：
-  1. 检出代码。
-  2. 登录内部 Harbor 镜像仓库 `192.168.31.100:2080`。
-  3. 使用 `docker buildx` 构建 `linux/amd64` 镜像，推送到 `192.168.31.100:2080/ijkzen/llm-gateway:latest`。
+- CI 位于 `.github/workflows/`：
+  - `ci.yml`：push/PR 时运行测试、clippy、fmt（先构建前端）。
+  - `docker.yml`：push 到 main / 打 `v*` tag 时用 `docker buildx` 构建镜像并推送到
+    **GitHub Container Registry**（`ghcr.io/ijkzen/llm-gateway`），tag 为 `latest` + `<sha>` 或 `<git-tag>`。
 - 生产容器：
   - 暴露端口 `4007`。
   - 需要挂载 `/config/db` 与 `/config/logs` 以保证数据与日志持久化。
