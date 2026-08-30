@@ -188,11 +188,10 @@ async fn load_item_responses<C: ConnectionTrait>(
         .all(db)
         .await?;
 
-    let model_map: HashMap<i32, &provider_model::Model> = provider_models
-        .iter()
-        .map(|pm| (pm.model_id, pm))
-        .collect();
-    let provider_map: HashMap<i32, &provider::Model> = providers.iter().map(|p| (p.id, p)).collect();
+    let model_map: HashMap<i32, &provider_model::Model> =
+        provider_models.iter().map(|pm| (pm.model_id, pm)).collect();
+    let provider_map: HashMap<i32, &provider::Model> =
+        providers.iter().map(|p| (p.id, p)).collect();
 
     let mut grouped: HashMap<i32, Vec<VirtualModelItemResponse>> = HashMap::new();
     for item in items {
@@ -246,9 +245,7 @@ async fn load_virtual_model_response(
     model: virtual_model::Model,
 ) -> Result<VirtualModelResponse, DbErr> {
     let mut grouped = load_item_responses(db, Some(model.virtual_model_id)).await?;
-    let items = grouped
-        .remove(&model.virtual_model_id)
-        .unwrap_or_default();
+    let items = grouped.remove(&model.virtual_model_id).unwrap_or_default();
     Ok(virtual_model_response(model, items))
 }
 
@@ -302,7 +299,10 @@ async fn list_virtual_models(State(state): State<AppState>) -> impl IntoResponse
     }
 }
 
-async fn get_virtual_model(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
+async fn get_virtual_model(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> impl IntoResponse {
     match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(model)) => match load_virtual_model_response(&state.db, model).await {
             Ok(resp) => (StatusCode::OK, Json(Response::success(resp))),
@@ -393,9 +393,7 @@ async fn update_virtual_model(
     let load_balancing_strategy = req
         .load_balancing_strategy
         .unwrap_or(existing.load_balancing_strategy);
-    let fallback_strategy = req
-        .fallback_strategy
-        .unwrap_or(existing.fallback_strategy);
+    let fallback_strategy = req.fallback_strategy.unwrap_or(existing.fallback_strategy);
     if let Some(msg) = validate_strategies(load_balancing_strategy, fallback_strategy) {
         return response::bad_request(msg);
     }
@@ -426,8 +424,10 @@ async fn update_virtual_model(
             Ok(current) => current,
             Err(e) => return response::db_error(e.to_string()),
         };
-        let current_map: HashMap<i32, virtual_model_item::Model> =
-            current.into_iter().map(|item| (item.model_id, item)).collect();
+        let current_map: HashMap<i32, virtual_model_item::Model> = current
+            .into_iter()
+            .map(|item| (item.model_id, item))
+            .collect();
         let keep_ids: HashSet<i32> = model_ids.iter().copied().collect();
         let removed: Vec<i32> = current_map
             .keys()
@@ -449,8 +449,7 @@ async fn update_virtual_model(
             match current_map.get(&item.model_id) {
                 // 保留的成员：enable 有变化才更新。
                 Some(existing_item) if existing_item.enable != item.enable => {
-                    let mut active: virtual_model_item::ActiveModel =
-                        existing_item.clone().into();
+                    let mut active: virtual_model_item::ActiveModel = existing_item.clone().into();
                     active.enable = Set(item.enable);
                     active.updated_at = Set(now);
                     if let Err(e) = active.update(&txn).await {
@@ -459,9 +458,7 @@ async fn update_virtual_model(
                 }
                 Some(_) => {}
                 None => {
-                    if let Err(e) =
-                        insert_items(&txn, id, std::slice::from_ref(item), now).await
-                    {
+                    if let Err(e) = insert_items(&txn, id, std::slice::from_ref(item), now).await {
                         if is_unique_violation(&e) {
                             return response::bad_request(unique_conflict_message(&e));
                         }
@@ -489,9 +486,7 @@ async fn update_virtual_model(
                 Err(e) => response::db_error(e.to_string()),
             }
         }
-        Err(e) if is_unique_violation(&e) => {
-            response::bad_request(unique_conflict_message(&e))
-        }
+        Err(e) if is_unique_violation(&e) => response::bad_request(unique_conflict_message(&e)),
         Err(e) => response::db_error(e.to_string()),
     }
 }

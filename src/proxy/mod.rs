@@ -17,13 +17,13 @@ use std::sync::{Arc, Mutex};
 use axum::body::Bytes;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use http_body_util::BodyExt;
 use hyper::header::HeaderName;
 use rand::seq::SliceRandom;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use http_body_util::BodyExt;
 use uuid::Uuid;
 
 use crate::auth::{AuthedApiKey, openai_error};
@@ -291,61 +291,66 @@ fn build_upstream_call(
     client_stream: bool,
     api_key: &str,
 ) -> Result<(UpstreamCall, bool), String> {
-    let (body, json_mode_tool, sub_path, auth_headers): (Value, bool, String, Vec<(String, String)>) =
-        match member.protocol {
-            Protocol::OpenAiCompat => {
-                let body = openai::build_request_body(chat, &member.model_id);
-                (
-                    body,
-                    false,
-                    "chat/completions".to_string(),
-                    vec![("authorization".to_string(), format!("Bearer {api_key}"))],
-                )
-            }
-            Protocol::OpenAiResponses => {
-                let body = responses::build_request_body(chat, &member.model_id)?;
-                (
-                    body,
-                    false,
-                    "responses".to_string(),
-                    vec![("authorization".to_string(), format!("Bearer {api_key}"))],
-                )
-            }
-            Protocol::Anthropic => {
-                let (body, json_mode_tool) = anthropic::build_request_body(chat, &member.model_id)?;
-                (
-                    body,
-                    json_mode_tool,
-                    "messages".to_string(),
-                    vec![
-                        ("x-api-key".to_string(), api_key.to_string()),
-                        ("anthropic-version".to_string(), "2023-06-01".to_string()),
-                    ],
-                )
-            }
-            Protocol::Gemini => {
-                let body = gemini::build_request_body(chat, &member.model_id)?;
-                let action = gemini::generate_action(client_stream);
-                let model_path = if member.model_id.starts_with("models/") {
-                    member.model_id.clone()
-                } else {
-                    format!("models/{}", member.model_id)
-                };
-                (
-                    body,
-                    false,
-                    format!("{model_path}:{action}"),
-                    vec![("x-goog-api-key".to_string(), api_key.to_string())],
-                )
-            }
-        };
+    let (body, json_mode_tool, sub_path, auth_headers): (
+        Value,
+        bool,
+        String,
+        Vec<(String, String)>,
+    ) = match member.protocol {
+        Protocol::OpenAiCompat => {
+            let body = openai::build_request_body(chat, &member.model_id);
+            (
+                body,
+                false,
+                "chat/completions".to_string(),
+                vec![("authorization".to_string(), format!("Bearer {api_key}"))],
+            )
+        }
+        Protocol::OpenAiResponses => {
+            let body = responses::build_request_body(chat, &member.model_id)?;
+            (
+                body,
+                false,
+                "responses".to_string(),
+                vec![("authorization".to_string(), format!("Bearer {api_key}"))],
+            )
+        }
+        Protocol::Anthropic => {
+            let (body, json_mode_tool) = anthropic::build_request_body(chat, &member.model_id)?;
+            (
+                body,
+                json_mode_tool,
+                "messages".to_string(),
+                vec![
+                    ("x-api-key".to_string(), api_key.to_string()),
+                    ("anthropic-version".to_string(), "2023-06-01".to_string()),
+                ],
+            )
+        }
+        Protocol::Gemini => {
+            let body = gemini::build_request_body(chat, &member.model_id)?;
+            let action = gemini::generate_action(client_stream);
+            let model_path = if member.model_id.starts_with("models/") {
+                member.model_id.clone()
+            } else {
+                format!("models/{}", member.model_id)
+            };
+            (
+                body,
+                false,
+                format!("{model_path}:{action}"),
+                vec![("x-goog-api-key".to_string(), api_key.to_string())],
+            )
+        }
+    };
 
     let url = build_upstream_url(&member.base_url, member.protocol_code(), &sub_path);
     let body_bytes = Bytes::from(body.to_string());
     let mut headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
     for (name, value) in auth_headers {
         headers.push((
-            HeaderName::from_bytes(name.as_bytes()).map_err(|e| format!("无效请求头名 {name}：{e}"))?,
+            HeaderName::from_bytes(name.as_bytes())
+                .map_err(|e| format!("无效请求头名 {name}：{e}"))?,
             HeaderValue::from_str(&value).map_err(|e| format!("无效请求头值：{e}"))?,
         ));
     }
@@ -379,7 +384,9 @@ fn merge_custom_headers(custom_header: &str, headers: &mut Vec<(HeaderName, Head
     };
     let Some(map) = value.as_object() else { return };
     for (name, header_value) in map {
-        let Some(header_value) = header_value.as_str() else { continue };
+        let Some(header_value) = header_value.as_str() else {
+            continue;
+        };
         if let (Ok(name), Ok(value)) = (
             HeaderName::from_bytes(name.as_bytes()),
             HeaderValue::from_str(header_value),
@@ -458,13 +465,15 @@ impl Converter {
 fn chunk_has_content(chunk: &Value) -> bool {
     let delta = chunk.pointer("/choices/0/delta");
     let Some(delta) = delta else { return false };
-    ["content", "reasoning_content"]
-        .iter()
-        .any(|key| delta.get(*key).and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
-        || delta
-            .get("tool_calls")
-            .and_then(Value::as_array)
-            .is_some_and(|calls| !calls.is_empty())
+    ["content", "reasoning_content"].iter().any(|key| {
+        delta
+            .get(*key)
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty())
+    }) || delta
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .is_some_and(|calls| !calls.is_empty())
 }
 
 /// 把流式转换出的 chunk 列表聚合为非流式 chat.completion（Responses 出站非流式路径）。
@@ -487,11 +496,15 @@ pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
             }
             created = chunk.get("created").and_then(Value::as_i64).unwrap_or(0);
         }
-        let Some(choice) = chunk.pointer("/choices/0") else { continue };
+        let Some(choice) = chunk.pointer("/choices/0") else {
+            continue;
+        };
         if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
             finish_reason = reason.to_string();
         }
-        let Some(delta) = choice.get("delta") else { continue };
+        let Some(delta) = choice.get("delta") else {
+            continue;
+        };
         if let Some(text) = delta.get("content").and_then(Value::as_str) {
             content.push_str(text);
         }
@@ -512,7 +525,8 @@ pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
                 {
                     entry.1 = name.to_string();
                 }
-                if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str) {
+                if let Some(arguments) = call.pointer("/function/arguments").and_then(Value::as_str)
+                {
                     entry.2.push_str(arguments);
                 }
             }
@@ -571,7 +585,10 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
         .unwrap_or("")
         .trim()
         .to_string();
-    let client_stream = client_body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let client_stream = client_body
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let include_usage = client_body
         .pointer("/stream_options/include_usage")
         .and_then(Value::as_bool)
@@ -655,28 +672,54 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                     continue;
                 }
                 record_failure(
-                    &state.db, &request_id, virtual_model.virtual_model_id, member, &api_key.name,
-                    start_time, false, client_stream, &message, start_time,
+                    &state.db,
+                    &request_id,
+                    virtual_model.virtual_model_id,
+                    member,
+                    &api_key.name,
+                    start_time,
+                    false,
+                    client_stream,
+                    &message,
+                    start_time,
                 );
-                return openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error");
+                return openai_error(
+                    StatusCode::BAD_GATEWAY,
+                    message,
+                    "api_error",
+                    "upstream_error",
+                );
             }
         };
 
-        let (call, json_mode_tool) = match build_upstream_call(member, &client_body, client_stream, &decrypted_key)
-        {
-            Ok(result) => result,
-            Err(message) => {
-                if retry_enabled && has_more {
-                    last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
-                    continue;
+        let (call, json_mode_tool) =
+            match build_upstream_call(member, &client_body, client_stream, &decrypted_key) {
+                Ok(result) => result,
+                Err(message) => {
+                    if retry_enabled && has_more {
+                        last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
+                        continue;
+                    }
+                    record_failure(
+                        &state.db,
+                        &request_id,
+                        virtual_model.virtual_model_id,
+                        member,
+                        &api_key.name,
+                        start_time,
+                        false,
+                        client_stream,
+                        &message,
+                        start_time,
+                    );
+                    return openai_error(
+                        StatusCode::BAD_GATEWAY,
+                        message,
+                        "api_error",
+                        "upstream_error",
+                    );
                 }
-                record_failure(
-                    &state.db, &request_id, virtual_model.virtual_model_id, member, &api_key.name,
-                    start_time, false, client_stream, &message, start_time,
-                );
-                return openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error");
-            }
-        };
+            };
 
         let reply = match upstream::call(call, &state.upstream_pool).await {
             Ok(reply) => reply,
@@ -687,10 +730,23 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                     continue;
                 }
                 record_failure(
-                    &state.db, &request_id, virtual_model.virtual_model_id, member, &api_key.name,
-                    start_time, false, client_stream, &message, start_time,
+                    &state.db,
+                    &request_id,
+                    virtual_model.virtual_model_id,
+                    member,
+                    &api_key.name,
+                    start_time,
+                    false,
+                    client_stream,
+                    &message,
+                    start_time,
                 );
-                return openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error");
+                return openai_error(
+                    StatusCode::BAD_GATEWAY,
+                    message,
+                    "api_error",
+                    "upstream_error",
+                );
             }
         };
 
@@ -703,8 +759,16 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                 continue;
             }
             record_failure(
-                &state.db, &request_id, virtual_model.virtual_model_id, member, &api_key.name,
-                start_time, false, client_stream, &message, reply.start_at_ms,
+                &state.db,
+                &request_id,
+                virtual_model.virtual_model_id,
+                member,
+                &api_key.name,
+                start_time,
+                false,
+                client_stream,
+                &message,
+                reply.start_at_ms,
             );
             let error_type = if status.is_client_error() {
                 "invalid_request_error"
@@ -743,8 +807,16 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
     });
     let start_time = now_ms();
     record_failure(
-        &state.db, &request_id, virtual_model.virtual_model_id, &member, &api_key.name,
-        start_time, false, client_stream, &message, start_time,
+        &state.db,
+        &request_id,
+        virtual_model.virtual_model_id,
+        &member,
+        &api_key.name,
+        start_time,
+        false,
+        client_stream,
+        &message,
+        start_time,
     );
     openai_error(status, message, "api_error", "upstream_error")
 }
@@ -862,15 +934,27 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
         }
         // Responses 出站：上游强制流式。
         (Protocol::OpenAiResponses, _) => {
-            let mut converter = Converter::Responses(Box::new(responses::ResponsesStreamConverter::new(
-                &request_id,
-                &requested_model,
-            )));
-            let events = collect_stream_events(&mut reply.body, &mut converter, &mut StreamMetrics::new(reply.start_at_ms)).await;
+            let mut converter = Converter::Responses(Box::new(
+                responses::ResponsesStreamConverter::new(&request_id, &requested_model),
+            ));
+            let events = collect_stream_events(
+                &mut reply.body,
+                &mut converter,
+                &mut StreamMetrics::new(reply.start_at_ms),
+            )
+            .await;
             if let Some(error) = events.error {
                 record_failure(
-                    &state.db, &request_id, virtual_model_id, &member, &api_key_name, start_time,
-                    client_stream, client_stream, &error, reply.start_at_ms,
+                    &state.db,
+                    &request_id,
+                    virtual_model_id,
+                    &member,
+                    &api_key_name,
+                    start_time,
+                    client_stream,
+                    client_stream,
+                    &error,
+                    reply.start_at_ms,
                 );
                 let status = StatusCode::BAD_GATEWAY;
                 return openai_error(status, error, "api_error", "upstream_error");
@@ -905,13 +989,24 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 let request_id_for_chunk = request_id.clone();
                 tokio::spawn(async move {
                     for chunk in events.chunks {
-                        if tx.send(Ok(Bytes::from(crate::proxy::sse::sse_frame(&chunk.to_string())))).await.is_err() {
+                        if tx
+                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(
+                                &chunk.to_string(),
+                            ))))
+                            .await
+                            .is_err()
+                        {
                             return;
                         }
                     }
                     if include_usage {
                         let frame = crate::proxy::sse::sse_frame(
-                            &usage_chunk_json(&request_id_for_chunk, &requested_model, &usage_for_chunk).to_string(),
+                            &usage_chunk_json(
+                                &request_id_for_chunk,
+                                &requested_model,
+                                &usage_for_chunk,
+                            )
+                            .to_string(),
                         );
                         let _ = tx.send(Ok(Bytes::from(frame))).await;
                     }
@@ -925,13 +1020,16 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
         // Anthropic / Gemini：非流式直接转换；流式逐事件转换后转发。
         (protocol, client_stream) => {
             let mut converter = match protocol {
-                Protocol::Anthropic => Converter::Anthropic(Box::new(
-                    anthropic::AnthropicStreamConverter::new(&request_id, &requested_model, json_mode_tool),
+                Protocol::Anthropic => {
+                    Converter::Anthropic(Box::new(anthropic::AnthropicStreamConverter::new(
+                        &request_id,
+                        &requested_model,
+                        json_mode_tool,
+                    )))
+                }
+                Protocol::Gemini => Converter::Gemini(Box::new(
+                    gemini::GeminiStreamConverter::new(&request_id, &requested_model),
                 )),
-                Protocol::Gemini => Converter::Gemini(Box::new(gemini::GeminiStreamConverter::new(
-                    &request_id,
-                    &requested_model,
-                ))),
                 Protocol::OpenAiCompat | Protocol::OpenAiResponses => unreachable!("handled above"),
             };
 
@@ -943,15 +1041,35 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     Err(e) => {
                         let message = format!("解析上游响应失败：{e}");
                         record_failure(
-                            &state.db, &request_id, virtual_model_id, &member, &api_key_name,
-                            start_time, false, false, &message, reply.start_at_ms,
+                            &state.db,
+                            &request_id,
+                            virtual_model_id,
+                            &member,
+                            &api_key_name,
+                            start_time,
+                            false,
+                            false,
+                            &message,
+                            reply.start_at_ms,
                         );
-                        return openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error");
+                        return openai_error(
+                            StatusCode::BAD_GATEWAY,
+                            message,
+                            "api_error",
+                            "upstream_error",
+                        );
                     }
                 };
                 let converted = match protocol {
-                    Protocol::Anthropic => anthropic::convert_response(&parsed, &request_id, &requested_model, json_mode_tool),
-                    Protocol::Gemini => gemini::convert_response(&parsed, &request_id, &requested_model),
+                    Protocol::Anthropic => anthropic::convert_response(
+                        &parsed,
+                        &request_id,
+                        &requested_model,
+                        json_mode_tool,
+                    ),
+                    Protocol::Gemini => {
+                        gemini::convert_response(&parsed, &request_id, &requested_model)
+                    }
                     _ => unreachable!(),
                 };
                 let body_done = now_ms();
@@ -978,10 +1096,23 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     }
                     Err(message) => {
                         record_failure(
-                            &state.db, &request_id, virtual_model_id, &member, &api_key_name,
-                            start_time, false, false, &message, reply.start_at_ms,
+                            &state.db,
+                            &request_id,
+                            virtual_model_id,
+                            &member,
+                            &api_key_name,
+                            start_time,
+                            false,
+                            false,
+                            &message,
+                            reply.start_at_ms,
                         );
-                        openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error")
+                        openai_error(
+                            StatusCode::BAD_GATEWAY,
+                            message,
+                            "api_error",
+                            "upstream_error",
+                        )
                     }
                 };
             }
@@ -999,9 +1130,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     let bytes = match frame {
                         Ok(frame) => frame.into_data().unwrap_or_default(),
                         Err(e) => {
-                            let _ = tx
-                                .send(Err(std::io::Error::other(e.to_string())))
-                                .await;
+                            let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
                             break;
                         }
                     };
@@ -1038,19 +1167,35 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 // 补发缺失的 finish / usage / [DONE]。
                 if converter.error().is_none() {
                     if let Some(chunk) = converter.final_chunk()
-                        && tx.send(Ok(Bytes::from(crate::proxy::sse::sse_frame(&chunk.to_string())))).await.is_err()
+                        && tx
+                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(
+                                &chunk.to_string(),
+                            ))))
+                            .await
+                            .is_err()
                     {
                         disconnect = true;
                     }
                     if !converter.has_finish() {
-                        let finish = chunk_json(&converter.completion_id(), &requested_model, json!({}), Some("stop"));
-                        let _ = tx.send(Ok(Bytes::from(crate::proxy::sse::sse_frame(&finish.to_string())))).await;
+                        let finish = chunk_json(
+                            &converter.completion_id(),
+                            &requested_model,
+                            json!({}),
+                            Some("stop"),
+                        );
+                        let _ = tx
+                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(
+                                &finish.to_string(),
+                            ))))
+                            .await;
                     }
-                    if include_usage
-                        && let Some(usage) = converter.usage()
-                    {
-                        let frame = usage_chunk_json(&converter.completion_id(), &requested_model, &usage).to_string();
-                        let _ = tx.send(Ok(Bytes::from(crate::proxy::sse::sse_frame(&frame)))).await;
+                    if include_usage && let Some(usage) = converter.usage() {
+                        let frame =
+                            usage_chunk_json(&converter.completion_id(), &requested_model, &usage)
+                                .to_string();
+                        let _ = tx
+                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(&frame))))
+                            .await;
                     }
                 }
                 let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n"))).await;
@@ -1070,7 +1215,10 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     end_time,
                     usage,
                     success,
-                    fail_reason: converter.error().clone().or(disconnect.then(|| "客户端提前断开".to_string())),
+                    fail_reason: converter
+                        .error()
+                        .clone()
+                        .or(disconnect.then(|| "客户端提前断开".to_string())),
                     api_key_name,
                 }
                 .insert(&db);

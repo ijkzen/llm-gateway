@@ -30,7 +30,11 @@ async fn seed_provider(db: &sea_orm::DatabaseConnection, name: &str) -> i32 {
 }
 
 /// 建一个测试 ProviderModel，返回其 model_id。
-async fn seed_provider_model(db: &sea_orm::DatabaseConnection, provider_id: i32, remote_id: &str) -> i32 {
+async fn seed_provider_model(
+    db: &sea_orm::DatabaseConnection,
+    provider_id: i32,
+    remote_id: &str,
+) -> i32 {
     let active = provider_model::ActiveModel {
         provider_id: Set(provider_id),
         provider_model_id: Set(remote_id.to_string()),
@@ -174,16 +178,16 @@ async fn test_create_virtual_model_validations() {
     )
     .await;
     assert_eq!(status, 400);
-    assert!(body["msg"].as_str().unwrap().contains("至少选择一个成员模型"));
+    assert!(
+        body["msg"]
+            .as_str()
+            .unwrap()
+            .contains("至少选择一个成员模型")
+    );
 
     // 不存在的 model_id。
-    let (status, body) = send_json(
-        app,
-        "POST",
-        "/api/virtual-models",
-        vm_payload("vm", &[999]),
-    )
-    .await;
+    let (status, body) =
+        send_json(app, "POST", "/api/virtual-models", vm_payload("vm", &[999])).await;
     assert_eq!(status, 400);
     assert!(body["msg"].as_str().unwrap().contains("不存在"));
 }
@@ -259,7 +263,12 @@ async fn test_model_can_only_belong_to_one_virtual_model() {
     )
     .await;
     assert_eq!(status, 400);
-    assert!(body["msg"].as_str().unwrap().contains("已被其他虚拟模型使用"));
+    assert!(
+        body["msg"]
+            .as_str()
+            .unwrap()
+            .contains("已被其他虚拟模型使用")
+    );
 
     // 更新其他虚拟模型把 a 加进来 → 400。
     let (status, body) = send_json(
@@ -279,7 +288,12 @@ async fn test_model_can_only_belong_to_one_virtual_model() {
     )
     .await;
     assert_eq!(status, 400);
-    assert!(body["msg"].as_str().unwrap().contains("已被其他虚拟模型使用"));
+    assert!(
+        body["msg"]
+            .as_str()
+            .unwrap()
+            .contains("已被其他虚拟模型使用")
+    );
 
     // 保留自身成员的更新不受影响。
     let (status, _) = send_json(
@@ -360,13 +374,7 @@ async fn test_update_virtual_model_diffs_members_and_preserves_enable() {
     assert_eq!(status, 400);
 
     // b 已被移除，应可再映射到新虚拟模型。
-    let (status, _) = send_json(
-        app,
-        "POST",
-        "/api/virtual-models",
-        vm_payload("vm2", &[b]),
-    )
-    .await;
+    let (status, _) = send_json(app, "POST", "/api/virtual-models", vm_payload("vm2", &[b])).await;
     assert_eq!(status, 201);
 }
 
@@ -448,10 +456,7 @@ async fn test_delete_virtual_model_releases_members() {
     )
     .await;
     assert_eq!(status, 200);
-    let items = virtual_model_item::Entity::find()
-        .all(&db)
-        .await
-        .unwrap();
+    let items = virtual_model_item::Entity::find().all(&db).await.unwrap();
     assert!(items.is_empty(), "级联删除成员条目");
 
     let (status, _) = send_json(
@@ -501,8 +506,13 @@ async fn test_delete_provider_cascades_virtual_model_items() {
     assert_eq!(status, 201);
     let vm2 = body["data"]["virtualModelId"].as_i64().unwrap();
 
-    let (status, _) = send_json(app.clone(), "DELETE", &format!("/api/providers/{p1}"), Value::Null)
-        .await;
+    let (status, _) = send_json(
+        app.clone(),
+        "DELETE",
+        &format!("/api/providers/{p1}"),
+        Value::Null,
+    )
+    .await;
     assert_eq!(status, 200);
 
     // vm1 的成员被级联清理；vm2 不受影响。
@@ -526,12 +536,6 @@ async fn test_delete_provider_cascades_virtual_model_items() {
     assert_eq!(body["data"]["items"].as_array().unwrap().len(), 1);
 
     // 已删除供应商的模型不能再被映射（已不存在）。
-    let (status, _) = send_json(
-        app,
-        "POST",
-        "/api/virtual-models",
-        vm_payload("vm3", &[a]),
-    )
-    .await;
+    let (status, _) = send_json(app, "POST", "/api/virtual-models", vm_payload("vm3", &[a])).await;
     assert_eq!(status, 400);
 }

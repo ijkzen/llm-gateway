@@ -45,7 +45,11 @@ pub async fn fetch_stepfun(
     };
 
     let reply = http
-        .post_json(&format!("{API_BASE}/QueryStepPlanRateLimit"), &headers, "{}")
+        .post_json(
+            &format!("{API_BASE}/QueryStepPlanRateLimit"),
+            &headers,
+            "{}",
+        )
         .await?;
     ensure_ok(&reply)?;
     parse_stepfun_rate_limit(&reply.body, plan)
@@ -67,8 +71,16 @@ fn parse_stepfun_rate_limit(body: &str, plan: Option<String>) -> Result<FetchOut
 
     let mut windows = empty_windows();
     for (rate_key, reset_key, kind) in [
-        ("five_hour_usage_left_rate", "five_hour_usage_reset_time", WindowKind::FiveHour),
-        ("weekly_usage_left_rate", "weekly_usage_reset_time", WindowKind::Weekly),
+        (
+            "five_hour_usage_left_rate",
+            "five_hour_usage_reset_time",
+            WindowKind::FiveHour,
+        ),
+        (
+            "weekly_usage_left_rate",
+            "weekly_usage_reset_time",
+            WindowKind::Weekly,
+        ),
         (
             "subscription_credit_left_rate",
             "subscription_credit_reset_time",

@@ -8,16 +8,12 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 use llm_gateway::cron::JobContext;
 use llm_gateway::cron::repository::SeaOrmCronJobRepository;
-use llm_gateway::entity::{
-    provider, provider_model, virtual_model, virtual_model_item,
-};
+use llm_gateway::entity::{provider, provider_model, virtual_model, virtual_model_item};
 use llm_gateway::usage::persist::apply_usage_gate;
 use llm_gateway::usage::types::{QuotaWindow, UsageData, UsageKind, WindowKind};
 
 /// 订阅型供应商 + 名下模型 + 虚拟模型条目，返回 (provider_id, model_id)。
-async fn seed_subscription_provider(
-    db: &sea_orm::DatabaseConnection,
-) -> (i32, i32) {
+async fn seed_subscription_provider(db: &sea_orm::DatabaseConnection) -> (i32, i32) {
     let now = chrono::Utc::now();
     let p = provider::ActiveModel {
         name: Set("订阅供应商".to_string()),
@@ -122,7 +118,11 @@ async fn quota_exhaustion_disables_and_restore_reenables() {
     let (pid, model_id) = seed_subscription_provider(&db).await;
 
     // 5h 窗口耗尽 → 停用 provider 及其虚拟模型子模型。
-    let p = provider::Entity::find_by_id(pid).one(&db).await.unwrap().unwrap();
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
     apply_usage_gate(&db, &p, &quota_data(pid, 0.0, 80.0, 100.0))
         .await
         .unwrap();
@@ -130,7 +130,11 @@ async fn quota_exhaustion_disables_and_restore_reenables() {
     assert!(!item_enabled(&db, model_id).await);
 
     // 额度恢复（全部窗口有剩余）→ 恢复启用 provider 及其子模型。
-    let p = provider::Entity::find_by_id(pid).one(&db).await.unwrap().unwrap();
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
     apply_usage_gate(&db, &p, &quota_data(pid, 40.0, 50.0, 100.0))
         .await
         .unwrap();
@@ -156,7 +160,11 @@ async fn gate_skips_unjudgeable_data() {
         ],
         balances: vec![],
     };
-    let p = provider::Entity::find_by_id(pid).one(&db).await.unwrap().unwrap();
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
     apply_usage_gate(&db, &p, &unknown).await.unwrap();
     assert!(provider_enabled(&db, pid).await);
     assert!(item_enabled(&db, model_id).await);
@@ -170,7 +178,11 @@ async fn gate_skips_unjudgeable_data() {
         windows: vec![],
         balances: vec![],
     };
-    let p = provider::Entity::find_by_id(pid).one(&db).await.unwrap().unwrap();
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
     apply_usage_gate(&db, &p, &balance).await.unwrap();
     assert!(provider_enabled(&db, pid).await);
 }
@@ -192,7 +204,11 @@ async fn usage_refresh_job_seed_is_scheduled() {
     scheduler.load_from_db(&repo).await.unwrap();
     scheduler.start().await.unwrap();
 
-    assert!(scheduler.has_job(llm_gateway::cron::seed::USAGE_REFRESH_JOB).await);
+    assert!(
+        scheduler
+            .has_job(llm_gateway::cron::seed::USAGE_REFRESH_JOB)
+            .await
+    );
     let jobs = scheduler.list_jobs().await;
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].expression, "@every 5m");

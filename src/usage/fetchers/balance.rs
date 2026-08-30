@@ -18,7 +18,10 @@ pub async fn fetch_deepseek(
     let reply = http
         .get(
             "https://api.deepseek.com/user/balance",
-            &[("Authorization", format!("Bearer {}", creds.api_key_required()?))],
+            &[(
+                "Authorization",
+                format!("Bearer {}", creds.api_key_required()?),
+            )],
         )
         .await?;
     ensure_not_auth_error(&reply)?;
@@ -74,7 +77,10 @@ pub async fn fetch_moonshot(
     let reply = http
         .get(
             &format!("https://{host}/v1/users/me/balance"),
-            &[("Authorization", format!("Bearer {}", creds.api_key_required()?))],
+            &[(
+                "Authorization",
+                format!("Bearer {}", creds.api_key_required()?),
+            )],
         )
         .await?;
     ensure_not_auth_error(&reply)?;
@@ -125,7 +131,10 @@ pub async fn fetch_openrouter(
     let reply = http
         .get(
             "https://openrouter.ai/api/v1/credits",
-            &[("Authorization", format!("Bearer {}", creds.api_key_required()?))],
+            &[(
+                "Authorization",
+                format!("Bearer {}", creds.api_key_required()?),
+            )],
         )
         .await?;
     ensure_not_auth_error(&reply)?;
@@ -145,7 +154,9 @@ fn parse_openrouter(body: &str) -> Result<FetchOutput, UsageError> {
         data.get("total_credits").and_then(num),
         data.get("total_usage").and_then(num),
     ) else {
-        return Err(UsageError::Parse("缺少 total_credits/total_usage 字段".to_string()));
+        return Err(UsageError::Parse(
+            "缺少 total_credits/total_usage 字段".to_string(),
+        ));
     };
     let usd = || Some("USD".to_string());
     Ok(FetchOutput::Balance {
@@ -183,7 +194,10 @@ pub async fn fetch_stepfun_account(
     let reply = http
         .get(
             &format!("https://{host}/v1/accounts"),
-            &[("Authorization", format!("Bearer {}", creds.api_key_required()?))],
+            &[(
+                "Authorization",
+                format!("Bearer {}", creds.api_key_required()?),
+            )],
         )
         .await?;
     ensure_not_auth_error(&reply)?;
@@ -265,7 +279,10 @@ mod tests {
     #[test]
     fn moonshot_business_error() {
         let body = r#"{ "code": 401, "message": "invalid key" }"#;
-        assert!(matches!(parse_moonshot(body), Err(UsageError::Upstream(_, _))));
+        assert!(matches!(
+            parse_moonshot(body),
+            Err(UsageError::Upstream(_, _))
+        ));
     }
 
     #[test]

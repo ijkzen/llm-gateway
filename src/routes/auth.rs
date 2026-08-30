@@ -72,7 +72,9 @@ async fn status(State(state): State<AppState>) -> AxumResponse {
     match Entity::find().count(&state.db).await {
         Ok(count) => (
             StatusCode::OK,
-            Json(Response::success(StatusResponse { initialized: count > 0 })),
+            Json(Response::success(StatusResponse {
+                initialized: count > 0,
+            })),
         )
             .into_response(),
         Err(e) => response::db_error::<()>(e.to_string()).into_response(),
@@ -136,7 +138,8 @@ async fn login(State(state): State<AppState>, Json(req): Json<CredentialsRequest
 
     // 用户不存在时也对固定密码做一次等价校验，避免通过响应时间探测用户名。
     static DUMMY_HASH: OnceLock<String> = OnceLock::new();
-    let dummy = DUMMY_HASH.get_or_init(|| hash_password("dummy-password-for-timing").unwrap_or_default());
+    let dummy =
+        DUMMY_HASH.get_or_init(|| hash_password("dummy-password-for-timing").unwrap_or_default());
     let verified = match &model {
         Some(model) => verify_password(&req.password, &model.password_hash),
         None => {
@@ -161,11 +164,16 @@ fn login_response(
     token: &str,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> AxumResponse {
-    let max_age = (expires_at - chrono::Utc::now()).num_seconds().clamp(0, 7 * 24 * 3600);
-    let cookie = format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}");
+    let max_age = (expires_at - chrono::Utc::now())
+        .num_seconds()
+        .clamp(0, 7 * 24 * 3600);
+    let cookie =
+        format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}");
     (
         [(header::SET_COOKIE, cookie)],
-        Json(Response::success(UserResponse { username: username.to_string() })),
+        Json(Response::success(UserResponse {
+            username: username.to_string(),
+        })),
     )
         .into_response()
 }
@@ -186,7 +194,9 @@ async fn logout(State(state): State<AppState>, headers: axum::http::HeaderMap) -
 async fn me(Extension(user): Extension<AuthedUser>) -> impl IntoResponse {
     (
         StatusCode::OK,
-        Json(Response::success(UserResponse { username: user.username })),
+        Json(Response::success(UserResponse {
+            username: user.username,
+        })),
     )
 }
 

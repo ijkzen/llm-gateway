@@ -41,7 +41,10 @@ pub async fn fetch_aliyun_bss(
         ("AccessKeyId".to_string(), ak.to_string()),
         ("SignatureMethod".to_string(), "HMAC-SHA1".to_string()),
         ("SignatureVersion".to_string(), "1.0".to_string()),
-        ("SignatureNonce".to_string(), uuid::Uuid::new_v4().to_string()),
+        (
+            "SignatureNonce".to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        ),
         (
             "Timestamp".to_string(),
             Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
@@ -56,7 +59,9 @@ pub async fn fetch_aliyun_bss(
         .collect::<Vec<_>>()
         .join("&");
     let url = format!("https://{ALIYUN_BSS_HOST}/?{query}");
-    let reply = http.get(&url, &[("Accept", "application/json".to_string())]).await?;
+    let reply = http
+        .get(&url, &[("Accept", "application/json".to_string())])
+        .await?;
     if reply.status == 401 || reply.status == 403 {
         return Err(UsageError::Auth);
     }
@@ -105,9 +110,14 @@ fn parse_aliyun_bss(body: &str) -> Result<FetchOutput, UsageError> {
         None => {
             // 错误形态：{Code, Message}；签名/凭据类错误单独归类。
             let code = v.get("Code").and_then(Value::as_str).unwrap_or_default();
-            let msg = v.get("Message").and_then(Value::as_str).unwrap_or("未知错误");
+            let msg = v
+                .get("Message")
+                .and_then(Value::as_str)
+                .unwrap_or("未知错误");
             let text = code.to_ascii_lowercase();
-            if text.contains("signature") || text.contains("accesskey") || text.contains("forbidden")
+            if text.contains("signature")
+                || text.contains("accesskey")
+                || text.contains("forbidden")
             {
                 return Err(UsageError::Auth);
             }
@@ -187,12 +197,12 @@ fn parse_volcengine_billing(status: u16, body: &str) -> Result<FetchOutput, Usag
         status,
         body: body.to_string(),
     })?;
-    if let Some(err) = v
-        .get("ResponseMetadata")
-        .and_then(|m| m.get("Error"))
-    {
+    if let Some(err) = v.get("ResponseMetadata").and_then(|m| m.get("Error")) {
         let code = err.get("Code").and_then(Value::as_str).unwrap_or_default();
-        let message = err.get("Message").and_then(Value::as_str).unwrap_or_default();
+        let message = err
+            .get("Message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let text = format!("{code} {message}").to_ascii_lowercase();
         if text.contains("auth") || text.contains("signature") || text.contains("denied") {
             return Err(UsageError::Auth);

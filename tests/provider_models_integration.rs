@@ -141,8 +141,13 @@ async fn test_create_model_validations() {
 #[tokio::test]
 async fn test_create_model_returns_404_for_missing_provider() {
     let (app, _db) = setup_app().await;
-    let (status, _) = send_json(app, "POST", "/api/providers/999/models", model_payload("gpt-4o"))
-        .await;
+    let (status, _) = send_json(
+        app,
+        "POST",
+        "/api/providers/999/models",
+        model_payload("gpt-4o"),
+    )
+    .await;
     assert_eq!(status, 404);
 }
 
@@ -231,11 +236,13 @@ async fn test_update_and_delete_provider_model() {
     )
     .await;
     assert_eq!(status, 200);
-    assert!(provider_model::Entity::find_by_id(model_id as i32)
-        .one(&db)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        provider_model::Entity::find_by_id(model_id as i32)
+            .one(&db)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     let (status, _) = send_json(
         app,
@@ -384,8 +391,13 @@ async fn test_delete_provider_cascades_models() {
         assert_eq!(status, 201, "create {mid}");
     }
 
-    let (status, _) = send_json(app.clone(), "DELETE", &format!("/api/providers/{p1}"), Value::Null)
-        .await;
+    let (status, _) = send_json(
+        app.clone(),
+        "DELETE",
+        &format!("/api/providers/{p1}"),
+        Value::Null,
+    )
+    .await;
     assert_eq!(status, 200);
 
     let remaining = provider_model::Entity::find()
@@ -395,8 +407,13 @@ async fn test_delete_provider_cascades_models() {
         .unwrap();
     assert!(remaining.is_empty(), "供应商删除后模型应级联硬删");
 
-    let (status, body) = send_json(app, "GET", &format!("/api/providers/{p1}/models"), Value::Null)
-        .await;
+    let (status, body) = send_json(
+        app,
+        "GET",
+        &format!("/api/providers/{p1}/models"),
+        Value::Null,
+    )
+    .await;
     assert_eq!(status, 200);
     assert_eq!(body["data"].as_array().unwrap().len(), 0);
 }
@@ -435,6 +452,12 @@ async fn test_refresh_returns_502_for_unreachable_provider() {
 #[tokio::test]
 async fn test_refresh_returns_404_for_missing_provider() {
     let (app, _db) = setup_app().await;
-    let (status, _) = send_json(app, "POST", "/api/providers/999/models/refresh", Value::Null).await;
+    let (status, _) = send_json(
+        app,
+        "POST",
+        "/api/providers/999/models/refresh",
+        Value::Null,
+    )
+    .await;
     assert_eq!(status, 404);
 }

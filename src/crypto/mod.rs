@@ -7,8 +7,8 @@
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng};
 use aes_gcm::{Aes256Gcm, Nonce};
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
@@ -20,7 +20,9 @@ const CIPHER_PREFIX: &str = "enc:v1:";
 
 /// 加密后是否真的发生了加密(区分"配置了密钥"与"退化明文")。
 pub fn encryption_enabled() -> bool {
-    std::env::var(ENCRYPTION_KEY_ENV).map(|k| !k.trim().is_empty()).unwrap_or(false)
+    std::env::var(ENCRYPTION_KEY_ENV)
+        .map(|k| !k.trim().is_empty())
+        .unwrap_or(false)
 }
 
 /// 从环境变量派生 AES-256 密钥。
@@ -36,7 +38,10 @@ pub fn encrypt(plaintext: &str) -> String {
     if plaintext.is_empty() {
         return String::new();
     }
-    let Some(secret) = std::env::var(ENCRYPTION_KEY_ENV).ok().filter(|k| !k.trim().is_empty()) else {
+    let Some(secret) = std::env::var(ENCRYPTION_KEY_ENV)
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+    else {
         tracing::warn!(
             "{} not set; API keys will be stored in plaintext",
             ENCRYPTION_KEY_ENV
@@ -82,9 +87,9 @@ pub fn decrypt(ciphertext: &str) -> anyhow::Result<String> {
         let key = derive_key(&secret);
         let cipher = Aes256Gcm::new_from_slice(&key).expect("AES-256 key is always 32 bytes");
 
-        let blob = BASE64.decode(encoded).map_err(|e| {
-            anyhow::anyhow!("stored API key is not valid base64: {e}")
-        })?;
+        let blob = BASE64
+            .decode(encoded)
+            .map_err(|e| anyhow::anyhow!("stored API key is not valid base64: {e}"))?;
         if blob.len() < 13 {
             return Err(anyhow::anyhow!(
                 "stored API key is too short to be a valid ciphertext"
@@ -96,7 +101,8 @@ pub fn decrypt(ciphertext: &str) -> anyhow::Result<String> {
         let plaintext = cipher
             .decrypt(&Nonce::from(nonce_arr), ciphertext_bytes)
             .map_err(|_| anyhow::anyhow!("failed to decrypt stored API key (wrong key?)"))?;
-        String::from_utf8(plaintext).map_err(|e| anyhow::anyhow!("decrypted API key is not UTF-8: {e}"))
+        String::from_utf8(plaintext)
+            .map_err(|e| anyhow::anyhow!("decrypted API key is not UTF-8: {e}"))
     } else {
         // 未加密的旧数据/开发环境明文,原样返回。
         Ok(ciphertext.to_string())
@@ -132,13 +138,10 @@ mod tests {
     const KEY: &str = "test-encryption-key";
 
     fn with_key<T>(key: Option<&str>, f: impl FnOnce() -> T) -> T {
-        temp_env::with_vars(
-            [(ENCRYPTION_KEY_ENV, key)],
-            || {
-                // temp_env 之外的环境可能残留变量,显式清理。
-                f()
-            },
-        )
+        temp_env::with_vars([(ENCRYPTION_KEY_ENV, key)], || {
+            // temp_env 之外的环境可能残留变量,显式清理。
+            f()
+        })
     }
 
     #[test]

@@ -85,8 +85,8 @@ static RAW: OnceLock<Vec<(String, RawModelFull)>> = OnceLock::new();
 
 fn catalog() -> &'static HashMap<String, CatalogEntry> {
     CATALOG.get_or_init(|| {
-        let raw: BTreeMap<String, RawModel> = serde_json::from_str(MODELS_JSON)
-            .expect("embedded models.json must be valid JSON");
+        let raw: BTreeMap<String, RawModel> =
+            serde_json::from_str(MODELS_JSON).expect("embedded models.json must be valid JSON");
         let mut index = HashMap::with_capacity(raw.len());
         for (key, model) in raw {
             let modalities = model.modalities.map(|m| m.input).unwrap_or_default();
@@ -98,7 +98,9 @@ fn catalog() -> &'static HashMap<String, CatalogEntry> {
                 image_understand: modalities.iter().any(|s| s == "image"),
                 video_understand: modalities.iter().any(|s| s == "video"),
             };
-            index.entry(last_segment(&key).to_lowercase()).or_insert(entry);
+            index
+                .entry(last_segment(&key).to_lowercase())
+                .or_insert(entry);
         }
         index
     })
@@ -106,8 +108,8 @@ fn catalog() -> &'static HashMap<String, CatalogEntry> {
 
 fn raw() -> &'static [(String, RawModelFull)] {
     RAW.get_or_init(|| {
-        let raw: BTreeMap<String, RawModelFull> = serde_json::from_str(MODELS_JSON)
-            .expect("embedded models.json must be valid JSON");
+        let raw: BTreeMap<String, RawModelFull> =
+            serde_json::from_str(MODELS_JSON).expect("embedded models.json must be valid JSON");
         raw.into_iter().collect()
     })
 }
@@ -134,12 +136,18 @@ pub fn search(q: &str, limit: usize) -> Vec<CatalogCandidate> {
                 1
             } else if name.to_lowercase().contains(&query) {
                 2
-            } else if family.to_lowercase().contains(&query) || description.to_lowercase().contains(&query) {
+            } else if family.to_lowercase().contains(&query)
+                || description.to_lowercase().contains(&query)
+            {
                 3
             } else {
                 return None;
             };
-            let modalities = model.modalities.as_ref().map(|m| m.input.clone()).unwrap_or_default();
+            let modalities = model
+                .modalities
+                .as_ref()
+                .map(|m| m.input.clone())
+                .unwrap_or_default();
             Some((
                 score,
                 CatalogCandidate {
@@ -201,7 +209,10 @@ mod tests {
         // name 含 "claude" 的也能命中。
         let hits = search("claude", 10);
         assert!(!hits.is_empty());
-        assert!(hits.iter().any(|c| c.name.to_lowercase().contains("claude")));
+        assert!(
+            hits.iter()
+                .any(|c| c.name.to_lowercase().contains("claude"))
+        );
     }
 
     #[test]

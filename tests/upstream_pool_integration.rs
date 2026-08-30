@@ -1,7 +1,7 @@
 //! 上游连接池集成测试：连接复用、空闲超时释放、`Connection: close` 后不归还。
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use http_body_util::Full;
@@ -14,7 +14,10 @@ use llm_gateway::proxy::pool::UpstreamPool;
 use llm_gateway::proxy::upstream::{UpstreamCall, call, read_body};
 
 /// 返回 `{"ok":true}`，可配置 `Connection: close`。
-async fn mock_handler(close: bool, req: Request<hyper::body::Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+async fn mock_handler(
+    close: bool,
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<Full<Bytes>>, hyper::Error> {
     let _ = req;
     let body = Bytes::from_static(b"{\"ok\":true}");
     let mut builder = Response::builder()
@@ -29,7 +32,9 @@ async fn mock_handler(close: bool, req: Request<hyper::body::Incoming>) -> Resul
 
 /// 手动 accept 循环的 mock 上游：计数接受的连接数，逐连接 `serve_connection`（支持 keep-alive）。
 async fn spawn_mock(count: Arc<AtomicUsize>, close: bool) -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind mock");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind mock");
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(async move {
         loop {
@@ -42,9 +47,7 @@ async fn spawn_mock(count: Arc<AtomicUsize>, close: bool) -> String {
             let close_flag = close;
             tokio::spawn(async move {
                 let service = service_fn(move |req| mock_handler(close_flag, req));
-                let _ = http1::Builder::new()
-                    .serve_connection(io, service)
-                    .await;
+                let _ = http1::Builder::new().serve_connection(io, service).await;
             });
         }
     });
@@ -72,7 +75,11 @@ async fn reuses_connection_for_second_request() {
 
     let body = call_json(&url, &pool).await;
     assert_eq!(String::from_utf8_lossy(&body), "{\"ok\":true}");
-    assert_eq!(connections.load(Ordering::SeqCst), 1, "首次请求应新建 1 条连接");
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        1,
+        "首次请求应新建 1 条连接"
+    );
 
     let body = call_json(&url, &pool).await;
     assert_eq!(String::from_utf8_lossy(&body), "{\"ok\":true}");

@@ -67,7 +67,10 @@ pub async fn fetch_remote_model_ids(
         }
     }
 
-    let response = request.send().await.map_err(|e| format!("请求供应商 Models 接口失败：{e}"))?;
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("请求供应商 Models 接口失败：{e}"))?;
     let status = response.status();
     let body = response
         .text()
@@ -104,12 +107,12 @@ pub fn parse_model_ids(protocol_type: i32, body: &str) -> Result<Vec<String>, St
     }
 
     if protocol_type == PROTOCOL_GEMINI {
-        let parsed: GeminiEnvelope = serde_json::from_str(body)
-            .map_err(|e| format!("解析供应商响应失败：{e}"))?;
+        let parsed: GeminiEnvelope =
+            serde_json::from_str(body).map_err(|e| format!("解析供应商响应失败：{e}"))?;
         Ok(parsed.models.into_iter().map(|m| m.name).collect())
     } else {
-        let parsed: OpenAiEnvelope = serde_json::from_str(body)
-            .map_err(|e| format!("解析供应商响应失败：{e}"))?;
+        let parsed: OpenAiEnvelope =
+            serde_json::from_str(body).map_err(|e| format!("解析供应商响应失败：{e}"))?;
         Ok(parsed.data.into_iter().map(|m| m.id).collect())
     }
 }
@@ -133,7 +136,10 @@ mod tests {
             "https://api.minimax.io/anthropic/v1/models"
         );
         assert_eq!(
-            build_models_url("https://generativelanguage.googleapis.com/v1beta", PROTOCOL_GEMINI),
+            build_models_url(
+                "https://generativelanguage.googleapis.com/v1beta",
+                PROTOCOL_GEMINI
+            ),
             "https://generativelanguage.googleapis.com/v1beta/models"
         );
     }
@@ -145,16 +151,21 @@ mod tests {
             "https://api.openai.com/v1/models"
         );
         assert_eq!(
-            build_models_url("https://generativelanguage.googleapis.com/", PROTOCOL_GEMINI),
+            build_models_url(
+                "https://generativelanguage.googleapis.com/",
+                PROTOCOL_GEMINI
+            ),
             "https://generativelanguage.googleapis.com/v1beta/models"
         );
     }
 
     #[test]
     fn test_parse_openai_model_ids() {
-        let ids =
-            parse_model_ids(PROTOCOL_OPENAI_COMPATIBLE, r#"{"data":[{"id":"gpt-4o"},{"id":"o3"}]}"#)
-                .unwrap();
+        let ids = parse_model_ids(
+            PROTOCOL_OPENAI_COMPATIBLE,
+            r#"{"data":[{"id":"gpt-4o"},{"id":"o3"}]}"#,
+        )
+        .unwrap();
         assert_eq!(ids, vec!["gpt-4o".to_string(), "o3".to_string()]);
     }
 

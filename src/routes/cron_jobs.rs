@@ -12,7 +12,7 @@ use tokio_stream::{StreamExt, wrappers::BroadcastStream};
 use crate::cron::JobInfo;
 use crate::cron::SchedulerError;
 use crate::cron::log_repository::{
-    CronJobLogRepository, LogRecord, RunRecord, SeaOrmCronJobLogRepository, MAX_RUNS_KEPT,
+    CronJobLogRepository, LogRecord, MAX_RUNS_KEPT, RunRecord, SeaOrmCronJobLogRepository,
 };
 use crate::cron::repository::{CronJobRepository, JobDefinition, SeaOrmCronJobRepository};
 use crate::response::{self, Response};
@@ -300,7 +300,9 @@ async fn stream_job_logs(
                         "ts": log.ts.to_rfc3339(),
                     })).collect::<Vec<_>>(),
                 });
-                SseEvent::default().event("snapshot").data(snapshot.to_string())
+                SseEvent::default()
+                    .event("snapshot")
+                    .data(snapshot.to_string())
             }
             _ => SseEvent::default().event("idle").data("{}"),
         },

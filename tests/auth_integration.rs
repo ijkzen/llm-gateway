@@ -44,7 +44,9 @@ async fn send_with_headers(
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or_default().to_string()))
         .collect();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let parsed: Value = if bytes.is_empty() {
         Value::Null
     } else {
@@ -61,7 +63,10 @@ async fn send_json(app: axum::Router, method: &str, uri: &str, body: Value) -> T
 fn session_token_from(headers: &[(String, String)]) -> Option<String> {
     headers.iter().find_map(|(name, value)| {
         if name == "set-cookie" && value.starts_with("lg_session=") {
-            value.split(';').next().and_then(|pair| pair.split_once('='))
+            value
+                .split(';')
+                .next()
+                .and_then(|pair| pair.split_once('='))
                 .map(|(_, token)| token.to_string())
         } else {
             None
@@ -171,7 +176,11 @@ async fn login_and_session_guard() {
     assert_eq!(status, 200, "login should succeed: {body}");
     assert_eq!(body["data"]["username"], ADMIN);
     let token = session_token_from(&headers).expect("login sets cookie");
-    assert!(headers.iter().any(|(n, v)| n == "set-cookie" && v.contains("HttpOnly")));
+    assert!(
+        headers
+            .iter()
+            .any(|(n, v)| n == "set-cookie" && v.contains("HttpOnly"))
+    );
 
     // 带 Cookie 访问管理接口 → 200，且 /api/auth/me 返回用户名。
     let headers: Vec<(&str, String)> = cookie(&token).to_vec();
@@ -251,14 +260,7 @@ async fn change_password_revokes_other_sessions() {
     assert_eq!(status, 401);
 
     // 会话 A 仍然有效。
-    let (status, _, _) = send_with_headers(
-        app.clone(),
-        "GET",
-        "/api/auth/me",
-        None,
-        &a_refs,
-    )
-    .await;
+    let (status, _, _) = send_with_headers(app.clone(), "GET", "/api/auth/me", None, &a_refs).await;
     assert_eq!(status, 200);
 
     // 旧密码不能再登录，新密码可以。
@@ -287,11 +289,11 @@ async fn logout_revokes_session() {
 
     let headers: Vec<(&str, String)> = cookie(&token).to_vec();
     let refs: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
-    let (status, _, _) = send_with_headers(app.clone(), "POST", "/api/auth/logout", None, &refs).await;
+    let (status, _, _) =
+        send_with_headers(app.clone(), "POST", "/api/auth/logout", None, &refs).await;
     assert_eq!(status, 200);
 
-    let (status, _, _) =
-        send_with_headers(app.clone(), "GET", "/api/settings", None, &refs).await;
+    let (status, _, _) = send_with_headers(app.clone(), "GET", "/api/settings", None, &refs).await;
     assert_eq!(status, 401);
 }
 

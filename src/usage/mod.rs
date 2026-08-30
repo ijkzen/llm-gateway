@@ -73,10 +73,7 @@ pub async fn query_provider_usage(
         Ok(Value::Object(map)) => map,
         _ => Default::default(),
     };
-    let usage_enabled = extra
-        .get("usage")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let usage_enabled = extra.get("usage").and_then(Value::as_bool).unwrap_or(false);
     if !usage_enabled {
         return Err(UsageError::NotEnabled);
     }
@@ -90,8 +87,7 @@ pub async fn query_provider_usage(
         api_key: &api_key,
         extra: &extra,
     };
-    let host = crate::provider_template::host_of(&model.base_url)
-        .ok_or(UsageError::Unsupported)?;
+    let host = crate::provider_template::host_of(&model.base_url).ok_or(UsageError::Unsupported)?;
     let fetcher = fetcher_for(&host, &path_of(&model.base_url)).ok_or(UsageError::Unsupported)?;
 
     let http = http::UsageHttp::new();
@@ -120,7 +116,10 @@ pub async fn query_provider_usage(
 
 /// 提取 base_url 的路径部分（小写，无路径返回 "/"）。
 fn path_of(base_url: &str) -> String {
-    let rest = base_url.split_once("://").map(|(_, r)| r).unwrap_or(base_url);
+    let rest = base_url
+        .split_once("://")
+        .map(|(_, r)| r)
+        .unwrap_or(base_url);
     rest.find('/')
         .map(|i| rest[i..].to_ascii_lowercase())
         .unwrap_or_else(|| "/".to_string())
@@ -203,39 +202,63 @@ impl Fetcher {
         http: &http::UsageHttp,
         creds: &Credentials<'_>,
     ) -> Result<FetchOutput, UsageError> {
-        use fetchers::{alibaba, api_key, balance, cloud_balance, copilot, stepfun, volcengine, xiaomi};
+        use fetchers::{
+            alibaba, api_key, balance, cloud_balance, copilot, stepfun, volcengine, xiaomi,
+        };
         match self {
             Fetcher::OpenCodeGo => api_key::fetch_opencode_go(http, creds).await,
             Fetcher::Kimi => api_key::fetch_kimi(http, creds).await,
             Fetcher::Zhipu { intl } => {
-                let host = if *intl { "api.z.ai" } else { "open.bigmodel.cn" };
+                let host = if *intl {
+                    "api.z.ai"
+                } else {
+                    "open.bigmodel.cn"
+                };
                 api_key::fetch_zhipu(http, creds, host).await
             }
             Fetcher::Minimax { intl } => {
-                let host = if *intl { "api.minimax.io" } else { "api.minimaxi.com" };
+                let host = if *intl {
+                    "api.minimax.io"
+                } else {
+                    "api.minimaxi.com"
+                };
                 api_key::fetch_minimax(http, creds, host).await
             }
             Fetcher::Zenmux => api_key::fetch_zenmux(http, creds).await,
             Fetcher::CommandCode => api_key::fetch_command_code(http, creds).await,
             Fetcher::Deepseek => balance::fetch_deepseek(http, creds).await,
             Fetcher::Moonshot { intl } => {
-                let host = if *intl { "api.moonshot.ai" } else { "api.moonshot.cn" };
+                let host = if *intl {
+                    "api.moonshot.ai"
+                } else {
+                    "api.moonshot.cn"
+                };
                 balance::fetch_moonshot(http, creds, host).await
             }
             Fetcher::Openrouter => balance::fetch_openrouter(http, creds).await,
             Fetcher::Copilot => copilot::fetch_copilot(http, creds).await,
             Fetcher::Volcengine => volcengine::fetch_volcengine(http, creds).await,
-            Fetcher::VolcengineBilling => cloud_balance::fetch_volcengine_billing(http, creds).await,
+            Fetcher::VolcengineBilling => {
+                cloud_balance::fetch_volcengine_billing(http, creds).await
+            }
             Fetcher::AliyunBss => cloud_balance::fetch_aliyun_bss(http, creds).await,
             Fetcher::XiaomiBalance => xiaomi::fetch_xiaomi_balance(http, creds).await,
             Fetcher::XiaomiTokenPlan => xiaomi::fetch_xiaomi_token_plan(http, creds).await,
             Fetcher::Stepfun => stepfun::fetch_stepfun(http, creds).await,
             Fetcher::StepfunBalance { intl } => {
-                let host = if *intl { "api.stepfun.ai" } else { "api.stepfun.com" };
+                let host = if *intl {
+                    "api.stepfun.ai"
+                } else {
+                    "api.stepfun.com"
+                };
                 balance::fetch_stepfun_account(http, creds, host).await
             }
-            Fetcher::AlibabaCoding { intl } => alibaba::fetch_alibaba_coding(http, creds, *intl).await,
-            Fetcher::AlibabaToken { intl } => alibaba::fetch_alibaba_token(http, creds, *intl).await,
+            Fetcher::AlibabaCoding { intl } => {
+                alibaba::fetch_alibaba_coding(http, creds, *intl).await
+            }
+            Fetcher::AlibabaToken { intl } => {
+                alibaba::fetch_alibaba_token(http, creds, *intl).await
+            }
         }
     }
 }

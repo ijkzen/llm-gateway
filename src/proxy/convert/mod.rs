@@ -49,13 +49,7 @@ pub fn extract_error_message(body: &str) -> String {
         let message = value
             .pointer("/error/message")
             .or_else(|| value.pointer("/error"))
-            .and_then(|v| {
-                if v.is_string() {
-                    v.as_str()
-                } else {
-                    None
-                }
-            })
+            .and_then(|v| if v.is_string() { v.as_str() } else { None })
             .map(str::to_string)
             .or_else(|| {
                 value
@@ -92,12 +86,7 @@ pub fn client_usage_json(usage: &crate::proxy::metrics::Usage) -> Value {
 }
 
 /// 构造 OpenAI chat.completion.chunk。
-pub fn chunk_json(
-    id: &str,
-    model: &str,
-    delta: Value,
-    finish_reason: Option<&str>,
-) -> Value {
+pub fn chunk_json(id: &str, model: &str, delta: Value, finish_reason: Option<&str>) -> Value {
     json!({
         "id": id,
         "object": "chat.completion.chunk",
@@ -144,9 +133,7 @@ pub fn message_text(content: Option<&Value>) -> String {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Array(items)) => items
             .iter()
-            .filter_map(|item| {
-                item.get("text").and_then(Value::as_str)
-            })
+            .filter_map(|item| item.get("text").and_then(Value::as_str))
             .collect::<Vec<_>>()
             .join(""),
         _ => String::new(),
@@ -176,7 +163,10 @@ fn inline_defs_recursive(value: &mut Value, defs: &Value, depth: usize) {
             let ref_path = map
                 .get("$ref")
                 .and_then(Value::as_str)
-                .and_then(|r| r.strip_prefix("#/$defs/").or_else(|| r.strip_prefix("#/definitions/")))
+                .and_then(|r| {
+                    r.strip_prefix("#/$defs/")
+                        .or_else(|| r.strip_prefix("#/definitions/"))
+                })
                 .map(str::to_string);
             if let Some(name) = ref_path
                 && let Some(def) = defs.get(&name)
@@ -229,16 +219,26 @@ pub fn actual_model_id(model: &provider_model::Model) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider_model::refresh::{PROTOCOL_ANTHROPIC, PROTOCOL_GEMINI, PROTOCOL_OPENAI_COMPATIBLE};
+    use crate::provider_model::refresh::{
+        PROTOCOL_ANTHROPIC, PROTOCOL_GEMINI, PROTOCOL_OPENAI_COMPATIBLE,
+    };
 
     #[test]
     fn build_url_follows_version_segment_rule() {
         assert_eq!(
-            build_upstream_url("https://api.openai.com/v1", PROTOCOL_OPENAI_COMPATIBLE, "chat/completions"),
+            build_upstream_url(
+                "https://api.openai.com/v1",
+                PROTOCOL_OPENAI_COMPATIBLE,
+                "chat/completions"
+            ),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
-            build_upstream_url("https://api.openai.com", PROTOCOL_OPENAI_COMPATIBLE, "chat/completions"),
+            build_upstream_url(
+                "https://api.openai.com",
+                PROTOCOL_OPENAI_COMPATIBLE,
+                "chat/completions"
+            ),
             "https://api.openai.com/v1/chat/completions"
         );
         assert_eq!(
@@ -246,7 +246,11 @@ mod tests {
             "https://api.anthropic.com/v1/messages"
         );
         assert_eq!(
-            build_upstream_url("https://generativelanguage.googleapis.com/", PROTOCOL_GEMINI, "models/m:generateContent"),
+            build_upstream_url(
+                "https://generativelanguage.googleapis.com/",
+                PROTOCOL_GEMINI,
+                "models/m:generateContent"
+            ),
             "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent"
         );
     }
@@ -258,14 +262,21 @@ mod tests {
             "boom"
         );
         assert_eq!(
-            extract_error_message(r#"{"type":"error","error":{"type":"x","message":"anthropic boom"}}"#),
+            extract_error_message(
+                r#"{"type":"error","error":{"type":"x","message":"anthropic boom"}}"#
+            ),
             "anthropic boom"
         );
         assert_eq!(
-            extract_error_message(r#"{"error":{"code":400,"message":"gemini boom","status":"INVALID"}}"#),
+            extract_error_message(
+                r#"{"error":{"code":400,"message":"gemini boom","status":"INVALID"}}"#
+            ),
             "gemini boom"
         );
-        assert_eq!(extract_error_message("plain text error"), "plain text error");
+        assert_eq!(
+            extract_error_message("plain text error"),
+            "plain text error"
+        );
     }
 
     #[test]

@@ -71,13 +71,9 @@ async fn test_load_from_db_skips_missed_cron_jobs() {
 
     repo.insert(&sample_job("missed_cron_test")).await.unwrap();
     let past = chrono::Utc::now() - chrono::TimeDelta::minutes(5);
-    repo.update_run_times(
-        "missed_cron_test",
-        chrono::DateTime::UNIX_EPOCH,
-        past,
-    )
-    .await
-    .unwrap();
+    repo.update_run_times("missed_cron_test", chrono::DateTime::UNIX_EPOCH, past)
+        .await
+        .unwrap();
 
     scheduler.load_from_db(&repo).await.unwrap();
 
@@ -647,10 +643,7 @@ async fn test_disabled_job_stays_listed_and_runnable_manually() {
     assert!(scheduler.has_job("disabled_manual_run").await);
     assert!(!scheduler.has_job("missing_job").await);
 
-    scheduler
-        .run_job_now("disabled_manual_run")
-        .await
-        .unwrap();
+    scheduler.run_job_now("disabled_manual_run").await.unwrap();
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 }

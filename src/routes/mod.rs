@@ -37,7 +37,10 @@ pub fn create_app(state: &AppState) -> Router {
         .nest("/v1", openai_compat::routes())
         .fallback(crate::static_assets::serve_asset)
         .layer(DefaultBodyLimit::max(5 * 1024 * 1024))
-        .layer(middleware::from_fn_with_state(state.clone(), crate::auth::auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::auth_middleware,
+        ))
         .with_state(state.clone());
 
     http_middleware::apply(router)

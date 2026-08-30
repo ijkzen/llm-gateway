@@ -104,4 +104,3 @@ pub async fn find_by_domain(
 ) -> Result<Option<provider_template::Model>, DbErr> {
     Ok(find_by_domain_all(db, domain).await?.into_iter().next())
 }
-

@@ -45,19 +45,20 @@ fn parse_copilot(body: &str) -> Result<FetchOutput, UsageError> {
         && premium.get("unlimited").and_then(Value::as_bool) != Some(true)
     {
         // 优先 percent_remaining；缺失时用 entitlement − remaining 兜底。
-        let window = if let Some(remaining_percent) =
-            premium.get("percent_remaining").and_then(num)
+        let window = if let Some(remaining_percent) = premium.get("percent_remaining").and_then(num)
         {
-            let mut w =
-                QuotaWindow::from_remaining_percent(WindowKind::Monthly, remaining_percent, resets_at);
+            let mut w = QuotaWindow::from_remaining_percent(
+                WindowKind::Monthly,
+                remaining_percent,
+                resets_at,
+            );
             w.limit = premium.get("entitlement").and_then(num);
-            w.used = premium
-                .get("credits_used")
-                .and_then(num)
-                .or_else(|| match (w.limit, premium.get("remaining").and_then(num)) {
+            w.used = premium.get("credits_used").and_then(num).or_else(|| {
+                match (w.limit, premium.get("remaining").and_then(num)) {
                     (Some(total), Some(remaining)) => Some(total - remaining),
                     _ => None,
-                });
+                }
+            });
             w
         } else if let (Some(entitlement), Some(remaining)) = (
             premium.get("entitlement").and_then(num),

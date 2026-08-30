@@ -27,15 +27,16 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
     let mut system_parts: Vec<Value> = Vec::new();
     let mut contents: Vec<(String, Vec<Value>)> = Vec::new();
 
-    let push_contents = |contents: &mut Vec<(String, Vec<Value>)>, role: String, parts: Vec<Value>| {
-        if let Some((last_role, last_parts)) = contents.last_mut()
-            && *last_role == role
-        {
-            last_parts.extend(parts);
-        } else {
-            contents.push((role, parts));
-        }
-    };
+    let push_contents =
+        |contents: &mut Vec<(String, Vec<Value>)>, role: String, parts: Vec<Value>| {
+            if let Some((last_role, last_parts)) = contents.last_mut()
+                && *last_role == role
+            {
+                last_parts.extend(parts);
+            } else {
+                contents.push((role, parts));
+            }
+        };
 
     for message in chat_messages(chat) {
         let role = message.get("role").and_then(Value::as_str).unwrap_or("");
@@ -74,7 +75,8 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
                             .pointer("/function/arguments")
                             .and_then(Value::as_str)
                             .unwrap_or("{}");
-                        let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+                        let args: Value =
+                            serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
                         parts.push(json!({
                             "functionCall": {
                                 "name": call.pointer("/function/name").and_then(Value::as_str).unwrap_or(""),
@@ -97,7 +99,8 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
                     .cloned()
                     .unwrap_or_else(|| tool_call_id.to_string());
                 let raw = message_text(content);
-                let result: Value = serde_json::from_str(&raw).unwrap_or_else(|_| json!({"result": raw}));
+                let result: Value =
+                    serde_json::from_str(&raw).unwrap_or_else(|_| json!({"result": raw}));
                 push_contents(
                     &mut contents,
                     "user".to_string(),
@@ -116,7 +119,10 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
     let mut body = Map::new();
     body.insert("contents".to_string(), Value::Array(contents));
     if !system_parts.is_empty() {
-        body.insert("systemInstruction".to_string(), json!({"parts": system_parts}));
+        body.insert(
+            "systemInstruction".to_string(),
+            json!({"parts": system_parts}),
+        );
     }
 
     let mut generation_config = Map::new();
@@ -145,7 +151,10 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
     if let Some(response_format) = chat.get("response_format")
         && response_format.is_object()
     {
-        let format_type = response_format.get("type").and_then(Value::as_str).unwrap_or("");
+        let format_type = response_format
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         if format_type == "json_object" {
             generation_config.insert("responseMimeType".to_string(), json!("application/json"));
         } else if format_type == "json_schema" {
@@ -159,7 +168,10 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
         }
     }
     if !generation_config.is_empty() {
-        body.insert("generationConfig".to_string(), Value::Object(generation_config));
+        body.insert(
+            "generationConfig".to_string(),
+            Value::Object(generation_config),
+        );
     }
 
     if let Some(tools) = chat.get("tools").and_then(Value::as_array) {
@@ -181,7 +193,10 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
             })
             .collect();
         if !declarations.is_empty() {
-            body.insert("tools".to_string(), json!([{ "functionDeclarations": declarations }]));
+            body.insert(
+                "tools".to_string(),
+                json!([{ "functionDeclarations": declarations }]),
+            );
         }
     }
     if let Some(choice) = chat.get("tool_choice") {
@@ -192,13 +207,17 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
                 "auto" => Some(json!({"mode": "AUTO"})),
                 _ => None,
             },
-            Value::Object(_) => choice.pointer("/function/name").and_then(Value::as_str).map(|name| {
-                json!({"mode": "ANY", "allowedFunctionNames": [name]})
-            }),
+            Value::Object(_) => choice
+                .pointer("/function/name")
+                .and_then(Value::as_str)
+                .map(|name| json!({"mode": "ANY", "allowedFunctionNames": [name]})),
             _ => None,
         };
         if let Some(config) = config {
-            body.insert("toolConfig".to_string(), json!({"functionCallingConfig": config}));
+            body.insert(
+                "toolConfig".to_string(),
+                json!({"functionCallingConfig": config}),
+            );
         }
     }
 
@@ -212,9 +231,28 @@ pub fn sanitize_gemini_schema(schema: &mut Value) {
 }
 
 const GEMINI_SCHEMA_KEYS: &[&str] = &[
-    "type", "format", "description", "nullable", "enum", "items", "properties", "required",
-    "minimum", "maximum", "minItems", "maxItems", "minProperties", "maxProperties", "minLength",
-    "maxLength", "pattern", "example", "anyOf", "propertyOrdering", "default", "title",
+    "type",
+    "format",
+    "description",
+    "nullable",
+    "enum",
+    "items",
+    "properties",
+    "required",
+    "minimum",
+    "maximum",
+    "minItems",
+    "maxItems",
+    "minProperties",
+    "maxProperties",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "example",
+    "anyOf",
+    "propertyOrdering",
+    "default",
+    "title",
 ];
 
 fn sanitize_node(value: &mut Value, depth: usize) {
@@ -235,15 +273,25 @@ fn sanitize_node(value: &mut Value, depth: usize) {
                 map.insert("nullable".to_string(), json!(true));
             }
             // 类型名转大写（OpenAPI 风格）。
-            if let Some(type_name) = map.get("type").and_then(Value::as_str).map(str::to_uppercase) {
+            if let Some(type_name) = map
+                .get("type")
+                .and_then(Value::as_str)
+                .map(str::to_uppercase)
+            {
                 map.insert("type".to_string(), json!(type_name));
             }
             // format 只保留 Gemini 接受的值。
-            if let Some(format) = map.get("format").and_then(Value::as_str).map(str::to_string) {
+            if let Some(format) = map
+                .get("format")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            {
                 let type_name = map.get("type").and_then(Value::as_str).unwrap_or("");
                 let allowed = match type_name {
                     "STRING" => matches!(format.as_str(), "enum" | "date-time"),
-                    "NUMBER" | "INTEGER" => matches!(format.as_str(), "float" | "double" | "int32" | "int64"),
+                    "NUMBER" | "INTEGER" => {
+                        matches!(format.as_str(), "float" | "double" | "int32" | "int64")
+                    }
                     _ => false,
                 };
                 if !allowed {
@@ -320,11 +368,21 @@ pub fn map_finish_reason(reason: &str, has_tool_calls: bool) -> &'static str {
         return "tool_calls";
     }
     match reason {
-        "STOP" | "FINISH_REASON_UNSPECIFIED" | "MALFORMED_FUNCTION_CALL" | "TOO_MANY_TOOL_CALLS"
+        "STOP"
+        | "FINISH_REASON_UNSPECIFIED"
+        | "MALFORMED_FUNCTION_CALL"
+        | "TOO_MANY_TOOL_CALLS"
         | "MALFORMED_RESPONSE" => "stop",
         "MAX_TOKENS" => "length",
-        "SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII" | "IMAGE_SAFETY"
-        | "IMAGE_PROHIBITED_CONTENT" | "LANGUAGE" | "OTHER" => "content_filter",
+        "SAFETY"
+        | "RECITATION"
+        | "BLOCKLIST"
+        | "PROHIBITED_CONTENT"
+        | "SPII"
+        | "IMAGE_SAFETY"
+        | "IMAGE_PROHIBITED_CONTENT"
+        | "LANGUAGE"
+        | "OTHER" => "content_filter",
         "" => "stop",
         other => {
             tracing::debug!("unmapped gemini finishReason: {other}");
@@ -381,7 +439,11 @@ fn parts_to_message(parts: &[Value]) -> (String, String, Vec<Value>) {
         if content_text.is_empty() {
             continue;
         }
-        if part.get("thought").and_then(Value::as_bool).unwrap_or(false) {
+        if part
+            .get("thought")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
             reasoning.push_str(content_text);
         } else {
             text.push_str(content_text);
@@ -403,9 +465,16 @@ pub fn convert_response(
         .pointer("/candidates/0")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let (text, reasoning, mut tool_calls) =
-        parts_to_message(candidate.pointer("/content/parts").and_then(Value::as_array).unwrap_or(&Vec::new()));
-    if let Some(block_reason) = upstream.pointer("/promptFeedback/blockReason").and_then(Value::as_str) {
+    let (text, reasoning, mut tool_calls) = parts_to_message(
+        candidate
+            .pointer("/content/parts")
+            .and_then(Value::as_array)
+            .unwrap_or(&Vec::new()),
+    );
+    if let Some(block_reason) = upstream
+        .pointer("/promptFeedback/blockReason")
+        .and_then(Value::as_str)
+    {
         tracing::debug!("gemini prompt blocked: {block_reason}");
     }
 
@@ -498,8 +567,8 @@ impl GeminiStreamConverter {
             self.finished = true;
             return Ok(Vec::new());
         }
-        let value: Value = serde_json::from_str(data)
-            .map_err(|e| format!("解析 Gemini SSE 失败：{e}"))?;
+        let value: Value =
+            serde_json::from_str(data).map_err(|e| format!("解析 Gemini SSE 失败：{e}"))?;
         if value.get("error").is_some() {
             self.error = Some(super::extract_error_message(&value.to_string()));
             self.finished = true;
@@ -517,7 +586,10 @@ impl GeminiStreamConverter {
             }
         }
 
-        if let Some(parts) = value.pointer("/candidates/0/content/parts").and_then(Value::as_array) {
+        if let Some(parts) = value
+            .pointer("/candidates/0/content/parts")
+            .and_then(Value::as_array)
+        {
             let (text, reasoning, tool_calls) = parts_to_message(parts);
             if !reasoning.is_empty() {
                 self.ensure_started(&mut out);
@@ -552,7 +624,10 @@ impl GeminiStreamConverter {
             }
         }
 
-        if let Some(reason) = value.pointer("/candidates/0/finishReason").and_then(Value::as_str) {
+        if let Some(reason) = value
+            .pointer("/candidates/0/finishReason")
+            .and_then(Value::as_str)
+        {
             self.finish_reason = Some(map_finish_reason(reason, self.tool_counter > 0));
         }
 
@@ -632,7 +707,10 @@ mod tests {
         assert_eq!(contents[1]["parts"][0]["functionCall"]["name"], "f");
         assert_eq!(contents[2]["role"], "user");
         assert_eq!(contents[2]["parts"][0]["functionResponse"]["name"], "f");
-        assert_eq!(contents[2]["parts"][0]["functionResponse"]["response"]["ok"], true);
+        assert_eq!(
+            contents[2]["parts"][0]["functionResponse"]["response"]["ok"],
+            true
+        );
         assert_eq!(body["generationConfig"]["maxOutputTokens"], 256);
         assert_eq!(body["generationConfig"]["stopSequences"], json!(["END"]));
         assert_eq!(body["tools"][0]["functionDeclarations"][0]["name"], "f");
@@ -641,9 +719,11 @@ mod tests {
             "STRING"
         );
         // email 不是 Gemini 允许的 format，应被移除。
-        assert!(body["tools"][0]["functionDeclarations"][0]["parameters"]["properties"]["a"]
-            .get("format")
-            .is_none());
+        assert!(
+            body["tools"][0]["functionDeclarations"][0]["parameters"]["properties"]["a"]
+                .get("format")
+                .is_none()
+        );
         assert_eq!(body["toolConfig"]["functionCallingConfig"]["mode"], "ANY");
     }
 
@@ -667,7 +747,9 @@ mod tests {
         assert_eq!(usage.cache_tokens, 30);
         assert_eq!(usage.output_tokens, Some(25));
 
-        let usage = extract_usage(&from_str::<Value>(r#"{"promptTokenCount":100,"totalTokenCount":110}"#).unwrap());
+        let usage = extract_usage(
+            &from_str::<Value>(r#"{"promptTokenCount":100,"totalTokenCount":110}"#).unwrap(),
+        );
         assert_eq!(usage.output_tokens, Some(10));
     }
 
@@ -705,8 +787,14 @@ mod tests {
         .unwrap();
         let (completion, usage) = convert_response(&upstream, "req-1", "vm-a").unwrap();
         assert_eq!(completion["choices"][0]["message"]["content"], "hi");
-        assert_eq!(completion["choices"][0]["message"]["reasoning_content"], "think");
-        assert_eq!(completion["choices"][0]["message"]["tool_calls"][0]["function"]["name"], "f");
+        assert_eq!(
+            completion["choices"][0]["message"]["reasoning_content"],
+            "think"
+        );
+        assert_eq!(
+            completion["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+            "f"
+        );
         assert_eq!(completion["choices"][0]["finish_reason"], "tool_calls");
         assert_eq!(usage.output_tokens, Some(5));
     }

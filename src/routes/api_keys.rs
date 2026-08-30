@@ -47,7 +47,9 @@ struct ApiKeyResponse {
 
 impl ApiKeyResponse {
     fn from_model(model: api_key::Model) -> Self {
-        let key_masked = crypto::decrypt(&model.key).map(|plain| crypto::mask(&plain)).unwrap_or_default();
+        let key_masked = crypto::decrypt(&model.key)
+            .map(|plain| crypto::mask(&plain))
+            .unwrap_or_default();
         Self {
             id: model.id,
             name: model.name,
@@ -81,9 +83,14 @@ struct UpdateApiKeyRequest {
 }
 
 async fn list_api_keys(State(state): State<AppState>) -> impl IntoResponse {
-    match Entity::find().order_by_asc(api_key::Column::Id).all(&state.db).await {
+    match Entity::find()
+        .order_by_asc(api_key::Column::Id)
+        .all(&state.db)
+        .await
+    {
         Ok(models) => {
-            let response: Vec<ApiKeyResponse> = models.into_iter().map(ApiKeyResponse::from_model).collect();
+            let response: Vec<ApiKeyResponse> =
+                models.into_iter().map(ApiKeyResponse::from_model).collect();
             (StatusCode::OK, Json(Response::success(response)))
         }
         Err(e) => response::db_error(e.to_string()),

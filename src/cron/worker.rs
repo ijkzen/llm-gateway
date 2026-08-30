@@ -6,7 +6,9 @@ use tokio::sync::{Semaphore, broadcast, mpsc};
 use tracing::Instrument;
 
 use crate::cron::log_capture::JobLogEvent;
-use crate::cron::log_repository::{CronJobLogRepository, SeaOrmCronJobLogRepository, MAX_RUNS_KEPT};
+use crate::cron::log_repository::{
+    CronJobLogRepository, MAX_RUNS_KEPT, SeaOrmCronJobLogRepository,
+};
 use crate::cron::parser::compute_next_run_from_scheduled_at;
 use crate::cron::repository::{CronJobRepository, SeaOrmCronJobRepository};
 use crate::cron::{JobContext, JobHandler};
@@ -205,7 +207,15 @@ async fn execute_with_logging(
     loop {
         match log_rx.try_recv() {
             Ok(event) if event.job_name == name => {
-                persist_log_event(&log_repo, &event, &run_id, &mut seq, &mut log_count, &mut truncated).await;
+                persist_log_event(
+                    &log_repo,
+                    &event,
+                    &run_id,
+                    &mut seq,
+                    &mut log_count,
+                    &mut truncated,
+                )
+                .await;
             }
             Ok(_) => {}
             Err(broadcast::error::TryRecvError::Empty)
@@ -230,7 +240,13 @@ async fn execute_with_logging(
         seq += 1;
         log_count += 1;
         if let Err(err) = log_repo
-            .insert_log(&run_id, seq, "ERROR", &format!("任务执行失败：{e}"), Utc::now())
+            .insert_log(
+                &run_id,
+                seq,
+                "ERROR",
+                &format!("任务执行失败：{e}"),
+                Utc::now(),
+            )
             .await
         {
             tracing::warn!("Failed to persist failure log for '{}': {}", name, err);
@@ -238,7 +254,9 @@ async fn execute_with_logging(
     }
 
     let ended_at = Utc::now();
-    let _ = log_tx.send(JobLogEvent::run_ended(&name, &run_id, status, ended_at, truncated));
+    let _ = log_tx.send(JobLogEvent::run_ended(
+        &name, &run_id, status, ended_at, truncated,
+    ));
 
     if let Err(e) = log_repo
         .finish_run(&run_id, status, ended_at, log_count, truncated)
@@ -296,14 +314,21 @@ async fn persist_log_event(
                 .insert_log(run_id, *seq + 1, "WARN", &msg, Utc::now())
                 .await
             {
-                tracing::warn!("Failed to persist truncation notice for '{}': {}", run_id, e);
+                tracing::warn!(
+                    "Failed to persist truncation notice for '{}': {}",
+                    run_id,
+                    e
+                );
             }
         }
         return;
     }
     *seq += 1;
     *log_count += 1;
-    if let Err(e) = repo.insert_log(run_id, *seq, level, message, Utc::now()).await {
+    if let Err(e) = repo
+        .insert_log(run_id, *seq, level, message, Utc::now())
+        .await
+    {
         tracing::warn!("Failed to persist log for run '{}': {}", run_id, e);
     }
 }
@@ -523,9 +548,7 @@ mod tests {
 
         // Give the dispatch loop a moment to pick up the invocation.
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        handle
-            .shutdown(tokio::time::Duration::from_secs(5))
-            .await;
+        handle.shutdown(tokio::time::Duration::from_secs(5)).await;
 
         assert!(
             completed.load(Ordering::SeqCst),

@@ -205,24 +205,30 @@ fn mask_api_key(stored: &str) -> String {
     }
 }
 
-async fn load_detail(db: &DatabaseConnection, id: i32) -> Result<Option<ProviderDetailResponse>, DbErr> {
-    Ok(Entity::find_by_id(id)
-        .one(db)
-        .await?
-        .map(|model| {
-            let plain = crypto::decrypt(&model.api_key).unwrap_or_default();
-            ProviderDetailResponse {
-                api_key: plain,
-                base: ProviderResponse::from_model(model),
-            }
-        }))
+async fn load_detail(
+    db: &DatabaseConnection,
+    id: i32,
+) -> Result<Option<ProviderDetailResponse>, DbErr> {
+    Ok(Entity::find_by_id(id).one(db).await?.map(|model| {
+        let plain = crypto::decrypt(&model.api_key).unwrap_or_default();
+        ProviderDetailResponse {
+            api_key: plain,
+            base: ProviderResponse::from_model(model),
+        }
+    }))
 }
 
 async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
-    match Entity::find().order_by_asc(provider::Column::Id).all(&state.db).await {
+    match Entity::find()
+        .order_by_asc(provider::Column::Id)
+        .all(&state.db)
+        .await
+    {
         Ok(models) => {
-            let response: Vec<ProviderResponse> =
-                models.into_iter().map(ProviderResponse::from_model).collect();
+            let response: Vec<ProviderResponse> = models
+                .into_iter()
+                .map(ProviderResponse::from_model)
+                .collect();
             (StatusCode::OK, Json(Response::success(response)))
         }
         Err(e) => response::db_error(e.to_string()),
@@ -291,7 +297,9 @@ async fn update_provider(
 
     let name = req.name.unwrap_or(model.name.clone());
     let base_url = req.base_url.unwrap_or_else(|| model.base_url.clone());
-    let custom_header = req.custom_header.unwrap_or_else(|| model.custom_header.clone());
+    let custom_header = req
+        .custom_header
+        .unwrap_or_else(|| model.custom_header.clone());
     let extra = req.extra.unwrap_or_else(|| model.extra.clone());
     // 空字符串表示"不修改"，其余值覆盖。
     let new_api_key = req
@@ -343,10 +351,7 @@ async fn update_provider(
     }
 }
 
-async fn delete_provider(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-) -> impl IntoResponse {
+async fn delete_provider(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
     // 级联硬删：同一事务内先删引用该供应商模型的虚拟模型成员（释放成员），
     // 再删该供应商名下全部模型，最后删供应商本身，避免 virtual_model_item 悬空。
     let txn = match state.db.begin().await {
@@ -431,7 +436,10 @@ async fn get_provider_usage(
         return response::bad_request(crate::usage::error::UsageError::NotEnabled.to_string());
     }
 
-    let force_refresh = query.refresh.as_deref().is_some_and(|v| v == "1" || v == "true");
+    let force_refresh = query
+        .refresh
+        .as_deref()
+        .is_some_and(|v| v == "1" || v == "true");
     if !force_refresh
         && let Ok(Some(data)) = crate::usage::persist::read_usage_cache(&state.db, id).await
     {

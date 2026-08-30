@@ -11,9 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::response::Json;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use serde_json::Value;
 use tower::ServiceExt;
 
@@ -275,15 +273,19 @@ async fn refresh_all_usage_only_writes_usage_enabled_providers() {
         .await
         .unwrap();
 
-        let ok = llm_gateway::usage::persist::refresh_all_usage(&db).await.unwrap();
+        let ok = llm_gateway::usage::persist::refresh_all_usage(&db)
+            .await
+            .unwrap();
         assert_eq!(ok, 1);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
-        assert!(usage_cache::Entity::find()
-            .filter(usage_cache::Column::ProviderId.eq(usage_provider))
-            .one(&db)
-            .await
-            .unwrap()
-            .is_some());
+        assert!(
+            usage_cache::Entity::find()
+                .filter(usage_cache::Column::ProviderId.eq(usage_provider))
+                .one(&db)
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(usage_cache::Entity::find().count(&db).await.unwrap(), 1);
     })
     .await;

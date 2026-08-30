@@ -187,7 +187,11 @@ async fn seed_provider(
     active.insert(db).await.unwrap().id
 }
 
-async fn seed_provider_model(db: &sea_orm::DatabaseConnection, provider_id: i32, remote_id: &str) -> i32 {
+async fn seed_provider_model(
+    db: &sea_orm::DatabaseConnection,
+    provider_id: i32,
+    remote_id: &str,
+) -> i32 {
     let active = provider_model::ActiveModel {
         provider_id: Set(provider_id),
         provider_model_id: Set(remote_id.to_string()),
@@ -255,14 +259,19 @@ async fn send_chat(app: &axum::Router, body: Value) -> (u16, String) {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let text = String::from_utf8_lossy(&bytes).to_string();
     let _ = content_type;
     (status, text)
 }
 
 /// 等待 request 表出现记录（落库为异步任务）。
-async fn wait_for_records(db: &sea_orm::DatabaseConnection, expected: usize) -> Vec<request::Model> {
+async fn wait_for_records(
+    db: &sea_orm::DatabaseConnection,
+    expected: usize,
+) -> Vec<request::Model> {
     for _ in 0..40 {
         if let Ok(rows) = request::Entity::find().all(db).await
             && rows.len() >= expected
@@ -418,7 +427,10 @@ async fn gemini_non_stream_converts() {
     assert_eq!(body["choices"][0]["finish_reason"], "stop");
 
     let upstream_bodies = captured.lock().unwrap();
-    assert_eq!(upstream_bodies[0]["generationConfig"]["maxOutputTokens"], 128);
+    assert_eq!(
+        upstream_bodies[0]["generationConfig"]["maxOutputTokens"],
+        128
+    );
     assert_eq!(upstream_bodies[0]["contents"][0]["role"], "user");
 
     let rows = wait_for_records(&db, 1).await;
@@ -533,7 +545,13 @@ async fn fail_directly_returns_upstream_error_and_records() {
     let rows = wait_for_records(&db, 1).await;
     let record = &rows[0];
     assert_eq!(record.success, false);
-    assert!(record.fail_reason.as_deref().unwrap_or("").contains("rate limited"));
+    assert!(
+        record
+            .fail_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("rate limited")
+    );
 }
 
 #[tokio::test]

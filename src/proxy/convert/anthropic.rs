@@ -27,15 +27,16 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
     let mut system_blocks: Vec<Value> = Vec::new();
     let mut messages: Vec<(String, Vec<Value>)> = Vec::new();
 
-    let push_message = |messages: &mut Vec<(String, Vec<Value>)>, role: String, blocks: Vec<Value>| {
-        if let Some((last_role, last_blocks)) = messages.last_mut()
-            && *last_role == role
-        {
-            last_blocks.extend(blocks);
-        } else {
-            messages.push((role, blocks));
-        }
-    };
+    let push_message =
+        |messages: &mut Vec<(String, Vec<Value>)>, role: String, blocks: Vec<Value>| {
+            if let Some((last_role, last_blocks)) = messages.last_mut()
+                && *last_role == role
+            {
+                last_blocks.extend(blocks);
+            } else {
+                messages.push((role, blocks));
+            }
+        };
 
     for message in chat_messages(chat) {
         let role = message.get("role").and_then(Value::as_str).unwrap_or("");
@@ -66,7 +67,10 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
                 // assistant 的 reasoning_content 不回传：thinking 块需要有效的 signature。
                 if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
                     for call in tool_calls {
-                        let name = call.pointer("/function/name").and_then(Value::as_str).unwrap_or("");
+                        let name = call
+                            .pointer("/function/name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
                         let arguments = call
                             .pointer("/function/arguments")
                             .and_then(Value::as_str)
@@ -127,10 +131,8 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
             if !input_schema.is_object() {
                 input_schema = json!({"type": "object", "properties": {}});
             }
-            let mut schema_object: Map<String, Value> = input_schema
-                .as_object()
-                .cloned()
-                .unwrap_or_default();
+            let mut schema_object: Map<String, Value> =
+                input_schema.as_object().cloned().unwrap_or_default();
             schema_object
                 .entry("type".to_string())
                 .or_insert_with(|| json!("object"));
@@ -154,7 +156,10 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
     let mut json_mode_tool = false;
 
     if let Some(response_format) = chat.get("response_format") {
-        let format_type = response_format.get("type").and_then(Value::as_str).unwrap_or("");
+        let format_type = response_format
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         if format_type == "json_object" || format_type == "json_schema" {
             let schema = match format_type {
                 "json_object" => json!({"type": "object"}),
@@ -266,7 +271,11 @@ fn map_stop(chat: &Value) -> Option<Vec<Value>> {
         .into_iter()
         .filter(|v| v.as_str().is_some_and(|s| !s.trim().is_empty()))
         .collect();
-    if filtered.is_empty() { None } else { Some(filtered) }
+    if filtered.is_empty() {
+        None
+    } else {
+        Some(filtered)
+    }
 }
 
 /// image_url → Anthropic image block（data: URL 转 base64，http(s) 直传 url）。
@@ -363,9 +372,7 @@ pub fn convert_response(
     json_mode_tool: bool,
 ) -> Result<(Value, Usage), String> {
     if upstream.get("type").and_then(Value::as_str) == Some("error") {
-        return Err(super::extract_error_message(
-            &upstream.to_string(),
-        ));
+        return Err(super::extract_error_message(&upstream.to_string()));
     }
     let stop_reason = upstream
         .get("stop_reason")
@@ -430,7 +437,10 @@ pub fn convert_response(
             message.insert("tool_calls".to_string(), Value::Array(tool_calls.clone()));
         }
         if !reasoning_parts.is_empty() {
-            message.insert("reasoning_content".to_string(), json!(reasoning_parts.join("\n")));
+            message.insert(
+                "reasoning_content".to_string(),
+                json!(reasoning_parts.join("\n")),
+            );
         }
         Value::Object(message)
     };
@@ -514,8 +524,8 @@ impl AnthropicStreamConverter {
             self.finished = true;
             return Ok(Vec::new());
         }
-        let value: Value = serde_json::from_str(data)
-            .map_err(|e| format!("解析 Anthropic SSE 失败：{e}"))?;
+        let value: Value =
+            serde_json::from_str(data).map_err(|e| format!("解析 Anthropic SSE 失败：{e}"))?;
         let mut out = Vec::new();
         match value.get("type").and_then(Value::as_str) {
             Some("error") => {
@@ -566,7 +576,12 @@ impl AnthropicStreamConverter {
                         let text = delta.get("text").and_then(Value::as_str).unwrap_or("");
                         if !text.is_empty() {
                             self.ensure_started(&mut out);
-                            out.push(super::chunk_json(&self.id, &self.model, json!({"content": text}), None));
+                            out.push(super::chunk_json(
+                                &self.id,
+                                &self.model,
+                                json!({"content": text}),
+                                None,
+                            ));
                         }
                     }
                     Some("thinking_delta") => {
@@ -582,7 +597,10 @@ impl AnthropicStreamConverter {
                         }
                     }
                     Some("input_json_delta") => {
-                        let arguments = delta.get("partial_json").and_then(Value::as_str).unwrap_or("");
+                        let arguments = delta
+                            .get("partial_json")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
                         if !arguments.is_empty() {
                             if self.json_mode_indexes.contains(&block_index) {
                                 // json 模式内容缓冲到流结束，解包后再一次性发出。
@@ -639,7 +657,12 @@ impl AnthropicStreamConverter {
                     })
                     .collect();
                 for content in buffers {
-                    out.push(super::chunk_json(&self.id, &self.model, json!({"content": content}), None));
+                    out.push(super::chunk_json(
+                        &self.id,
+                        &self.model,
+                        json!({"content": content}),
+                        None,
+                    ));
                 }
                 self.finish_emitted = true;
                 out.push(super::chunk_json(
@@ -742,7 +765,8 @@ mod tests {
 
     #[test]
     fn defaults_max_tokens_to_4096() {
-        let chat = from_str::<Value>(r#"{"model":"m","messages":[{"role":"user","content":"x"}]}"#).unwrap();
+        let chat = from_str::<Value>(r#"{"model":"m","messages":[{"role":"user","content":"x"}]}"#)
+            .unwrap();
         let (body, _) = build_request_body(&chat, "claude-x").unwrap();
         assert_eq!(body["max_tokens"], 4096);
     }
@@ -800,8 +824,14 @@ mod tests {
         assert_eq!(completion["model"], "vm-a");
         assert_eq!(completion["choices"][0]["finish_reason"], "tool_calls");
         assert_eq!(completion["choices"][0]["message"]["content"], "hello");
-        assert_eq!(completion["choices"][0]["message"]["reasoning_content"], "hmm");
-        assert_eq!(completion["choices"][0]["message"]["tool_calls"][0]["id"], "toolu_1");
+        assert_eq!(
+            completion["choices"][0]["message"]["reasoning_content"],
+            "hmm"
+        );
+        assert_eq!(
+            completion["choices"][0]["message"]["tool_calls"][0]["id"],
+            "toolu_1"
+        );
         assert_eq!(usage.input_tokens, Some(15));
         assert_eq!(usage.cache_tokens, 5);
         assert_eq!(usage.output_tokens, Some(5));
@@ -856,6 +886,9 @@ mod tests {
             .filter_map(|c| c["choices"][0]["delta"]["content"].as_str())
             .collect::<String>();
         assert_eq!(content, "{\"a\":1}");
-        assert_eq!(chunks.last().unwrap()["choices"][0]["finish_reason"], "stop");
+        assert_eq!(
+            chunks.last().unwrap()["choices"][0]["finish_reason"],
+            "stop"
+        );
     }
 }

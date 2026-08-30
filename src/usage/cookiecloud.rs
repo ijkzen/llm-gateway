@@ -113,7 +113,11 @@ pub fn find_cookie<'a>(cookies: &'a [Cookie], name: &str) -> Option<&'a str> {
 }
 
 /// 解密 CookieCloud 的 encrypted 字段（纯函数，便于测试）。
-pub fn decrypt_payload(uuid: &str, password: &str, encrypted_b64: &str) -> Result<String, UsageError> {
+pub fn decrypt_payload(
+    uuid: &str,
+    password: &str,
+    encrypted_b64: &str,
+) -> Result<String, UsageError> {
     // 密钥材料：md5("{uuid}-{password}") hex 前 16 字符。
     let material_hex = hex::encode(Md5::digest(format!("{uuid}-{password}").as_bytes()));
     let passphrase = &material_hex[..16];

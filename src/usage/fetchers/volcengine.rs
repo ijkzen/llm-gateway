@@ -9,9 +9,7 @@ use serde_json::Value;
 use super::{Credentials, num, reset_ts_of, snippet};
 use crate::usage::error::UsageError;
 use crate::usage::http::{HttpReply, UsageHttp, parse_json};
-use crate::usage::types::{
-    FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window,
-};
+use crate::usage::types::{FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window};
 use crate::usage::volcengine_sign;
 
 const GATEWAY_HOST: &str = "open.volcengineapi.com";
@@ -45,7 +43,16 @@ async fn call_action(
 ) -> Result<HttpReply, UsageError> {
     let body = "";
     let sig = volcengine_sign::sign(
-        "POST", GATEWAY_HOST, "ark", action, VERSION, REGION, ak, sk, body.as_bytes(), chrono::Utc::now(),
+        "POST",
+        GATEWAY_HOST,
+        "ark",
+        action,
+        VERSION,
+        REGION,
+        ak,
+        sk,
+        body.as_bytes(),
+        chrono::Utc::now(),
     );
     let url = format!("https://{GATEWAY_HOST}/?Action={action}&Version={VERSION}&Region={REGION}");
     http.post_json(
@@ -66,17 +73,21 @@ fn auth_error(reply: &HttpReply) -> Result<(), UsageError> {
         return Err(UsageError::Auth);
     }
     if let Ok(v) = parse_json(reply)
-        && let Some(err) = v
-            .get("ResponseMetadata")
-            .and_then(|m| m.get("Error"))
+        && let Some(err) = v.get("ResponseMetadata").and_then(|m| m.get("Error"))
     {
         let code = err.get("Code").and_then(Value::as_str).unwrap_or_default();
-        let message = err.get("Message").and_then(Value::as_str).unwrap_or_default();
+        let message = err
+            .get("Message")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let text = format!("{code} {message}").to_ascii_lowercase();
         if text.contains("auth") || text.contains("signature") || text.contains("denied") {
             return Err(UsageError::Auth);
         }
-        return Err(UsageError::Upstream(reply.status, format!("{code} {message}")));
+        return Err(UsageError::Upstream(
+            reply.status,
+            format!("{code} {message}"),
+        ));
     }
     if reply.status != 200 {
         return Err(UsageError::Upstream(reply.status, snippet(&reply.body)));
@@ -105,15 +116,16 @@ fn parse_coding_plan(reply: &HttpReply) -> Result<FetchOutput, UsageError> {
             .find_map(|k| entry.get(k).and_then(Value::as_str))
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let kind = if label.contains("session") || label.contains("5h") || label.contains("fivehour") {
-            WindowKind::FiveHour
-        } else if label.contains("weekly") || label.contains("week") || label.contains("7d") {
-            WindowKind::Weekly
-        } else if label.contains("monthly") || label.contains("month") {
-            WindowKind::Monthly
-        } else {
-            continue;
-        };
+        let kind =
+            if label.contains("session") || label.contains("5h") || label.contains("fivehour") {
+                WindowKind::FiveHour
+            } else if label.contains("weekly") || label.contains("week") || label.contains("7d") {
+                WindowKind::Weekly
+            } else if label.contains("monthly") || label.contains("month") {
+                WindowKind::Monthly
+            } else {
+                continue;
+            };
         let Some(percent) = ["Percent", "UsagePercent", "UsedPercent"]
             .iter()
             .find_map(|k| entry.get(k).and_then(num))
@@ -153,7 +165,9 @@ fn parse_afp(reply: &HttpReply) -> Result<FetchOutput, UsageError> {
         ("AFPWeekly", WindowKind::Weekly),
         ("AFPMonthly", WindowKind::Monthly),
     ] {
-        let Some(entry) = result.get(key) else { continue };
+        let Some(entry) = result.get(key) else {
+            continue;
+        };
         let (Some(used), Some(quota)) = (
             entry.get("Used").and_then(num),
             entry.get("Quota").and_then(num),
@@ -177,7 +191,10 @@ mod tests {
     use super::*;
 
     fn ok_reply(body: &str) -> HttpReply {
-        HttpReply { status: 200, body: body.to_string() }
+        HttpReply {
+            status: 200,
+            body: body.to_string(),
+        }
     }
 
     #[test]
@@ -192,8 +209,7 @@ mod tests {
             ]
           }
         }"#;
-        let FetchOutput::Quota { windows, .. } = parse_coding_plan(&ok_reply(body)).unwrap()
-        else {
+        let FetchOutput::Quota { windows, .. } = parse_coding_plan(&ok_reply(body)).unwrap() else {
             panic!("expected quota")
         };
         assert!(windows.iter().all(|w| w.available));
@@ -228,7 +244,10 @@ mod tests {
         }"#;
         assert!(matches!(auth_error(&ok_reply(body)), Err(UsageError::Auth)));
 
-        let http_err = HttpReply { status: 403, body: String::new() };
+        let http_err = HttpReply {
+            status: 403,
+            body: String::new(),
+        };
         assert!(matches!(auth_error(&http_err), Err(UsageError::Auth)));
     }
 }

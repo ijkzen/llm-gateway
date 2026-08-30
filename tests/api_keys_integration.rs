@@ -16,12 +16,7 @@ async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
     (app, db)
 }
 
-async fn send_json(
-    app: &axum::Router,
-    method: &str,
-    uri: &str,
-    body: &str,
-) -> (StatusCode, Value) {
+async fn send_json(app: &axum::Router, method: &str, uri: &str, body: &str) -> (StatusCode, Value) {
     let request = Request::builder()
         .method(method)
         .uri(uri)
@@ -70,11 +65,12 @@ async fn test_create_api_key_generates_encrypted_key_and_masks_response() {
         assert!(data.get("key").is_none(), "创建响应不得返回明文 key");
 
         // 数据库里必须是加密后的密文，且明文符合生成格式。
-        let model = llm_gateway::entity::api_key::Entity::find_by_id(data["id"].as_i64().unwrap() as i32)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
+        let model =
+            llm_gateway::entity::api_key::Entity::find_by_id(data["id"].as_i64().unwrap() as i32)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap();
         assert!(model.key.starts_with("enc:v1:"), "key 应以密文落库");
         let plain = llm_gateway::crypto::decrypt(&model.key).unwrap();
         assert_valid_key_format(&plain);
@@ -172,14 +168,24 @@ async fn test_update_api_key_toggles_enable() {
         };
 
         // 禁用。
-        let (status, body) = send_json(&app, "PUT", &format!("/api/api-keys/{id}"), r#"{"enable":false}"#)
-            .await;
+        let (status, body) = send_json(
+            &app,
+            "PUT",
+            &format!("/api/api-keys/{id}"),
+            r#"{"enable":false}"#,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"]["enable"], false);
 
         // 重新启用。
-        let (status, body) = send_json(&app, "PUT", &format!("/api/api-keys/{id}"), r#"{"enable":true}"#)
-            .await;
+        let (status, body) = send_json(
+            &app,
+            "PUT",
+            &format!("/api/api-keys/{id}"),
+            r#"{"enable":true}"#,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"]["enable"], true);
 
@@ -225,11 +231,13 @@ async fn test_create_api_key_stores_plaintext_when_encryption_not_configured() {
         assert_eq!(status, StatusCode::CREATED);
 
         // 未配置加密密钥时退化为明文落库（开发环境行为）。
-        let model = llm_gateway::entity::api_key::Entity::find_by_id(body["data"]["id"].as_i64().unwrap() as i32)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
+        let model = llm_gateway::entity::api_key::Entity::find_by_id(
+            body["data"]["id"].as_i64().unwrap() as i32,
+        )
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
         assert!(!model.key.starts_with("enc:v1:"), "未配置密钥时应明文落库");
         assert_valid_key_format(&model.key);
 

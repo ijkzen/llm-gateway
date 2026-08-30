@@ -13,7 +13,9 @@ use super::{Credentials, num, reset_ts, snippet};
 use crate::usage::cookiecloud;
 use crate::usage::error::UsageError;
 use crate::usage::http::{HttpReply, UsageHttp, parse_json};
-use crate::usage::types::{BalanceItem, FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window};
+use crate::usage::types::{
+    BalanceItem, FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window,
+};
 
 const API_BASE: &str = "https://platform.xiaomimimo.com/api/v1";
 const REFERER: &str = "https://platform.xiaomimimo.com/";
@@ -188,7 +190,10 @@ mod tests {
 
     #[test]
     fn redirect_means_session_expired() {
-        let reply = HttpReply { status: 302, body: String::new() };
+        let reply = HttpReply {
+            status: 302,
+            body: String::new(),
+        };
         assert!(matches!(ensure_ok(&reply), Err(UsageError::Auth)));
     }
 }

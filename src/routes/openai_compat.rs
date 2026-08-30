@@ -55,7 +55,11 @@ async fn list_models(State(state): State<AppState>) -> Response {
                 .iter()
                 .map(|m| model_object(&m.display_id, m.created_at))
                 .collect();
-            (StatusCode::OK, Json(json!({ "object": "list", "data": data }))).into_response()
+            (
+                StatusCode::OK,
+                Json(json!({ "object": "list", "data": data })),
+            )
+                .into_response()
         }
         Err(e) => openai_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -75,7 +79,11 @@ async fn get_model(State(state): State<AppState>, Path(display_id): Path<String>
         .one(&state.db)
         .await
     {
-        Ok(Some(model)) => (StatusCode::OK, Json(model_object(&model.display_id, model.created_at))).into_response(),
+        Ok(Some(model)) => (
+            StatusCode::OK,
+            Json(model_object(&model.display_id, model.created_at)),
+        )
+            .into_response(),
         Ok(None) => openai_error(
             StatusCode::NOT_FOUND,
             format!("The model '{display_id}' does not exist"),

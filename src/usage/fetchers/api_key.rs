@@ -6,9 +6,7 @@ use serde_json::Value;
 use super::{Credentials, num, reset_ts, reset_ts_of, snippet};
 use crate::usage::error::UsageError;
 use crate::usage::http::{HttpReply, UsageHttp, ensure_not_auth_error, parse_json};
-use crate::usage::types::{
-    FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window, ts_ms,
-};
+use crate::usage::types::{FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window, ts_ms};
 
 // ── OpenCode Go ─────────────────────────────────────────────
 // GET https://opencode.ai/zen/go/v1/usage（只认 Bearer）
@@ -22,7 +20,10 @@ pub async fn fetch_opencode_go(
     let reply = http
         .get(
             "https://opencode.ai/zen/go/v1/usage",
-            &[("Authorization", format!("Bearer {}", creds.api_key_required()?))],
+            &[(
+                "Authorization",
+                format!("Bearer {}", creds.api_key_required()?),
+            )],
         )
         .await?;
     ensure_not_auth_error(&reply)?;
@@ -70,11 +71,17 @@ fn parse_opencode_go(body: &str) -> Result<FetchOutput, UsageError> {
 // GET https://api.kimi.com/coding/v1/usages（Bearer）
 // usage = 周限额（数值为字符串）；limits[] 首个条目 detail = 5h 窗口；无月窗。
 
-pub async fn fetch_kimi(http: &UsageHttp, creds: &Credentials<'_>) -> Result<FetchOutput, UsageError> {
+pub async fn fetch_kimi(
+    http: &UsageHttp,
+    creds: &Credentials<'_>,
+) -> Result<FetchOutput, UsageError> {
     let reply = http
         .get(
             "https://api.kimi.com/coding/v1/usages",
-            &[("Authorization", format!("Bearer {}", creds.api_key_required()?))],
+            &[(
+                "Authorization",
+                format!("Bearer {}", creds.api_key_required()?),
+            )],
         )
         .await?;
     ensure_not_auth_error(&reply)?;
@@ -119,11 +126,10 @@ fn window_from_detail(kind: WindowKind, detail: &Value) -> Option<QuotaWindow> {
         .get("used")
         .and_then(num)
         .or_else(|| detail.get("remaining").and_then(num).map(|r| limit - r))?;
-    let resets_at = reset_ts_of(
-        detail,
-        &["resetTime", "resetAt", "reset_time", "reset_at"],
-    );
-    Some(QuotaWindow::from_used_limit(kind, used, limit, resets_at, None))
+    let resets_at = reset_ts_of(detail, &["resetTime", "resetAt", "reset_time", "reset_at"]);
+    Some(QuotaWindow::from_used_limit(
+        kind, used, limit, resets_at, None,
+    ))
 }
 
 // ── 智谱 GLM Coding Plan / Z.AI ─────────────────────────────
@@ -138,7 +144,10 @@ pub async fn fetch_zhipu(
 ) -> Result<FetchOutput, UsageError> {
     let url = format!("https://{host}/api/monitor/usage/quota/limit");
     let reply = http
-        .get(&url, &[("Authorization", creds.api_key_required()?.to_string())])
+        .get(
+            &url,
+            &[("Authorization", creds.api_key_required()?.to_string())],
+        )
         .await?;
     ensure_not_auth_error(&reply)?;
     if reply.status != 200 {
@@ -151,10 +160,7 @@ fn parse_zhipu(body: &str) -> Result<FetchOutput, UsageError> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
     if v.get("success").and_then(Value::as_bool) == Some(false) {
-        let msg = v
-            .get("msg")
-            .and_then(Value::as_str)
-            .unwrap_or("未知错误");
+        let msg = v.get("msg").and_then(Value::as_str).unwrap_or("未知错误");
         return Err(UsageError::Upstream(200, msg.to_string()));
     }
     let data = v
@@ -268,9 +274,7 @@ fn parse_minimax(reply: &HttpReply) -> Result<FetchOutput, UsageError> {
     }
     // 周桶：status 3 表示该套餐无周限额，不展示。
     if entry.get("current_weekly_status").and_then(Value::as_i64) == Some(1)
-        && let Some(remaining) = entry
-            .get("current_weekly_remaining_percent")
-            .and_then(num)
+        && let Some(remaining) = entry.get("current_weekly_remaining_percent").and_then(num)
     {
         let resets_at = entry
             .get("weekly_end_time")
@@ -291,11 +295,17 @@ fn parse_minimax(reply: &HttpReply) -> Result<FetchOutput, UsageError> {
 // GET https://zenmux.ai/api/v1/management/subscription/detail（Bearer Management key）
 // usage_percentage 是 0–1 小数；月窗为固定 cap，可能无实时用量。
 
-pub async fn fetch_zenmux(http: &UsageHttp, creds: &Credentials<'_>) -> Result<FetchOutput, UsageError> {
+pub async fn fetch_zenmux(
+    http: &UsageHttp,
+    creds: &Credentials<'_>,
+) -> Result<FetchOutput, UsageError> {
     let reply = http
         .get(
             "https://zenmux.ai/api/v1/management/subscription/detail",
-            &[("Authorization", format!("Bearer {}", creds.api_key_required()?))],
+            &[(
+                "Authorization",
+                format!("Bearer {}", creds.api_key_required()?),
+            )],
         )
         .await?;
     ensure_not_auth_error(&reply)?;
@@ -401,8 +411,12 @@ pub async fn fetch_command_code(
             // 实测有 success/data 包装，文档样例为裸 data，两种都兼容。
             let data = v.get("data").unwrap_or(&v);
             (
-                data.get("planId").and_then(Value::as_str).map(str::to_string),
-                data.get("currentPeriodStart").and_then(Value::as_str).map(str::to_string),
+                data.get("planId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                data.get("currentPeriodStart")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             )
         }),
         _ => None,
@@ -439,7 +453,8 @@ pub async fn fetch_command_code(
 fn urlencode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b':' | b'Z' | b'T') {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b':' | b'Z' | b'T')
+        {
             out.push(b as char);
         } else {
             out.push_str(&format!("%{b:02X}"));
@@ -460,8 +475,13 @@ fn parse_command_code_credits(
         .ok_or_else(|| UsageError::Parse("缺少 windowLimits 字段".to_string()))?;
 
     let mut windows = empty_windows();
-    for (key, kind) in [("fiveHour", WindowKind::FiveHour), ("weekly", WindowKind::Weekly)] {
-        let Some(entry) = limits.get(key) else { continue };
+    for (key, kind) in [
+        ("fiveHour", WindowKind::FiveHour),
+        ("weekly", WindowKind::Weekly),
+    ] {
+        let Some(entry) = limits.get(key) else {
+            continue;
+        };
         let (Some(used), Some(cap)) = (
             entry.get("used").and_then(num),
             entry.get("cap").and_then(num),
@@ -486,7 +506,13 @@ fn parse_command_code_credits(
     {
         set_window(
             &mut windows,
-            QuotaWindow::from_used_limit(WindowKind::Monthly, total - remaining, total, None, Some("USD")),
+            QuotaWindow::from_used_limit(
+                WindowKind::Monthly,
+                total - remaining,
+                total,
+                None,
+                Some("USD"),
+            ),
         );
     }
 
@@ -582,7 +608,10 @@ mod tests {
             }
           ]
         }"#;
-        let reply = HttpReply { status: 200, body: body.to_string() };
+        let reply = HttpReply {
+            status: 200,
+            body: body.to_string(),
+        };
         let FetchOutput::Quota { windows, .. } = parse_minimax(&reply).unwrap() else {
             panic!("expected quota")
         };
@@ -597,8 +626,14 @@ mod tests {
     #[test]
     fn minimax_business_error() {
         let body = r#"{ "base_resp": { "status_code": 1004, "status_msg": "invalid api key" } }"#;
-        let reply = HttpReply { status: 200, body: body.to_string() };
-        assert!(matches!(parse_minimax(&reply), Err(UsageError::Upstream(_, _))));
+        let reply = HttpReply {
+            status: 200,
+            body: body.to_string(),
+        };
+        assert!(matches!(
+            parse_minimax(&reply),
+            Err(UsageError::Upstream(_, _))
+        ));
     }
 
     #[test]
@@ -633,7 +668,8 @@ mod tests {
           }
         }"#;
         let FetchOutput::Quota { plan, windows } =
-            parse_command_code_credits(body, Some("individual-goat".to_string()), Some(0.946)).unwrap()
+            parse_command_code_credits(body, Some("individual-goat".to_string()), Some(0.946))
+                .unwrap()
         else {
             panic!("expected quota")
         };

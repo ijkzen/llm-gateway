@@ -16,12 +16,7 @@ async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
     (app, db)
 }
 
-async fn send_json(
-    app: &axum::Router,
-    method: &str,
-    uri: &str,
-    body: &str,
-) -> (StatusCode, Value) {
+async fn send_json(app: &axum::Router, method: &str, uri: &str, body: &str) -> (StatusCode, Value) {
     let request = Request::builder()
         .method(method)
         .uri(uri)
@@ -59,7 +54,12 @@ async fn test_create_provider_encrypts_api_key_and_masks_response() {
             &app,
             "POST",
             "/api/providers",
-            &create_body("DeepSeek", "https://api.deepseek.com", "sk-secret-1234", r#"{}"#),
+            &create_body(
+                "DeepSeek",
+                "https://api.deepseek.com",
+                "sk-secret-1234",
+                r#"{}"#,
+            ),
         )
         .await;
 
@@ -67,16 +67,23 @@ async fn test_create_provider_encrypts_api_key_and_masks_response() {
         let data = &body["data"];
         assert_eq!(data["name"], "DeepSeek");
         assert_eq!(data["apiKeyMasked"], "sk-****1234");
-        assert!(data.get("apiKey").is_none(), "列表/创建响应不得返回明文 api_key");
+        assert!(
+            data.get("apiKey").is_none(),
+            "列表/创建响应不得返回明文 api_key"
+        );
 
         // 数据库里必须是加密后的密文。
-        let model = llm_gateway::entity::provider::Entity::find_by_id(data["id"].as_i64().unwrap() as i32)
-            .one(&db)
-            .await
-            .unwrap()
-            .unwrap();
+        let model =
+            llm_gateway::entity::provider::Entity::find_by_id(data["id"].as_i64().unwrap() as i32)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap();
         assert!(model.api_key.starts_with("enc:v1:"), "api_key 应以密文落库");
-        assert_eq!(llm_gateway::crypto::decrypt(&model.api_key).unwrap(), "sk-secret-1234");
+        assert_eq!(
+            llm_gateway::crypto::decrypt(&model.api_key).unwrap(),
+            "sk-secret-1234"
+        );
     })
     .await;
 }
@@ -128,7 +135,11 @@ async fn test_create_provider_with_filled_usage_extra_succeeds() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::CREATED, "usage 字段填写完整应创建成功: {body}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "usage 字段填写完整应创建成功: {body}"
+    );
 }
 
 #[tokio::test]
@@ -192,7 +203,10 @@ async fn test_update_provider_keeps_key_when_empty_and_overwrites_when_filled() 
             .unwrap()
             .unwrap();
         assert!(!model.enable);
-        assert_eq!(llm_gateway::crypto::decrypt(&model.api_key).unwrap(), "sk-original");
+        assert_eq!(
+            llm_gateway::crypto::decrypt(&model.api_key).unwrap(),
+            "sk-original"
+        );
 
         // 填写新 api_key 覆盖旧密钥。
         let (status, _) = send_json(
@@ -208,7 +222,10 @@ async fn test_update_provider_keeps_key_when_empty_and_overwrites_when_filled() 
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(llm_gateway::crypto::decrypt(&model.api_key).unwrap(), "sk-new-key");
+        assert_eq!(
+            llm_gateway::crypto::decrypt(&model.api_key).unwrap(),
+            "sk-new-key"
+        );
     })
     .await;
 }
@@ -237,7 +254,9 @@ async fn test_delete_provider_then_404() {
 async fn test_match_template_found_and_not_found() {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
     // 集成测试用内存库，需要先种入模板种子数据。
-    llm_gateway::provider_template::upsert_templates(&db).await.unwrap();
+    llm_gateway::provider_template::upsert_templates(&db)
+        .await
+        .unwrap();
     let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
     // 命中：种子模板中存在 DeepSeek，data 是模板列表。
     let (status, body) = send_json(

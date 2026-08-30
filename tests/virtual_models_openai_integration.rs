@@ -27,7 +27,11 @@ async fn seed_provider(db: &sea_orm::DatabaseConnection, name: &str) -> i32 {
     active.insert(db).await.unwrap().id
 }
 
-async fn seed_provider_model(db: &sea_orm::DatabaseConnection, provider_id: i32, remote_id: &str) -> i32 {
+async fn seed_provider_model(
+    db: &sea_orm::DatabaseConnection,
+    provider_id: i32,
+    remote_id: &str,
+) -> i32 {
     let active = provider_model::ActiveModel {
         provider_id: Set(provider_id),
         provider_model_id: Set(remote_id.to_string()),

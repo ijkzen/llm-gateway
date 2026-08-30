@@ -21,7 +21,11 @@ fn sqlite_url_path(database_url: &str) -> Option<String> {
     }
     let rel = rest.strip_prefix("//").unwrap_or(rest);
     let rel = rel.strip_prefix('/').unwrap_or(rel);
-    if rel.is_empty() { None } else { Some(rel.to_string()) }
+    if rel.is_empty() {
+        None
+    } else {
+        Some(rel.to_string())
+    }
 }
 
 async fn ensure_sqlite_dir(database_url: &str) -> Result<(), std::io::Error> {

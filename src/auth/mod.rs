@@ -3,16 +3,16 @@
 //! 管理后台（`/api/*`）使用 Cookie Session（HttpOnly，服务端 session 表）；
 //! `/v1/*` 使用 `Authorization: Bearer` 校验 api_key 表。
 
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
 use axum::{
     Json,
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response as AxumResponse},
-};
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use chrono::{DateTime, Utc};
 use rand::RngCore;
@@ -54,7 +54,11 @@ pub fn hash_password(password: &str) -> anyhow::Result<String> {
 
 pub fn verify_password(password: &str, hash: &str) -> bool {
     PasswordHash::new(hash)
-        .map(|parsed| Argon2::default().verify_password(password.as_bytes(), &parsed).is_ok())
+        .map(|parsed| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &parsed)
+                .is_ok()
+        })
         .unwrap_or(false)
 }
 
@@ -97,11 +101,16 @@ pub async fn session_user(
     token: &str,
 ) -> anyhow::Result<Option<user::Model>> {
     let now = Utc::now();
-    let Some(session) = session::Entity::find_by_id(hash_token(token)).one(db).await? else {
+    let Some(session) = session::Entity::find_by_id(hash_token(token))
+        .one(db)
+        .await?
+    else {
         return Ok(None);
     };
     if session.expires_at <= now {
-        session::Entity::delete_by_id(session.id.clone()).exec(db).await?;
+        session::Entity::delete_by_id(session.id.clone())
+            .exec(db)
+            .await?;
         return Ok(None);
     }
     Ok(user::Entity::find_by_id(session.user_id).one(db).await?)
@@ -117,7 +126,9 @@ pub async fn delete_expired_sessions(db: &DatabaseConnection) {
 
 /// 吊销单个会话（登出）。
 pub async fn revoke_session(db: &DatabaseConnection, token: &str) {
-    let _ = session::Entity::delete_by_id(hash_token(token)).exec(db).await;
+    let _ = session::Entity::delete_by_id(hash_token(token))
+        .exec(db)
+        .await;
 }
 
 /// 吊销指定用户的其他会话（修改密码后踢掉旧登录，保留当前会话）。
@@ -148,9 +159,7 @@ pub fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
 
 /// 会话 Cookie 的 Set-Cookie 值。
 pub fn session_cookie(token: &str) -> String {
-    format!(
-        "{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={SESSION_TTL_SECS}"
-    )
+    format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={SESSION_TTL_SECS}")
 }
 
 /// 清除会话 Cookie 的 Set-Cookie 值。
@@ -175,7 +184,10 @@ pub async fn authorize_api_key(
         .one(db)
         .await
     {
-        Ok(Some(model)) => Ok(AuthedApiKey { id: model.id, name: model.name }),
+        Ok(Some(model)) => Ok(AuthedApiKey {
+            id: model.id,
+            name: model.name,
+        }),
         Ok(None) => Err(unauthorized_api_key()),
         Err(e) => Err(Response::<()>::error(
             crate::response::INTERNAL_ERROR,
@@ -185,10 +197,19 @@ pub async fn authorize_api_key(
 }
 
 fn extract_bearer(headers: &HeaderMap) -> Option<String> {
-    let value = headers.get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
-    let token = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer "))?;
+    let value = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?;
+    let token = value
+        .strip_prefix("Bearer ")
+        .or_else(|| value.strip_prefix("bearer "))?;
     let token = token.trim();
-    if token.is_empty() { None } else { Some(token.to_string()) }
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
 }
 
 fn unauthorized_api_key() -> Response<()> {
@@ -244,7 +265,9 @@ pub async fn auth_middleware(
     match session_user(&state.db, &token).await {
         Ok(Some(user)) => {
             let mut req = req;
-            req.extensions_mut().insert(AuthedUser { username: user.username });
+            req.extensions_mut().insert(AuthedUser {
+                username: user.username,
+            });
             next.run(req).await
         }
         Ok(None) => unauthorized_session(),
@@ -262,7 +285,10 @@ pub async fn auth_middleware(
 fn unauthorized_session() -> AxumResponse {
     (
         StatusCode::UNAUTHORIZED,
-        Json(Response::<()>::error(crate::response::UNAUTHORIZED, "未登录或登录已过期")),
+        Json(Response::<()>::error(
+            crate::response::UNAUTHORIZED,
+            "未登录或登录已过期",
+        )),
     )
         .into_response()
 }
@@ -303,7 +329,10 @@ pub async fn backfill_api_key_hashes(db: &DatabaseConnection) {
             return;
         }
     };
-    let rows: Vec<_> = rows.into_iter().filter(|m| m.key_hash.as_deref().unwrap_or("").is_empty()).collect();
+    let rows: Vec<_> = rows
+        .into_iter()
+        .filter(|m| m.key_hash.as_deref().unwrap_or("").is_empty())
+        .collect();
     if rows.is_empty() {
         return;
     }
@@ -367,7 +396,10 @@ mod tests {
             axum::http::header::COOKIE,
             "a=1; lg_session=tok ; b=2".parse().unwrap(),
         );
-        assert_eq!(extract_cookie(&headers, SESSION_COOKIE).as_deref(), Some("tok"));
+        assert_eq!(
+            extract_cookie(&headers, SESSION_COOKIE).as_deref(),
+            Some("tok")
+        );
         assert_eq!(extract_cookie(&headers, "missing"), None);
     }
 
@@ -384,13 +416,22 @@ mod tests {
     #[test]
     fn extract_bearer_supports_case_insensitive_scheme() {
         let mut headers = HeaderMap::new();
-        headers.insert(axum::http::header::AUTHORIZATION, "Bearer lg-abc".parse().unwrap());
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer lg-abc".parse().unwrap(),
+        );
         assert_eq!(extract_bearer(&headers).as_deref(), Some("lg-abc"));
         let mut headers = HeaderMap::new();
-        headers.insert(axum::http::header::AUTHORIZATION, "bearer lg-abc".parse().unwrap());
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "bearer lg-abc".parse().unwrap(),
+        );
         assert_eq!(extract_bearer(&headers).as_deref(), Some("lg-abc"));
         let mut headers = HeaderMap::new();
-        headers.insert(axum::http::header::AUTHORIZATION, "Token lg-abc".parse().unwrap());
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Token lg-abc".parse().unwrap(),
+        );
         assert_eq!(extract_bearer(&headers), None);
     }
 }

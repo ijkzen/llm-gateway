@@ -135,7 +135,9 @@ pub fn parse_url(url: &str) -> Result<(String, String, u16, String), UpstreamErr
         .host()
         .ok_or_else(|| UpstreamError::Connect(format!("上游 URL 缺少主机名（{url}）")))?
         .to_string();
-    let port = uri.port_u16().unwrap_or(if scheme == "https" { 443 } else { 80 });
+    let port = uri
+        .port_u16()
+        .unwrap_or(if scheme == "https" { 443 } else { 80 });
     let path_query = match (uri.path(), uri.query()) {
         ("", Some(q)) => format!("/?{q}"),
         ("", None) => "/".to_string(),
@@ -162,7 +164,9 @@ async fn connect_stream(
         .map_err(|e| UpstreamError::Connect(format!("DNS 解析失败（{host}）：{e}")))?
         .collect();
     if addrs.is_empty() {
-        return Err(UpstreamError::Connect(format!("DNS 解析不到可用地址（{host}）")));
+        return Err(UpstreamError::Connect(format!(
+            "DNS 解析不到可用地址（{host}）"
+        )));
     }
 
     let mut last_err: Option<UpstreamError> = None;
@@ -195,8 +199,11 @@ async fn connect_stream(
             tokio_rustls::rustls::pki_types::ServerName::try_from(host.to_string())
                 .map_err(|e| UpstreamError::Connect(format!("TLS 主机名无效（{host}）：{e}")))?;
         let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_config().clone()));
-        let tls = match tokio::time::timeout(TLS_HANDSHAKE_TIMEOUT, connector.connect(server_name, stream))
-            .await
+        let tls = match tokio::time::timeout(
+            TLS_HANDSHAKE_TIMEOUT,
+            connector.connect(server_name, stream),
+        )
+        .await
         {
             Ok(Ok(tls)) => tls,
             Ok(Err(e)) => {
@@ -279,9 +286,13 @@ pub async fn call(call: UpstreamCall, pool: &UpstreamPool) -> Result<UpstreamRep
     let mut attempt = 0;
     loop {
         let mut send = sender.take().expect("sender present");
-        let reply =
-            send_upstream_request(&mut send, &path_query, &call, &authority(&scheme, &host, port))
-                .await;
+        let reply = send_upstream_request(
+            &mut send,
+            &path_query,
+            &call,
+            &authority(&scheme, &host, port),
+        )
+        .await;
         match reply {
             Ok((status, body)) => {
                 let body = PooledBody::new(body, key.clone(), send, pool.clone());
@@ -295,7 +306,8 @@ pub async fn call(call: UpstreamCall, pool: &UpstreamPool) -> Result<UpstreamRep
             Err(UpstreamError::Request(_)) if attempt == 0 && timing.total_ms() == 0 => {
                 // 复用连接可能已被对端静默关闭：丢弃并新建连接重试一次。
                 attempt += 1;
-                let (stream, measured, connect_start) = connect_stream(&scheme, &host, port).await?;
+                let (stream, measured, connect_start) =
+                    connect_stream(&scheme, &host, port).await?;
                 timing = measured;
                 start_at_ms = connect_start;
                 connect_done_at_ms = now_ms();

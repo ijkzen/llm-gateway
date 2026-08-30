@@ -98,7 +98,5 @@ pub(crate) fn reset_ts(v: &Value) -> Option<DateTime<Utc>> {
 
 /// 依次尝试多个字段名取重置时间。
 pub(crate) fn reset_ts_of(v: &Value, keys: &[&str]) -> Option<DateTime<Utc>> {
-    keys.iter()
-        .filter_map(|k| v.get(*k))
-        .find_map(reset_ts)
+    keys.iter().filter_map(|k| v.get(*k)).find_map(reset_ts)
 }

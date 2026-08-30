@@ -126,11 +126,11 @@ fn validate_fields(req: &UpsertProviderModelRequest) -> Option<String> {
     None
 }
 
-async fn ensure_provider_exists(
-    db: &DatabaseConnection,
-    provider_id: i32,
-) -> Result<bool, DbErr> {
-    Ok(provider::Entity::find_by_id(provider_id).one(db).await?.is_some())
+async fn ensure_provider_exists(db: &DatabaseConnection, provider_id: i32) -> Result<bool, DbErr> {
+    Ok(provider::Entity::find_by_id(provider_id)
+        .one(db)
+        .await?
+        .is_some())
 }
 
 async fn list_provider_models(
@@ -144,8 +144,10 @@ async fn list_provider_models(
         .await
     {
         Ok(models) => {
-            let response: Vec<ProviderModelResponse> =
-                models.into_iter().map(ProviderModelResponse::from_model).collect();
+            let response: Vec<ProviderModelResponse> = models
+                .into_iter()
+                .map(ProviderModelResponse::from_model)
+                .collect();
             (StatusCode::OK, Json(Response::success(response)))
         }
         Err(e) => response::db_error(e.to_string()),
@@ -160,8 +162,10 @@ async fn list_all_provider_models(State(state): State<AppState>) -> impl IntoRes
         .await
     {
         Ok(models) => {
-            let response: Vec<ProviderModelResponse> =
-                models.into_iter().map(ProviderModelResponse::from_model).collect();
+            let response: Vec<ProviderModelResponse> = models
+                .into_iter()
+                .map(ProviderModelResponse::from_model)
+                .collect();
             (StatusCode::OK, Json(Response::success(response)))
         }
         Err(e) => response::db_error(e.to_string()),
@@ -252,9 +256,7 @@ async fn create_provider_model(
             let response = ProviderModelResponse::from_model(model);
             (StatusCode::CREATED, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => {
-            response::bad_request("该供应商下已存在同名模型 ID")
-        }
+        Err(e) if is_unique_violation(&e) => response::bad_request("该供应商下已存在同名模型 ID"),
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -303,7 +305,10 @@ async fn batch_create_provider_models(
         .collect();
 
     if pending.is_empty() {
-        return (StatusCode::OK, Json(Response::success(Vec::<ProviderModelResponse>::new())));
+        return (
+            StatusCode::OK,
+            Json(Response::success(Vec::<ProviderModelResponse>::new())),
+        );
     }
 
     let txn = match state.db.begin().await {
@@ -379,9 +384,7 @@ async fn update_provider_model(
             let response = ProviderModelResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => {
-            response::bad_request("该供应商下已存在同名模型 ID")
-        }
+        Err(e) if is_unique_violation(&e) => response::bad_request("该供应商下已存在同名模型 ID"),
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -396,9 +399,7 @@ async fn delete_provider_model(
         .exec(&state.db)
         .await
     {
-        Ok(result) if result.rows_affected > 0 => {
-            (StatusCode::OK, Json(Response::success(())))
-        }
+        Ok(result) if result.rows_affected > 0 => (StatusCode::OK, Json(Response::success(()))),
         Ok(_) => response::not_found(format!("供应商模型 {model_id} 不存在")),
         Err(e) => response::db_error(e.to_string()),
     }
@@ -408,7 +409,10 @@ async fn refresh_provider_models(
     State(state): State<AppState>,
     Path(provider_id): Path<i32>,
 ) -> impl IntoResponse {
-    let provider_model_data = match provider::Entity::find_by_id(provider_id).one(&state.db).await {
+    let provider_model_data = match provider::Entity::find_by_id(provider_id)
+        .one(&state.db)
+        .await
+    {
         Ok(Some(model)) => model,
         Ok(None) => return response::not_found(format!("Provider {provider_id} 不存在")),
         Err(e) => return response::db_error(e.to_string()),
@@ -461,7 +465,11 @@ async fn refresh_provider_models(
         let candidate = match catalog::find_by_suffix(id) {
             Some(entry) => RefreshCandidate {
                 provider_model_id: id.to_string(),
-                match_state: if entry.is_complete() { "smart" } else { "partial" },
+                match_state: if entry.is_complete() {
+                    "smart"
+                } else {
+                    "partial"
+                },
                 context_length: entry.context_length,
                 max_output_tokens: entry.max_output_tokens,
                 reasoning: entry.reasoning,
@@ -500,7 +508,12 @@ async fn refresh_provider_models(
 
 /// 模型 ID 的尾段归一化 key：按 `/` 取最后一段并转小写。
 fn tail_key(model_id: &str) -> String {
-    model_id.trim().rsplit('/').next().unwrap_or("").to_lowercase()
+    model_id
+        .trim()
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_lowercase()
 }
 
 /// SQLite 唯一约束冲突（provider_model 的复合唯一索引）。

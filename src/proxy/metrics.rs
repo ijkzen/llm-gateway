@@ -186,7 +186,9 @@ impl Default for Stopwatch {
 
 impl Stopwatch {
     pub fn new() -> Self {
-        Self { started: Instant::now() }
+        Self {
+            started: Instant::now(),
+        }
     }
 
     pub fn elapsed_ms(&self) -> i64 {
@@ -218,7 +220,11 @@ mod tests {
             ttft_start_ms: start,
             start_time: start,
             end_time: end,
-            usage: Usage { input_tokens: None, cache_tokens: 0, output_tokens: output },
+            usage: Usage {
+                input_tokens: None,
+                cache_tokens: 0,
+                output_tokens: output,
+            },
             success: true,
             fail_reason: None,
             api_key_name: "k".into(),

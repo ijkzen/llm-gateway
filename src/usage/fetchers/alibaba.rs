@@ -67,8 +67,13 @@ async fn console_auth(
         ("Sec-Fetch-Site", "none".to_string()),
         ("Upgrade-Insecure-Requests", "1".to_string()),
     ];
-    let html_reply = http.get(&format!("{}/", site.console), &nav_headers).await?;
-    if html_reply.status == 401 || html_reply.status == 403 || (300..400).contains(&html_reply.status) {
+    let html_reply = http
+        .get(&format!("{}/", site.console), &nav_headers)
+        .await?;
+    if html_reply.status == 401
+        || html_reply.status == 403
+        || (300..400).contains(&html_reply.status)
+    {
         return Err(UsageError::Auth);
     }
     let sec_token = extract_sec_token(&html_reply.body).ok_or_else(|| {
@@ -76,7 +81,9 @@ async fn console_auth(
     })?;
 
     let xsrf = xsrf_token(&cookies).ok_or_else(|| {
-        UsageError::MissingCredential("login_aliyunid_csrf cookie（请确认控制台已登录并同步）".to_string())
+        UsageError::MissingCredential(
+            "login_aliyunid_csrf cookie（请确认控制台已登录并同步）".to_string(),
+        )
     })?;
     Ok((cookie, xsrf, sec_token))
 }
@@ -160,11 +167,7 @@ pub async fn fetch_alibaba_coding(
         site.coding_commodity
     );
     let reply = http
-        .post_json(
-            &url,
-            &[("Cookie", cookie), ("x-xsrf-token", xsrf)],
-            &body,
-        )
+        .post_json(&url, &[("Cookie", cookie), ("x-xsrf-token", xsrf)], &body)
         .await?;
     if reply.status == 401 || reply.status == 403 {
         return Err(UsageError::Auth);

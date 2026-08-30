@@ -132,8 +132,7 @@ async fn test_run_logs_returns_persisted_lines() {
 #[tokio::test]
 async fn test_run_logs_404_for_unknown_run() {
     let (app, _db) = setup_app().await;
-    let (status, body) =
-        get_json(&app, "/api/cron-jobs/log_job/logs/does-not-exist").await;
+    let (status, body) = get_json(&app, "/api/cron-jobs/log_job/logs/does-not-exist").await;
     assert_eq!(status, 404);
     assert!(body.contains("NOT_FOUND"));
 }

@@ -41,7 +41,11 @@ impl UsageHttp {
         }
     }
 
-    pub async fn get(&self, url: &str, headers: &[(&str, String)]) -> Result<HttpReply, UsageError> {
+    pub async fn get(
+        &self,
+        url: &str,
+        headers: &[(&str, String)],
+    ) -> Result<HttpReply, UsageError> {
         self.send(reqwest::Method::GET, url, headers, None).await
     }
 

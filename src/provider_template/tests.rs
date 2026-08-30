@@ -67,7 +67,14 @@ async fn test_upsert_updates_existing_template() {
 async fn test_seed_has_expected_entries() {
     let names: Vec<&str> = seed::TEMPLATES.iter().map(|t| t.name).collect();
     // 关键 provider 应存在
-    for expect in ["DeepSeek", "OpenRouter", "Moonshot AI", "Zhipu AI Coding Plan", "OpenCode Go", "Command Code"] {
+    for expect in [
+        "DeepSeek",
+        "OpenRouter",
+        "Moonshot AI",
+        "Zhipu AI Coding Plan",
+        "OpenCode Go",
+        "Command Code",
+    ] {
         assert!(names.contains(&expect), "missing {expect}");
     }
     // 无 base_url 的 provider 不应存在（Claude/Codex/Kimi 会员等）
@@ -122,7 +129,9 @@ async fn test_find_by_domain_ignores_case_and_path() {
     assert_eq!(found.unwrap().name, "DeepSeek");
 
     // 带路径/协议
-    let found = find_by_domain(&db, "https://api.deepseek.com/v1/chat").await.unwrap();
+    let found = find_by_domain(&db, "https://api.deepseek.com/v1/chat")
+        .await
+        .unwrap();
     assert!(found.is_some());
     assert_eq!(found.unwrap().name, "DeepSeek");
 }
@@ -134,7 +143,11 @@ async fn test_find_by_domain_all_returns_all_hits() {
 
     // api.stepfun.com host 下有按量 StepFun (China) 与订阅 StepFun Step Plan (China) 两个模板。
     let all = find_by_domain_all(&db, "api.stepfun.com").await.unwrap();
-    assert!(all.len() >= 2, "同一 host 应返回全部命中，实际 {}", all.len());
+    assert!(
+        all.len() >= 2,
+        "同一 host 应返回全部命中，实际 {}",
+        all.len()
+    );
     assert!(all.iter().any(|t| t.name == "StepFun (China)"));
     assert!(all.iter().any(|t| t.name == "StepFun Step Plan (China)"));
 
@@ -143,7 +156,12 @@ async fn test_find_by_domain_all_returns_all_hits() {
     assert!(first.is_some());
 
     // 无命中返回空列表。
-    assert!(find_by_domain_all(&db, "nonexistent.example.com").await.unwrap().is_empty());
+    assert!(
+        find_by_domain_all(&db, "nonexistent.example.com")
+            .await
+            .unwrap()
+            .is_empty()
+    );
     assert!(find_by_domain_all(&db, "").await.unwrap().is_empty());
 }
 
@@ -153,7 +171,12 @@ async fn test_find_by_domain_no_match_returns_none() {
     upsert_templates(&db).await.unwrap();
 
     // 不存在/含占位符的域名不匹配
-    assert!(find_by_domain(&db, "nonexistent.example.com").await.unwrap().is_none());
+    assert!(
+        find_by_domain(&db, "nonexistent.example.com")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(find_by_domain(&db, "").await.unwrap().is_none());
     assert!(find_by_domain(&db, "  ").await.unwrap().is_none());
     // Cloudflare Workers AI 的 host 是 api.cloudflare.com（路径含 ${VAR} 但 host 干净），
@@ -166,9 +189,18 @@ async fn test_find_by_domain_no_match_returns_none() {
 #[test]
 fn test_host_of_extracts_domain() {
     use super::host_of;
-    assert_eq!(host_of("https://api.deepseek.com"), Some("api.deepseek.com".to_string()));
-    assert_eq!(host_of("https://api.302.ai/v1"), Some("api.302.ai".to_string()));
-    assert_eq!(host_of("http://localhost:8080/v1"), Some("localhost".to_string()));
+    assert_eq!(
+        host_of("https://api.deepseek.com"),
+        Some("api.deepseek.com".to_string())
+    );
+    assert_eq!(
+        host_of("https://api.302.ai/v1"),
+        Some("api.302.ai".to_string())
+    );
+    assert_eq!(
+        host_of("http://localhost:8080/v1"),
+        Some("localhost".to_string())
+    );
     assert_eq!(host_of("${CLOUDFLARE_ACCOUNT_ID}/ai/v1"), None);
     assert_eq!(host_of(""), None);
 }

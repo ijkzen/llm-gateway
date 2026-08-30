@@ -1,5 +1,5 @@
-use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Schema, Statement};
 use llm_gateway::entity::provider;
+use sea_orm::{ConnectionTrait, Database, DatabaseConnection, Schema, Statement};
 
 #[tokio::test]
 async fn provider_table_ddl_matches_expected() {
@@ -31,11 +31,7 @@ async fn provider_table_ddl_matches_expected() {
 
     let expected = vec![
         ("api_key".to_string(), "varchar".to_string(), String::new()),
-        (
-            "base_url".to_string(),
-            "varchar".to_string(),
-            String::new(),
-        ),
+        ("base_url".to_string(), "varchar".to_string(), String::new()),
         (
             "billing_mode".to_string(),
             "INTEGER".to_string(),
@@ -56,7 +52,11 @@ async fn provider_table_ddl_matches_expected() {
             "boolean".to_string(),
             "'1'".to_string(),
         ),
-        ("extra".to_string(), "varchar".to_string(), "'{}'".to_string()),
+        (
+            "extra".to_string(),
+            "varchar".to_string(),
+            "'{}'".to_string(),
+        ),
         ("id".to_string(), "INTEGER".to_string(), String::new()),
         ("name".to_string(), "varchar".to_string(), String::new()),
         (

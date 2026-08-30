@@ -44,11 +44,7 @@ pub fn sign(
     let payload_hash = hex::encode(Sha256::digest(body));
 
     // canonical query：Action/Region/Version 按 key 升序 + RFC3986 编码。
-    let mut pairs = [
-        ("Action", action),
-        ("Region", region),
-        ("Version", version),
-    ];
+    let mut pairs = [("Action", action), ("Region", region), ("Version", version)];
     pairs.sort_by(|a, b| a.0.cmp(b.0));
     let canonical_query = pairs
         .iter()
@@ -138,7 +134,8 @@ mod tests {
     /// k = H(H(H(H(b"SK_EXAMPLE", date), "cn-beijing"), "ark"), "request")
     /// print(hmac.new(k, sts.encode(), hashlib.sha256).hexdigest())
     /// ```
-    const EXPECTED_SIGNATURE: &str = "1384532448cea98834a6b176d8795a4fb85b49672d12303fc5fe86a5fb49f024";
+    const EXPECTED_SIGNATURE: &str =
+        "1384532448cea98834a6b176d8795a4fb85b49672d12303fc5fe86a5fb49f024";
 
     #[test]
     fn known_answer_signature() {
@@ -182,8 +179,14 @@ mod tests {
             b"",
             now,
         );
-        assert!(sig.authorization.contains("Credential=AKID_EXAMPLE/20260830/cn-beijing/billing/request"));
-        assert!(sig.authorization.contains("SignedHeaders=host;x-content-sha256;x-date"));
+        assert!(
+            sig.authorization
+                .contains("Credential=AKID_EXAMPLE/20260830/cn-beijing/billing/request")
+        );
+        assert!(
+            sig.authorization
+                .contains("SignedHeaders=host;x-content-sha256;x-date")
+        );
         assert!(!sig.authorization.contains("content-type"));
         assert_eq!(sig.content_type, None);
     }

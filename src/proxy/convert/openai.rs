@@ -11,7 +11,10 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Value {
     let mut body = chat.clone();
     if let Some(object) = body.as_object_mut() {
         object.insert("model".to_string(), json!(actual_model));
-        let stream = object.get("stream").and_then(Value::as_bool).unwrap_or(false);
+        let stream = object
+            .get("stream")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if stream {
             let include_usage = object
                 .get("stream_options")
@@ -35,16 +38,34 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Value {
 
 /// 从 OpenAI 兼容 usage 对象提取归一 usage（兼容 DeepSeek/Gemini 兼容别名）。
 pub fn extract_usage(usage: &Value) -> Usage {
-    let input = first_i64(usage, &["prompt_tokens", "promptTokenCount", "input_tokens", "inputTokenCount"]);
-    let output = first_i64(usage, &[
-        "completion_tokens", "candidatesTokenCount", "output_tokens", "outputTokenCount",
-    ]);
+    let input = first_i64(
+        usage,
+        &[
+            "prompt_tokens",
+            "promptTokenCount",
+            "input_tokens",
+            "inputTokenCount",
+        ],
+    );
+    let output = first_i64(
+        usage,
+        &[
+            "completion_tokens",
+            "candidatesTokenCount",
+            "output_tokens",
+            "outputTokenCount",
+        ],
+    );
     let cache = usage
         .get("prompt_tokens_details")
         .and_then(|details| details.get("cached_tokens"))
         .and_then(Value::as_i64)
         .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(Value::as_i64))
-        .or_else(|| usage.get("cached_content_token_count").and_then(Value::as_i64))
+        .or_else(|| {
+            usage
+                .get("cached_content_token_count")
+                .and_then(Value::as_i64)
+        })
         .unwrap_or(0);
     Usage {
         input_tokens: input,
@@ -54,7 +75,8 @@ pub fn extract_usage(usage: &Value) -> Usage {
 }
 
 fn first_i64(value: &Value, keys: &[&str]) -> Option<i64> {
-    keys.iter().find_map(|key| value.get(*key).and_then(Value::as_i64))
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_i64))
 }
 
 /// 从 OpenAI 兼容错误体提取 message（convert::extract_error_message 的别名场景已覆盖）。
@@ -81,7 +103,8 @@ impl OpenAiStreamScanner {
             };
             if let Some(usage_value) = value.get("usage")
                 && usage_value.is_object()
-                && (usage_value.get("prompt_tokens").is_some() || usage_value.get("input_tokens").is_some())
+                && (usage_value.get("prompt_tokens").is_some()
+                    || usage_value.get("input_tokens").is_some())
             {
                 let usage = extract_usage(usage_value);
                 if usage.input_tokens.is_some() || usage.output_tokens.is_some() {
@@ -118,10 +141,7 @@ mod tests {
 
     #[test]
     fn build_body_rewrites_model_and_injects_include_usage() {
-        let chat = from_str::<Value>(
-            r#"{"model":"vm-a","stream":true,"messages":[]}"#,
-        )
-        .unwrap();
+        let chat = from_str::<Value>(r#"{"model":"vm-a","stream":true,"messages":[]}"#).unwrap();
         let body = build_request_body(&chat, "gpt-4o");
         assert_eq!(body["model"], "gpt-4o");
         assert_eq!(body["stream_options"]["include_usage"], true);
@@ -148,19 +168,19 @@ mod tests {
         assert_eq!(usage.output_tokens, Some(20));
         assert_eq!(usage.cache_tokens, 40);
 
-        let usage = extract_usage(&from_str::<Value>(
-            r#"{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":60}"#,
-        )
-        .unwrap());
+        let usage = extract_usage(
+            &from_str::<Value>(
+                r#"{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":60}"#,
+            )
+            .unwrap(),
+        );
         assert_eq!(usage.cache_tokens, 60);
     }
 
     #[test]
     fn scanner_finds_usage_and_content() {
         let mut scanner = OpenAiStreamScanner::default();
-        scanner.feed(
-            "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
-        );
+        scanner.feed("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n");
         scanner.feed("data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n");
         scanner.feed(
             "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n",
@@ -176,8 +196,7 @@ mod tests {
     fn scanner_detects_reasoning_and_tool_content() {
         // 推理模型（reasoning_content）与纯函数调用（tool_calls）流同样应标记首 token。
         let mut reasoning = OpenAiStreamScanner::default();
-        reasoning
-            .feed("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考\"}}]}\n\n");
+        reasoning.feed("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考\"}}]}\n\n");
         assert!(reasoning.saw_content);
 
         let mut tools = OpenAiStreamScanner::default();

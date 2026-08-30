@@ -58,8 +58,13 @@ async fn get(app: &axum::Router, uri: &str) -> (StatusCode, Value) {
         .await
         .unwrap();
     let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 #[tokio::test]
@@ -136,7 +141,11 @@ async fn test_sorting_and_page_size() {
     assert_eq!(body["data"]["items"][0]["requestId"], "a");
 
     // 降序 + pageSize=2 + page=2 → 最后 1 条。
-    let (_, body) = get(&app, "/api/request-logs?page=2&pageSize=2&sortBy=startTime&sortOrder=desc").await;
+    let (_, body) = get(
+        &app,
+        "/api/request-logs?page=2&pageSize=2&sortBy=startTime&sortOrder=desc",
+    )
+    .await;
     assert_eq!(body["data"]["total"], 3);
     assert_eq!(body["data"]["items"].as_array().unwrap().len(), 1);
     assert_eq!(body["data"]["items"][0]["requestId"], "a");

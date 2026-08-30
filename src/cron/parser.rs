@@ -98,9 +98,7 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs(total_secs))
 }
 
-pub fn compute_next_run(
-    expression: &str,
-) -> Result<chrono::DateTime<chrono::Utc>, SchedulerError> {
+pub fn compute_next_run(expression: &str) -> Result<chrono::DateTime<chrono::Utc>, SchedulerError> {
     compute_next_run_from_scheduled_at(expression, chrono::Utc::now())
 }
 

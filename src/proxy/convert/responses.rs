@@ -137,7 +137,10 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
     if let Some(response_format) = chat.get("response_format")
         && response_format.is_object()
     {
-        let format_type = response_format.get("type").and_then(Value::as_str).unwrap_or("");
+        let format_type = response_format
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let format = match format_type {
             "json_object" => Some(json!({"type": "json_object"})),
             "json_schema" => {
@@ -243,14 +246,23 @@ impl ResponsesStreamConverter {
     }
 
     fn openai_index(&mut self, output_index: i64) -> i64 {
-        *self.output_to_openai_index.entry(output_index).or_insert_with(|| {
-            let index = self.next_tool_index;
-            self.next_tool_index += 1;
-            index
-        })
+        *self
+            .output_to_openai_index
+            .entry(output_index)
+            .or_insert_with(|| {
+                let index = self.next_tool_index;
+                self.next_tool_index += 1;
+                index
+            })
     }
 
-    fn emit_tool_start(&mut self, output_index: i64, call_id: Option<&str>, name: &str, out: &mut Vec<Value>) {
+    fn emit_tool_start(
+        &mut self,
+        output_index: i64,
+        call_id: Option<&str>,
+        name: &str,
+        out: &mut Vec<Value>,
+    ) {
         self.ensure_started(out);
         let index = self.openai_index(output_index);
         out.push(super::chunk_json(
@@ -273,8 +285,8 @@ impl ResponsesStreamConverter {
             self.finished = true;
             return Ok(Vec::new());
         }
-        let value: Value = serde_json::from_str(data)
-            .map_err(|e| format!("解析 Responses SSE 失败：{e}"))?;
+        let value: Value =
+            serde_json::from_str(data).map_err(|e| format!("解析 Responses SSE 失败：{e}"))?;
         let mut out = Vec::new();
         match value.get("type").and_then(Value::as_str) {
             Some("response.created") | Some("response.in_progress") => {
@@ -290,10 +302,16 @@ impl ResponsesStreamConverter {
                 let text = value.get("delta").and_then(Value::as_str).unwrap_or("");
                 if !text.is_empty() {
                     self.ensure_started(&mut out);
-                    out.push(super::chunk_json(&self.id, &self.model, json!({"content": text}), None));
+                    out.push(super::chunk_json(
+                        &self.id,
+                        &self.model,
+                        json!({"content": text}),
+                        None,
+                    ));
                 }
             }
-            Some("response.reasoning_text.delta") | Some("response.reasoning_summary_text.delta") => {
+            Some("response.reasoning_text.delta")
+            | Some("response.reasoning_summary_text.delta") => {
                 let text = value.get("delta").and_then(Value::as_str).unwrap_or("");
                 if !text.is_empty() {
                     self.ensure_started(&mut out);
@@ -308,7 +326,10 @@ impl ResponsesStreamConverter {
             Some("response.output_item.added") => {
                 let item = value.get("item").cloned().unwrap_or(json!({}));
                 if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                    let output_index = value.get("output_index").and_then(Value::as_i64).unwrap_or(0);
+                    let output_index = value
+                        .get("output_index")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
                     let call_id = item
                         .get("call_id")
                         .or_else(|| item.get("id"))
@@ -318,7 +339,10 @@ impl ResponsesStreamConverter {
                 }
             }
             Some("response.function_call_arguments.delta") => {
-                let output_index = value.get("output_index").and_then(Value::as_i64).unwrap_or(0);
+                let output_index = value
+                    .get("output_index")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
                 let arguments = value.get("delta").and_then(Value::as_str).unwrap_or("");
                 if !arguments.is_empty() {
                     self.ensure_started(&mut out);
@@ -335,7 +359,10 @@ impl ResponsesStreamConverter {
             Some("response.output_item.done") => {
                 let item = value.get("item").cloned().unwrap_or(json!({}));
                 if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                    let output_index = value.get("output_index").and_then(Value::as_i64).unwrap_or(0);
+                    let output_index = value
+                        .get("output_index")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
                     // 没有 delta 流式输出时补发完整 arguments。
                     if !self.streamed_args.contains(&output_index)
                         && let Some(arguments) = item.get("arguments").and_then(Value::as_str)
@@ -356,7 +383,10 @@ impl ResponsesStreamConverter {
                 if let Some(usage) = value.pointer("/response/usage") {
                     self.capture_usage(usage);
                 }
-                let status = value.pointer("/response/status").and_then(Value::as_str).unwrap_or("completed");
+                let status = value
+                    .pointer("/response/status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("completed");
                 let incomplete_reason = value
                     .pointer("/response/incomplete_details/reason")
                     .and_then(Value::as_str);
@@ -479,7 +509,10 @@ mod tests {
         assert_eq!(input[2]["output"], "ok");
         assert_eq!(body["tools"][0]["type"], "function");
         assert_eq!(body["tools"][0]["name"], "f");
-        assert_eq!(body["tool_choice"], json!({"type": "function", "name": "f"}));
+        assert_eq!(
+            body["tool_choice"],
+            json!({"type": "function", "name": "f"})
+        );
     }
 
     #[test]
@@ -510,8 +543,14 @@ mod tests {
         assert!(converter.is_finished());
         assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
         assert_eq!(chunks[1]["choices"][0]["delta"]["content"], "hi");
-        assert_eq!(chunks[2]["choices"][0]["delta"]["tool_calls"][0]["id"], "call_9");
-        assert_eq!(chunks[2]["choices"][0]["delta"]["tool_calls"][0]["index"], 0);
+        assert_eq!(
+            chunks[2]["choices"][0]["delta"]["tool_calls"][0]["id"],
+            "call_9"
+        );
+        assert_eq!(
+            chunks[2]["choices"][0]["delta"]["tool_calls"][0]["index"],
+            0
+        );
         assert_eq!(chunks[4]["choices"][0]["finish_reason"], "stop");
         let usage = converter.usage().unwrap();
         assert_eq!(usage.input_tokens, Some(12));
@@ -527,6 +566,9 @@ mod tests {
                 r#"{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":1,"output_tokens":2}}}"#,
             )
             .unwrap();
-        assert_eq!(chunks.last().unwrap()["choices"][0]["finish_reason"], "length");
+        assert_eq!(
+            chunks.last().unwrap()["choices"][0]["finish_reason"],
+            "length"
+        );
     }
 }

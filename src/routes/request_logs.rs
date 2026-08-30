@@ -88,7 +88,10 @@ async fn list_request_logs(
     Query(query): Query<ListQuery>,
 ) -> impl IntoResponse {
     let page = query.page.unwrap_or(1).max(1);
-    let page_size = query.page_size.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE);
+    let page_size = query
+        .page_size
+        .unwrap_or(DEFAULT_PAGE_SIZE)
+        .clamp(1, MAX_PAGE_SIZE);
     let offset = ((page - 1) * page_size) as i64;
 
     // 拼接 WHERE 条件与绑定参数。
@@ -164,7 +167,10 @@ async fn list_request_logs(
         Err(e) => return response::db_error(e.to_string()),
     };
 
-    let items = rows.iter().filter_map(|row| row_to_entry(row).ok()).collect();
+    let items = rows
+        .iter()
+        .filter_map(|row| row_to_entry(row).ok())
+        .collect();
     (
         StatusCode::OK,
         Json(Response::success(PageResponse {

@@ -77,7 +77,10 @@ pub async fn write_usage_cache(db: &DatabaseConnection, data: &UsageData) -> Res
 }
 
 /// 删除某供应商的用量缓存行（Provider 更新/删除后调用，避免旧凭据的缓存残留）。
-pub async fn invalidate_usage_cache(db: &DatabaseConnection, provider_id: i32) -> Result<(), DbErr> {
+pub async fn invalidate_usage_cache(
+    db: &DatabaseConnection,
+    provider_id: i32,
+) -> Result<(), DbErr> {
     usage_cache::Entity::delete_many()
         .filter(usage_cache::Column::ProviderId.eq(provider_id))
         .exec(db)
@@ -86,10 +89,14 @@ pub async fn invalidate_usage_cache(db: &DatabaseConnection, provider_id: i32) -
 }
 
 /// 真实抓取一次供应商用量并写入数据库缓存，返回新数据。
-pub async fn fetch_and_store(db: &DatabaseConnection, provider_id: i32) -> Result<UsageData, UsageError> {
+pub async fn fetch_and_store(
+    db: &DatabaseConnection,
+    provider_id: i32,
+) -> Result<UsageData, UsageError> {
     // force_refresh=true 绕过 60s 内存缓存，确保是真请求；落库后读接口与
     // LB 排序可直接命中 10 分钟数据库缓存。
-    let data = crate::usage::query_provider_usage(db, &UsageCache::default(), provider_id, true).await?;
+    let data =
+        crate::usage::query_provider_usage(db, &UsageCache::default(), provider_id, true).await?;
     if let Err(e) = write_usage_cache(db, &data).await {
         tracing::warn!(provider_id, "用量缓存落库失败：{e}");
     }
@@ -123,10 +130,7 @@ pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> 
         let db = db.clone();
         let semaphore = semaphore.clone();
         set.spawn(async move {
-            let _permit = semaphore
-                .acquire()
-                .await
-                .expect("用量刷新信号量未关闭");
+            let _permit = semaphore.acquire().await.expect("用量刷新信号量未关闭");
             (p, fetch_and_store(&db, provider_id).await)
         });
     }
@@ -241,11 +245,19 @@ pub async fn apply_usage_gate(
     if usable && !p.enable {
         set_provider_enabled(db, p.id, true).await?;
         let items = set_items_enabled(db, p.id, true).await?;
-        tracing::info!(provider_id = p.id, items, "订阅额度已恢复，自动启用供应商及其全部虚拟模型子模型");
+        tracing::info!(
+            provider_id = p.id,
+            items,
+            "订阅额度已恢复，自动启用供应商及其全部虚拟模型子模型"
+        );
     } else if !usable && p.enable {
         set_provider_enabled(db, p.id, false).await?;
         let items = set_items_enabled(db, p.id, false).await?;
-        tracing::info!(provider_id = p.id, items, "订阅额度已耗尽，自动停用供应商及其全部虚拟模型子模型");
+        tracing::info!(
+            provider_id = p.id,
+            items,
+            "订阅额度已耗尽，自动停用供应商及其全部虚拟模型子模型"
+        );
     }
     Ok(())
 }
@@ -254,7 +266,7 @@ pub async fn apply_usage_gate(
 mod tests {
     use super::*;
     use crate::usage::types::{
-        empty_windows, set_window, QuotaWindow, UsageData, UsageKind, WindowKind,
+        QuotaWindow, UsageData, UsageKind, WindowKind, empty_windows, set_window,
     };
 
     fn quota_data(provider_id: i32, windows: Vec<crate::usage::types::QuotaWindow>) -> UsageData {

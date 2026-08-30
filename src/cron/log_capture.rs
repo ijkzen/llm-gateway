@@ -159,7 +159,11 @@ impl JobLogLayer {
     ///
     /// 注意：`event.parent()` 只返回显式指定的 parent，contextual 事件（宏
     /// 默认形式）返回 None，必须用 `ctx.event_scope` 解析当前 span 链。
-    fn lookup_owner<'a, S>(&self, event: &Event<'_>, ctx: &Context<'a, S>) -> Option<(String, String)>
+    fn lookup_owner<'a, S>(
+        &self,
+        event: &Event<'_>,
+        ctx: &Context<'a, S>,
+    ) -> Option<(String, String)>
     where
         S: Subscriber + for<'b> LookupSpan<'b>,
     {
@@ -258,8 +262,8 @@ mod tests {
     use std::sync::mpsc::Receiver;
 
     use super::*;
-    use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::Registry;
+    use tracing_subscriber::layer::SubscriberExt;
 
     /// 在全局默认 subscriber 上挂载 JobLogLayer，收集任务 span 内的日志事件。
     /// 返回的 keep_alive 必须存活到事件消费完，避免 channel 断连。
@@ -303,7 +307,10 @@ mod tests {
         assert_eq!(second.level.as_deref(), Some("WARN"));
 
         // 没有第三条事件。
-        assert!(matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
     }
 
     #[test]
@@ -319,7 +326,10 @@ mod tests {
                 tracing::info!("nested but not a job span");
             });
         });
-        assert!(matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
         drop(keep_alive);
     }
 

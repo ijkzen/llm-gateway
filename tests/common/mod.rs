@@ -1,8 +1,8 @@
 //! Shared bootstrap helpers for the HTTP integration tests.
 
 use axum::extract::Request;
-use axum::middleware::Next;
 use axum::http::HeaderValue;
+use axum::middleware::Next;
 use axum::response::Response;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 
@@ -26,8 +26,11 @@ const TEST_BEARER: &str = "Bearer lg-itest-api-key-0000000000000";
 /// Creates an in-memory database, starts a job worker, and builds the
 /// scheduler on top of it. The scheduler is returned unstarted so each test
 /// can register handlers and seed data before calling `start()`.
-pub async fn setup_db_and_scheduler(
-) -> (DatabaseConnection, SchedulerRuntime, tokio::sync::broadcast::Sender<JobLogEvent>) {
+pub async fn setup_db_and_scheduler() -> (
+    DatabaseConnection,
+    SchedulerRuntime,
+    tokio::sync::broadcast::Sender<JobLogEvent>,
+) {
     let db = db::connect("sqlite::memory:").await.unwrap();
 
     let (log_tx, _) = tokio::sync::broadcast::channel::<JobLogEvent>(64);
@@ -52,7 +55,9 @@ pub fn build_app(
         log_tx,
         lb_state: llm_gateway::proxy::LbState::default(),
         usage_cache: llm_gateway::usage::UsageCache::default(),
-        upstream_pool: llm_gateway::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
+        upstream_pool: llm_gateway::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(
+            600,
+        )),
     };
     routes::create_app(&state)
 }
@@ -102,7 +107,10 @@ async fn inject_test_auth(mut req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let headers = req.headers_mut();
     if path.starts_with("/api/") && !path.starts_with("/api/auth/") {
-        headers.insert(axum::http::header::COOKIE, HeaderValue::from_static(TEST_COOKIE));
+        headers.insert(
+            axum::http::header::COOKIE,
+            HeaderValue::from_static(TEST_COOKIE),
+        );
     } else if path.starts_with("/v1/") {
         headers.insert(
             axum::http::header::AUTHORIZATION,
@@ -120,7 +128,5 @@ pub async fn build_authed_app(
     log_tx: tokio::sync::broadcast::Sender<JobLogEvent>,
 ) -> axum::Router {
     seed_default_auth(&db).await;
-    build_app(db, scheduler, log_tx)
-        .layer(axum::middleware::from_fn(inject_test_auth))
+    build_app(db, scheduler, log_tx).layer(axum::middleware::from_fn(inject_test_auth))
 }
-

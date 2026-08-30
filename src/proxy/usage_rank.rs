@@ -13,7 +13,11 @@ use crate::usage::types::{UsageData, UsageKind, WindowKind};
 pub fn cmp_quota_remaining(a: Option<&UsageData>, b: Option<&UsageData>) -> Ordering {
     match (a, b) {
         (Some(x), Some(y)) => {
-            for kind in [WindowKind::FiveHour, WindowKind::Weekly, WindowKind::Monthly] {
+            for kind in [
+                WindowKind::FiveHour,
+                WindowKind::Weekly,
+                WindowKind::Monthly,
+            ] {
                 match cmp_window(x, y, kind) {
                     Ordering::Equal => continue,
                     ord => return ord,
@@ -119,15 +123,24 @@ mod tests {
     fn five_hour_window_decides() {
         let high = quota(1, Some(80.0), None, None);
         let low = quota(2, Some(20.0), None, None);
-        assert_eq!(cmp_quota_remaining(high.as_ref(), low.as_ref()), Ordering::Greater);
-        assert_eq!(cmp_quota_remaining(low.as_ref(), high.as_ref()), Ordering::Less);
+        assert_eq!(
+            cmp_quota_remaining(high.as_ref(), low.as_ref()),
+            Ordering::Greater
+        );
+        assert_eq!(
+            cmp_quota_remaining(low.as_ref(), high.as_ref()),
+            Ordering::Less
+        );
     }
 
     #[test]
     fn tie_on_five_hour_falls_to_weekly() {
         let a = quota(1, Some(50.0), Some(70.0), None);
         let b = quota(2, Some(50.0), Some(30.0), None);
-        assert_eq!(cmp_quota_remaining(a.as_ref(), b.as_ref()), Ordering::Greater);
+        assert_eq!(
+            cmp_quota_remaining(a.as_ref(), b.as_ref()),
+            Ordering::Greater
+        );
     }
 
     #[test]
@@ -142,7 +155,10 @@ mod tests {
         // a 无 5h 窗口（提供 weekly），b 有 5h 窗口 → 5h 平局（缺数据持平）→ 周决胜。
         let a = quota(1, None, Some(80.0), None);
         let b = quota(2, Some(50.0), Some(10.0), None);
-        assert_eq!(cmp_quota_remaining(a.as_ref(), b.as_ref()), Ordering::Greater);
+        assert_eq!(
+            cmp_quota_remaining(a.as_ref(), b.as_ref()),
+            Ordering::Greater
+        );
     }
 
     #[test]
