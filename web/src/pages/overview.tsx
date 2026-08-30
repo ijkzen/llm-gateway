@@ -15,8 +15,10 @@ import { formatTokenCount } from "@/lib/utils";
 import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-react";
 
 function formatPercent(rate: number): string {
-	// 如实展示（保留最多 5 位小数，去尾零），避免 99.789% 被舍入成 100%。
-	return `${Number.parseFloat((rate * 100).toFixed(5))}%`;
+	// 先对原始比率（0~1）截断保留 5 位小数，再转百分比展示：
+	// 如 0.1234567 → 0.12345 → 12.345%；避免 99.789% 被舍入成 100%。
+	const truncated = Math.floor(rate * 100_000 + 1e-6);
+	return `${truncated / 1000}%`;
 }
 
 export default function OverviewPage() {
