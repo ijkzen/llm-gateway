@@ -224,7 +224,7 @@ export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 				<ChartTooltip
 					content={
 						<ChartTooltipContent
-							nameKey="label"
+							labelKey="label"
 							formatter={(value) => (
 								<span className="font-mono font-medium tabular-nums text-foreground">
 									{formatValueText(Number(value), formatValue)}
@@ -274,7 +274,7 @@ export function ModelRankBarChart({ data, formatValue }: ModelChartProps) {
 				<ChartTooltip
 					content={
 						<ChartTooltipContent
-							nameKey="label"
+							labelKey="label"
 							formatter={(value) => (
 								<span className="font-mono font-medium tabular-nums text-foreground">
 									{formatValueText(Number(value), formatValue)}
