@@ -291,14 +291,11 @@ export function ModelRankBarChart({ data, formatValue }: ModelChartProps) {
 				<ChartTooltip
 					content={
 						<ChartTooltipContent
-							nameKey="label"
-							formatter={(value, name) => (
-								<div className="flex items-center gap-2">
-									<span className="text-foreground">{name}</span>
-									<span className="font-mono font-medium tabular-nums text-foreground">
-										{formatValueText(Number(value), formatValue)}
-									</span>
-								</div>
+							hideLabel
+							formatter={(value) => (
+								<span className="font-mono font-medium tabular-nums text-foreground">
+									{formatValueText(Number(value), formatValue)}
+								</span>
 							)}
 						/>
 					}
