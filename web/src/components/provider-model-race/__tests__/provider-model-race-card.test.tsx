@@ -6,6 +6,11 @@ import type {
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// ProviderModelRaceCard 用 useNavigate 跳转模型详情页，测试中 stub。
+vi.mock("react-router-dom", () => ({
+	useNavigate: () => vi.fn(),
+}));
+
 const mocks = vi.hoisted(() => ({
 	data: undefined as ProviderModelRankResponse | undefined,
 	isLoading: false,
@@ -29,6 +34,7 @@ vi.mock("@/hooks/use-in-view", () => ({
 
 function makeItem(overrides: Partial<ProviderModelRankItem> = {}): ProviderModelRankItem {
 	return {
+		providerId: 1,
 		providerName: "火山方舟",
 		modelId: "deepseek-v3",
 		requestCount: 10,

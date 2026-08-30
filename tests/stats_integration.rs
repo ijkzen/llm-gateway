@@ -627,3 +627,64 @@ async fn test_charts_virtual_model_filter() {
     assert_eq!(status, 200);
     assert_eq!(json["data"]["callByModel"].as_array().unwrap().len(), 2);
 }
+
+#[tokio::test]
+async fn test_charts_provider_and_model_filter() {
+    let (app, db) = setup_app().await;
+    // 固定窗口内：供应商 A 两个模型、B 一个模型；带 providerId+modelId 只返回该模型。
+    let t0 = (1_700_000_000_000i64 / HOUR_MS) * HOUR_MS;
+    let end_time = t0 + 500;
+    for (rid, pid, model) in [
+        ("pmf1", DEFAULT_PROVIDER_ID, "gpt-4o"),
+        ("pmf2", DEFAULT_PROVIDER_ID, "deepseek-v3"),
+        ("pmf3", 2, "claude-sonnet"),
+    ] {
+        request_entity::ActiveModel {
+            request_id: Set(rid.to_string()),
+            virtual_model_id: Set(1),
+            provider_id: Set(pid),
+            model_id: Set(model.to_string()),
+            stream: Set(false),
+            ttft: Set(None),
+            input_tokens: Set(Some(10)),
+            input_cache_tokens: Set(0),
+            input_cache_rate: Set(0.0),
+            output_tokens: Set(None),
+            output_tokens_time: Set(None),
+            tps: Set(0.0),
+            start_time: Set(t0 + 1),
+            end_time: Set(end_time),
+            request_time: Set(500),
+            success: Set(true),
+            fail_reason: Set(None),
+            total_tokens: Set(Some(100)),
+            api_key_name: Set("itest-key".to_string()),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+    }
+
+    // providerId + modelId 组合过滤：只返回 gpt-4o。
+    let (status, json) = get_json(
+        app,
+        &format!(
+            "/api/stats/charts?startTime={t0}&endTime={}&providerId={}&modelId=gpt-4o",
+            t0 + 2 * HOUR_MS,
+            DEFAULT_PROVIDER_ID
+        ),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+    let call_by_model = data["callByModel"].as_array().unwrap();
+    assert_eq!(call_by_model.len(), 1);
+    assert_eq!(call_by_model[0]["modelId"], "gpt-4o");
+    let total_calls: i64 = data["callTrend"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .sum();
+    assert_eq!(total_calls, 1);
+}

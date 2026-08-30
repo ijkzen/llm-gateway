@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("react-router-dom", () => ({
 	useParams: () => ({ providerId: "3" }),
 	useSearchParams: () => [new URLSearchParams("period=week&offset=0"), vi.fn()],
+	useNavigate: () => vi.fn(),
 }));
 
 vi.mock("@/hooks/use-dashboard-stats", () => ({

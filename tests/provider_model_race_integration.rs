@@ -240,6 +240,7 @@ async fn test_pm_rank_aggregates_all_six_metrics() {
     // 默认排序：totalTokens 降序 → A/gpt-4o(400) 在前。
     let a = &items[0];
     let b = &items[1];
+    assert_eq!(a["providerId"], 1);
     assert_eq!(a["providerName"], "供应商A");
     assert_eq!(a["modelId"], "gpt-4o");
     assert_eq!(a["requestCount"], 2); // 失败行排除

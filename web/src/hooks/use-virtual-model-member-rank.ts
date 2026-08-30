@@ -11,6 +11,8 @@ export type RaceSortKey =
 	| "cacheHitRate";
 
 export interface VirtualModelMemberRankItem {
+	/** 成员所属供应商 ID。 */
+	providerId: number;
 	/** 成员所属供应商名称（供应商已删除时为空串）。 */
 	providerName: string;
 	/** 成员模型 ID（供应商侧真实 ID）。 */

@@ -14,6 +14,7 @@ import { formatPeriodLabel } from "@/lib/race-period";
 import { formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 function initialWindowState(): RaceWindowState {
 	return {
@@ -63,6 +64,7 @@ function modelLabel(item: Pick<ProviderModelRankItem, "providerName" | "modelId"
  * 卡片进入视口才发请求。
  */
 export function ProviderModelRaceCard() {
+	const navigate = useNavigate();
 	// 挂载时刻固化 now：保证「当前周期」的窗口终点稳定，不因渲染抖动重复请求。
 	const [now] = useState(() => Date.now());
 	const [windowState, setWindowState] = useState<RaceWindowState>(initialWindowState);
@@ -83,6 +85,22 @@ export function ProviderModelRaceCard() {
 			const column = COLUMNS.find((c) => c.key === key);
 			return { sortBy: key, sortOrder: column?.defaultDesc ? "desc" : "asc" };
 		});
+	};
+
+	const openModelOverview = (item: ProviderModelRankItem) => {
+		// 携带当前时间段参数（custom 时带起止，否则带 period/offset）。
+		const params = new URLSearchParams();
+		if (windowState.period === "custom") {
+			params.set("period", "custom");
+			params.set("startTime", String(window.startTime));
+			params.set("endTime", String(window.endTime));
+		} else {
+			params.set("period", windowState.period);
+			params.set("offset", String(windowState.offset));
+		}
+		navigate(
+			`/models/${item.providerId}/${encodeURIComponent(item.modelId)}/overview?${params.toString()}`,
+		);
 	};
 
 	return (
@@ -134,21 +152,28 @@ export function ProviderModelRaceCard() {
 					该时间段暂无数据
 				</div>
 			) : (
-				<RaceTable items={query.data.items} sort={sort} onSort={handleSort} />
+				<RaceTable
+					items={query.data.items}
+					sort={sort}
+					onSort={handleSort}
+					onRowClick={openModelOverview}
+				/>
 			)}
 		</div>
 	);
 }
 
-/** 可排序指标表格。 */
+/** 可排序指标表格；点击行进入模型详情三级页。 */
 function RaceTable({
 	items,
 	sort,
 	onSort,
+	onRowClick,
 }: {
 	items: ProviderModelRankItem[];
 	sort: RaceSort;
 	onSort: (key: RaceSortKey) => void;
+	onRowClick: (item: ProviderModelRankItem) => void;
 }) {
 	return (
 		<div className="overflow-x-auto">
@@ -190,7 +215,15 @@ function RaceTable({
 					{items.map((item, index) => (
 						<tr
 							key={`${item.providerName}::${item.modelId}`}
-							className="border-b border-foreground/5 last:border-0 hover:bg-foreground/5"
+							onClick={() => onRowClick(item)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") {
+									onRowClick(item);
+								}
+							}}
+							tabIndex={0}
+							className="cursor-pointer border-b border-foreground/5 last:border-0 hover:bg-foreground/5"
+							title="点击查看该模型详情"
 						>
 							<td className="px-2 py-2 text-left font-mono text-xs text-muted-foreground">
 								{index + 1}

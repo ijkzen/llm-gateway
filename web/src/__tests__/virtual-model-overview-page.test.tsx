@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("react-router-dom", () => ({
 	useParams: () => ({ virtualModelId: "3" }),
 	useSearchParams: () => [new URLSearchParams("period=week&offset=0"), vi.fn()],
+	useNavigate: () => vi.fn(),
 }));
 
 vi.mock("@/hooks/use-dashboard-stats", () => ({
@@ -113,6 +114,7 @@ describe("VirtualModelOverviewPage（虚拟模型二级数据面板）", () => {
 		mocks.tokenCharts = makeCharts();
 		mocks.memberItems = [
 			{
+				providerId: 1,
 				providerName: "火山方舟",
 				modelId: "deepseek-v3",
 				memberEnable: true,
@@ -124,6 +126,7 @@ describe("VirtualModelOverviewPage（虚拟模型二级数据面板）", () => {
 				cacheHitRate: 0.32,
 			},
 			{
+				providerId: 2,
 				providerName: "DeepSeek 官方",
 				modelId: "deepseek-chat",
 				memberEnable: false,

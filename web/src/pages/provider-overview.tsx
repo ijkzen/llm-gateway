@@ -18,7 +18,7 @@ import { type RacePeriod, formatPeriodLabel } from "@/lib/race-period";
 import { formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 /** 二级页三个图表区块的独立时间段状态。 */
 interface ProviderOverviewWindows {
@@ -78,6 +78,7 @@ function InternalModelRaceTable({
 	windowState: RaceWindowState;
 	now: number;
 }) {
+	const navigate = useNavigate();
 	const [sort, setSort] = useState<RaceSort>({ sortBy: "totalTokens", sortOrder: "desc" });
 	const window = raceWindowBounds(windowState, now);
 	const query = useProviderModelRace(window, sort, true, providerId);
@@ -90,6 +91,21 @@ function InternalModelRaceTable({
 			const column = COLUMNS.find((c) => c.key === key);
 			return { sortBy: key, sortOrder: column?.defaultDesc ? "desc" : "asc" };
 		});
+	};
+
+	const openModelOverview = (item: ProviderModelRankItem) => {
+		const params = new URLSearchParams();
+		if (windowState.period === "custom") {
+			params.set("period", "custom");
+			params.set("startTime", String(window.startTime));
+			params.set("endTime", String(window.endTime));
+		} else {
+			params.set("period", windowState.period);
+			params.set("offset", String(windowState.offset));
+		}
+		navigate(
+			`/models/${providerId}/${encodeURIComponent(item.modelId)}/overview?${params.toString()}`,
+		);
 	};
 
 	return (
@@ -130,7 +146,15 @@ function InternalModelRaceTable({
 					{query.data?.items.map((item: ProviderModelRankItem, index: number) => (
 						<tr
 							key={item.modelId}
-							className="border-b border-foreground/5 last:border-0 hover:bg-foreground/5"
+							onClick={() => openModelOverview(item)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") {
+									openModelOverview(item);
+								}
+							}}
+							tabIndex={0}
+							className="cursor-pointer border-b border-foreground/5 last:border-0 hover:bg-foreground/5"
+							title="点击查看该模型详情"
 						>
 							<td className="px-2 py-2 text-left font-mono text-xs text-muted-foreground">
 								{index + 1}

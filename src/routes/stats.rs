@@ -22,6 +22,7 @@ pub fn routes() -> Router<AppState> {
         .route("/virtual-model-rank", get(virtual_model_rank))
         .route("/provider-model-rank", get(provider_model_rank))
         .route("/virtual-model-member-rank", get(virtual_model_member_rank))
+        .route("/model-metrics", get(model_metrics))
 }
 
 #[derive(Serialize)]
@@ -123,6 +124,8 @@ struct ChartsQuery {
     provider_id: Option<i32>,
     /// 按虚拟模型过滤（可选）。
     virtual_model_id: Option<i32>,
+    /// 按模型 ID 过滤（可选；供应商侧真实模型 ID）。
+    model_id: Option<String>,
 }
 
 /// 图表数据：调用/ token 的趋势 + 按上游模型的分布。
@@ -161,6 +164,10 @@ async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>)
     if let Some(virtual_model_id) = query.virtual_model_id {
         where_sql.push_str(" AND r.virtual_model_id = ?");
         params.push(virtual_model_id.into());
+    }
+    if let Some(model_id) = query.model_id {
+        where_sql.push_str(" AND r.model_id = ?");
+        params.push(model_id.into());
     }
 
     let trend_sql = |value_expr: &str| {
@@ -552,6 +559,8 @@ async fn virtual_model_rank(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderModelRankItem {
+    /// 实际服务的供应商 ID。
+    provider_id: i32,
     /// 实际服务的供应商名称（供应商已删除时为空串）。
     provider_name: String,
     /// 模型 ID（供应商侧真实 ID；provider_model 行已删时退化为 request 里的原始串）。
@@ -603,7 +612,7 @@ async fn provider_model_rank(
     }
 
     let sql = format!(
-        "SELECT COALESCE(p.name, '') AS provider_name, \
+        "SELECT r.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name, \
                 COALESCE(pm.provider_model_id, r.model_id) AS model_id,{RANK_METRIC_SQL} \
          FROM request r \
          LEFT JOIN provider p ON p.id = r.provider_id \
@@ -627,6 +636,7 @@ async fn provider_model_rank(
     let mut items = rows
         .iter()
         .map(|row| ProviderModelRankItem {
+            provider_id: row.try_get::<i32>("", "provider_id").unwrap_or(0),
             provider_name: row.try_get("", "provider_name").unwrap_or_default(),
             model_id: row.try_get("", "model_id").unwrap_or_default(),
             request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
@@ -661,6 +671,8 @@ async fn provider_model_rank(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VirtualModelMemberRankItem {
+    /// 成员所属供应商 ID。
+    provider_id: i32,
     /// 成员所属供应商名称（供应商已删除时为空串）。
     provider_name: String,
     /// 成员模型 ID（供应商侧真实 ID）。
@@ -713,7 +725,7 @@ async fn virtual_model_member_rank(
     // 聚合子查询：该虚拟模型下实际服务的成员（按 provider_id + model_id 分组）。
     // 6 指标表达式与 RANK_METRIC_SQL 同口径，但需带上关联键列。
     let sql = format!(
-        "SELECT COALESCE(p.name, '') AS provider_name, \
+        "SELECT pm.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name, \
                 pm.provider_model_id AS model_id, \
                 vmi.enable AS member_enable, \
                 COALESCE(agg.request_count, 0) AS request_count, \
@@ -768,6 +780,7 @@ async fn virtual_model_member_rank(
     let mut items = rows
         .iter()
         .map(|row| VirtualModelMemberRankItem {
+            provider_id: row.try_get::<i32>("", "provider_id").unwrap_or(0),
             provider_name: row.try_get("", "provider_name").unwrap_or_default(),
             model_id: row.try_get("", "model_id").unwrap_or_default(),
             member_enable: row.try_get::<bool>("", "member_enable").unwrap_or(true),
@@ -813,4 +826,101 @@ async fn virtual_model_member_rank(
         end_time: end,
         items,
     })))
+}
+
+/// 模型详情查询参数：providerId + modelId + 时间窗口。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelMetricsQuery {
+    /// 供应商 ID（必填）。
+    provider_id: Option<i32>,
+    /// 模型 ID（必填；供应商侧真实模型 ID）。
+    model_id: Option<String>,
+    /// 窗口起点（毫秒时间戳，含）。
+    start_time: Option<i64>,
+    /// 窗口终点（毫秒时间戳，不含）。
+    end_time: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelMetricsResponse {
+    /// 供应商 ID。
+    provider_id: i32,
+    /// 供应商名称（供应商已删除时为空串）。
+    provider_name: String,
+    /// 模型 ID（供应商侧真实 ID）。
+    model_id: String,
+    /// 成功请求数。
+    request_count: i64,
+    /// 总计 token（成功请求的 total_tokens 合计）。
+    total_tokens: i64,
+    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
+    ttft: f64,
+    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
+    request_time: f64,
+    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
+    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
+    tps: f64,
+    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
+    cache_hit_rate: f64,
+}
+
+/// 单模型指标：按 (provider_id, model_id) 过滤聚合 6 指标，返回单行。
+/// 供模型详情三级页的指标卡片使用。
+async fn model_metrics(
+    State(state): State<AppState>,
+    Query(query): Query<ModelMetricsQuery>,
+) -> impl IntoResponse {
+    let (Some(provider_id), Some(model_id)) = (query.provider_id, query.model_id) else {
+        return response::bad_request("缺少 providerId / modelId 参数");
+    };
+    let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
+        return response::bad_request("缺少 startTime / endTime 参数");
+    };
+    if end <= start {
+        return response::bad_request("endTime 必须大于 startTime");
+    }
+    let db = &state.db;
+
+    // 单行聚合 6 指标（无 GROUP BY），JOIN provider 出名称。
+    let sql = format!(
+        "SELECT COALESCE(p.name, '') AS provider_name,{RANK_METRIC_SQL} \
+         FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
+         WHERE r.success = 1 AND r.provider_id = ? AND r.model_id = ? \
+           AND r.start_time >= ? AND r.start_time < ?"
+    );
+
+    let row = match db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            [
+                provider_id.into(),
+                model_id.clone().into(),
+                start.into(),
+                end.into(),
+            ],
+        ))
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return response::db_error("模型指标查询无结果".to_string()),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+
+    (
+        StatusCode::OK,
+        Json(Response::success(ModelMetricsResponse {
+            provider_id,
+            provider_name: row.try_get("", "provider_name").unwrap_or_default(),
+            model_id,
+            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
+            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
+            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
+            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
+            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
+            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+        })),
+    )
 }

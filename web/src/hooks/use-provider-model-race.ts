@@ -11,6 +11,8 @@ export type RaceSortKey =
 	| "cacheHitRate";
 
 export interface ProviderModelRankItem {
+	/** 实际服务的供应商 ID。 */
+	providerId: number;
 	/** 实际服务的供应商名称（供应商已删除时为空串）。 */
 	providerName: string;
 	/** 模型 ID（供应商侧真实 ID；provider_model 行已删时退化为原始串）。 */

@@ -197,6 +197,7 @@ async fn test_member_rank_returns_all_configured_members() {
     // 默认 totalTokens 降序：gpt-4o(400) 最前。
     let by_model: Vec<&serde_json::Value> = items.iter().collect();
     let gpt = by_model.iter().find(|i| i["modelId"] == "gpt-4o").unwrap();
+    assert_eq!(gpt["providerId"], 1);
     assert_eq!(gpt["providerName"], "供应商A");
     assert_eq!(gpt["memberEnable"], true);
     assert_eq!(gpt["requestCount"], 2);
