@@ -153,12 +153,10 @@ function ModelLegendItem({
 	label,
 	color,
 	active,
-	percentText,
 }: {
 	label: string;
 	color?: string;
 	active?: boolean;
-	percentText?: string;
 }) {
 	return (
 		<div className="flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground">
@@ -172,9 +170,6 @@ function ModelLegendItem({
 						)}
 					>
 						{middleEllipsis(label, 18)}
-						{active && percentText !== undefined && (
-							<span className="ml-1 tabular-nums text-muted-foreground">{percentText}</span>
-						)}
 					</span>
 				</TooltipTrigger>
 				<TooltipContent side="top">{label}</TooltipContent>
@@ -187,12 +182,9 @@ function ModelLegendItem({
 function ModelLegendContent({
 	payload,
 	activeLabel,
-	percentTextOf,
 }: {
 	payload?: Array<{ value: string; color?: string }>;
 	activeLabel?: string;
-	/** 选中项的百分比文字（未选中项返回 undefined，不展示）。 */
-	percentTextOf?: (label: string) => string | undefined;
 }) {
 	if (!payload?.length) {
 		return null;
@@ -205,14 +197,13 @@ function ModelLegendContent({
 					label={item.value}
 					color={item.color}
 					active={activeLabel === item.value}
-					percentText={percentTextOf?.(item.value)}
 				/>
 			))}
 		</div>
 	);
 }
 
-/** 占比计算（占比 ×100，保留 3 位小数，去尾零），供图例展示。 */
+/** 占比计算（占比 ×100，保留 3 位小数，去尾零），供选中扇区展示。 */
 function percentText(value: number, total: number): string {
 	if (total <= 0) {
 		return "";
@@ -253,6 +244,15 @@ export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 					outerRadius={110}
 					onClick={(entry) => setActiveLabel((prev) => (prev === entry.label ? null : entry.label))}
 					style={{ cursor: "pointer", outline: "none" }}
+					labelLine={false}
+					label={(entry) => {
+						// 扇区上方文字：显示数值；选中块在数值右边追加百分比。
+						const text = formatValueText(Number(entry.value), formatValue);
+						if (entry.name === activeLabel) {
+							return `${text} ${percentText(Number(entry.value), total)}`;
+						}
+						return text;
+					}}
 				>
 					{ranked.map((item, index) => (
 						<Cell
@@ -266,20 +266,7 @@ export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 						/>
 					))}
 				</Pie>
-				<ChartLegend
-					content={
-						<ModelLegendContent
-							activeLabel={activeLabel ?? undefined}
-							percentTextOf={(label) => {
-								if (activeLabel !== label) {
-									return undefined;
-								}
-								const item = ranked.find((r) => r.label === label);
-								return item ? percentText(item.value, total) : undefined;
-							}}
-						/>
-					}
-				/>
+				<ChartLegend content={<ModelLegendContent activeLabel={activeLabel ?? undefined} />} />
 			</PieChart>
 		</ChartContainer>
 	);
