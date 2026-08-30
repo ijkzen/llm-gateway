@@ -47,6 +47,7 @@ struct SeedRow {
     output_tokens_time: Option<i64>,
     tps: f64,
     total_tokens: Option<i64>,
+    request_time: i64,
 }
 
 impl SeedRow {
@@ -65,12 +66,13 @@ impl SeedRow {
             output_tokens_time: None,
             tps: 0.0,
             total_tokens: None,
+            request_time: 500,
         }
     }
 }
 
 async fn insert_request(db: &DatabaseConnection, row: SeedRow) {
-    let end_time = row.start_time + 500;
+    let end_time = row.start_time + row.request_time;
     request_entity::ActiveModel {
         request_id: Set(row.request_id),
         virtual_model_id: Set(1),
@@ -86,7 +88,7 @@ async fn insert_request(db: &DatabaseConnection, row: SeedRow) {
         tps: Set(row.tps),
         start_time: Set(row.start_time),
         end_time: Set(end_time),
-        request_time: Set(500),
+        request_time: Set(row.request_time),
         success: Set(row.success),
         fail_reason: Set(None),
         total_tokens: Set(row.total_tokens),
@@ -123,19 +125,36 @@ async fn get_json(app: axum::Router, uri: &str) -> (u16, serde_json::Value) {
     (status, json)
 }
 
-#[tokio::test]
-async fn test_token_rank_aggregates_and_sorts() {
-    let (app, db) = setup_app().await;
-    // A 两笔成功（150+250）、一笔失败；B 一笔成功；失败行不应计入。
+/// 种入 A/B 两供应商的各指标种子数据，返回 (app, db)：
+/// - A：r1(成功, 流式 ttft=100, 输入100/缓存40, 输出100 tps=50, token=150, rt=1000)
+///       r2(成功, 流式 ttft=300, 输入100/缓存0, 输出300 tps=100, token=250, rt=2000)
+///       r3(失败, token=999 —— 应被 success=1 排除)
+/// - B：r4(成功, 流式 ttft=500, 输入200/缓存100, 输出200 tps=200, token=100, rt=3000)
+///       r5(成功, 非流式 ttft NULL —— 只影响 ttft 分母，其余指标计入)
+async fn seed_rank_data(db: &DatabaseConnection) {
     for row in [
         SeedRow {
             request_id: "r1".into(),
+            stream: true,
+            ttft: Some(100),
+            input_tokens: Some(100),
+            input_cache_tokens: 40,
+            output_tokens: Some(100),
+            tps: 50.0,
             total_tokens: Some(150),
+            request_time: 1000,
             ..SeedRow::new("r1", 1, "gpt-4o", T0)
         },
         SeedRow {
             request_id: "r2".into(),
+            stream: true,
+            ttft: Some(300),
+            input_tokens: Some(100),
+            input_cache_tokens: 0,
+            output_tokens: Some(300),
+            tps: 100.0,
             total_tokens: Some(250),
+            request_time: 2000,
             ..SeedRow::new("r2", 1, "gpt-4o", T0 + 1)
         },
         SeedRow {
@@ -146,45 +165,117 @@ async fn test_token_rank_aggregates_and_sorts() {
         },
         SeedRow {
             request_id: "r4".into(),
+            stream: true,
+            ttft: Some(500),
+            input_tokens: Some(200),
+            input_cache_tokens: 100,
+            output_tokens: Some(200),
+            tps: 200.0,
             total_tokens: Some(100),
+            request_time: 3000,
             ..SeedRow::new("r4", 2, "claude-sonnet", T0)
         },
-        // usage 缺失（total_tokens NULL）的一行：不应计入 SUM（COALESCE 忽略）。
         SeedRow {
             request_id: "r5".into(),
-            total_tokens: None,
+            stream: false,
+            ttft: None,
+            input_tokens: Some(200),
+            input_cache_tokens: 0,
+            output_tokens: None,
+            tps: 0.0,
+            total_tokens: Some(100),
+            request_time: 3000,
             ..SeedRow::new("r5", 2, "claude-sonnet", T0 + 1)
         },
     ] {
-        insert_request(&db, row).await;
+        insert_request(db, row).await;
     }
+}
+
+#[tokio::test]
+async fn test_rank_aggregates_all_six_metrics() {
+    let (app, db) = setup_app().await;
+    seed_rank_data(&db).await;
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-rank?metric=token&startTime={T0}&endTime={}", T0 + 3),
+        &format!("/api/stats/provider-rank?startTime={T0}&endTime={}", T0 + 3),
     )
     .await;
     assert_eq!(status, 200);
     assert_eq!(json["code"], "0");
+    assert_eq!(json["data"]["startTime"], T0);
+    assert_eq!(json["data"]["endTime"], T0 + 3);
 
-    let data = &json["data"];
-    assert_eq!(data["metric"], "token");
-    assert_eq!(data["startTime"], T0);
-    assert_eq!(data["endTime"], T0 + 3);
-
-    let items = data["items"].as_array().unwrap();
+    let items = json["data"]["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);
-    // 降序：A(400) 在前，B(100) 在后。
-    assert_eq!(items[0]["providerName"], "供应商A");
-    assert_eq!(items[0]["value"], 400.0);
-    // request_count 只统计成功请求（失败行被 success=1 过滤）。
-    assert_eq!(items[0]["requestCount"], 2);
-    assert_eq!(items[1]["providerName"], "供应商B");
-    assert_eq!(items[1]["value"], 100.0);
+    // 默认排序：totalTokens 降序 → A(400) 在前。
+    let a = &items[0];
+    let b = &items[1];
+    assert_eq!(a["providerName"], "供应商A");
+    assert_eq!(a["requestCount"], 2); // 失败行排除
+    assert_eq!(a["totalTokens"], 400.0);
+    assert_eq!(a["ttft"], 200.0); // (100+300)/2
+    assert_eq!(a["requestTime"], 1500.0); // (1000+2000)/2
+    assert!((a["tps"].as_f64().unwrap() - 80.0).abs() < 0.001); // (100+300)/(100/50+300/100)
+    assert!((a["cacheHitRate"].as_f64().unwrap() - 0.2).abs() < 0.001); // 40/200
+    assert_eq!(b["providerName"], "供应商B");
+    assert_eq!(b["requestCount"], 2);
+    assert_eq!(b["totalTokens"], 200.0);
+    assert_eq!(b["ttft"], 500.0); // r5 非流式被排除
+    assert_eq!(b["requestTime"], 3000.0);
+    assert!((b["tps"].as_f64().unwrap() - 200.0).abs() < 0.001);
+    assert!((b["cacheHitRate"].as_f64().unwrap() - 0.25).abs() < 0.001); // 100/400
 }
 
 #[tokio::test]
-async fn test_token_rank_respects_half_open_window() {
+async fn test_rank_sort_by_and_order() {
+    let (app, db) = setup_app().await;
+    seed_rank_data(&db).await;
+
+    // ttft 升序（默认方向）→ A(200) 在前。
+    let (status, json) = get_json(
+        app.clone(),
+        &format!("/api/stats/provider-rank?sortBy=ttft&startTime={T0}&endTime={}", T0 + 3),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let items = json["data"]["items"].as_array().unwrap();
+    assert_eq!(items[0]["providerName"], "供应商A");
+    assert_eq!(items[0]["ttft"], 200.0);
+
+    // ttft 降序 → B(500) 在前。
+    let (status, json) = get_json(
+        app.clone(),
+        &format!("/api/stats/provider-rank?sortBy=ttft&sortOrder=desc&startTime={T0}&endTime={}", T0 + 3),
+    )
+    .await;
+    let items = json["data"]["items"].as_array().unwrap();
+    assert_eq!(items[0]["providerName"], "供应商B");
+
+    // cacheHitRate 降序 → B(0.25) 在前。
+    let (status, json) = get_json(
+        app.clone(),
+        &format!("/api/stats/provider-rank?sortBy=cacheHitRate&startTime={T0}&endTime={}", T0 + 3),
+    )
+    .await;
+    let items = json["data"]["items"].as_array().unwrap();
+    assert_eq!(items[0]["providerName"], "供应商B");
+    assert_eq!(items[0]["cacheHitRate"], 0.25);
+
+    // requestCount 升序 → 都是 2，保持稳定（A 在前，default 排序稳定）。
+    let (status, json) = get_json(
+        app,
+        &format!("/api/stats/provider-rank?sortBy=requestCount&sortOrder=asc&startTime={T0}&endTime={}", T0 + 3),
+    )
+    .await;
+    let items = json["data"]["items"].as_array().unwrap();
+    assert_eq!(items[0]["providerName"], "供应商A");
+    assert_eq!(items[1]["providerName"], "供应商B");
+}
+
+#[tokio::test]
+async fn test_rank_respects_half_open_window() {
     let (app, db) = setup_app().await;
     insert_request(
         &db,
@@ -219,20 +310,20 @@ async fn test_token_rank_respects_half_open_window() {
     // 窗口 [T0, T0+1000)：r1（T0-1）与 r2（T0+1000）都应被排除。
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-rank?metric=token&startTime={T0}&endTime={}", T0 + 1_000),
+        &format!("/api/stats/provider-rank?startTime={T0}&endTime={}", T0 + 1_000),
     )
     .await;
     assert_eq!(status, 200);
     let items = json["data"]["items"].as_array().unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["providerName"], "供应商B");
-    assert_eq!(items[0]["value"], 50.0);
+    assert_eq!(items[0]["totalTokens"], 50.0);
 }
 
 #[tokio::test]
-async fn test_token_rank_limits_to_ten() {
+async fn test_rank_all_providers_returned_no_limit() {
     let (app, db) = setup_app().await;
-    // 11 个供应商各一笔请求，token 递增保证排序稳定。
+    // 11 个供应商各一笔请求，验证不再截断到 Top 10。
     for i in 1..=11 {
         seed_provider(&db, 100 + i, &format!("供应商{i}")).await;
         insert_request(
@@ -249,135 +340,18 @@ async fn test_token_rank_limits_to_ten() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-rank?metric=token&startTime={T0}&endTime={}", T0 + 1),
+        &format!("/api/stats/provider-rank?startTime={T0}&endTime={}", T0 + 1),
     )
     .await;
     assert_eq!(status, 200);
     let items = json["data"]["items"].as_array().unwrap();
-    assert_eq!(items.len(), 10);
-    // 第一名是 token 最高的 供应商11。
+    assert_eq!(items.len(), 11);
+    // 默认 totalTokens 降序：第一名是 token 最高的 供应商11。
     assert_eq!(items[0]["providerName"], "供应商11");
 }
 
 #[tokio::test]
-async fn test_ttft_rank_only_streaming_with_ttft() {
-    let (app, db) = setup_app().await;
-    // A：两条流式（100ms、300ms）→ 均值 200。
-    // B：一条流式（500ms）、一条非流式（ttft NULL 应排除）。
-    // C：一条流式 ttft NULL（应排除）。
-    for row in [
-        SeedRow {
-            request_id: "r1".into(),
-            stream: true,
-            ttft: Some(100),
-            ..SeedRow::new("r1", 1, "gpt-4o", T0)
-        },
-        SeedRow {
-            request_id: "r2".into(),
-            stream: true,
-            ttft: Some(300),
-            ..SeedRow::new("r2", 1, "gpt-4o", T0 + 1)
-        },
-        SeedRow {
-            request_id: "r3".into(),
-            stream: true,
-            ttft: Some(500),
-            ..SeedRow::new("r3", 2, "claude-sonnet", T0)
-        },
-        SeedRow {
-            request_id: "r4".into(),
-            stream: false,
-            ttft: None,
-            ..SeedRow::new("r4", 2, "claude-sonnet", T0 + 1)
-        },
-        SeedRow {
-            request_id: "r5".into(),
-            stream: true,
-            ttft: None,
-            ..SeedRow::new("r5", 3, "gemini-pro", T0)
-        },
-    ] {
-        insert_request(&db, row).await;
-    }
-
-    let (status, json) = get_json(
-        app,
-        &format!("/api/stats/provider-rank?metric=ttft&startTime={T0}&endTime={}", T0 + 2),
-    )
-    .await;
-    assert_eq!(status, 200);
-
-    let items = json["data"]["items"].as_array().unwrap();
-    assert_eq!(items.len(), 2);
-    // 升序：A(200) 在前，B(500) 在后；C 因全部被排除而不出现。
-    assert_eq!(items[0]["providerName"], "供应商A");
-    assert_eq!(items[0]["value"], 200.0);
-    assert_eq!(items[1]["providerName"], "供应商B");
-    assert_eq!(items[1]["value"], 500.0);
-}
-
-#[tokio::test]
-async fn test_tps_rank_weighted_average() {
-    let (app, db) = setup_app().await;
-    // A：两笔（output=100, tps=50 → 耗时 2s；output=300, tps=100 → 耗时 3s）
-    //    Σ输出=400，Σ耗时=5 → tps=80。
-    // B：一笔（output=200, tps=200 → 耗时 1s）→ tps=200，应排第一。
-    // C：一笔 output_tokens NULL、一笔 tps=0（应被排除出分母分子，值记 0）。
-    for row in [
-        SeedRow {
-            request_id: "r1".into(),
-            output_tokens: Some(100),
-            tps: 50.0,
-            ..SeedRow::new("r1", 1, "gpt-4o", T0)
-        },
-        SeedRow {
-            request_id: "r2".into(),
-            output_tokens: Some(300),
-            tps: 100.0,
-            ..SeedRow::new("r2", 1, "gpt-4o", T0 + 1)
-        },
-        SeedRow {
-            request_id: "r3".into(),
-            output_tokens: Some(200),
-            tps: 200.0,
-            ..SeedRow::new("r3", 2, "claude-sonnet", T0)
-        },
-        SeedRow {
-            request_id: "r4".into(),
-            output_tokens: None,
-            tps: 10.0,
-            ..SeedRow::new("r4", 3, "gemini-pro", T0)
-        },
-        SeedRow {
-            request_id: "r5".into(),
-            output_tokens: Some(100),
-            tps: 0.0,
-            ..SeedRow::new("r5", 3, "gemini-pro", T0 + 1)
-        },
-    ] {
-        insert_request(&db, row).await;
-    }
-
-    let (status, json) = get_json(
-        app,
-        &format!("/api/stats/provider-rank?metric=tps&startTime={T0}&endTime={}", T0 + 2),
-    )
-    .await;
-    assert_eq!(status, 200);
-
-    let items = json["data"]["items"].as_array().unwrap();
-    assert_eq!(items.len(), 3);
-    assert_eq!(items[0]["providerName"], "供应商B");
-    assert_eq!(items[0]["value"], 200.0);
-    assert_eq!(items[1]["providerName"], "供应商A");
-    assert_eq!(items[1]["value"], 80.0);
-    // C 无可用的耗时/输出，值记 0，排最后。
-    assert_eq!(items[2]["providerName"], "供应商C");
-    assert_eq!(items[2]["value"], 0.0);
-}
-
-#[tokio::test]
-async fn test_provider_deleted_shows_empty_name() {
+async fn test_rank_provider_deleted_shows_empty_name() {
     let (app, db) = setup_app().await;
     insert_request(
         &db,
@@ -391,7 +365,7 @@ async fn test_provider_deleted_shows_empty_name() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-rank?metric=token&startTime={T0}&endTime={}", T0 + 1),
+        &format!("/api/stats/provider-rank?startTime={T0}&endTime={}", T0 + 1),
     )
     .await;
     assert_eq!(status, 200);
@@ -401,11 +375,11 @@ async fn test_provider_deleted_shows_empty_name() {
 }
 
 #[tokio::test]
-async fn test_invalid_metric_rejected() {
+async fn test_rank_invalid_sort_by_rejected() {
     let (app, _db) = setup_app().await;
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-rank?metric=foo&startTime={T0}&endTime={}", T0 + 1),
+        &format!("/api/stats/provider-rank?sortBy=foo&startTime={T0}&endTime={}", T0 + 1),
     )
     .await;
     assert_eq!(status, 400);
@@ -413,32 +387,29 @@ async fn test_invalid_metric_rejected() {
 }
 
 #[tokio::test]
-async fn test_missing_params_rejected() {
+async fn test_rank_missing_params_rejected() {
     let (app, _db) = setup_app().await;
-    // 缺 metric。
-    let (status, _json) = get_json(app.clone(), "/api/stats/provider-rank?startTime=1&endTime=2").await;
-    assert_eq!(status, 400);
     // 缺 startTime / endTime。
-    let (status, _json) = get_json(app.clone(), "/api/stats/provider-rank?metric=token").await;
+    let (status, _json) = get_json(app.clone(), "/api/stats/provider-rank?sortBy=ttft").await;
     assert_eq!(status, 400);
     // endTime <= startTime。
     let (status, _json) = get_json(
         app,
-        "/api/stats/provider-rank?metric=token&startTime=200&endTime=200",
+        "/api/stats/provider-rank?sortBy=ttft&startTime=200&endTime=200",
     )
     .await;
     assert_eq!(status, 400);
 }
 
 #[tokio::test]
-async fn test_requires_auth() {
+async fn test_rank_requires_auth() {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
     scheduler.start().await.unwrap();
     // 未注入会话/Bearer 的应用，/api/* 应 401。
     let app = common::build_app(db, scheduler, log_tx);
     let (status, _json) = get_json(
         app,
-        &format!("/api/stats/provider-rank?metric=token&startTime={T0}&endTime={}", T0 + 1),
+        &format!("/api/stats/provider-rank?startTime={T0}&endTime={}", T0 + 1),
     )
     .await;
     assert_eq!(status, 401);

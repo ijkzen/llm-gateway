@@ -42,7 +42,7 @@ vi.mock("@/hooks/use-in-view", () => ({
 
 vi.mock("@/hooks/use-provider-race", () => ({
 	useProviderRace: () => ({
-		data: { metric: "token", startTime: 0, endTime: 0, items: [] },
+		data: { startTime: 0, endTime: 0, items: [] },
 		isLoading: false,
 		isError: false,
 		refetch: vi.fn(),

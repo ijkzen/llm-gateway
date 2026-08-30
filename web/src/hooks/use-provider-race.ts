@@ -1,18 +1,33 @@
 import { type ApiResponse, api, unwrap } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 
-/** 赛马指标。 */
-export type RaceMetric = "token" | "tps" | "ttft";
+/** 赛马排序指标。 */
+export type RaceSortKey =
+	| "totalTokens"
+	| "requestCount"
+	| "ttft"
+	| "requestTime"
+	| "tps"
+	| "cacheHitRate";
 
 export interface ProviderRankItem {
 	/** 实际服务的供应商名称（供应商已删除时为空串）。 */
 	providerName: string;
+	/** 成功请求数。 */
 	requestCount: number;
-	value: number;
+	/** 总计 token（成功请求的 total_tokens 合计）。 */
+	totalTokens: number;
+	/** 流式请求首 token 耗时均值（毫秒）。 */
+	ttft: number;
+	/** 平均请求耗时（毫秒）。 */
+	requestTime: number;
+	/** TPS（加权均值）。 */
+	tps: number;
+	/** 缓存命中率（加权，0~1）。 */
+	cacheHitRate: number;
 }
 
 export interface ProviderRankResponse {
-	metric: RaceMetric;
 	startTime: number;
 	endTime: number;
 	items: ProviderRankItem[];
@@ -25,23 +40,36 @@ export interface RaceWindow {
 	endTime: number;
 }
 
+export interface RaceSort {
+	sortBy: RaceSortKey;
+	sortOrder: "asc" | "desc";
+}
+
 export const providerRaceKeys = {
-	rank: (metric: RaceMetric, window: RaceWindow) =>
-		["stats", "provider-rank", metric, window.startTime, window.endTime] as const,
+	rank: (window: RaceWindow, sort: RaceSort) =>
+		[
+			"stats",
+			"provider-rank",
+			window.startTime,
+			window.endTime,
+			sort.sortBy,
+			sort.sortOrder,
+		] as const,
 };
 
 /**
- * 供应商赛马排行查询。
- * @param metric 指标
+ * 供应商赛马排行查询（全部供应商 + 后端排序）。
  * @param window 时间窗口
+ * @param sort 排序指标与方向
  * @param enabled 是否启用（配合懒加载 useInView 使用，未进入视口不发请求）
  */
-export function useProviderRace(metric: RaceMetric, window: RaceWindow, enabled: boolean) {
+export function useProviderRace(window: RaceWindow, sort: RaceSort, enabled: boolean) {
 	return useQuery<ProviderRankResponse>({
-		queryKey: providerRaceKeys.rank(metric, window),
+		queryKey: providerRaceKeys.rank(window, sort),
 		queryFn: async () => {
 			const params = new URLSearchParams({
-				metric,
+				sortBy: sort.sortBy,
+				sortOrder: sort.sortOrder,
 				startTime: String(window.startTime),
 				endTime: String(window.endTime),
 			});
