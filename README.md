@@ -19,6 +19,16 @@ OpenAI 兼容的 `/v1` 入口，客户端只需一把 `lg-` API Key 即可访问
 - **定时任务引擎**：内置 cron 调度器（支持标准 Cron 与 `@every` 间隔），执行日志实时 SSE 推送。
 - **单用户管理后台**：登录认证（argon2id）、Cookie Session、内嵌 React SPA。
 
+## 界面预览
+
+| 数据面板 | 供应商管理 |
+| --- | --- |
+| ![数据面板](docs/screenshots/dashboard.png) | ![供应商](docs/screenshots/providers.png) |
+
+| 虚拟模型 | API Key | 请求日志 |
+| --- | --- | --- |
+| ![虚拟模型](docs/screenshots/virtual-models.png) | ![API Key](docs/screenshots/api-keys.png) | ![请求日志](docs/screenshots/request-logs.png) |
+
 ## 架构
 
 ```
