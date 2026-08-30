@@ -52,6 +52,7 @@ pub fn build_app(
         log_tx,
         lb_state: llm_gateway::proxy::LbState::default(),
         usage_cache: llm_gateway::usage::UsageCache::default(),
+        upstream_pool: llm_gateway::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
     };
     routes::create_app(&state)
 }

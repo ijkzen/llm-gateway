@@ -4,6 +4,7 @@ use tokio::sync::broadcast;
 use crate::cron::log_capture::JobLogEvent;
 use crate::cron::scheduler::SchedulerRuntime;
 use crate::proxy::LbState;
+use crate::proxy::pool::UpstreamPool;
 use crate::usage::UsageCache;
 
 #[derive(Clone)]
@@ -16,4 +17,6 @@ pub struct AppState {
     pub lb_state: LbState,
     /// 供应商用量查询结果缓存（60s TTL，仅缓存成功结果）。
     pub usage_cache: UsageCache,
+    /// /v1 上游连接池（按 host 隔离，空闲 10 分钟释放）。
+    pub upstream_pool: UpstreamPool,
 }

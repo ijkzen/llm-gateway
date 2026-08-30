@@ -191,6 +191,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         log_tx,
         lb_state: crate::proxy::LbState::default(),
         usage_cache: crate::usage::UsageCache::default(),
+        upstream_pool: crate::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
     };
 
     Ok(AppContext {

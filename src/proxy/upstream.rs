@@ -1,7 +1,11 @@
 //! 上游 HTTP 客户端。
 //!
-//! 每次请求独立建连（不做连接池复用），精确测量 TCP 建连与 TLS 握手耗时，
-//! 用于 request 表的 `network_latency` 指标。仅支持 HTTP/1.1 上游。
+//! 连接按 `scheme://host:port` 池化复用：首次请求独立建连（精确测量 TCP 建连
+//! 与 TLS 握手耗时，作为 request 表的 `network_latency`），响应体读完连接归还
+//! 池，后续请求直接复用；连接空闲超过 10 分钟被释放。仅支持 HTTP/1.1 上游。
+//!
+//! 指标语义：复用连接的 `network_latency` 记 0（本次请求未发生建连），TTFT
+//! 起点取请求发出时刻；新建连接保持原语义（建连完成时刻）。
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -16,6 +20,9 @@ use hyper::{Method, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
+
+use crate::proxy::metrics::now_ms;
+use crate::proxy::pool::{PooledBody, UpstreamPool};
 
 /// 建连各阶段耗时（毫秒）。
 #[derive(Debug, Clone, Copy, Default)]
@@ -223,59 +230,100 @@ pub struct UpstreamCall {
 /// 上游响应。
 pub struct UpstreamReply {
     pub status: StatusCode,
-    pub body: Incoming,
+    pub body: PooledBody,
+    /// 本次请求发生的建连耗时（毫秒）。复用连接为 0；新建连接为 TCP+TLS 实测。
     pub connect_ms: u64,
-    /// 成功建连（TCP+TLS 完成）的时刻（wall-clock 毫秒时间戳），
-    /// 作为 TTFT 与上游处理耗时的计时起点。
+    /// TTFT 计时起点（wall-clock 毫秒时间戳）。新建连接为建连完成时刻，
+    /// 复用连接为请求发出时刻。
     pub connect_done_at_ms: i64,
 }
 
-/// 发起上游调用：独立建连（计时）→ HTTP/1.1 请求 → 等待响应头。
-/// 响应体由调用方读取（`read_body` 或逐帧流式）。
-pub async fn call(call: UpstreamCall) -> Result<UpstreamReply, UpstreamError> {
+/// 发起上游调用：优先复用池内连接，未命中才独立建连（计时）→ HTTP/1.1 请求 →
+/// 等待响应头。响应体由调用方读取（`read_body` 或逐帧流式），读完自动归还连接。
+/// 复用连接若已陈旧（对端关闭），发送失败后丢弃并新建连接重试一次。
+pub async fn call(call: UpstreamCall, pool: &UpstreamPool) -> Result<UpstreamReply, UpstreamError> {
     let (scheme, host, port, path_query) = parse_url(&call.url)?;
-    let (stream, timing) = connect_stream(&scheme, &host, port).await?;
-    let connect_done_at_ms = crate::proxy::metrics::now_ms();
+    let key = format!("{}://{}:{}", scheme, host, port);
 
-    let (mut sender, conn) = http1::handshake(TokioIo::new(stream))
-        .await
-        .map_err(|e| UpstreamError::Request(format!("HTTP 握手失败：{e}")))?;
-    tokio::spawn(async move {
-        if let Err(e) = conn.await {
-            tracing::debug!("upstream connection closed: {e}");
+    let mut timing = ConnectTiming::default();
+    let mut sender = pool.checkout(&key);
+    if sender.is_none() {
+        let (stream, measured) = connect_stream(&scheme, &host, port).await?;
+        timing = measured;
+        let (send, conn) = http1::handshake(TokioIo::new(stream))
+            .await
+            .map_err(|e| UpstreamError::Request(format!("HTTP 握手失败：{e}")))?;
+        tokio::spawn(async move {
+            if let Err(e) = conn.await {
+                tracing::debug!("upstream connection closed: {e}");
+            }
+        });
+        sender = Some(send);
+    }
+
+    // TTFT 起点：此刻拿到连接（新建=建连完成时刻，复用=请求发出时刻）。
+    let connect_done_at_ms = now_ms();
+    let mut attempt = 0;
+    loop {
+        let mut send = sender.take().expect("sender present");
+        let reply =
+            send_upstream_request(&mut send, &path_query, &call, &authority(&scheme, &host, port))
+                .await;
+        match reply {
+            Ok((status, body)) => {
+                let body = PooledBody::new(body, key.clone(), send, pool.clone());
+                return Ok(UpstreamReply { status, body, connect_ms: timing.total_ms(), connect_done_at_ms });
+            }
+            Err(UpstreamError::Request(_)) if attempt == 0 && timing.total_ms() == 0 => {
+                // 复用连接可能已被对端静默关闭：丢弃并新建连接重试一次。
+                attempt += 1;
+                let (stream, measured) = connect_stream(&scheme, &host, port).await?;
+                timing = measured;
+                let (send, conn) = http1::handshake(TokioIo::new(stream))
+                    .await
+                    .map_err(|e| UpstreamError::Request(format!("HTTP 握手失败：{e}")))?;
+                tokio::spawn(async move {
+                    if let Err(e) = conn.await {
+                        tracing::debug!("upstream connection closed: {e}");
+                    }
+                });
+                sender = Some(send);
+            }
+            Err(e) => return Err(e),
         }
-    });
+    }
+}
 
+async fn send_upstream_request(
+    sender: &mut http1::SendRequest<Full<Bytes>>,
+    path_query: &str,
+    call: &UpstreamCall,
+    authority: &str,
+) -> Result<(StatusCode, Incoming), UpstreamError> {
     let mut builder = Builder::new()
         .method(Method::POST)
         .uri(path_query)
-        .header(HOST, authority(&scheme, &host, port))
+        .header(HOST, authority)
         .header(CONTENT_TYPE, "application/json")
         .header("accept", "application/json, text/event-stream")
         .header(CONTENT_LENGTH, call.body.len());
-    for (name, value) in call.headers {
+    for (name, value) in &call.headers {
         builder = builder.header(name, value);
     }
     let request = builder
-        .body(Full::new(call.body))
+        .body(Full::new(call.body.clone()))
         .map_err(|e| UpstreamError::Request(format!("构造上游请求失败：{e}")))?;
 
     let reply = tokio::time::timeout(HEADER_TIMEOUT, sender.send_request(request))
         .await
         .map_err(|_| UpstreamError::Timeout)?
         .map_err(|e| UpstreamError::Request(format!("发送上游请求失败：{e}")))?;
-
     let (parts, body) = reply.into_parts();
-    Ok(UpstreamReply {
-        status: parts.status,
-        body,
-        connect_ms: timing.total_ms(),
-        connect_done_at_ms,
-    })
+    Ok((parts.status, body))
 }
 
-/// 读取整个响应体（非流式路径）。
-pub async fn read_body(body: Incoming) -> Result<Bytes, UpstreamError> {
+/// 读取整个响应体（非流式路径）。读完连接自动归还池。
+pub async fn read_body(body: PooledBody) -> Result<Bytes, UpstreamError> {
     let collected = tokio::time::timeout(NON_STREAM_BODY_TIMEOUT, body.collect())
         .await
         .map_err(|_| UpstreamError::Timeout)?

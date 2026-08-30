@@ -4,14 +4,15 @@ use serde::{Deserialize, Serialize};
 /// Request: 每次 /v1 转发请求的指标记录（成功与失败均落一行）。
 ///
 /// 字段口径：
-/// - `ttft`：流式首 token 耗时（毫秒），从「上游建连完成」到「收到首个内容
-///   块」（含上游排队/处理等待），非流式为 NULL。
+/// - `ttft`：流式首 token 耗时（毫秒），从「上游建连完成（复用连接为请求发出）
+///   时刻」到「收到首个内容块」（含上游排队/处理等待），非流式为 NULL。
 /// - `input_tokens`：归一后的输入 token（含缓存命中部分）；上游未返回 usage 时为 NULL。
 /// - `input_cache_tokens`：缓存命中 token（Anthropic 的 cache_read + cache_creation）。
 /// - `output_tokens`：输出 token 总数（含推理/思考 token）；usage 缺失时为 NULL。
 /// - `output_tokens_time`：输出阶段耗时（毫秒）；流式为末 token − 首 token，
 ///   非流式为响应体接收完成 − 响应头到达。
-/// - `network_latency`：TCP 建连 + TLS 握手耗时（毫秒），每请求独立建连实测。
+/// - `network_latency`：本次请求发生的建连耗时（毫秒）：新建连接为 TCP 建连 +
+///   TLS 握手实测；复用池内连接为 0（本次未建连）。
 /// - `tps`：output_tokens / output_tokens_time（秒），分母无效时为 0。
 ///
 /// 注意：`output_tokens_time` 是「token 到达窗口」，上游对短回复常缓冲后

@@ -6,6 +6,7 @@
 
 pub mod convert;
 pub mod metrics;
+pub mod pool;
 pub mod sse;
 pub mod upstream;
 pub mod usage_rank;
@@ -33,6 +34,7 @@ use crate::proxy::convert::{
     truncate_chars, usage_chunk_json,
 };
 use crate::proxy::metrics::{RequestRecord, StreamMetrics, Usage, now_ms};
+use crate::proxy::pool::PooledBody;
 use crate::proxy::upstream::{UpstreamCall, UpstreamReply};
 use crate::state::AppState;
 use crate::usage::persist::{fetch_and_store, read_usage_cache};
@@ -676,7 +678,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             }
         };
 
-        let reply = match upstream::call(call).await {
+        let reply = match upstream::call(call, &state.upstream_pool).await {
             Ok(reply) => reply,
             Err(e) => {
                 let message = e.fail_reason();
@@ -1089,7 +1091,7 @@ struct CollectedEvents {
 }
 
 async fn collect_stream_events(
-    body: &mut hyper::body::Incoming,
+    body: &mut PooledBody,
     converter: &mut Converter,
     stream_metrics: &mut StreamMetrics,
 ) -> CollectedEvents {

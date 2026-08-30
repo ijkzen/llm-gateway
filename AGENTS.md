@@ -14,7 +14,7 @@
   - 登录认证（单用户）：首次启动走初始化流程创建管理员（argon2 哈希），Cookie Session（7 天）保护 `/api/*`；设置页可修改密码（吊销其他会话）。
   - 供应商 API Key 管理：服务端生成 `lg-` 密钥，AES-256-GCM 加密存储（含 SHA-256 `key_hash` 供鉴权查找）。
   - `/v1` OpenAI 兼容转发：对外仅提供 `POST /v1/chat/completions`（Bearer API Key 鉴权），按虚拟模型 LB 策略选成员转发到 OpenAI Compatible / OpenAI Responses / Anthropic / Gemini 四种上游协议（转换逻辑参考 nyro 与 LiteLLM），支持流式与非流式、failover 重试（408/429/500/502/503/529）。
-  - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率、TCP+TLS 建连耗时 `network_latency` 等 20 个字段），供后续指标展示。
+  - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率、建连耗时 `network_latency` 等 20 个字段），供后续指标展示。
   - 数据面板：`/api/stats/summary`（全量历史累计：请求数/成功率/总 token/加权缓存命中率）+ `/api/stats/charts`（过去 24 小时：按小时分桶趋势 + 按上游 `model_id` 分布）；前端 overview 页（侧边栏「数据面板」）用 Recharts + shadcn chart 展示 4 指标卡与两组三态图表（折线/饼图/降序条形图，Top 10 + 其他）。
   - 供应商用量查询：`GET /api/providers/{id}/usage?refresh=1`（`src/usage/`）。对 `extra.usage=true` 的供应商按 base_url host（火山/阶跃再看 path 区分订阅 Plan 与按量账户）分发到各厂商 fetcher（API key 直查 / Copilot OAuth / 火山与阿里 AK/SK 签名 / CookieCloud cookie 系），归一化为订阅制窗口（5h/周/月，厂商不提供的窗口 `available=false`）或按量余额条目；成功结果写**数据库缓存**（`provider_usage_cache` 表，10 分钟内直出，过期/缺失才真实抓取并重新落库；更新/删除供应商时失效；`?refresh=1` 强制重取），详情页内嵌「用量信息」卡片（进度条按剩余百分比着色）。
   - 用量自动刷新与额度门控：内置定时任务 `usage_refresh`（`@every 5m`，`src/cron/seed.rs` 种子行）刷新全部用量供应商（**不含 enable 过滤**，停用的也持续监测）并落库；订阅制供应商额度耗尽（任一厂商已提供的窗口剩余为 0）时自动停用该 Provider 及名下全部虚拟模型子模型，恢复后自动启用（`src/usage/persist.rs::apply_usage_gate`）。
@@ -32,7 +32,7 @@
 - **日志捕获与实时推送**: 自定义 `JobLogLayer`（tracing-subscriber Layer）捕获任务 span 内日志，经 std 通道桥接到 `tokio::sync::broadcast`（容量 8192）；SSE 用 axum 自带 `response::sse`（0.8 默认可用，无需 feature）+ `tokio-stream` 的 `BroadcastStream`。
 - **日志**: `tracing` + `tracing-subscriber`（JSON 格式输出到 stdout 与按日滚动的日志文件）。
 - **认证**: `argon2`（密码哈希）；会话存 `session` 表（只存令牌 SHA-256），HttpOnly Cookie；`src/auth/` 提供 `/api/*` 会话中间件与 `/v1/*` Bearer 中间件。
-- **转发上游客户端**: 自研 `src/proxy/upstream.rs`（hyper 1 + tokio-rustls + webpki-roots，仅 HTTP/1.1）：每请求独立建连（不池化），精确计时 TCP 建连 + TLS 握手作为 `network_latency`；协议转换在 `src/proxy/convert/`。
+- **转发上游客户端**: 自研 `src/proxy/upstream.rs` + `src/proxy/pool.rs`（hyper 1 + tokio-rustls + webpki-roots，仅 HTTP/1.1）：连接按 `scheme://host:port` 池化复用（响应体读完归还，空闲超 10 分钟由后台任务释放，复用连接 `network_latency` 记 0）；新建连接才精确计时 TCP 建连 + TLS 握手作为 `network_latency`；协议转换在 `src/proxy/convert/`。
 - **静态资源**: `rust-embed` 将 `web/dist` 打包进二进制。
 - **配置**: 仅通过环境变量读取，无额外配置框架。
 
@@ -72,7 +72,8 @@
 │   ├── auth/mod.rs         # 登录认证：argon2 密码哈希、session 表、/api 与 /v1 拦截中间件
 │   ├── proxy/              # /v1 转发核心模块
 │   │   ├── mod.rs          # 转发管线：虚拟模型路由、LB 选路、failover、request 表落库
-│   │   ├── upstream.rs     # 上游 HTTP 客户端（hyper + tokio-rustls，每请求独立建连并计时 TCP/TLS）
+│   │   ├── upstream.rs     # 上游 HTTP 客户端（hyper + tokio-rustls，连接池化复用，新建连接计时 TCP/TLS）
+│   │   ├── pool.rs         # 上游连接池（按 host 隔离，响应体读完归还，空闲 10 分钟释放）
 │   │   ├── convert/        # 协议转换：openai(直通)/responses/anthropic/gemini（请求+响应+流式+usage 归一）
 │   │   ├── metrics.rs      # request 表记录与流式指标（ttft/输出耗时）
 │   │   ├── sse.rs          # SSE 拆分/写出工具
@@ -119,6 +120,7 @@
 │   ├── cron_jobs_integration.rs
 │   ├── cron_job_logs_integration.rs
 │   ├── provider_quota_gate_integration.rs # 订阅额度耗尽自动停用/恢复 + usage_refresh 种子任务被调度
+│   ├── upstream_pool_integration.rs # 上游连接池：复用 / 空闲释放 / Connection: close 不归还
 │   └── settings_integration.rs
 ├── web/                    # 前端源码
 │   ├── package.json
@@ -218,7 +220,7 @@ Dockerfile 为多阶段构建：
 
 ## 测试说明
 
-- **Rust 测试**: `cargo test`。当前共 210 个单元测试（`auth`、`config`、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`、`logs_cleanup`、`proxy::convert`（四协议转换）、`proxy::sse`、`proxy::upstream`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词）等模块）+ 集成测试（`tests/auth_integration.rs`、`tests/proxy_integration.rs`（本地 mock 上游）、`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`、`tests/providers_integration.rs`、`tests/provider_models_integration.rs`、`tests/api_keys_integration.rs`、`tests/virtual_models_integration.rs`、`tests/virtual_models_openai_integration.rs`、`tests/stats_integration.rs`、`tests/provider_usage_integration.rs`（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>）、`tests/provider_quota_gate_integration.rs`（额度耗尽停用/恢复 + 种子任务被调度）、`tests/provider_usage_integration.rs` 经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向到本地 mock）。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
+- **Rust 测试**: `cargo test`。当前共 210 个单元测试（`auth`、`config`、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`、`logs_cleanup`、`proxy::convert`（四协议转换）、`proxy::sse`、`proxy::upstream`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词）等模块）+ 集成测试（`tests/auth_integration.rs`、`tests/proxy_integration.rs`（本地 mock 上游）、`tests/cron_jobs_integration.rs`、`tests/cron_job_logs_integration.rs`、`tests/settings_integration.rs`、`tests/providers_integration.rs`、`tests/provider_models_integration.rs`、`tests/api_keys_integration.rs`、`tests/virtual_models_integration.rs`、`tests/virtual_models_openai_integration.rs`、`tests/stats_integration.rs`、`tests/provider_usage_integration.rs`（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>）、`tests/provider_quota_gate_integration.rs`（额度耗尽停用/恢复 + 种子任务被调度）、`tests/upstream_pool_integration.rs`（连接池：同一上游复用连接 / 空闲超时释放 / `Connection: close` 不归还，mock server 手动计数连接数）、`tests/provider_usage_integration.rs` 经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向到本地 mock）。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
 - 环境变量隔离使用 `temp-env`，临时目录使用 `tempfile`。
 - 调度器测试包含关键行为回归：禁用的任务不会触发（`set_stop` 在 tokio-cron-scheduler 内存存储下无效，禁用必须走移除）、启用后恢复触发、禁用任务仍可手动执行。
 - **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 27 个测试文件 109 个用例，位于 `web/src/__tests__/` 与 `web/src/components/__tests__/`（含 login 页、RequireAuth 守卫、ChangePasswordDialog、ProviderUsageCard）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
