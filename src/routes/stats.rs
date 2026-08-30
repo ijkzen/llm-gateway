@@ -5,6 +5,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
+use chrono::Datelike;
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde::{Deserialize, Serialize};
 
@@ -12,7 +13,129 @@ use crate::response::{self, Response};
 use crate::state::AppState;
 
 const HOUR_MS: i64 = 3_600_000;
+const DAY_MS: i64 = 24 * HOUR_MS;
 const TREND_BUCKETS: i64 = 24;
+
+/// 图表趋势桶粒度（显式指定；缺省时按窗口长度回退推断）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Granularity {
+    Hour,
+    Day,
+    Month,
+    Year,
+}
+
+impl Granularity {
+    fn parse(value: Option<&str>) -> Result<Option<Self>, &'static str> {
+        match value {
+            None => Ok(None),
+            Some("hour") => Ok(Some(Self::Hour)),
+            Some("day") => Ok(Some(Self::Day)),
+            Some("month") => Ok(Some(Self::Month)),
+            Some("year") => Ok(Some(Self::Year)),
+            Some(_) => Err("不支持的 granularity，可选 hour/day/month/year"),
+        }
+    }
+}
+
+/// 客户端 UTC 偏移（分钟，东八区为 480）。仅在显式 granularity 下生效：
+/// 小时/天桶按本地整点/午夜对齐，月/年桶按本地自然月/年归并。
+fn parse_tz_offset(value: Option<i32>) -> i32 {
+    value
+        .filter(|offset| (-14 * 60..=14 * 60).contains(offset))
+        .unwrap_or(0)
+}
+
+/// 月/年桶：把窗口内每个「本地日索引」归并到自然月/年（键 year 或 (year, month)），
+/// 对窗口首日所在月/年到末日所在月/年补零，输出按桶起点（该月/年 1 日 0 点，本地）排序。
+///
+/// 返回 (桶起点列表, call 值序列, token 值序列)，三组长度一致；两序列共享同一组桶起点。
+fn merge_natural_periods(
+    call_day_indexes: &[(i64, i64)],
+    token_day_indexes: &[(i64, i64)],
+    window_start: i64,
+    window_end: i64,
+    tz: chrono::FixedOffset,
+    month_mode: bool,
+) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
+    // 本地日索引 = (ts + offset) / DAY_MS；本地 0 点毫秒 = index * DAY_MS - offset_ms。
+    // 注意 local_minus_utc() 返回秒（+08:00 → 28800），需 ×1000 转毫秒。
+    let offset_ms = i64::from(tz.local_minus_utc()) * 1000;
+    let mut call_map: std::collections::BTreeMap<(i32, u32), i64> = std::collections::BTreeMap::new();
+    let mut token_map: std::collections::BTreeMap<(i32, u32), i64> = std::collections::BTreeMap::new();
+    let collect = |index: i64| -> Option<(i32, u32)> {
+        let day_ms = index * DAY_MS - offset_ms;
+        chrono::DateTime::from_timestamp_millis(day_ms)
+            .map(|t| t.with_timezone(&tz))
+            .map(|local| {
+                if month_mode {
+                    (local.year(), local.month())
+                } else {
+                    (local.year(), 0)
+                }
+            })
+    };
+    for &(index, value) in call_day_indexes {
+        if let Some(key) = collect(index) {
+            *call_map.entry(key).or_insert(0) += value;
+        }
+    }
+    for &(index, value) in token_day_indexes {
+        if let Some(key) = collect(index) {
+            *token_map.entry(key).or_insert(0) += value;
+        }
+    }
+
+    // 补零：窗口首日/末日所在月（年）及其间的全部自然月（年）。
+    let first_local = chrono::DateTime::from_timestamp_millis(window_start).map(|t| t.with_timezone(&tz));
+    let last_local = chrono::DateTime::from_timestamp_millis(window_end - 1).map(|t| t.with_timezone(&tz));
+    if let (Some(first), Some(last)) = (first_local, last_local) {
+        if month_mode {
+            let mut y = first.year();
+            let mut m = first.month();
+            let (ly, lm) = (last.year(), last.month());
+            loop {
+                call_map.entry((y, m)).or_insert(0);
+                token_map.entry((y, m)).or_insert(0);
+                if (y, m) == (ly, lm) {
+                    break;
+                }
+                m += 1;
+                if m > 12 {
+                    m = 1;
+                    y += 1;
+                }
+            }
+        } else {
+            for y in first.year()..=last.year() {
+                call_map.entry((y, 0)).or_insert(0);
+                token_map.entry((y, 0)).or_insert(0);
+            }
+        }
+    }
+
+    // 桶起点 = 该月/年 1 日 0 点（本地）。
+    let to_bucket_start =
+        |(y, m): (i32, u32)| -> Option<i64> {
+            let (by, bm) = if month_mode { (y, m) } else { (y, 1) };
+            chrono::NaiveDate::from_ymd_opt(by, bm, 1)
+                .and_then(|d| d.and_hms_opt(0, 0, 0))
+                .and_then(|dt| dt.and_local_timezone(tz).single())
+                .map(|dt| dt.timestamp_millis())
+        };
+    let mut starts = Vec::with_capacity(call_map.len());
+    let mut calls = Vec::with_capacity(call_map.len());
+    let mut tokens = Vec::with_capacity(call_map.len());
+    for (key, call_value) in call_map {
+        if let Some(start_ms) = to_bucket_start(key) {
+            let token_value = token_map.get(&key).copied().unwrap_or(0);
+            starts.push(start_ms);
+            calls.push(call_value);
+            tokens.push(token_value);
+        }
+    }
+    (starts, calls, tokens)
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -128,31 +251,68 @@ struct ChartsQuery {
     virtual_model_id: Option<i32>,
     /// 按模型 ID 过滤（可选；供应商侧真实模型 ID）。
     model_id: Option<String>,
+    /// 桶粒度（hour/day/month/year）。缺省按窗口长度回退推断。
+    granularity: Option<String>,
+    /// 客户端 UTC 偏移（分钟）。仅与显式 granularity 搭配使用。
+    tz_offset_minutes: Option<i32>,
 }
 
 /// 图表数据：调用/ token 的趋势 + 按上游模型的分布。
 ///
 /// 支持可选 startTime/endTime（缺省回退过去 24 小时）与 providerId 过滤；
-/// 趋势分桶粒度按窗口长度自适应：≤24h 小时桶、≤62 天天桶、其余月桶。
+/// 显式 granularity + tzOffsetMinutes 时按客户端本地自然边界分桶：
+/// 小时/天桶对齐本地整点/午夜，月/年桶按自然月/年归并；两者缺省时
+/// 按窗口长度回退（≤48h 小时桶、≤62 天天桶、其余 30 天块）。
 async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>) -> impl IntoResponse {
-    let (window_start, window_end, bucket_ms) = match (query.start_time, query.end_time) {
-        (Some(start), Some(end)) if end > start => {
-            // 显式窗口：按长度选桶粒度（小时/天/月）。
-            let bucket = if end - start <= 48 * HOUR_MS {
-                HOUR_MS
-            } else if end - start <= 62 * 24 * HOUR_MS {
-                24 * HOUR_MS
-            } else {
-                30 * 24 * HOUR_MS
+    let explicit_granularity = match Granularity::parse(query.granularity.as_deref()) {
+        Ok(g) => g,
+        Err(msg) => return response::bad_request(msg),
+    };
+    let tz_offset_minutes = parse_tz_offset(query.tz_offset_minutes);
+    let tz = chrono::FixedOffset::east_opt(tz_offset_minutes * 60)
+        .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).expect("0 偏移恒有效"));
+
+    let (window_start, window_end, bucket_ms, granularity) = match explicit_granularity {
+        Some(g) => {
+            let bucket_ms = match g {
+                Granularity::Hour => HOUR_MS,
+                Granularity::Day => DAY_MS,
+                Granularity::Month | Granularity::Year => DAY_MS,
             };
-            (start, end, bucket)
+            let (start, end) = match (query.start_time, query.end_time) {
+                (Some(start), Some(end)) if end > start => (start, end),
+                _ => {
+                    // 缺省窗口：过去 24 小时（小时桶）。
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    let current_bucket = now_ms / HOUR_MS;
+                    let first_bucket = current_bucket - (TREND_BUCKETS - 1);
+                    (first_bucket * HOUR_MS, now_ms)
+                }
+            };
+            (start, end, bucket_ms, g)
         }
-        _ => {
-            // 缺省：过去 24 小时（小时桶）。
-            let now_ms = chrono::Utc::now().timestamp_millis();
-            let current_bucket = now_ms / HOUR_MS;
-            let first_bucket = current_bucket - (TREND_BUCKETS - 1);
-            (first_bucket * HOUR_MS, now_ms, HOUR_MS)
+        None => {
+            let (start, end, bucket_ms) = match (query.start_time, query.end_time) {
+                (Some(start), Some(end)) if end > start => {
+                    // 显式窗口：按长度选桶粒度（小时/天/月）。
+                    let bucket = if end - start <= 48 * HOUR_MS {
+                        HOUR_MS
+                    } else if end - start <= 62 * DAY_MS {
+                        DAY_MS
+                    } else {
+                        30 * DAY_MS
+                    };
+                    (start, end, bucket)
+                }
+                _ => {
+                    // 缺省：过去 24 小时（小时桶）。
+                    let now_ms = chrono::Utc::now().timestamp_millis();
+                    let current_bucket = now_ms / HOUR_MS;
+                    let first_bucket = current_bucket - (TREND_BUCKETS - 1);
+                    (first_bucket * HOUR_MS, now_ms, HOUR_MS)
+                }
+            };
+            (start, end, bucket_ms, Granularity::Hour)
         }
     };
 
@@ -172,9 +332,17 @@ async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>)
         params.push(model_id.into());
     }
 
+    // 月/年粒度：SQL 按本地日桶聚合，Rust 侧再归并自然月/年。
+    let offset_ms = i64::from(tz_offset_minutes) * 60_000;
+    let bucket_expr = if matches!(granularity, Granularity::Month | Granularity::Year) {
+        format!("(r.start_time + {offset_ms}) / {DAY_MS}")
+    } else {
+        format!("(r.start_time + {offset_ms}) / {bucket_ms}")
+    };
+
     let trend_sql = |value_expr: &str| {
         format!(
-            "SELECT (r.start_time / {bucket_ms}) AS bucket, {value_expr} AS value \
+            "SELECT {bucket_expr} AS bucket, {value_expr} AS value \
              FROM request r WHERE {where_sql} GROUP BY bucket"
         )
     };
@@ -213,29 +381,63 @@ async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>)
         Err(e) => return response::db_error(e.to_string()),
     };
 
-    let mut call_counts = std::collections::HashMap::new();
-    for row in &call_rows {
-        let bucket: i64 = row.try_get("", "bucket").unwrap_or(0);
-        let value: i64 = row.try_get("", "value").unwrap_or(0);
-        call_counts.insert(bucket, value);
-    }
-    let mut token_sums = std::collections::HashMap::new();
-    for row in &token_rows {
-        let bucket: i64 = row.try_get("", "bucket").unwrap_or(0);
-        let value: i64 = row.try_get("", "value").unwrap_or(0);
-        token_sums.insert(bucket, value);
-    }
-
     // 桶填充：从窗口起点所在桶到终点所在桶，按桶粒度对齐。
-    let first_bucket = window_start / bucket_ms;
-    let last_bucket = (window_end - 1).max(window_start) / bucket_ms;
-    let fill_trend = |map: &std::collections::HashMap<i64, i64>| {
-        (first_bucket..=last_bucket)
-            .map(|bucket| TrendPoint {
-                bucket_start: bucket * bucket_ms,
-                value: map.get(&bucket).copied().unwrap_or(0),
-            })
-            .collect::<Vec<_>>()
+    let (call_trend, token_trend) = if matches!(granularity, Granularity::Month | Granularity::Year) {
+        // 月/年：先按本地日索引收集，再归并自然月/年（含窗口内补零）。
+        let collect = |rows: &[sea_orm::QueryResult]| {
+            rows.iter()
+                .filter_map(|row| {
+                    let bucket: i64 = row.try_get("", "bucket").ok()?;
+                    let value: i64 = row.try_get("", "value").ok()?;
+                    Some((bucket, value))
+                })
+                .collect::<Vec<_>>()
+        };
+        let (starts, call_values, token_values) = merge_natural_periods(
+            &collect(&call_rows),
+            &collect(&token_rows),
+            window_start,
+            window_end,
+            tz,
+            matches!(granularity, Granularity::Month),
+        );
+        let call_trend = starts
+            .iter()
+            .zip(call_values)
+            .map(|(&bucket_start, value)| TrendPoint { bucket_start, value })
+            .collect::<Vec<_>>();
+        let token_trend = starts
+            .iter()
+            .zip(token_values)
+            .map(|(&bucket_start, value)| TrendPoint { bucket_start, value })
+            .collect::<Vec<_>>();
+        (call_trend, token_trend)
+    } else {
+        // 小时/天：直接按桶索引区间补零（桶对齐本地边界，tz 偏移已并入表达式）。
+        let offset_ms = i64::from(tz_offset_minutes) * 60_000;
+        let first_bucket = (window_start + offset_ms) / bucket_ms;
+        let last_bucket = (window_end - 1 + offset_ms).max(window_start + offset_ms) / bucket_ms;
+        let fill_trend = |map: &std::collections::HashMap<i64, i64>| {
+            (first_bucket..=last_bucket)
+                .map(|bucket| TrendPoint {
+                    bucket_start: bucket * bucket_ms - offset_ms,
+                    value: map.get(&bucket).copied().unwrap_or(0),
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut call_counts = std::collections::HashMap::new();
+        for row in &call_rows {
+            let bucket: i64 = row.try_get("", "bucket").unwrap_or(0);
+            let value: i64 = row.try_get("", "value").unwrap_or(0);
+            call_counts.insert(bucket, value);
+        }
+        let mut token_sums = std::collections::HashMap::new();
+        for row in &token_rows {
+            let bucket: i64 = row.try_get("", "bucket").unwrap_or(0);
+            let value: i64 = row.try_get("", "value").unwrap_or(0);
+            token_sums.insert(bucket, value);
+        }
+        (fill_trend(&call_counts), fill_trend(&token_sums))
     };
 
     let to_model_values = |rows: Vec<sea_orm::QueryResult>| {
@@ -251,9 +453,9 @@ async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>)
     (
         StatusCode::OK,
         Json(Response::success(ChartsResponse {
-            call_trend: fill_trend(&call_counts),
+            call_trend,
             call_by_model: to_model_values(call_model_rows),
-            token_trend: fill_trend(&token_sums),
+            token_trend,
             token_by_model: to_model_values(token_model_rows),
         })),
     )
@@ -1093,4 +1295,101 @@ async fn virtual_model_metrics(
             cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn tz480() -> chrono::FixedOffset {
+        chrono::FixedOffset::east_opt(480 * 60).unwrap()
+    }
+
+    /// 本地日期 → UTC 毫秒时间戳（东八区）。
+    fn local_ms(y: i32, m: u32, d: u32, h: u32, min: u32) -> i64 {
+        tz480()
+            .with_ymd_and_hms(y, m, d, h, min, 0)
+            .single()
+            .unwrap()
+            .timestamp_millis()
+    }
+
+    #[test]
+    fn parse_granularity_accepts_all_kinds() {
+        assert_eq!(Granularity::parse(None), Ok(None));
+        assert_eq!(Granularity::parse(Some("hour")), Ok(Some(Granularity::Hour)));
+        assert_eq!(Granularity::parse(Some("day")), Ok(Some(Granularity::Day)));
+        assert_eq!(Granularity::parse(Some("month")), Ok(Some(Granularity::Month)));
+        assert_eq!(Granularity::parse(Some("year")), Ok(Some(Granularity::Year)));
+        assert!(Granularity::parse(Some("week")).is_err());
+    }
+
+    #[test]
+    fn parse_tz_offset_clamps_out_of_range() {
+        assert_eq!(parse_tz_offset(None), 0);
+        assert_eq!(parse_tz_offset(Some(480)), 480);
+        assert_eq!(parse_tz_offset(Some(0)), 0);
+        assert_eq!(parse_tz_offset(Some(-330)), -330);
+        assert_eq!(parse_tz_offset(Some(900)), 0); // 超出 ±14h
+    }
+
+    #[test]
+    fn merge_natural_periods_groups_and_zero_fills_months() {
+        // 窗口：2026-06-25 00:00 ~ 2026-08-27 00:00（东八区）。
+        let start = local_ms(2026, 6, 25, 0, 0);
+        let end = local_ms(2026, 8, 27, 0, 0);
+        // 日索引数据：6/25 一次、7/15 一次、7/16 一次、8/26 一次。
+        // 本地 0 点的 UTC 毫秒 / DAY_MS 即本地日索引（东八区 +480）。
+        let day_indexes = vec![
+            (start / DAY_MS, 1),
+            (local_ms(2026, 7, 15, 0, 0) / DAY_MS, 5),
+            (local_ms(2026, 7, 16, 0, 0) / DAY_MS, 7),
+            (local_ms(2026, 8, 26, 0, 0) / DAY_MS, 3),
+        ];
+        let (starts, calls, tokens) =
+            merge_natural_periods(&day_indexes, &day_indexes, start, end, tz480(), true);
+        assert_eq!(starts.len(), 3);
+        assert_eq!(starts[0], local_ms(2026, 6, 1, 0, 0));
+        assert_eq!(calls[0], 1);
+        assert_eq!(starts[1], local_ms(2026, 7, 1, 0, 0));
+        assert_eq!(calls[1], 12);
+        assert_eq!(starts[2], local_ms(2026, 8, 1, 0, 0));
+        assert_eq!(calls[2], 3);
+        assert_eq!(tokens, calls);
+    }
+
+    #[test]
+    fn merge_natural_periods_zero_fills_gap_months() {
+        // 窗口：2026-06-25 ~ 2026-08-27，无 7 月数据 → 7 月补零。
+        let start = local_ms(2026, 6, 25, 0, 0);
+        let end = local_ms(2026, 8, 27, 0, 0);
+        let day_indexes = vec![
+            (start / DAY_MS, 1),
+            (local_ms(2026, 8, 26, 0, 0) / DAY_MS, 3),
+        ];
+        let (starts, calls, _) =
+            merge_natural_periods(&day_indexes, &day_indexes, start, end, tz480(), true);
+        assert_eq!(starts.len(), 3);
+        assert_eq!(starts[1], local_ms(2026, 7, 1, 0, 0));
+        assert_eq!(calls[1], 0);
+    }
+
+    #[test]
+    fn merge_natural_periods_groups_years() {
+        // 窗口：2025-07-01 ~ 2026-09-01 → 2025 / 2026 两个年桶。
+        let start = local_ms(2025, 7, 1, 0, 0);
+        let end = local_ms(2026, 9, 1, 0, 0);
+        let day_indexes = vec![
+            (start / DAY_MS, 2),
+            (local_ms(2026, 3, 5, 0, 0) / DAY_MS, 4),
+        ];
+        let (starts, calls, _) =
+            merge_natural_periods(&day_indexes, &day_indexes, start, end, tz480(), false);
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[0], local_ms(2025, 1, 1, 0, 0));
+        assert_eq!(calls[0], 2);
+        assert_eq!(starts[1], local_ms(2026, 1, 1, 0, 0));
+        assert_eq!(calls[1], 4);
+    }
 }

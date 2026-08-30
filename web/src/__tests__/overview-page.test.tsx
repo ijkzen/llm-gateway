@@ -1,6 +1,6 @@
 import type { DashboardCharts, DashboardSummary } from "@/hooks/use-dashboard-stats";
 import OverviewPage from "@/pages/overview";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ProviderRaceCard 用 useNavigate 跳转二级页，测试中 stub。
@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 	summaryError: false,
 	chartsError: false,
 	refetch: vi.fn(),
+	chartsParams: undefined as Record<string, unknown> | undefined,
 }));
 
 vi.mock("@/hooks/use-dashboard-stats", () => ({
@@ -25,12 +26,15 @@ vi.mock("@/hooks/use-dashboard-stats", () => ({
 		isError: mocks.summaryError,
 		refetch: mocks.refetch,
 	}),
-	useDashboardCharts: () => ({
-		data: mocks.charts,
-		isLoading: mocks.chartsLoading,
-		isError: mocks.chartsError,
-		refetch: mocks.refetch,
-	}),
+	useDashboardCharts: (params?: unknown) => {
+		mocks.chartsParams = params as Record<string, unknown> | undefined;
+		return {
+			data: mocks.charts,
+			isLoading: mocks.chartsLoading,
+			isError: mocks.chartsError,
+			refetch: mocks.refetch,
+		};
+	},
 }));
 
 // 图表组件依赖浏览器布局尺寸，jsdom 下用 stub 标记当前视图。
@@ -175,5 +179,64 @@ describe("OverviewPage（数据面板）", () => {
 
 		fireEvent.click(screen.getByRole("button", { name: "调用次数分布" }));
 		expect(screen.getByText("暂无调用数据")).toBeTruthy();
+	});
+});
+
+describe("OverviewPage 时间组件（默认今天）", () => {
+	const withinChartsWindow = () => {
+		const container = screen.getByTestId("charts-window");
+		return within(container);
+	};
+
+	beforeEach(() => {
+		mocks.summary = makeSummary();
+		mocks.charts = makeCharts();
+		mocks.chartsParams = undefined;
+	});
+
+	it("默认选中「天」，图表请求携带小时粒度与本地时区偏移", () => {
+		render(<OverviewPage />);
+
+		// 默认「天」处于按下态。
+		expect(withinChartsWindow().getByRole("button", { name: "天" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
+		// 请求携带显式窗口 + granularity=hour + tzOffsetMinutes。
+		expect(mocks.chartsParams).toBeTruthy();
+		expect(mocks.chartsParams?.granularity).toBe("hour");
+		expect(typeof mocks.chartsParams?.tzOffsetMinutes).toBe("number");
+		expect(mocks.chartsParams?.startTime).toBeTypeOf("number");
+		expect(mocks.chartsParams?.endTime).toBeTypeOf("number");
+	});
+
+	it("切换到「周」后请求携带 day 粒度", () => {
+		render(<OverviewPage />);
+
+		fireEvent.click(withinChartsWindow().getByRole("button", { name: "周" }));
+		expect(withinChartsWindow().getByRole("button", { name: "周" })).toHaveAttribute(
+			"aria-pressed",
+			"true",
+		);
+		expect(mocks.chartsParams?.granularity).toBe("day");
+	});
+
+	it("切换到「年」后请求携带 month 粒度，且副标题显示当前年份", () => {
+		render(<OverviewPage />);
+
+		fireEvent.click(withinChartsWindow().getByRole("button", { name: "年" }));
+		expect(mocks.chartsParams?.granularity).toBe("month");
+		// 副标题与控件标题都显示当前年份（同文本出现两处）。
+		expect(
+			withinChartsWindow().getAllByText(`${new Date().getFullYear()}年（当前）`).length,
+		).toBeGreaterThan(0);
+	});
+
+	it("切换到「自定义」显示输入框与副标题", () => {
+		render(<OverviewPage />);
+
+		fireEvent.click(withinChartsWindow().getByRole("button", { name: "自定义" }));
+		expect(withinChartsWindow().getByTestId("custom-start")).toBeTruthy();
+		expect(withinChartsWindow().getByText("自定义时间范围")).toBeTruthy();
 	});
 });

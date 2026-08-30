@@ -6,6 +6,7 @@ import {
 } from "@/components/ui/chart";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ModelValue, TrendPoint } from "@/hooks/use-dashboard-stats";
+import type { ChartGranularity } from "@/lib/race-period";
 import { cn, middleEllipsis, topWithOther } from "@/lib/utils";
 import { useState } from "react";
 import {
@@ -59,8 +60,8 @@ export function toRankedModels(items: ModelValue[]): ChartItem[] {
 	});
 }
 
-/** 按桶粒度格式化 X 轴标签：小时 → HH:00，天 → M月d日，月 → yyyy年M月。 */
-function formatBucketLabel(bucketStart: number, granularity: "hour" | "day" | "month"): string {
+/** 按桶粒度格式化 X 轴标签：小时 → HH:00，天 → M月d日，月 → yyyy年M月，年 → yyyy年。 */
+export function formatBucketLabel(bucketStart: number, granularity: ChartGranularity): string {
 	const date = new Date(bucketStart);
 	switch (granularity) {
 		case "hour":
@@ -69,6 +70,8 @@ function formatBucketLabel(bucketStart: number, granularity: "hour" | "day" | "m
 			return `${date.getMonth() + 1}月${date.getDate()}日`;
 		case "month":
 			return `${date.getFullYear()}年${date.getMonth() + 1}月`;
+		case "year":
+			return `${date.getFullYear()}年`;
 	}
 }
 
@@ -88,15 +91,19 @@ interface TrendLineChartProps {
 	data: TrendPoint[];
 	label: string;
 	formatValue?: (value: number) => string;
+	/** 显式桶粒度（后端分桶结果已知时传入，避免由间距推断）。 */
+	granularity?: ChartGranularity;
 }
 
-/** 按时间窗口分桶的单条总量折线（粒度由数据推断）。 */
-export function TrendLineChart({ data, label, formatValue }: TrendLineChartProps) {
-	const granularity = inferGranularity(data.map((p) => p.bucketStart));
+/** 按时间窗口分桶的单条总量折线（粒度可显式指定，缺省由数据推断）。 */
+export function TrendLineChart({ data, label, formatValue, granularity }: TrendLineChartProps) {
+	const resolvedGranularity = granularity ?? inferGranularity(data.map((p) => p.bucketStart));
 	const chartData = data.map((point) => ({
-		label: formatBucketLabel(point.bucketStart, granularity),
+		label: formatBucketLabel(point.bucketStart, resolvedGranularity),
 		value: point.value,
 	}));
+	// 标签密度自适应：约每 6 个点显示一个标签，避免 24 点小时图过密 / 7 点周图过疏。
+	const labelInterval = Math.max(0, Math.floor(chartData.length / 6) - 1);
 	return (
 		<ChartContainer
 			config={{ value: { label, color: "hsl(var(--chart-1))" } }}
@@ -104,7 +111,13 @@ export function TrendLineChart({ data, label, formatValue }: TrendLineChartProps
 		>
 			<LineChart data={chartData} margin={{ left: 8, right: 8, top: 8 }}>
 				<CartesianGrid vertical={false} />
-				<XAxis dataKey="label" tickLine={false} axisLine={false} interval={3} tickMargin={8} />
+				<XAxis
+					dataKey="label"
+					tickLine={false}
+					axisLine={false}
+					interval={labelInterval}
+					tickMargin={8}
+				/>
 				<YAxis
 					tickLine={false}
 					axisLine={false}

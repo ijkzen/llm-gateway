@@ -1,4 +1,9 @@
-import { formatPeriodLabel, periodBounds, toLocalInputValue } from "@/lib/race-period";
+import {
+	chartGranularity,
+	formatPeriodLabel,
+	periodBounds,
+	toLocalInputValue,
+} from "@/lib/race-period";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -121,5 +126,43 @@ describe("toLocalInputValue", () => {
 	it("个位数补零", () => {
 		const ms = new Date(2026, 0, 5, 8, 7).getTime();
 		expect(toLocalInputValue(ms)).toBe("2026-01-05T08:07");
+	});
+});
+
+describe("chartGranularity 桶粒度推导", () => {
+	const H = 3_600_000;
+	const D = 24 * H;
+	const t0 = new Date(2026, 7, 30, 0, 0).getTime();
+
+	it("预设周期：天→hour、周/月→day、年→month", () => {
+		expect(chartGranularity("day", t0, t0 + 5 * H)).toBe("hour");
+		expect(chartGranularity("week", t0, t0 + 7 * D)).toBe("day");
+		expect(chartGranularity("month", t0, t0 + 31 * D)).toBe("day");
+		expect(chartGranularity("year", t0, t0 + 366 * D)).toBe("month");
+	});
+
+	it("自定义 ≤24h → hour", () => {
+		expect(chartGranularity("custom", t0, t0 + 5 * H)).toBe("hour");
+		expect(chartGranularity("custom", t0, t0 + 24 * H)).toBe("hour");
+	});
+
+	it("自定义 24h~31 天 → day", () => {
+		expect(chartGranularity("custom", t0, t0 + 25 * H)).toBe("day");
+		expect(chartGranularity("custom", t0, t0 + 31 * D)).toBe("day");
+	});
+
+	it("自定义 >31 天且 ≤366 天 → month（跨年短区间也按月）", () => {
+		expect(chartGranularity("custom", t0, t0 + 63 * D)).toBe("month");
+		// 12/20 ~ 1/15（约 27 天，但跨年）：按时长仍 ≤31 天 → day。
+		const dec = new Date(2026, 11, 20).getTime();
+		const jan = new Date(2027, 0, 15).getTime();
+		expect(chartGranularity("custom", dec, jan)).toBe("day");
+		// 跨年且超 31 天 → month。
+		expect(chartGranularity("custom", dec, new Date(2027, 1, 15).getTime())).toBe("month");
+	});
+
+	it("自定义 >366 天 → year", () => {
+		expect(chartGranularity("custom", t0, t0 + 367 * D)).toBe("year");
+		expect(chartGranularity("custom", t0, t0 + 2 * 366 * D)).toBe("year");
 	});
 });

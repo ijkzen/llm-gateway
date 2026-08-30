@@ -1,4 +1,5 @@
 import { type ApiResponse, api, unwrap } from "@/lib/api";
+import type { ChartGranularity } from "@/lib/race-period";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 export interface DashboardSummary {
@@ -39,6 +40,10 @@ export interface ChartsParams {
 	virtualModelId?: number;
 	/** 按模型 ID 过滤（可选；供应商侧真实模型 ID）。 */
 	modelId?: string;
+	/** 桶粒度（hour/day/month/year）。缺省由后端按窗口长度回退推断。 */
+	granularity?: ChartGranularity;
+	/** 客户端 UTC 偏移（分钟，东八区 480）。与 granularity 搭配使用。 */
+	tzOffsetMinutes?: number;
 }
 
 export const dashboardStatsKeys = {
@@ -52,6 +57,8 @@ export const dashboardStatsKeys = {
 			params.providerId ?? null,
 			params.virtualModelId ?? null,
 			params.modelId ?? null,
+			params.granularity ?? null,
+			params.tzOffsetMinutes ?? null,
 		] as const,
 };
 
@@ -80,6 +87,10 @@ export function useDashboardCharts(params: ChartsParams = {}) {
 				query.set("virtualModelId", String(params.virtualModelId));
 			}
 			if (params.modelId !== undefined) query.set("modelId", params.modelId);
+			if (params.granularity !== undefined) query.set("granularity", params.granularity);
+			if (params.tzOffsetMinutes !== undefined) {
+				query.set("tzOffsetMinutes", String(params.tzOffsetMinutes));
+			}
 			const suffix = query.size > 0 ? `?${query.toString()}` : "";
 			const res = await api.get(`stats/charts${suffix}`).json<ApiResponse<DashboardCharts>>();
 			return unwrap(res);

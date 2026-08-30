@@ -18,7 +18,7 @@ import {
 import { useProviderDetail } from "@/hooks/use-providers";
 import { useProviderMetrics } from "@/hooks/use-stats-metrics";
 import { useUsageEstimate } from "@/hooks/use-usage-estimate";
-import { type RacePeriod, formatPeriodLabel } from "@/lib/race-period";
+import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race-period";
 import { formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
@@ -207,6 +207,19 @@ export default function ProviderOverviewPage() {
 	const callWindow = raceWindowBounds(windows.call, now);
 	const tokenWindow = raceWindowBounds(windows.token, now);
 
+	// 图表桶粒度由所选时间窗口推导，并与本地时区偏移一起传给后端。
+	const tzOffsetMinutes = -new Date().getTimezoneOffset();
+	const callGranularity = chartGranularity(
+		windows.call.period,
+		callWindow.startTime,
+		callWindow.endTime,
+	);
+	const tokenGranularity = chartGranularity(
+		windows.token.period,
+		tokenWindow.startTime,
+		tokenWindow.endTime,
+	);
+
 	const providerMetrics = useProviderMetrics(
 		providerId,
 		metricsWindow,
@@ -221,11 +234,15 @@ export default function ProviderOverviewPage() {
 		startTime: callWindow.startTime,
 		endTime: callWindow.endTime,
 		providerId,
+		granularity: callGranularity,
+		tzOffsetMinutes,
 	});
 	const tokenCharts = useDashboardCharts({
 		startTime: tokenWindow.startTime,
 		endTime: tokenWindow.endTime,
 		providerId,
+		granularity: tokenGranularity,
+		tzOffsetMinutes,
 	});
 
 	const windowSubtitle = (state: RaceWindowState) =>
@@ -278,7 +295,11 @@ export default function ProviderOverviewPage() {
 						数据加载失败
 					</div>
 				) : (
-					<CallAnalysisCard charts={callCharts.data} subtitle={windowSubtitle(windows.call)} />
+					<CallAnalysisCard
+						charts={callCharts.data}
+						subtitle={windowSubtitle(windows.call)}
+						granularity={callGranularity}
+					/>
 				)}
 			</div>
 
@@ -301,7 +322,11 @@ export default function ProviderOverviewPage() {
 						数据加载失败
 					</div>
 				) : (
-					<TokenAnalysisCard charts={tokenCharts.data} subtitle={windowSubtitle(windows.token)} />
+					<TokenAnalysisCard
+						charts={tokenCharts.data}
+						subtitle={windowSubtitle(windows.token)}
+						granularity={tokenGranularity}
+					/>
 				)}
 			</div>
 

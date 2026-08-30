@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useModelMetrics } from "@/hooks/use-model-metrics";
-import { type RacePeriod, formatPeriodLabel } from "@/lib/race-period";
+import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race-period";
 import { formatTokenCount } from "@/lib/utils";
 import { Coins, DatabaseZap, Gauge, ListChecks, Timer, TrendingUp } from "lucide-react";
 import { useState } from "react";
@@ -56,17 +56,34 @@ export default function ModelOverviewPage() {
 	const tokenWindow = raceWindowBounds(windows.token, now);
 	const metricsWindow = raceWindowBounds(windows.metrics, now);
 
+	// 图表桶粒度由所选时间窗口推导，并与本地时区偏移一起传给后端。
+	const tzOffsetMinutes = -new Date().getTimezoneOffset();
+	const callGranularity = chartGranularity(
+		windows.call.period,
+		callWindow.startTime,
+		callWindow.endTime,
+	);
+	const tokenGranularity = chartGranularity(
+		windows.token.period,
+		tokenWindow.startTime,
+		tokenWindow.endTime,
+	);
+
 	const callCharts = useDashboardCharts({
 		startTime: callWindow.startTime,
 		endTime: callWindow.endTime,
 		providerId,
 		modelId,
+		granularity: callGranularity,
+		tzOffsetMinutes,
 	});
 	const tokenCharts = useDashboardCharts({
 		startTime: tokenWindow.startTime,
 		endTime: tokenWindow.endTime,
 		providerId,
 		modelId,
+		granularity: tokenGranularity,
+		tzOffsetMinutes,
 	});
 	const metrics = useModelMetrics(
 		Number.isFinite(providerId) ? providerId : -1,
@@ -112,7 +129,11 @@ export default function ModelOverviewPage() {
 							数据加载失败
 						</div>
 					) : (
-						<TrendLineChart data={callCharts.data.callTrend} label="调用次数" />
+						<TrendLineChart
+							data={callCharts.data.callTrend}
+							label="调用次数"
+							granularity={callGranularity}
+						/>
 					)}
 				</CardContent>
 			</Card>
@@ -144,6 +165,7 @@ export default function ModelOverviewPage() {
 							data={tokenCharts.data.tokenTrend}
 							label="Token 数"
 							formatValue={formatTokenCount}
+							granularity={tokenGranularity}
 						/>
 					)}
 				</CardContent>

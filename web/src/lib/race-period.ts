@@ -8,6 +8,9 @@
 
 export type RacePeriod = "day" | "week" | "month" | "year";
 
+/** 图表桶粒度（透传给 /api/stats/charts 的 granularity 参数）。 */
+export type ChartGranularity = "hour" | "day" | "month" | "year";
+
 export interface PeriodBounds {
 	/** 窗口起点（毫秒时间戳，含）。 */
 	startTime: number;
@@ -145,4 +148,40 @@ export function toLocalInputValue(ms: number): string {
 	const date = new Date(ms);
 	const pad = (n: number) => n.toString().padStart(2, "0");
 	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * 由时间窗口推导图表桶粒度：
+ * - 预设周期：天→小时桶、周/月→天桶、年→月桶；
+ * - 自定义：时长 ≤24h→小时、≤31 天→天、≤366 天→月（自然月）、否则→年（自然年）。
+ */
+export function chartGranularity(
+	period: RacePeriod | "custom",
+	startTime: number,
+	endTime: number,
+): ChartGranularity {
+	if (period !== "custom") {
+		switch (period) {
+			case "day":
+				return "hour";
+			case "week":
+			case "month":
+				return "day";
+			case "year":
+				return "month";
+		}
+	}
+	const duration = endTime - startTime;
+	const HOUR_MS = 3_600_000;
+	const DAY_MS = 24 * HOUR_MS;
+	if (duration <= 24 * HOUR_MS) {
+		return "hour";
+	}
+	if (duration <= 31 * DAY_MS) {
+		return "day";
+	}
+	if (duration <= 366 * DAY_MS) {
+		return "month";
+	}
+	return "year";
 }

@@ -16,7 +16,7 @@ import {
 	useVirtualModelMemberRank,
 } from "@/hooks/use-virtual-model-member-rank";
 import { useVirtualModelDetail } from "@/hooks/use-virtual-models";
-import { type RacePeriod, formatPeriodLabel } from "@/lib/race-period";
+import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race-period";
 import { formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
@@ -231,15 +231,32 @@ export default function VirtualModelOverviewPage() {
 		Number.isFinite(virtualModelId),
 	);
 
+	// 图表桶粒度由所选时间窗口推导，并与本地时区偏移一起传给后端。
+	const tzOffsetMinutes = -new Date().getTimezoneOffset();
+	const callGranularity = chartGranularity(
+		windows.call.period,
+		callWindow.startTime,
+		callWindow.endTime,
+	);
+	const tokenGranularity = chartGranularity(
+		windows.token.period,
+		tokenWindow.startTime,
+		tokenWindow.endTime,
+	);
+
 	const callCharts = useDashboardCharts({
 		startTime: callWindow.startTime,
 		endTime: callWindow.endTime,
 		virtualModelId,
+		granularity: callGranularity,
+		tzOffsetMinutes,
 	});
 	const tokenCharts = useDashboardCharts({
 		startTime: tokenWindow.startTime,
 		endTime: tokenWindow.endTime,
 		virtualModelId,
+		granularity: tokenGranularity,
+		tzOffsetMinutes,
 	});
 
 	const windowSubtitle = (state: RaceWindowState) =>
@@ -285,7 +302,11 @@ export default function VirtualModelOverviewPage() {
 						数据加载失败
 					</div>
 				) : (
-					<CallAnalysisCard charts={callCharts.data} subtitle={windowSubtitle(windows.call)} />
+					<CallAnalysisCard
+						charts={callCharts.data}
+						subtitle={windowSubtitle(windows.call)}
+						granularity={callGranularity}
+					/>
 				)}
 			</div>
 
@@ -308,7 +329,11 @@ export default function VirtualModelOverviewPage() {
 						数据加载失败
 					</div>
 				) : (
-					<TokenAnalysisCard charts={tokenCharts.data} subtitle={windowSubtitle(windows.token)} />
+					<TokenAnalysisCard
+						charts={tokenCharts.data}
+						subtitle={windowSubtitle(windows.token)}
+						granularity={tokenGranularity}
+					/>
 				)}
 			</div>
 
