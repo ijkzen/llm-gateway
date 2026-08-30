@@ -225,13 +225,13 @@ export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 					content={
 						<ChartTooltipContent
 							nameKey="label"
-							formatter={(value, name) => (
-								<div className="flex items-center gap-2">
-									<span className="text-foreground">{name}</span>
-									<span className="font-mono font-medium tabular-nums text-foreground">
-										{formatValueText(Number(value), formatValue)}
+							formatter={(value) => (
+								<span className="font-mono font-medium tabular-nums text-foreground">
+									{formatValueText(Number(value), formatValue)}
+									<span className="ml-1 text-muted-foreground">
+										{percentText(Number(value), total)}
 									</span>
-								</div>
+								</span>
 							)}
 						/>
 					}
@@ -244,26 +244,9 @@ export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 					outerRadius={110}
 					onClick={(entry) => setActiveLabel((prev) => (prev === entry.label ? null : entry.label))}
 					style={{ cursor: "pointer", outline: "none" }}
-					labelLine={false}
-					label={(entry) => {
-						// 扇区上方文字：显示数值；选中块在数值右边追加百分比。
-						const text = formatValueText(Number(entry.value), formatValue);
-						if (entry.name === activeLabel) {
-							return `${text} ${percentText(Number(entry.value), total)}`;
-						}
-						return text;
-					}}
 				>
 					{ranked.map((item, index) => (
-						<Cell
-							key={item.label}
-							fill={chartColorAt(index)}
-							className={cn(
-								"transition-opacity [&:hover]:opacity-80",
-								activeLabel !== null && activeLabel !== item.label && "opacity-40",
-							)}
-							strokeOpacity={activeLabel === item.label ? 1 : 0.5}
-						/>
+						<Cell key={item.label} fill={chartColorAt(index)} />
 					))}
 				</Pie>
 				<ChartLegend content={<ModelLegendContent activeLabel={activeLabel ?? undefined} />} />
