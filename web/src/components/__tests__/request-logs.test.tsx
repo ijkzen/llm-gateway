@@ -167,4 +167,25 @@ describe("RequestLogsTable", () => {
 		expect(start.getMinutes()).toBe(0);
 		expect(typeof params.endTime).toBe("number");
 	});
+
+	it("重置后 endTime 刷新为新的当前时刻（修复固化 now 导致查不到最新日志）", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(2026, 7, 31, 10, 0, 0));
+		mockQuery({ items: [], total: 0 });
+		render(<RequestLogsTable />);
+
+		const firstEnd = mocks.useRequestLogs.mock.calls[0]?.[0]?.endTime;
+		expect(firstEnd).toBe(new Date(2026, 7, 31, 10, 0, 0).getTime());
+
+		// 时间前进 5 分钟后重置：endTime 应更新到新时刻。
+		vi.setSystemTime(new Date(2026, 7, 31, 10, 5, 0));
+		fireEvent.click(screen.getByRole("button", { name: /重置/ }));
+
+		const calls = mocks.useRequestLogs.mock.calls;
+		const lastCall = calls[calls.length - 1]?.[0];
+		expect(lastCall?.endTime).toBe(new Date(2026, 7, 31, 10, 5, 0).getTime());
+		expect(lastCall?.endTime).toBeGreaterThan(firstEnd ?? 0);
+
+		vi.useRealTimers();
+	});
 });

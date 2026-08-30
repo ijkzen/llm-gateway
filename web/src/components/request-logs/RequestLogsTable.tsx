@@ -86,7 +86,9 @@ export function RequestLogsTable() {
 	const [apiKey, setApiKey] = useState<string | undefined>(undefined);
 	// 时间过滤：通用时间组件（天/周/月/年/自定义），默认今天。
 	const [timeWindow, setTimeWindow] = useState<RaceWindowState>(defaultTimeWindow);
-	const [now] = useState(() => Date.now());
+	// now 随重置刷新：当前周期（offset=0）的 endTime 由它派生，
+	// 若固化在挂载时刻，重置后结束时间不更新，最新日志查不到。
+	const [now, setNow] = useState(() => Date.now());
 	const timeBounds = raceWindowBounds(timeWindow, now);
 
 	const { data: virtualModels } = useVirtualModels();
@@ -122,6 +124,7 @@ export function RequestLogsTable() {
 	const { data, isLoading, isError, refetch } = query;
 
 	const resetAll = () => {
+		setNow(Date.now());
 		setTimeWindow(defaultTimeWindow());
 		setVmId(undefined);
 		setProviderId(undefined);
@@ -225,14 +228,8 @@ export function RequestLogsTable() {
 
 	return (
 		<div className="space-y-4">
-			{/* 过滤卡片：条件（上）+ 时间（下），重置按钮在右上角 */}
+			{/* 过滤卡片：条件（上，重置右对齐）+ 时间（下，显示列右对齐） */}
 			<div className="rounded-2xl border border-white/70 bg-white/65 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-				<div className="mb-3 flex items-center justify-end">
-					<Button type="button" variant="outline" size="sm" onClick={resetAll}>
-						<RotateCcw className="mr-1.5 size-4" />
-						重置
-					</Button>
-				</div>
 				<div className="flex flex-wrap items-end gap-3">
 					<div className="space-y-1">
 						<p className="text-xs text-muted-foreground">虚拟模型</p>
@@ -343,6 +340,10 @@ export function RequestLogsTable() {
 							</SelectContent>
 						</Select>
 					</div>
+					<Button type="button" variant="outline" size="sm" onClick={resetAll} className="ml-auto">
+						<RotateCcw className="mr-1.5 size-4" />
+						重置
+					</Button>
 				</div>
 				<div className="mt-3 flex flex-wrap items-center gap-3 border-t border-foreground/5 pt-3">
 					<span className="text-xs text-muted-foreground">时间</span>
@@ -351,11 +352,10 @@ export function RequestLogsTable() {
 						now={now}
 						onChange={(patch) => setTimeWindow((prev) => ({ ...prev, ...patch }))}
 					/>
+					<div className="ml-auto">
+						<DataTableViewOptions table={table} />
+					</div>
 				</div>
-			</div>
-
-			<div className="flex justify-end">
-				<DataTableViewOptions table={table} />
 			</div>
 
 			{isError ? (
