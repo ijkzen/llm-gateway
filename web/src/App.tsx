@@ -1,5 +1,6 @@
 import AppLayout from "@/components/layout";
 import { RequireAuth } from "@/components/require-auth";
+import { ScrollToTop } from "@/components/scroll-to-top";
 import { Toaster } from "@/components/ui/sonner";
 import { useInitTheme } from "@/hooks/use-theme";
 import { lazy } from "react";
@@ -22,6 +23,7 @@ function App() {
 
 	return (
 		<>
+			<ScrollToTop />
 			<Routes>
 				<Route
 					element={
