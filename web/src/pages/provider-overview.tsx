@@ -1,6 +1,5 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
-import { UsageEstimatePanel } from "@/components/dashboard/usage-estimate-panel";
 import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
 import {
 	RaceWindowControl,
@@ -253,9 +252,8 @@ export default function ProviderOverviewPage() {
 				subtitle={windowSubtitle(windows.metrics)}
 				extra={
 					showUsage && (
-						<div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-							<ProviderUsageCard providerId={providerId} />
-							<UsageEstimatePanel estimate={usageEstimate.data} />
+						<div className="mt-4">
+							<ProviderUsageCard providerId={providerId} estimate={usageEstimate.data} />
 						</div>
 					)
 				}

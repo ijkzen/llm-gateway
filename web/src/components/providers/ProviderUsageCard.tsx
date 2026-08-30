@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type UsageWindow, useProviderUsage } from "@/hooks/use-provider-usage";
+import type { UsageEstimate } from "@/hooks/use-usage-estimate";
 import { cn } from "@/lib/utils";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { useState } from "react";
@@ -11,6 +12,17 @@ const WINDOW_LABELS: Record<UsageWindow["window"], string> = {
 	weekly: "本周",
 	monthly: "本月",
 };
+
+/** 预估的月 Token 总量：周窗口 ×4 折算为月，月窗口直接用。 */
+function monthlyEstimateTokens(estimate: UsageEstimate): number | null {
+	if (!estimate.estimatable || estimate.estimatedTotalTokens == null) {
+		return null;
+	}
+	if (estimate.window === "weekly") {
+		return estimate.estimatedTotalTokens * 4;
+	}
+	return estimate.estimatedTotalTokens;
+}
 
 /** provider.extra 中是否开启了用量查询（决定详情页是否渲染本卡片）。 */
 export function usageEnabled(extra: string): boolean {
@@ -75,13 +87,21 @@ function WindowRow({ window }: { window: UsageWindow }) {
 	);
 }
 
-export function ProviderUsageCard({ providerId }: { providerId: number }) {
+export function ProviderUsageCard({
+	providerId,
+	estimate,
+}: {
+	providerId: number;
+	/** 订阅周期 Token 预估（可预估时在右下角展示月 Token 总量）。 */
+	estimate?: UsageEstimate | undefined;
+}) {
 	const [refreshToken, setRefreshToken] = useState(0);
 	const { data, isLoading, isFetching, error } = useProviderUsage(providerId, refreshToken);
 
 	const refresh = () => setRefreshToken((t) => t + 1);
 
 	const availableWindows = data?.windows?.filter((w) => w.available) ?? [];
+	const monthlyTokens = estimate ? monthlyEstimateTokens(estimate) : null;
 
 	return (
 		<div className="rounded-lg border bg-card/50 p-4">
@@ -147,11 +167,22 @@ export function ProviderUsageCard({ providerId }: { providerId: number }) {
 				<p className="text-sm text-muted-foreground">暂无用量数据</p>
 			)}
 
-			{data && (
-				<p className="mt-3 text-xs text-muted-foreground">
-					更新于 {new Date(data.fetchedAt).toLocaleTimeString("zh-CN")}
-				</p>
-			)}
+			{/* 底部：右下角展示预估月 Token 总量（无法预估时留空）。 */}
+			<div className="mt-3 flex items-end justify-between gap-2">
+				{data && (
+					<p className="text-xs text-muted-foreground">
+						更新于 {new Date(data.fetchedAt).toLocaleTimeString("zh-CN")}
+					</p>
+				)}
+				{monthlyTokens !== null && (
+					<p className="text-right text-xs text-muted-foreground">
+						预估月 Token：
+						<span className="font-mono font-medium tabular-nums">
+							{formatAmount(monthlyTokens)}
+						</span>
+					</p>
+				)}
+			</div>
 		</div>
 	);
 }
