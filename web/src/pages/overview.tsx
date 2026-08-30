@@ -3,6 +3,7 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
+import { ProviderRaceSection } from "@/components/provider-race/ProviderRaceSection";
 import { SegmentedControl } from "@/components/segmented-control";
 import { StatsCard } from "@/components/stats-card";
 import { StatsCardsSkeleton } from "@/components/stats-cards-skeleton";
@@ -178,6 +179,7 @@ export default function OverviewPage() {
 
 			<CallAnalysisCard charts={chartsQuery.data} />
 			<TokenAnalysisCard charts={chartsQuery.data} />
+			<ProviderRaceSection />
 		</div>
 	);
 }

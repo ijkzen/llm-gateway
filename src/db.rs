@@ -306,6 +306,22 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         .await?;
     }
 
+    // Migration 12: 供应商赛马排行查询索引。
+    // 赛马/图表/请求日志的查询模式都是「start_time 时间窗口过滤 + 按
+    // provider_id 分组（JOIN provider 出名称）」，把 start_time 单列索引升级为
+    // (start_time, provider_id, success) 复合索引以覆盖过滤 + 分组；另补
+    // success 前置索引服务「只看成功请求」的过滤路径。
+    changed |= ensure_migration(
+        db,
+        12,
+        &[
+            "DROP INDEX IF EXISTS idx_request_start_time",
+            "CREATE INDEX idx_request_start_time ON request (start_time, provider_id, success)",
+            "CREATE INDEX idx_request_success_start ON request (success, start_time)",
+        ],
+    )
+    .await?;
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)

@@ -35,6 +35,20 @@ vi.mock("@/components/dashboard-charts", () => ({
 	ModelRankBarChart: () => <div data-testid="rank-chart" />,
 }));
 
+// 赛马卡片使用 TanStack Query + IntersectionObserver，测试中直接 stub。
+vi.mock("@/hooks/use-in-view", () => ({
+	useInView: () => ({ ref: { current: null }, inView: true }),
+}));
+
+vi.mock("@/hooks/use-provider-race", () => ({
+	useProviderRace: () => ({
+		data: { metric: "token", startTime: 0, endTime: 0, items: [] },
+		isLoading: false,
+		isError: false,
+		refetch: vi.fn(),
+	}),
+}));
+
 function makeSummary(overrides: Partial<DashboardSummary> = {}): DashboardSummary {
 	return {
 		totalRequests: 12345,
