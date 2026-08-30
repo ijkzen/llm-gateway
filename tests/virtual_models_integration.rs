@@ -138,6 +138,44 @@ async fn test_create_and_get_virtual_models() {
     assert_eq!(body["data"]["items"].as_array().unwrap().len(), 2);
 }
 
+/// 成员排序：启用成员在前、组内按远端模型 ID 字母升序。
+#[tokio::test]
+async fn test_member_sort_enabled_first_then_alphabetical() {
+    let (app, db) = setup_app().await;
+    let p1 = seed_provider(&db, "p1").await;
+    // 故意乱序创建：z 开头停用、a 开头启用、m 开头停用、b 开头启用。
+    let z = seed_provider_model(&db, p1, "z-model").await;
+    let a = seed_provider_model(&db, p1, "a-model").await;
+    let m = seed_provider_model(&db, p1, "m-model").await;
+    let b = seed_provider_model(&db, p1, "b-model").await;
+
+    let payload = json!({
+        "displayId": "sorted",
+        "loadBalancingStrategy": 0,
+        "fallbackStrategy": 0,
+        "items": [
+            {"modelId": z, "enable": false},
+            {"modelId": a, "enable": true},
+            {"modelId": m, "enable": false},
+            {"modelId": b, "enable": true},
+        ],
+    });
+    let (status, body) = send_json(app.clone(), "POST", "/api/virtual-models", payload).await;
+    assert_eq!(status, 201);
+
+    let items = body["data"]["items"].as_array().unwrap();
+    let remote_ids: Vec<&str> = items
+        .iter()
+        .map(|it| it["providerModelId"].as_str().unwrap())
+        .collect();
+    // 启用在前且按字母序：a-model、b-model，然后停用按字母序：m-model、z-model。
+    assert_eq!(
+        remote_ids,
+        vec!["a-model", "b-model", "m-model", "z-model"],
+        "成员应启用优先 + 字母升序：{remote_ids:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_create_virtual_model_validations() {
     let (app, db) = setup_app().await;

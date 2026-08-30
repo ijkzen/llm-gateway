@@ -6,7 +6,8 @@ import {
 } from "@/components/ui/chart";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ModelValue, TrendPoint } from "@/hooks/use-dashboard-stats";
-import { middleEllipsis, topWithOther } from "@/lib/utils";
+import { cn, middleEllipsis, topWithOther } from "@/lib/utils";
+import { useState } from "react";
 import {
 	Bar,
 	BarChart,
@@ -148,13 +149,33 @@ function toPieConfig(data: ChartItem[]) {
 }
 
 /** 图例项：色块 + 中间省略的「供应商・模型」文本，hover 显示完整名称。 */
-function ModelLegendItem({ label, color }: { label: string; color?: string }) {
+function ModelLegendItem({
+	label,
+	color,
+	active,
+	percentText,
+}: {
+	label: string;
+	color?: string;
+	active?: boolean;
+	percentText?: string;
+}) {
 	return (
 		<div className="flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground">
 			<div className="h-2 w-2 shrink-0 rounded-[2px]" style={{ backgroundColor: color }} />
 			<Tooltip>
 				<TooltipTrigger asChild>
-					<span className="cursor-default">{middleEllipsis(label, 18)}</span>
+					<span
+						className={cn(
+							"cursor-default transition-colors",
+							active && "font-medium underline decoration-2 underline-offset-4",
+						)}
+					>
+						{middleEllipsis(label, 18)}
+						{active && percentText !== undefined && (
+							<span className="ml-1 tabular-nums text-muted-foreground">{percentText}</span>
+						)}
+					</span>
 				</TooltipTrigger>
 				<TooltipContent side="top">{label}</TooltipContent>
 			</Tooltip>
@@ -165,8 +186,13 @@ function ModelLegendItem({ label, color }: { label: string; color?: string }) {
 /** 饼图 / 条形图共享的图例内容：取「供应商・模型」组合 label 作唯一 key。 */
 function ModelLegendContent({
 	payload,
+	activeLabel,
+	percentTextOf,
 }: {
 	payload?: Array<{ value: string; color?: string }>;
+	activeLabel?: string;
+	/** 选中项的百分比文字（未选中项返回 undefined，不展示）。 */
+	percentTextOf?: (label: string) => string | undefined;
 }) {
 	if (!payload?.length) {
 		return null;
@@ -174,15 +200,33 @@ function ModelLegendContent({
 	return (
 		<div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 pt-3">
 			{payload.map((item) => (
-				<ModelLegendItem key={item.value} label={item.value} color={item.color} />
+				<ModelLegendItem
+					key={item.value}
+					label={item.value}
+					color={item.color}
+					active={activeLabel === item.value}
+					percentText={percentTextOf?.(item.value)}
+				/>
 			))}
 		</div>
 	);
 }
 
+/** 占比计算（占比 ×100，保留 3 位小数，去尾零），供图例展示。 */
+function percentText(value: number, total: number): string {
+	if (total <= 0) {
+		return "";
+	}
+	const percent = Number.parseFloat(((value / total) * 100).toFixed(3));
+	return `${percent}%`;
+}
+
 /** 按模型占比的饼图（Top 10 + 其他）。 */
 export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 	const ranked = toRankedModels(data);
+	const total = ranked.reduce((sum, item) => sum + item.value, 0);
+	const [activeLabel, setActiveLabel] = useState<string | null>(null);
+
 	return (
 		<ChartContainer config={toPieConfig(ranked)} className="mx-auto h-[260px] w-full">
 			<PieChart>
@@ -201,12 +245,41 @@ export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 						/>
 					}
 				/>
-				<Pie data={ranked} dataKey="value" nameKey="label" strokeWidth={2}>
+				<Pie
+					data={ranked}
+					dataKey="value"
+					nameKey="label"
+					strokeWidth={2}
+					outerRadius={110}
+					onClick={(entry) => setActiveLabel((prev) => (prev === entry.label ? null : entry.label))}
+					style={{ cursor: "pointer", outline: "none" }}
+				>
 					{ranked.map((item, index) => (
-						<Cell key={item.label} fill={chartColorAt(index)} />
+						<Cell
+							key={item.label}
+							fill={chartColorAt(index)}
+							className={cn(
+								"transition-opacity [&:hover]:opacity-80",
+								activeLabel !== null && activeLabel !== item.label && "opacity-40",
+							)}
+							strokeOpacity={activeLabel === item.label ? 1 : 0.5}
+						/>
 					))}
 				</Pie>
-				<ChartLegend content={<ModelLegendContent />} />
+				<ChartLegend
+					content={
+						<ModelLegendContent
+							activeLabel={activeLabel ?? undefined}
+							percentTextOf={(label) => {
+								if (activeLabel !== label) {
+									return undefined;
+								}
+								const item = ranked.find((r) => r.label === label);
+								return item ? percentText(item.value, total) : undefined;
+							}}
+						/>
+					}
+				/>
 			</PieChart>
 		</ChartContainer>
 	);

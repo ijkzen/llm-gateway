@@ -26,7 +26,7 @@ import {
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { useLogout, useMe } from "@/hooks/use-auth";
-import { CRON_JOBS_PAGE, PAGES, SETTINGS_PAGE } from "@/lib/pages";
+import { NAV_GROUPS } from "@/lib/pages";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronUp, LogOut, RefreshCw, Waypoints } from "lucide-react";
 import { Suspense } from "react";
@@ -70,12 +70,12 @@ export default function AppLayout() {
 					</SidebarMenu>
 				</SidebarHeader>
 				<SidebarContent>
-					<SidebarGroup>
-						<SidebarGroupLabel>导航</SidebarGroupLabel>
-						<SidebarGroupContent>
-							<SidebarMenu>
-								{PAGES.filter((page) => page !== CRON_JOBS_PAGE && page !== SETTINGS_PAGE).map(
-									(page) => (
+					{NAV_GROUPS.map((group) => (
+						<SidebarGroup key={group.label}>
+							<SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+							<SidebarGroupContent>
+								<SidebarMenu>
+									{group.pages.map((page) => (
 										<SidebarMenuItem key={page.path}>
 											<SidebarMenuButton asChild isActive={location.pathname === page.path}>
 												<Link to={page.path}>
@@ -84,25 +84,14 @@ export default function AppLayout() {
 												</Link>
 											</SidebarMenuButton>
 										</SidebarMenuItem>
-									),
-								)}
-							</SidebarMenu>
-						</SidebarGroupContent>
-					</SidebarGroup>
+									))}
+								</SidebarMenu>
+							</SidebarGroupContent>
+						</SidebarGroup>
+					))}
 				</SidebarContent>
 				<SidebarFooter>
 					<SidebarMenu>
-						{/* 管理类入口：定时任务 / 系统设置，置于用户区块上方 */}
-						{[CRON_JOBS_PAGE, SETTINGS_PAGE].map((page) => (
-							<SidebarMenuItem key={page.path}>
-								<SidebarMenuButton asChild isActive={location.pathname === page.path}>
-									<Link to={page.path}>
-										<page.icon />
-										<span>{page.title}</span>
-									</Link>
-								</SidebarMenuButton>
-							</SidebarMenuItem>
-						))}
 						<SidebarMenuItem>
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>

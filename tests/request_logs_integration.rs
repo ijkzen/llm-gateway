@@ -16,11 +16,14 @@ async fn setup_app() -> (axum::Router, DatabaseConnection) {
     (app, db)
 }
 
-/// 种入一条 request 行。
-async fn seed_request(
+/// 种入一条 request 行（可覆盖供应商/模型）。
+#[allow(clippy::too_many_arguments)]
+async fn seed_request_full(
     db: &DatabaseConnection,
     request_id: &str,
     vm_id: i32,
+    provider_id: i32,
+    model_id: &str,
     api_key: &str,
     start_time: i64,
     success: bool,
@@ -28,8 +31,8 @@ async fn seed_request(
     request::ActiveModel {
         request_id: Set(request_id.to_string()),
         virtual_model_id: Set(vm_id),
-        provider_id: Set(1),
-        model_id: Set("gpt-4o".to_string()),
+        provider_id: Set(provider_id),
+        model_id: Set(model_id.to_string()),
         stream: Set(false),
         ttft: Set(None),
         input_tokens: Set(Some(100)),
@@ -49,6 +52,21 @@ async fn seed_request(
     .insert(db)
     .await
     .unwrap();
+}
+
+/// 种入一条 request 行（默认 provider 1 / 模型 gpt-4o）。
+async fn seed_request(
+    db: &DatabaseConnection,
+    request_id: &str,
+    vm_id: i32,
+    api_key: &str,
+    start_time: i64,
+    success: bool,
+) {
+    seed_request_full(
+        db, request_id, vm_id, 1, "gpt-4o", api_key, start_time, success,
+    )
+    .await;
 }
 
 async fn get(app: &axum::Router, uri: &str) -> (StatusCode, Value) {
@@ -127,6 +145,44 @@ async fn test_filters_vm_api_key_time() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["total"], 1);
     assert_eq!(body["data"]["items"][0]["requestId"], "r1");
+}
+
+#[tokio::test]
+async fn test_filters_provider_model_success() {
+    let (app, db) = setup_app().await;
+    // provider 1 / gpt-4o（成功）、provider 1 / gpt-4o（失败）、provider 2 / claude（成功）。
+    seed_request_full(&db, "p1-ok", 1, 1, "gpt-4o", "key-a", 1_700_000_000_000, true).await;
+    seed_request_full(&db, "p1-bad", 1, 1, "gpt-4o", "key-a", 1_700_000_100_000, false).await;
+    seed_request_full(&db, "p2-ok", 1, 2, "claude-3", "key-a", 1_700_000_200_000, true).await;
+
+    // 按供应商过滤。
+    let (status, body) = get(&app, "/api/request-logs?providerId=2").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["total"], 1);
+    assert_eq!(body["data"]["items"][0]["requestId"], "p2-ok");
+
+    // 按供应商模型过滤。
+    let (status, body) = get(&app, "/api/request-logs?modelId=claude-3").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["total"], 1);
+    assert_eq!(body["data"]["items"][0]["requestId"], "p2-ok");
+
+    // 按结果状态过滤：成功。
+    let (status, body) = get(&app, "/api/request-logs?success=true").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["total"], 2);
+
+    // 失败。
+    let (status, body) = get(&app, "/api/request-logs?success=false").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["total"], 1);
+    assert_eq!(body["data"]["items"][0]["requestId"], "p1-bad");
+
+    // 组合：供应商 + 模型 + 结果。
+    let (status, body) = get(&app, "/api/request-logs?providerId=1&modelId=gpt-4o&success=true").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["total"], 1);
+    assert_eq!(body["data"]["items"][0]["requestId"], "p1-ok");
 }
 
 #[tokio::test]

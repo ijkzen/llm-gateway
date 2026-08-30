@@ -1,5 +1,5 @@
 import { type ApiResponse, api, unwrap } from "@/lib/api";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 /** 赛马排序指标。 */
 export type RaceSortKey =
@@ -81,5 +81,7 @@ export function useVirtualModelRace(window: RaceWindow, sort: RaceSort, enabled:
 			return unwrap(res);
 		},
 		enabled,
+		// 切换时间窗口期间保留上一窗口数据，避免图表闪回骨架导致页面抖动。
+		placeholderData: keepPreviousData,
 	});
 }

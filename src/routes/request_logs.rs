@@ -1,7 +1,8 @@
 //! 请求日志查询：`GET /api/request-logs`。
 //!
-//! 服务端分页 + 过滤（时间段 / 虚拟模型 / API Key）+ 排序，返回全字段行
-//! （含 JOIN 出的虚拟模型 displayId），供前端表格与行详情弹窗使用。
+//! 服务端分页 + 过滤（时间段 / 虚拟模型 / 供应商 / 供应商模型 / 结果状态 /
+//! API Key）+ 排序，返回全字段行（含 JOIN 出的虚拟模型 displayId），供前端
+//! 表格与行详情弹窗使用。
 
 use axum::{
     Json, Router,
@@ -42,6 +43,12 @@ struct ListQuery {
     page: Option<u32>,
     page_size: Option<u32>,
     vm_id: Option<i32>,
+    /// 按供应商过滤（request.provider_id）。
+    provider_id: Option<i32>,
+    /// 按供应商模型过滤（request.model_id，供应商侧真实模型 ID）。
+    model_id: Option<String>,
+    /// 按结果状态过滤：省略 = 全部，true = 成功，false = 失败。
+    success: Option<bool>,
     api_key: Option<String>,
     start_time: Option<i64>,
     end_time: Option<i64>,
@@ -100,6 +107,18 @@ async fn list_request_logs(
     if let Some(vm_id) = query.vm_id {
         where_sql.push_str(" AND r.virtual_model_id = ?");
         params.push(vm_id.into());
+    }
+    if let Some(provider_id) = query.provider_id {
+        where_sql.push_str(" AND r.provider_id = ?");
+        params.push(provider_id.into());
+    }
+    if let Some(model_id) = query.model_id.filter(|m| !m.trim().is_empty()) {
+        where_sql.push_str(" AND r.model_id = ?");
+        params.push(model_id.trim().to_string().into());
+    }
+    if let Some(success) = query.success {
+        where_sql.push_str(" AND r.success = ?");
+        params.push(success.into());
     }
     if let Some(api_key) = query.api_key.filter(|k| !k.trim().is_empty()) {
         where_sql.push_str(" AND r.api_key_name = ?");

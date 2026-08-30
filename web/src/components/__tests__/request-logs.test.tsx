@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
 	useRequestLogs: vi.fn(),
 	useVirtualModels: vi.fn(),
 	useApiKeys: vi.fn(),
+	useProviders: vi.fn(),
+	useProviderModels: vi.fn(),
 	refetch: vi.fn(),
 }));
 
@@ -19,9 +21,13 @@ vi.mock("@/hooks/use-api-keys", () => ({
 	useApiKeys: mocks.useApiKeys,
 }));
 vi.mock("@/hooks/use-providers", () => ({
+	useProviders: mocks.useProviders,
 	useProviderDetail: (id: number | null) => ({
 		data: id ? { id, name: "Provider Beta" } : undefined,
 	}),
+}));
+vi.mock("@/hooks/use-provider-models", () => ({
+	useProviderModels: mocks.useProviderModels,
 }));
 
 function makeRow(overrides: Partial<Parameters<typeof mocks.useRequestLogs>[0]> = {}) {
@@ -67,6 +73,26 @@ describe("RequestLogsTable", () => {
 		});
 		mocks.useApiKeys.mockReturnValue({
 			data: [{ id: 1, name: "key-a" }],
+		});
+		mocks.useProviders.mockReturnValue({
+			data: [{ id: 2, name: "Provider Beta" }],
+		});
+		mocks.useProviderModels.mockReturnValue({
+			data: [
+				{
+					modelId: 10,
+					providerId: 2,
+					providerModelId: "gpt-4o",
+					contextLength: 0,
+					maxOutputTokens: 0,
+					reasoning: false,
+					toolUse: false,
+					imageUnderstand: false,
+					videoUnderstand: false,
+					createdAt: "",
+					updatedAt: "",
+				},
+			],
 		});
 	});
 

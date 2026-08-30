@@ -1,5 +1,5 @@
 import { type ApiResponse, api, unwrap } from "@/lib/api";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 export interface ModelMetrics {
 	/** 供应商 ID。 */
@@ -62,5 +62,7 @@ export function useModelMetrics(
 			return unwrap(res);
 		},
 		enabled,
+		// 切换时间窗口期间保留上一窗口数据，避免指标卡片闪回骨架导致页面抖动。
+		placeholderData: keepPreviousData,
 	});
 }

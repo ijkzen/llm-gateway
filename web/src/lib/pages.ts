@@ -17,6 +17,12 @@ export interface PageConfig {
 	icon: LucideIcon;
 }
 
+/** 侧边栏分组：组标题 + 组内页面（顺序即展示顺序）。 */
+export interface PageGroup {
+	label: string;
+	pages: readonly PageConfig[];
+}
+
 export const OVERVIEW_PAGE: PageConfig = {
 	path: "/",
 	title: "数据面板",
@@ -82,4 +88,15 @@ export const PAGES: readonly PageConfig[] = [
 	API_KEYS_PAGE,
 	REQUEST_LOGS_PAGE,
 	SETTINGS_PAGE,
+];
+
+/** 侧边栏导航分组：概览 / 接入配置 / 观测 / 管理。 */
+export const NAV_GROUPS: readonly PageGroup[] = [
+	{ label: "概览", pages: [OVERVIEW_PAGE] },
+	{
+		label: "接入配置",
+		pages: [PROVIDERS_PAGE, PROVIDER_MODELS_PAGE, VIRTUAL_MODELS_PAGE, API_KEYS_PAGE],
+	},
+	{ label: "观测", pages: [REQUEST_LOGS_PAGE] },
+	{ label: "管理", pages: [CRON_JOBS_PAGE, SETTINGS_PAGE] },
 ];

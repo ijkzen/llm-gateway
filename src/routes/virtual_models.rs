@@ -155,6 +155,10 @@ async fn validate_item_model_ids<C: ConnectionTrait>(
 
 /// 加载成员明细并附带供应商与供应商模型展示信息，按虚拟模型 id 分组；
 /// `virtual_model_id` 为 Some 时只加载该虚拟模型的成员。
+///
+/// 组内成员排序规则：启用成员在前、停用成员在后（启用态不因供应商
+/// 禁用而改变，可用性以 provider_enable 为准但排序只看条目启用），
+/// 启用/停用内部按远端模型 ID 字母升序，保证列表顺序稳定可预期。
 async fn load_item_responses<C: ConnectionTrait>(
     db: &C,
     virtual_model_id: Option<i32>,
@@ -220,6 +224,14 @@ async fn load_item_responses<C: ConnectionTrait>(
                 image_understand: pm.image_understand,
                 video_understand: pm.video_understand,
             });
+    }
+    // 启用成员在前，组内按远端模型 ID 字母升序。
+    for items in grouped.values_mut() {
+        items.sort_by(|a, b| {
+            b.enable
+                .cmp(&a.enable)
+                .then_with(|| a.provider_model_id.cmp(&b.provider_model_id))
+        });
     }
     Ok(grouped)
 }

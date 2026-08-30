@@ -1,5 +1,5 @@
 import { type ApiResponse, api, unwrap } from "@/lib/api";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 export interface DashboardSummary {
 	totalRequests: number;
@@ -55,7 +55,8 @@ export const dashboardStatsKeys = {
 		] as const,
 };
 
-const REFETCH_INTERVAL = 60_000;
+// 数据面板不做主动轮询刷新：一级/二级/三级页均依赖手动刷新或切窗触发
+// （refetchOnWindowFocus 等默认策略保持不变）。
 
 export function useDashboardSummary() {
 	return useQuery<DashboardSummary>({
@@ -64,7 +65,6 @@ export function useDashboardSummary() {
 			const res = await api.get("stats/summary").json<ApiResponse<DashboardSummary>>();
 			return unwrap(res);
 		},
-		refetchInterval: REFETCH_INTERVAL,
 	});
 }
 
@@ -84,6 +84,7 @@ export function useDashboardCharts(params: ChartsParams = {}) {
 			const res = await api.get(`stats/charts${suffix}`).json<ApiResponse<DashboardCharts>>();
 			return unwrap(res);
 		},
-		refetchInterval: REFETCH_INTERVAL,
+		// 切换时间窗口期间保留上一窗口数据，避免图表闪回骨架导致页面抖动。
+		placeholderData: keepPreviousData,
 	});
 }

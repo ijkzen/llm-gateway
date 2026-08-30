@@ -21,6 +21,8 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { useApiKeys } from "@/hooks/use-api-keys";
+import { useProviderModels } from "@/hooks/use-provider-models";
+import { useProviders } from "@/hooks/use-providers";
 import { type RequestLogRow, useRequestLogs } from "@/hooks/use-request-logs";
 import { useVirtualModels } from "@/hooks/use-virtual-models";
 import {
@@ -66,8 +68,11 @@ export function RequestLogsTable() {
 	const [pageSize, setPageSize] = useState(20);
 	const [detailRow, setDetailRow] = useState<RequestLogRow | null>(null);
 
-	// 过滤条件。
+	// 过滤条件：先过滤（虚拟模型/供应商/供应商模型/结果状态/API Key），再选时间段。
 	const [vmId, setVmId] = useState<number | undefined>(undefined);
+	const [providerId, setProviderId] = useState<number | undefined>(undefined);
+	const [modelId, setModelId] = useState<string | undefined>(undefined);
+	const [success, setSuccess] = useState<boolean | undefined>(undefined);
 	const [apiKey, setApiKey] = useState<string | undefined>(undefined);
 	const [startTime, setStartTime] = useState<number | undefined>(undefined);
 	const [endTime, setEndTime] = useState<number | undefined>(undefined);
@@ -76,7 +81,18 @@ export function RequestLogsTable() {
 	const [customEnd, setCustomEnd] = useState("");
 
 	const { data: virtualModels } = useVirtualModels();
+	const { data: providers } = useProviders();
+	const { data: allProviderModels } = useProviderModels();
 	const { data: apiKeys } = useApiKeys();
+
+	// 供应商模型选项随所选供应商级联过滤。
+	const providerModelOptions = useMemo(
+		() =>
+			(allProviderModels ?? []).filter(
+				(model) => providerId === undefined || model.providerId === providerId,
+			),
+		[allProviderModels, providerId],
+	);
 
 	const sortBy = sorting[0]?.id;
 	const sortOrder = sorting[0]?.desc ? "desc" : "asc";
@@ -85,6 +101,9 @@ export function RequestLogsTable() {
 		page,
 		pageSize,
 		vmId,
+		providerId,
+		modelId,
+		success,
 		apiKey,
 		startTime,
 		endTime,
@@ -115,6 +134,9 @@ export function RequestLogsTable() {
 		setStartTime(Date.now() - 24 * 60 * 60 * 1000);
 		setEndTime(undefined);
 		setVmId(undefined);
+		setProviderId(undefined);
+		setModelId(undefined);
+		setSuccess(undefined);
 		setApiKey(undefined);
 		setPage(1);
 	};
@@ -213,7 +235,124 @@ export function RequestLogsTable() {
 
 	return (
 		<div className="space-y-4">
-			{/* 过滤工具栏 */}
+			{/* 过滤工具栏：先过滤（虚拟模型/供应商/模型/结果/API Key），再选时间段 */}
+			<div className="flex flex-wrap items-end gap-3 rounded-2xl border border-white/70 bg-white/65 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
+				<div className="space-y-1">
+					<p className="text-xs text-muted-foreground">虚拟模型</p>
+					<Select
+						value={vmId !== undefined ? String(vmId) : "all"}
+						onValueChange={(v) => {
+							setVmId(v === "all" ? undefined : Number(v));
+							setPage(1);
+						}}
+					>
+						<SelectTrigger className="w-[160px]" aria-label="按虚拟模型过滤">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="all">全部</SelectItem>
+							{virtualModels?.map((vm) => (
+								<SelectItem key={vm.virtualModelId} value={String(vm.virtualModelId)}>
+									{vm.displayId}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</div>
+				<div className="space-y-1">
+					<p className="text-xs text-muted-foreground">供应商</p>
+					<Select
+						value={providerId !== undefined ? String(providerId) : "all"}
+						onValueChange={(v) => {
+							setProviderId(v === "all" ? undefined : Number(v));
+							// 供应商变化后旧模型过滤不再适用，清空并回到全部。
+							setModelId(undefined);
+							setPage(1);
+						}}
+					>
+						<SelectTrigger className="w-[160px]" aria-label="按供应商过滤">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="all">全部</SelectItem>
+							{providers?.map((p) => (
+								<SelectItem key={p.id} value={String(p.id)}>
+									{p.name}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</div>
+				<div className="space-y-1">
+					<p className="text-xs text-muted-foreground">供应商模型</p>
+					<Select
+						value={modelId ?? "all"}
+						onValueChange={(v) => {
+							setModelId(v === "all" ? undefined : v);
+							setPage(1);
+						}}
+					>
+						<SelectTrigger className="w-[180px]" aria-label="按供应商模型过滤">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="all">全部</SelectItem>
+							{providerModelOptions.map((model) => (
+								<SelectItem key={model.modelId} value={model.providerModelId}>
+									{model.providerModelId}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</div>
+				<div className="space-y-1">
+					<p className="text-xs text-muted-foreground">结果</p>
+					<Select
+						value={success === undefined ? "all" : success ? "true" : "false"}
+						onValueChange={(v) => {
+							setSuccess(v === "all" ? undefined : v === "true");
+							setPage(1);
+						}}
+					>
+						<SelectTrigger className="w-[100px]" aria-label="按结果状态过滤">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="all">全部</SelectItem>
+							<SelectItem value="true">成功</SelectItem>
+							<SelectItem value="false">失败</SelectItem>
+						</SelectContent>
+					</Select>
+				</div>
+				<div className="space-y-1">
+					<p className="text-xs text-muted-foreground">API Key</p>
+					<Select
+						value={apiKey ?? "all"}
+						onValueChange={(v) => {
+							setApiKey(v === "all" ? undefined : v);
+							setPage(1);
+						}}
+					>
+						<SelectTrigger className="w-[160px]" aria-label="按 API Key 过滤">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="all">全部</SelectItem>
+							{apiKeys?.map((key) => (
+								<SelectItem key={key.id} value={key.name}>
+									{key.name}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</div>
+				<Button type="button" variant="outline" size="sm" onClick={resetAll} className="ml-auto">
+					<RotateCcw className="mr-1.5 size-4" />
+					重置
+				</Button>
+			</div>
+
+			{/* 时间段：快捷范围 + 自定义起止 */}
 			<div className="flex flex-wrap items-end gap-3 rounded-2xl border border-white/70 bg-white/65 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
 				<div className="space-y-1">
 					<p className="text-xs text-muted-foreground">时间段</p>
@@ -251,54 +390,6 @@ export function RequestLogsTable() {
 						</Button>
 					</div>
 				</div>
-				<div className="space-y-1">
-					<p className="text-xs text-muted-foreground">虚拟模型</p>
-					<Select
-						value={vmId !== undefined ? String(vmId) : "all"}
-						onValueChange={(v) => {
-							setVmId(v === "all" ? undefined : Number(v));
-							setPage(1);
-						}}
-					>
-						<SelectTrigger className="w-[160px]" aria-label="按虚拟模型过滤">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">全部</SelectItem>
-							{virtualModels?.map((vm) => (
-								<SelectItem key={vm.virtualModelId} value={String(vm.virtualModelId)}>
-									{vm.displayId}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</div>
-				<div className="space-y-1">
-					<p className="text-xs text-muted-foreground">API Key</p>
-					<Select
-						value={apiKey ?? "all"}
-						onValueChange={(v) => {
-							setApiKey(v === "all" ? undefined : v);
-							setPage(1);
-						}}
-					>
-						<SelectTrigger className="w-[160px]" aria-label="按 API Key 过滤">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">全部</SelectItem>
-							{apiKeys?.map((key) => (
-								<SelectItem key={key.id} value={key.name}>
-									{key.name}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</div>
-				<Button type="button" variant="outline" size="sm" onClick={resetAll} className="ml-auto">
-					<RotateCcw className="mr-1.5 size-4" />
-					重置
-				</Button>
 			</div>
 
 			<div className="flex justify-end">

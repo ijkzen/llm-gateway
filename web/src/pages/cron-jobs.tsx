@@ -15,13 +15,16 @@ import { useState } from "react";
 
 export default function CronJobsPage() {
 	const [selectedName, setSelectedName] = useState<string | null>(null);
+	// 默认选中第一个定时任务（数据加载后尚未手动选择时）。
+	const [hasUserSelected, setHasUserSelected] = useState(false);
 	const [editingJob, setEditingJob] = useState<CronJob | null>(null);
 	const [deletingJobName, setDeletingJobName] = useState<string | null>(null);
 	const [viewingLogsJob, setViewingLogsJob] = useState<CronJob | null>(null);
 
 	const { data: jobs, isLoading, isError, refetch } = useCronJobs();
 
-	const selectedJob = jobs?.find((j) => j.name === selectedName) ?? undefined;
+	const effectiveSelectedName = hasUserSelected ? selectedName : (jobs?.[0]?.name ?? null);
+	const selectedJob = jobs?.find((j) => j.name === effectiveSelectedName) ?? undefined;
 
 	if (isLoading) {
 		return (
@@ -66,8 +69,11 @@ export default function CronJobsPage() {
 				<div className="h-full min-h-0 overflow-auto lg:col-span-1">
 					<CronJobList
 						jobs={jobs}
-						selectedName={selectedName}
-						onSelect={(job) => setSelectedName(job.name)}
+						selectedName={effectiveSelectedName}
+						onSelect={(job) => {
+							setSelectedName(job.name);
+							setHasUserSelected(true);
+						}}
 					/>
 				</div>
 				<div className="h-full min-h-0 lg:col-span-2">

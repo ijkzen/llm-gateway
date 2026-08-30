@@ -38,15 +38,15 @@ export function CronJobList({ jobs, selectedName, onSelect }: CronJobListProps) 
 					<CardHeader className="py-4">
 						<CardTitle className="text-sm font-medium text-muted-foreground">{group}</CardTitle>
 					</CardHeader>
-					<CardContent className="p-0">
-						<ul className="divide-y">
+					<CardContent className="p-2">
+						<ul className="space-y-1">
 							{groupJobs.map((job) => (
 								<li key={job.name}>
 									<button
 										type="button"
 										onClick={() => onSelect(job)}
 										className={cn(
-											"flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors",
+											"flex w-full items-center justify-between gap-3 rounded-lg px-4 py-3 text-left transition-colors",
 											selectedName === job.name
 												? "bg-foreground text-background dark:bg-primary dark:text-primary-foreground"
 												: "hover:bg-slate-100/60 dark:hover:bg-white/5",
