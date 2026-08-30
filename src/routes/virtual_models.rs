@@ -40,6 +40,8 @@ struct VirtualModelItemResponse {
     provider_name: String,
     /// 供应商启用状态；false 时该成员实际不可用。
     provider_enable: bool,
+    /// 供应商付费模式：0=按量付费，1=订阅制。
+    billing_mode: i32,
     /// 远端模型 ID 字符串，如 `gpt-4o`。
     provider_model_id: String,
     context_length: i64,
@@ -156,9 +158,8 @@ async fn validate_item_model_ids<C: ConnectionTrait>(
 /// 加载成员明细并附带供应商与供应商模型展示信息，按虚拟模型 id 分组；
 /// `virtual_model_id` 为 Some 时只加载该虚拟模型的成员。
 ///
-/// 组内成员排序规则：启用成员在前、停用成员在后（启用态不因供应商
-/// 禁用而改变，可用性以 provider_enable 为准但排序只看条目启用），
-/// 启用/停用内部按远端模型 ID 字母升序，保证列表顺序稳定可预期。
+/// 注意：组内顺序由 `virtual_model_response` 的 `sort_items` 统一排序
+/// （启用优先 → LB 策略分组 → 字母序），此处保持数据库返回序。
 async fn load_item_responses<C: ConnectionTrait>(
     db: &C,
     virtual_model_id: Option<i32>,
@@ -216,6 +217,7 @@ async fn load_item_responses<C: ConnectionTrait>(
                 provider_id: p.id,
                 provider_name: p.name.clone(),
                 provider_enable: p.enable,
+                billing_mode: p.billing_mode,
                 provider_model_id: pm.provider_model_id.clone(),
                 context_length: pm.context_length,
                 max_output_tokens: pm.max_output_tokens,
@@ -225,21 +227,47 @@ async fn load_item_responses<C: ConnectionTrait>(
                 video_understand: pm.video_understand,
             });
     }
-    // 启用成员在前，组内按远端模型 ID 字母升序。
-    for items in grouped.values_mut() {
-        items.sort_by(|a, b| {
-            b.enable
-                .cmp(&a.enable)
-                .then_with(|| a.provider_model_id.cmp(&b.provider_model_id))
-        });
-    }
     Ok(grouped)
+}
+
+/// 成员排序：启用优先 → 按虚拟模型负载均衡策略分组 → 组内远端模型 ID 字母升序。
+///
+/// 策略 0（订阅制优先）：订阅制成员在前、按量付费在后；策略 1（按量付费优先）
+/// 反之；策略 2/3（轮转/随机）不按付费模式分组。启用/停用两个大组内部都
+/// 先做策略分组，再按 provider_model_id 字母升序。
+fn sort_items(
+    items: &mut [VirtualModelItemResponse],
+    load_balancing_strategy: i32,
+) {
+    let subscription_first = load_balancing_strategy == 0;
+    let payg_first = load_balancing_strategy == 1;
+    items.sort_by(|a, b| {
+        // 第一层：启用在前。
+        b.enable
+            .cmp(&a.enable)
+            // 第二层：LB 策略分组（仅策略 0/1 生效）。
+            .then_with(|| {
+                if !(subscription_first || payg_first) {
+                    return std::cmp::Ordering::Equal;
+                }
+                let a_sub = a.billing_mode == 1;
+                let b_sub = b.billing_mode == 1;
+                if subscription_first {
+                    b_sub.cmp(&a_sub)
+                } else {
+                    a_sub.cmp(&b_sub)
+                }
+            })
+            // 第三层：字母升序。
+            .then_with(|| a.provider_model_id.cmp(&b.provider_model_id))
+    });
 }
 
 fn virtual_model_response(
     model: virtual_model::Model,
-    items: Vec<VirtualModelItemResponse>,
+    mut items: Vec<VirtualModelItemResponse>,
 ) -> VirtualModelResponse {
+    sort_items(&mut items, model.load_balancing_strategy);
     VirtualModelResponse {
         virtual_model_id: model.virtual_model_id,
         display_id: model.display_id,

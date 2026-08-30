@@ -176,6 +176,103 @@ async fn test_member_sort_enabled_first_then_alphabetical() {
     );
 }
 
+/// 成员排序第二层：按虚拟模型 LB 策略分组（订阅制优先 → 订阅在前）。
+#[tokio::test]
+async fn test_member_sort_lb_strategy_grouping() {
+    let (app, db) = setup_app().await;
+    let payg = seed_provider(&db, "payg").await;
+    let sub = seed_provider(&db, "sub").await;
+    // 修改 sub 供应商为订阅制（billing_mode=1）。
+    provider::ActiveModel {
+        id: Set(sub),
+        billing_mode: Set(1),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    // payg：z-payg（启用）、a-payg（停用）；sub：m-sub（启用）、b-sub（停用）。
+    let z_payg = seed_provider_model(&db, payg, "z-payg").await;
+    let a_payg = seed_provider_model(&db, payg, "a-payg").await;
+    let m_sub = seed_provider_model(&db, sub, "m-sub").await;
+    let b_sub = seed_provider_model(&db, sub, "b-sub").await;
+
+    let payload = json!({
+        "displayId": "lb-sorted",
+        "loadBalancingStrategy": 0,
+        "fallbackStrategy": 0,
+        "items": [
+            {"modelId": z_payg, "enable": true},
+            {"modelId": a_payg, "enable": false},
+            {"modelId": m_sub, "enable": true},
+            {"modelId": b_sub, "enable": false},
+        ],
+    });
+    let (status, body) = send_json(app.clone(), "POST", "/api/virtual-models", payload).await;
+    assert_eq!(status, 201);
+
+    let items = body["data"]["items"].as_array().unwrap();
+    let remote_ids: Vec<&str> = items
+        .iter()
+        .map(|it| it["providerModelId"].as_str().unwrap())
+        .collect();
+    // 启用在前；启用组内订阅制（m-sub）在按量（z-payg）前，字母序持平；
+    // 停用组内订阅制（b-sub）在按量（a-payg）前。
+    assert_eq!(
+        remote_ids,
+        vec!["m-sub", "z-payg", "b-sub", "a-payg"],
+        "订阅制优先策略下应按 订阅→按量 分组：{remote_ids:?}"
+    );
+}
+
+/// 成员排序第二层：按量付费优先策略 → 按量在前。
+#[tokio::test]
+async fn test_member_sort_payg_first_grouping() {
+    let (app, db) = setup_app().await;
+    let payg = seed_provider(&db, "payg").await;
+    let sub = seed_provider(&db, "sub").await;
+    provider::ActiveModel {
+        id: Set(sub),
+        billing_mode: Set(1),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    let z_payg = seed_provider_model(&db, payg, "z-payg").await;
+    let a_payg = seed_provider_model(&db, payg, "a-payg").await;
+    let m_sub = seed_provider_model(&db, sub, "m-sub").await;
+    let b_sub = seed_provider_model(&db, sub, "b-sub").await;
+
+    let payload = json!({
+        "displayId": "payg-sorted",
+        "loadBalancingStrategy": 1,
+        "fallbackStrategy": 0,
+        "items": [
+            {"modelId": z_payg, "enable": true},
+            {"modelId": a_payg, "enable": false},
+            {"modelId": m_sub, "enable": true},
+            {"modelId": b_sub, "enable": false},
+        ],
+    });
+    let (status, body) = send_json(app.clone(), "POST", "/api/virtual-models", payload).await;
+    assert_eq!(status, 201);
+
+    let items = body["data"]["items"].as_array().unwrap();
+    let remote_ids: Vec<&str> = items
+        .iter()
+        .map(|it| it["providerModelId"].as_str().unwrap())
+        .collect();
+    // 启用组内按量（z-payg）在订阅（m-sub）前；停用组内按量（a-payg）在订阅（b-sub）前。
+    assert_eq!(
+        remote_ids,
+        vec!["z-payg", "m-sub", "a-payg", "b-sub"],
+        "按量付费优先策略下应按 按量→订阅 分组：{remote_ids:?}"
+    );
+}
+
 #[tokio::test]
 async fn test_create_virtual_model_validations() {
     let (app, db) = setup_app().await;

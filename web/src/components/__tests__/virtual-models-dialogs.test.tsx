@@ -89,6 +89,7 @@ function makeItem(overrides: Partial<VirtualModelItem> = {}): VirtualModelItem {
 		providerId: 7,
 		providerName: "OpenAI",
 		providerEnable: true,
+		billingMode: 0,
 		providerModelId: "gpt-4o",
 		contextLength: 128000,
 		maxOutputTokens: 4096,

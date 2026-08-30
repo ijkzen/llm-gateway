@@ -10,6 +10,8 @@ export interface VirtualModelItem {
 	providerName: string;
 	/** 供应商启用状态；false 时该成员实际不可用。 */
 	providerEnable: boolean;
+	/** 供应商付费模式：0=按量付费，1=订阅制。 */
+	billingMode: number;
 	/** 远端模型 ID 字符串，如 `gpt-4o`。 */
 	providerModelId: string;
 	contextLength: number;
