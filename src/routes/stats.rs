@@ -110,44 +110,87 @@ async fn summary(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
-/// 过去 24 小时图表数据：调用/ token 的小时趋势 + 按上游模型的分布。
-async fn charts(State(state): State<AppState>) -> impl IntoResponse {
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let current_bucket = now_ms / HOUR_MS;
-    let first_bucket = current_bucket - (TREND_BUCKETS - 1);
-    let window_start = first_bucket * HOUR_MS;
+/// 图表查询参数（全部可选；缺省回退「过去 24 小时」）。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChartsQuery {
+    /// 窗口起点（毫秒时间戳，含）。
+    start_time: Option<i64>,
+    /// 窗口终点（毫秒时间戳，不含）。
+    end_time: Option<i64>,
+    /// 按供应商过滤（可选）。
+    provider_id: Option<i32>,
+}
+
+/// 图表数据：调用/ token 的趋势 + 按上游模型的分布。
+///
+/// 支持可选 startTime/endTime（缺省回退过去 24 小时）与 providerId 过滤；
+/// 趋势分桶粒度按窗口长度自适应：≤24h 小时桶、≤62 天天桶、其余月桶。
+async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>) -> impl IntoResponse {
+    let (window_start, window_end, bucket_ms) = match (query.start_time, query.end_time) {
+        (Some(start), Some(end)) if end > start => {
+            // 显式窗口：按长度选桶粒度（小时/天/月）。
+            let bucket = if end - start <= 48 * HOUR_MS {
+                HOUR_MS
+            } else if end - start <= 62 * 24 * HOUR_MS {
+                24 * HOUR_MS
+            } else {
+                30 * 24 * HOUR_MS
+            };
+            (start, end, bucket)
+        }
+        _ => {
+            // 缺省：过去 24 小时（小时桶）。
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let current_bucket = now_ms / HOUR_MS;
+            let first_bucket = current_bucket - (TREND_BUCKETS - 1);
+            (first_bucket * HOUR_MS, now_ms, HOUR_MS)
+        }
+    };
+
+    // WHERE 公共条件：时间窗口（半开）+ 可选供应商过滤。
+    let mut where_sql = String::from("r.start_time >= ? AND r.start_time < ?");
+    let mut params: Vec<sea_orm::Value> = vec![window_start.into(), window_end.into()];
+    if let Some(provider_id) = query.provider_id {
+        where_sql.push_str(" AND r.provider_id = ?");
+        params.push(provider_id.into());
+    }
 
     let trend_sql = |value_expr: &str| {
         format!(
-            "SELECT (start_time / {HOUR_MS}) AS bucket, {value_expr} AS value \
-             FROM request WHERE start_time >= {window_start} GROUP BY bucket"
+            "SELECT (r.start_time / {bucket_ms}) AS bucket, {value_expr} AS value \
+             FROM request r WHERE {where_sql} GROUP BY bucket"
         )
     };
     let model_sql = |value_expr: &str| {
         format!(
             "SELECT COALESCE(p.name, '') AS provider_name, r.model_id, {value_expr} AS value \
              FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
-             WHERE r.start_time >= {window_start} GROUP BY p.name, r.model_id"
+             WHERE {where_sql} GROUP BY p.name, r.model_id"
         )
     };
 
     let db = &state.db;
     let (call_rows, token_rows, call_model_rows, token_model_rows) = match tokio::try_join!(
-        db.query_all_raw(Statement::from_string(
+        db.query_all_raw(Statement::from_sql_and_values(
             DbBackend::Sqlite,
             trend_sql("COUNT(*)"),
+            params.clone(),
         )),
-        db.query_all_raw(Statement::from_string(
+        db.query_all_raw(Statement::from_sql_and_values(
             DbBackend::Sqlite,
-            trend_sql("COALESCE(SUM(total_tokens), 0)"),
+            trend_sql("COALESCE(SUM(r.total_tokens), 0)"),
+            params.clone(),
         )),
-        db.query_all_raw(Statement::from_string(
+        db.query_all_raw(Statement::from_sql_and_values(
             DbBackend::Sqlite,
             model_sql("COUNT(*)"),
+            params.clone(),
         )),
-        db.query_all_raw(Statement::from_string(
+        db.query_all_raw(Statement::from_sql_and_values(
             DbBackend::Sqlite,
-            model_sql("COALESCE(SUM(total_tokens), 0)"),
+            model_sql("COALESCE(SUM(r.total_tokens), 0)"),
+            params.clone(),
         )),
     ) {
         Ok(rows) => rows,
@@ -167,10 +210,13 @@ async fn charts(State(state): State<AppState>) -> impl IntoResponse {
         token_sums.insert(bucket, value);
     }
 
+    // 桶填充：从窗口起点所在桶到终点所在桶，按桶粒度对齐。
+    let first_bucket = window_start / bucket_ms;
+    let last_bucket = (window_end - 1).max(window_start) / bucket_ms;
     let fill_trend = |map: &std::collections::HashMap<i64, i64>| {
-        (first_bucket..=current_bucket)
+        (first_bucket..=last_bucket)
             .map(|bucket| TrendPoint {
-                bucket_start: bucket * HOUR_MS,
+                bucket_start: bucket * bucket_ms,
                 value: map.get(&bucket).copied().unwrap_or(0),
             })
             .collect::<Vec<_>>()
@@ -224,6 +270,8 @@ struct RankQuery {
     start_time: Option<i64>,
     /// 窗口终点（毫秒时间戳，不含）。
     end_time: Option<i64>,
+    /// 按供应商过滤（可选；仅 provider_model_rank 使用）。
+    provider_id: Option<i32>,
 }
 
 /// 解析排序指标白名单；非法值返回 None（调用方转 400）。
@@ -300,6 +348,8 @@ fn parse_rank_query<T>(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderRankItem {
+    /// 实际服务的供应商 ID（聚合维度；已删除供应商仍保留原始 id）。
+    provider_id: i32,
     /// 实际服务的供应商名称（供应商已删除时为空串）。
     provider_name: String,
     /// 成功请求数。
@@ -338,11 +388,12 @@ async fn provider_rank(
     let db = &state.db;
 
     // 单查询聚合全部 6 个指标：仅成功请求 + start_time 半开窗口。
+    // 按 r.provider_id 分组（id 才是真实聚合维度，name 仅展示）。
     let sql = format!(
-        "SELECT COALESCE(p.name, '') AS provider_name,{RANK_METRIC_SQL} \
+        "SELECT r.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name,{RANK_METRIC_SQL} \
          FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
          WHERE r.success = 1 AND r.start_time >= ? AND r.start_time < ? \
-         GROUP BY p.name"
+         GROUP BY r.provider_id"
     );
 
     let rows = match db
@@ -360,6 +411,7 @@ async fn provider_rank(
     let mut items = rows
         .iter()
         .map(|row| ProviderRankItem {
+            provider_id: row.try_get::<i32>("", "provider_id").unwrap_or(0),
             provider_name: row.try_get("", "provider_name").unwrap_or_default(),
             request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
             total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
@@ -529,13 +581,21 @@ async fn provider_model_rank(
     };
     let db = &state.db;
 
+    // 可选按供应商过滤（二级页用）：有 providerId 时只聚合该供应商内部模型。
+    let mut where_sql = String::from("r.success = 1 AND r.start_time >= ? AND r.start_time < ?");
+    let mut params: Vec<sea_orm::Value> = vec![start.into(), end.into()];
+    if let Some(provider_id) = query.provider_id {
+        where_sql.push_str(" AND r.provider_id = ?");
+        params.push(provider_id.into());
+    }
+
     let sql = format!(
         "SELECT COALESCE(p.name, '') AS provider_name, \
                 COALESCE(pm.provider_model_id, r.model_id) AS model_id,{RANK_METRIC_SQL} \
          FROM request r \
          LEFT JOIN provider p ON p.id = r.provider_id \
          LEFT JOIN provider_model pm ON pm.provider_id = r.provider_id AND pm.provider_model_id = r.model_id \
-         WHERE r.success = 1 AND r.start_time >= ? AND r.start_time < ? \
+         WHERE {where_sql} \
          GROUP BY r.provider_id, r.model_id"
     );
 
@@ -543,7 +603,7 @@ async fn provider_model_rank(
         .query_all_raw(Statement::from_sql_and_values(
             DbBackend::Sqlite,
             sql,
-            [start.into(), end.into()],
+            params,
         ))
         .await
     {

@@ -58,9 +58,29 @@ export function toRankedModels(items: ModelValue[]): ChartItem[] {
 	});
 }
 
-function formatHourLabel(bucketStart: number): string {
+/** 按桶粒度格式化 X 轴标签：小时 → HH:00，天 → M月d日，月 → yyyy年M月。 */
+function formatBucketLabel(bucketStart: number, granularity: "hour" | "day" | "month"): string {
 	const date = new Date(bucketStart);
-	return `${date.getHours().toString().padStart(2, "0")}:00`;
+	switch (granularity) {
+		case "hour":
+			return `${date.getHours().toString().padStart(2, "0")}:00`;
+		case "day":
+			return `${date.getMonth() + 1}月${date.getDate()}日`;
+		case "month":
+			return `${date.getFullYear()}年${date.getMonth() + 1}月`;
+	}
+}
+
+/** 由相邻桶间距推断粒度：1h=小时桶，24h=天桶，否则月桶。 */
+export function inferGranularity(bucketStart: number[]): "hour" | "day" | "month" {
+	const first = bucketStart[0];
+	const second = bucketStart[1];
+	if (first !== undefined && second !== undefined) {
+		const gap = second - first;
+		if (gap <= 3_600_000) return "hour";
+		if (gap <= 24 * 3_600_000) return "day";
+	}
+	return "month";
 }
 
 interface TrendLineChartProps {
@@ -69,10 +89,11 @@ interface TrendLineChartProps {
 	formatValue?: (value: number) => string;
 }
 
-/** 过去 24 小时按小时分桶的单条总量折线。 */
+/** 按时间窗口分桶的单条总量折线（粒度由数据推断）。 */
 export function TrendLineChart({ data, label, formatValue }: TrendLineChartProps) {
+	const granularity = inferGranularity(data.map((p) => p.bucketStart));
 	const chartData = data.map((point) => ({
-		label: formatHourLabel(point.bucketStart),
+		label: formatBucketLabel(point.bucketStart, granularity),
 		value: point.value,
 	}));
 	return (

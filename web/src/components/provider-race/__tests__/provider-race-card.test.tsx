@@ -3,6 +3,11 @@ import type { ProviderRankItem, ProviderRankResponse } from "@/hooks/use-provide
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// ProviderRaceCard 用 useNavigate 跳转二级页，测试中 stub。
+vi.mock("react-router-dom", () => ({
+	useNavigate: () => vi.fn(),
+}));
+
 const mocks = vi.hoisted(() => ({
 	data: undefined as ProviderRankResponse | undefined,
 	isLoading: false,
@@ -26,6 +31,7 @@ vi.mock("@/hooks/use-in-view", () => ({
 
 function makeItem(overrides: Partial<ProviderRankItem> = {}): ProviderRankItem {
 	return {
+		providerId: 1,
 		providerName: "供应商A",
 		requestCount: 10,
 		totalTokens: 1_000_000,

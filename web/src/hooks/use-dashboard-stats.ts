@@ -27,9 +27,26 @@ export interface DashboardCharts {
 	tokenByModel: ModelValue[];
 }
 
+/** 图表查询参数（全部可选；缺省回退过去 24 小时）。 */
+export interface ChartsParams {
+	/** 窗口起点（毫秒时间戳，含）。 */
+	startTime?: number;
+	/** 窗口终点（毫秒时间戳，不含）。 */
+	endTime?: number;
+	/** 按供应商过滤（可选）。 */
+	providerId?: number;
+}
+
 export const dashboardStatsKeys = {
 	summary: ["stats", "summary"] as const,
-	charts: ["stats", "charts"] as const,
+	charts: (params: ChartsParams = {}) =>
+		[
+			"stats",
+			"charts",
+			params.startTime ?? null,
+			params.endTime ?? null,
+			params.providerId ?? null,
+		] as const,
 };
 
 const REFETCH_INTERVAL = 60_000;
@@ -45,11 +62,16 @@ export function useDashboardSummary() {
 	});
 }
 
-export function useDashboardCharts() {
+export function useDashboardCharts(params: ChartsParams = {}) {
 	return useQuery<DashboardCharts>({
-		queryKey: dashboardStatsKeys.charts,
+		queryKey: dashboardStatsKeys.charts(params),
 		queryFn: async () => {
-			const res = await api.get("stats/charts").json<ApiResponse<DashboardCharts>>();
+			const query = new URLSearchParams();
+			if (params.startTime !== undefined) query.set("startTime", String(params.startTime));
+			if (params.endTime !== undefined) query.set("endTime", String(params.endTime));
+			if (params.providerId !== undefined) query.set("providerId", String(params.providerId));
+			const suffix = query.size > 0 ? `?${query.toString()}` : "";
+			const res = await api.get(`stats/charts${suffix}`).json<ApiResponse<DashboardCharts>>();
 			return unwrap(res);
 		},
 		refetchInterval: REFETCH_INTERVAL,

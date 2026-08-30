@@ -1,6 +1,8 @@
-import { SegmentedControl } from "@/components/segmented-control";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+	RaceWindowControl,
+	type RaceWindowState,
+	raceWindowBounds,
+} from "@/components/race-window-control";
 import { useInView } from "@/hooks/use-in-view";
 import {
 	type ProviderModelRankItem,
@@ -8,23 +10,20 @@ import {
 	type RaceSortKey,
 	useProviderModelRace,
 } from "@/hooks/use-provider-model-race";
-import {
-	type RacePeriod,
-	formatPeriodLabel,
-	periodBounds,
-	toLocalInputValue,
-} from "@/lib/race-period";
+import { formatPeriodLabel } from "@/lib/race-period";
 import { formatTokenCount } from "@/lib/utils";
-import { ArrowDown, ArrowUp, Boxes, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
 
-const PERIOD_OPTIONS = [
-	{ value: "day", label: "天" },
-	{ value: "week", label: "周" },
-	{ value: "month", label: "月" },
-	{ value: "year", label: "年" },
-	{ value: "custom", label: "自定义" },
-] as const satisfies readonly { value: RacePeriod | "custom"; label: string }[];
+function initialWindowState(): RaceWindowState {
+	return {
+		period: "day",
+		offset: 0,
+		customStart: Date.now() - 3_600_000,
+		customEnd: Date.now(),
+		appliedCustom: null,
+	};
+}
 
 /** 6 列指标定义：key / 标题 / 格式化 / 默认方向（true=降序，耗时类默认升序）。 */
 const COLUMNS: ReadonlyArray<{
@@ -51,18 +50,6 @@ const COLUMNS: ReadonlyArray<{
 	},
 ];
 
-function formatDateTime(ms: number): string {
-	const date = new Date(ms);
-	const pad = (n: number) => n.toString().padStart(2, "0");
-	return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-/** datetime-local 值 → 毫秒时间戳；空值返回当前时刻（避免 NaN）。 */
-function parseLocalInput(value: string): number {
-	const ms = new Date(value).getTime();
-	return Number.isNaN(ms) ? Date.now() : ms;
-}
-
 /** 名称列标签：供应商・模型（供应商缺失时退化为纯模型 ID）。 */
 function modelLabel(item: Pick<ProviderModelRankItem, "providerName" | "modelId">): string {
 	return item.providerName ? `${item.providerName}・${item.modelId}` : item.modelId;
@@ -78,33 +65,15 @@ function modelLabel(item: Pick<ProviderModelRankItem, "providerName" | "modelId"
 export function ProviderModelRaceCard() {
 	// 挂载时刻固化 now：保证「当前周期」的窗口终点稳定，不因渲染抖动重复请求。
 	const [now] = useState(() => Date.now());
-	const [period, setPeriod] = useState<RacePeriod | "custom">("day");
-	const [offset, setOffset] = useState(0);
-	// 自定义窗口：默认最近 1 小时，秒级精度由 datetime-local step=1 保证。
-	const [customStart, setCustomStart] = useState(() => Date.now() - 3_600_000);
-	const [customEnd, setCustomEnd] = useState(() => Date.now());
-	const [appliedCustom, setAppliedCustom] = useState<{ startTime: number; endTime: number } | null>(
-		null,
-	);
+	const [windowState, setWindowState] = useState<RaceWindowState>(initialWindowState);
 
 	// 排序：默认按总计 Token 降序；点击表头切换升/降。
 	const [sort, setSort] = useState<RaceSort>({ sortBy: "totalTokens", sortOrder: "desc" });
 
-	const window =
-		period === "custom"
-			? (appliedCustom ?? { startTime: customStart, endTime: customEnd })
-			: periodBounds(period, offset, now);
+	const window = raceWindowBounds(windowState, now);
 
 	const { ref, inView } = useInView();
 	const query = useProviderModelRace(window, sort, inView);
-
-	const changePeriod = (next: RacePeriod | "custom") => {
-		setPeriod(next);
-		if (next === "custom") {
-			// 进入自定义：用当前输入值作为初始窗口并立即生效。
-			setAppliedCustom({ startTime: customStart, endTime: customEnd });
-		}
-	};
 
 	const handleSort = (key: RaceSortKey) => {
 		setSort((prev) => {
@@ -128,77 +97,20 @@ export function ProviderModelRaceCard() {
 				<div className="min-w-0">
 					<h3 className="text-sm font-semibold text-foreground">供应商模型赛马</h3>
 					<p className="truncate text-xs text-muted-foreground">
-						{period === "custom" ? "自定义时间范围" : formatPeriodLabel(period, offset, now)}
+						{windowState.period === "custom"
+							? "自定义时间范围"
+							: formatPeriodLabel(windowState.period, windowState.offset, now)}
 					</p>
 				</div>
 
-				<div className="ml-auto flex flex-wrap items-center gap-2">
-					<SegmentedControl options={PERIOD_OPTIONS} value={period} onChange={changePeriod} />
-					{period === "custom" ? (
-						<span className="text-xs text-muted-foreground">
-							{formatDateTime(customStart)} ~ {formatDateTime(customEnd)}
-						</span>
-					) : (
-						<div className="flex items-center gap-1">
-							<Button
-								variant="ghost"
-								size="icon"
-								className="h-6 w-6"
-								aria-label="上一周期"
-								onClick={() => setOffset((o) => o - 1)}
-							>
-								<ChevronLeft className="h-4 w-4" />
-							</Button>
-							<span className="min-w-24 text-center text-xs font-medium text-foreground">
-								{formatPeriodLabel(period, offset, now)}
-							</span>
-							<Button
-								variant="ghost"
-								size="icon"
-								className="h-6 w-6"
-								aria-label="下一周期"
-								onClick={() => setOffset((o) => o + 1)}
-							>
-								<ChevronRight className="h-4 w-4" />
-							</Button>
-						</div>
-					)}
+				<div className="ml-auto">
+					<RaceWindowControl
+						state={windowState}
+						now={now}
+						onChange={(patch) => setWindowState((prev) => ({ ...prev, ...patch }))}
+					/>
 				</div>
 			</div>
-
-			{period === "custom" && (
-				<div className="mb-4 flex flex-wrap items-center gap-2">
-					<Input
-						type="datetime-local"
-						step={1}
-						data-testid="custom-start"
-						className="h-8 w-auto text-xs"
-						value={toLocalInputValue(customStart)}
-						onChange={(e) => setCustomStart(parseLocalInput(e.target.value))}
-					/>
-					<span className="text-xs text-muted-foreground">~</span>
-					<Input
-						type="datetime-local"
-						step={1}
-						data-testid="custom-end"
-						className="h-8 w-auto text-xs"
-						value={toLocalInputValue(customEnd)}
-						onChange={(e) => setCustomEnd(parseLocalInput(e.target.value))}
-					/>
-					<Button
-						variant="outline"
-						size="sm"
-						className="h-8 text-xs"
-						onClick={() => {
-							if (customEnd > customStart) {
-								setAppliedCustom({ startTime: customStart, endTime: customEnd });
-							}
-						}}
-					>
-						应用
-					</Button>
-				</div>
-			)}
 
 			{!inView ? (
 				<div className="flex h-[220px] items-center justify-center text-xs text-muted-foreground">

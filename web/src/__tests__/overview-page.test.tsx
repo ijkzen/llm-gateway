@@ -3,6 +3,11 @@ import OverviewPage from "@/pages/overview";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// ProviderRaceCard 用 useNavigate 跳转二级页，测试中 stub。
+vi.mock("react-router-dom", () => ({
+	useNavigate: () => vi.fn(),
+}));
+
 const mocks = vi.hoisted(() => ({
 	summary: undefined as DashboardSummary | undefined,
 	charts: undefined as DashboardCharts | undefined,

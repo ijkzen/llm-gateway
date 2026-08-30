@@ -48,7 +48,7 @@ export interface RaceSort {
 }
 
 export const providerModelRaceKeys = {
-	rank: (window: RaceWindow, sort: RaceSort) =>
+	rank: (window: RaceWindow, sort: RaceSort, providerId?: number) =>
 		[
 			"stats",
 			"provider-model-rank",
@@ -56,18 +56,25 @@ export const providerModelRaceKeys = {
 			window.endTime,
 			sort.sortBy,
 			sort.sortOrder,
+			providerId ?? null,
 		] as const,
 };
 
 /**
- * 供应商模型平铺赛马排行查询（全部供应商×模型 + 后端排序）。
+ * 供应商模型平铺赛马排行查询（全部供应商×模型 + 后端排序；可选按供应商过滤）。
  * @param window 时间窗口
  * @param sort 排序指标与方向
  * @param enabled 是否启用（配合懒加载 useInView 使用，未进入视口不发请求）
+ * @param providerId 可选：只返回该供应商的模型
  */
-export function useProviderModelRace(window: RaceWindow, sort: RaceSort, enabled: boolean) {
+export function useProviderModelRace(
+	window: RaceWindow,
+	sort: RaceSort,
+	enabled: boolean,
+	providerId?: number,
+) {
 	return useQuery<ProviderModelRankResponse>({
-		queryKey: providerModelRaceKeys.rank(window, sort),
+		queryKey: providerModelRaceKeys.rank(window, sort, providerId),
 		queryFn: async () => {
 			const params = new URLSearchParams({
 				sortBy: sort.sortBy,
@@ -75,6 +82,9 @@ export function useProviderModelRace(window: RaceWindow, sort: RaceSort, enabled
 				startTime: String(window.startTime),
 				endTime: String(window.endTime),
 			});
+			if (providerId !== undefined) {
+				params.set("providerId", String(providerId));
+			}
 			const res = await api
 				.get(`stats/provider-model-rank?${params.toString()}`)
 				.json<ApiResponse<ProviderModelRankResponse>>();

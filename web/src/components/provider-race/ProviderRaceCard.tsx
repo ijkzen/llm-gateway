@@ -1,6 +1,8 @@
-import { SegmentedControl } from "@/components/segmented-control";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+	RaceWindowControl,
+	type RaceWindowState,
+	raceWindowBounds,
+} from "@/components/race-window-control";
 import { useInView } from "@/hooks/use-in-view";
 import {
 	type ProviderRankItem,
@@ -8,23 +10,11 @@ import {
 	type RaceSortKey,
 	useProviderRace,
 } from "@/hooks/use-provider-race";
-import {
-	type RacePeriod,
-	formatPeriodLabel,
-	periodBounds,
-	toLocalInputValue,
-} from "@/lib/race-period";
+import { formatPeriodLabel } from "@/lib/race-period";
 import { formatTokenCount } from "@/lib/utils";
-import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, TrendingUp } from "lucide-react";
+import { ArrowDown, ArrowUp, TrendingUp } from "lucide-react";
 import { useState } from "react";
-
-const PERIOD_OPTIONS = [
-	{ value: "day", label: "天" },
-	{ value: "week", label: "周" },
-	{ value: "month", label: "月" },
-	{ value: "year", label: "年" },
-	{ value: "custom", label: "自定义" },
-] as const satisfies readonly { value: RacePeriod | "custom"; label: string }[];
+import { useNavigate } from "react-router-dom";
 
 /** 6 列指标定义：key / 标题 / 格式化 / 默认方向（true=降序，耗时类默认升序）。 */
 const COLUMNS: ReadonlyArray<{
@@ -51,53 +41,35 @@ const COLUMNS: ReadonlyArray<{
 	},
 ];
 
-function formatDateTime(ms: number): string {
-	const date = new Date(ms);
-	const pad = (n: number) => n.toString().padStart(2, "0");
-	return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-/** datetime-local 值 → 毫秒时间戳；空值返回当前时刻（避免 NaN）。 */
-function parseLocalInput(value: string): number {
-	const ms = new Date(value).getTime();
-	return Number.isNaN(ms) ? Date.now() : ms;
+function initialWindowState(): RaceWindowState {
+	return {
+		period: "day",
+		offset: 0,
+		customStart: Date.now() - 3_600_000,
+		customEnd: Date.now(),
+		appliedCustom: null,
+	};
 }
 
 /**
  * 供应商赛马卡片：单卡片聚合展示 6 个指标（总计 Token / 请求数 / TTFT /
  * 平均耗时 / TPS / 缓存命中率），可点表头按任意指标升/降序；时间窗口支持
  * 天/周/月/年（左右箭头切换周期）+ 自定义（秒级）。卡片进入视口才发请求。
+ * 点击行进入该供应商的二级数据面板页（携带当前时间段参数）。
  */
 export function ProviderRaceCard() {
+	const navigate = useNavigate();
 	// 挂载时刻固化 now：保证「当前周期」的窗口终点稳定，不因渲染抖动重复请求。
 	const [now] = useState(() => Date.now());
-	const [period, setPeriod] = useState<RacePeriod | "custom">("day");
-	const [offset, setOffset] = useState(0);
-	// 自定义窗口：默认最近 1 小时，秒级精度由 datetime-local step=1 保证。
-	const [customStart, setCustomStart] = useState(() => Date.now() - 3_600_000);
-	const [customEnd, setCustomEnd] = useState(() => Date.now());
-	const [appliedCustom, setAppliedCustom] = useState<{ startTime: number; endTime: number } | null>(
-		null,
-	);
+	const [windowState, setWindowState] = useState<RaceWindowState>(initialWindowState);
 
 	// 排序：默认按总计 Token 降序；点击表头切换升/降。
 	const [sort, setSort] = useState<RaceSort>({ sortBy: "totalTokens", sortOrder: "desc" });
 
-	const window =
-		period === "custom"
-			? (appliedCustom ?? { startTime: customStart, endTime: customEnd })
-			: periodBounds(period, offset, now);
+	const window = raceWindowBounds(windowState, now);
 
 	const { ref, inView } = useInView();
 	const query = useProviderRace(window, sort, inView);
-
-	const changePeriod = (next: RacePeriod | "custom") => {
-		setPeriod(next);
-		if (next === "custom") {
-			// 进入自定义：用当前输入值作为初始窗口并立即生效。
-			setAppliedCustom({ startTime: customStart, endTime: customEnd });
-		}
-	};
 
 	const handleSort = (key: RaceSortKey) => {
 		setSort((prev) => {
@@ -107,6 +79,20 @@ export function ProviderRaceCard() {
 			const column = COLUMNS.find((c) => c.key === key);
 			return { sortBy: key, sortOrder: column?.defaultDesc ? "desc" : "asc" };
 		});
+	};
+
+	const openProviderOverview = (item: ProviderRankItem) => {
+		// 携带当前时间段参数（custom 时带起止，否则带 period/offset）。
+		const params = new URLSearchParams();
+		if (windowState.period === "custom") {
+			params.set("period", "custom");
+			params.set("startTime", String(window.startTime));
+			params.set("endTime", String(window.endTime));
+		} else {
+			params.set("period", windowState.period);
+			params.set("offset", String(windowState.offset));
+		}
+		navigate(`/providers/${item.providerId}/overview?${params.toString()}`);
 	};
 
 	return (
@@ -121,77 +107,20 @@ export function ProviderRaceCard() {
 				<div className="min-w-0">
 					<h3 className="text-sm font-semibold text-foreground">供应商赛马</h3>
 					<p className="truncate text-xs text-muted-foreground">
-						{period === "custom" ? "自定义时间范围" : formatPeriodLabel(period, offset, now)}
+						{windowState.period === "custom"
+							? "自定义时间范围"
+							: formatPeriodLabel(windowState.period, windowState.offset, now)}
 					</p>
 				</div>
 
-				<div className="ml-auto flex flex-wrap items-center gap-2">
-					<SegmentedControl options={PERIOD_OPTIONS} value={period} onChange={changePeriod} />
-					{period === "custom" ? (
-						<span className="text-xs text-muted-foreground">
-							{formatDateTime(customStart)} ~ {formatDateTime(customEnd)}
-						</span>
-					) : (
-						<div className="flex items-center gap-1">
-							<Button
-								variant="ghost"
-								size="icon"
-								className="h-6 w-6"
-								aria-label="上一周期"
-								onClick={() => setOffset((o) => o - 1)}
-							>
-								<ChevronLeft className="h-4 w-4" />
-							</Button>
-							<span className="min-w-24 text-center text-xs font-medium text-foreground">
-								{formatPeriodLabel(period, offset, now)}
-							</span>
-							<Button
-								variant="ghost"
-								size="icon"
-								className="h-6 w-6"
-								aria-label="下一周期"
-								onClick={() => setOffset((o) => o + 1)}
-							>
-								<ChevronRight className="h-4 w-4" />
-							</Button>
-						</div>
-					)}
+				<div className="ml-auto">
+					<RaceWindowControl
+						state={windowState}
+						now={now}
+						onChange={(patch) => setWindowState((prev) => ({ ...prev, ...patch }))}
+					/>
 				</div>
 			</div>
-
-			{period === "custom" && (
-				<div className="mb-4 flex flex-wrap items-center gap-2">
-					<Input
-						type="datetime-local"
-						step={1}
-						data-testid="custom-start"
-						className="h-8 w-auto text-xs"
-						value={toLocalInputValue(customStart)}
-						onChange={(e) => setCustomStart(parseLocalInput(e.target.value))}
-					/>
-					<span className="text-xs text-muted-foreground">~</span>
-					<Input
-						type="datetime-local"
-						step={1}
-						data-testid="custom-end"
-						className="h-8 w-auto text-xs"
-						value={toLocalInputValue(customEnd)}
-						onChange={(e) => setCustomEnd(parseLocalInput(e.target.value))}
-					/>
-					<Button
-						variant="outline"
-						size="sm"
-						className="h-8 text-xs"
-						onClick={() => {
-							if (customEnd > customStart) {
-								setAppliedCustom({ startTime: customStart, endTime: customEnd });
-							}
-						}}
-					>
-						应用
-					</Button>
-				</div>
-			)}
 
 			{!inView ? (
 				<div className="flex h-[220px] items-center justify-center text-xs text-muted-foreground">
@@ -215,21 +144,28 @@ export function ProviderRaceCard() {
 					该时间段暂无数据
 				</div>
 			) : (
-				<RaceTable items={query.data.items} sort={sort} onSort={handleSort} />
+				<RaceTable
+					items={query.data.items}
+					sort={sort}
+					onSort={handleSort}
+					onRowClick={openProviderOverview}
+				/>
 			)}
 		</div>
 	);
 }
 
-/** 可排序指标表格。 */
+/** 可排序指标表格；点击行进入供应商二级页。 */
 function RaceTable({
 	items,
 	sort,
 	onSort,
+	onRowClick,
 }: {
 	items: ProviderRankItem[];
 	sort: RaceSort;
 	onSort: (key: RaceSortKey) => void;
+	onRowClick: (item: ProviderRankItem) => void;
 }) {
 	return (
 		<div className="overflow-x-auto">
@@ -270,8 +206,16 @@ function RaceTable({
 				<tbody>
 					{items.map((item, index) => (
 						<tr
-							key={item.providerName}
-							className="border-b border-foreground/5 last:border-0 hover:bg-foreground/5"
+							key={item.providerId}
+							onClick={() => onRowClick(item)}
+							onKeyDown={(e) => {
+								if (e.key === "Enter") {
+									onRowClick(item);
+								}
+							}}
+							tabIndex={0}
+							className="cursor-pointer border-b border-foreground/5 last:border-0 hover:bg-foreground/5"
+							title="点击查看该供应商数据面板"
 						>
 							<td className="px-2 py-2 text-left font-mono text-xs text-muted-foreground">
 								{index + 1}

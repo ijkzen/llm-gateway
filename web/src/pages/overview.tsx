@@ -1,110 +1,22 @@
-import { ModelPieChart, ModelRankBarChart, TrendLineChart } from "@/components/dashboard-charts";
-import { EmptyState } from "@/components/empty-state";
+import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
 import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { ProviderModelRaceSection } from "@/components/provider-model-race/ProviderModelRaceSection";
 import { ProviderRaceSection } from "@/components/provider-race/ProviderRaceSection";
-import { SegmentedControl } from "@/components/segmented-control";
 import { StatsCard } from "@/components/stats-card";
 import { StatsCardsSkeleton } from "@/components/stats-cards-skeleton";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualModelRaceSection } from "@/components/virtual-model-race/VirtualModelRaceSection";
-import {
-	type DashboardCharts,
-	useDashboardCharts,
-	useDashboardSummary,
-} from "@/hooks/use-dashboard-stats";
+import { useDashboardCharts, useDashboardSummary } from "@/hooks/use-dashboard-stats";
 import { OVERVIEW_PAGE } from "@/lib/pages";
 import { formatTokenCount } from "@/lib/utils";
 import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-react";
-import { useState } from "react";
 
 function formatPercent(rate: number): string {
 	// 如实展示（保留最多 5 位小数，去尾零），避免 99.789% 被舍入成 100%。
 	return `${Number.parseFloat((rate * 100).toFixed(5))}%`;
-}
-
-type CallView = "trend" | "distribution" | "rank";
-type TokenView = "trend" | "distribution" | "rank";
-
-const CALL_VIEW_OPTIONS = [
-	{ value: "trend", label: "调用趋势" },
-	{ value: "distribution", label: "调用次数分布" },
-	{ value: "rank", label: "调用次数排行" },
-] as const satisfies readonly { value: CallView; label: string }[];
-
-const TOKEN_VIEW_OPTIONS = [
-	{ value: "trend", label: "token 使用分布" },
-	{ value: "distribution", label: "token 模型分布" },
-	{ value: "rank", label: "token 模型排行" },
-] as const satisfies readonly { value: TokenView; label: string }[];
-
-function CallAnalysisCard({ charts }: { charts: DashboardCharts }) {
-	const [view, setView] = useState<CallView>("trend");
-	return (
-		<Card>
-			<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-				<div className="space-y-1">
-					<CardTitle>调用分析</CardTitle>
-					<p className="text-xs text-muted-foreground">过去 24 小时 · 按上游实际模型统计</p>
-				</div>
-				<SegmentedControl options={CALL_VIEW_OPTIONS} value={view} onChange={setView} />
-			</CardHeader>
-			<CardContent>
-				{view === "trend" && <TrendLineChart data={charts.callTrend} label="调用次数" />}
-				{view === "distribution" &&
-					(charts.callByModel.length > 0 ? (
-						<ModelPieChart data={charts.callByModel} />
-					) : (
-						<EmptyState title="暂无调用数据" />
-					))}
-				{view === "rank" &&
-					(charts.callByModel.length > 0 ? (
-						<ModelRankBarChart data={charts.callByModel} />
-					) : (
-						<EmptyState title="暂无调用数据" />
-					))}
-			</CardContent>
-		</Card>
-	);
-}
-
-function TokenAnalysisCard({ charts }: { charts: DashboardCharts }) {
-	const [view, setView] = useState<TokenView>("trend");
-	return (
-		<Card>
-			<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-				<div className="space-y-1">
-					<CardTitle>Token 分析</CardTitle>
-					<p className="text-xs text-muted-foreground">过去 24 小时 · 按上游实际模型统计</p>
-				</div>
-				<SegmentedControl options={TOKEN_VIEW_OPTIONS} value={view} onChange={setView} />
-			</CardHeader>
-			<CardContent>
-				{view === "trend" && (
-					<TrendLineChart
-						data={charts.tokenTrend}
-						label="Token 数"
-						formatValue={formatTokenCount}
-					/>
-				)}
-				{view === "distribution" &&
-					(charts.tokenByModel.length > 0 ? (
-						<ModelPieChart data={charts.tokenByModel} formatValue={formatTokenCount} />
-					) : (
-						<EmptyState title="暂无 token 数据" />
-					))}
-				{view === "rank" &&
-					(charts.tokenByModel.length > 0 ? (
-						<ModelRankBarChart data={charts.tokenByModel} formatValue={formatTokenCount} />
-					) : (
-						<EmptyState title="暂无 token 数据" />
-					))}
-			</CardContent>
-		</Card>
-	);
 }
 
 export default function OverviewPage() {

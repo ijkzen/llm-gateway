@@ -443,3 +443,128 @@ async fn test_charts_provider_deleted_falls_back_to_empty_name() {
     assert_eq!(ghost["modelId"], "ghost-model");
     assert_eq!(ghost["value"], 2);
 }
+
+#[tokio::test]
+async fn test_charts_with_window_and_provider_filter() {
+    let (app, db) = setup_app().await;
+    // 固定窗口 [T0, T0+3h)，两个供应商各一笔；带 providerId 应只返回该供应商。
+    let t0 = (1_700_000_000_000i64 / HOUR_MS) * HOUR_MS;
+    for row in [
+        SeedRow {
+            request_id: "w1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: t0 + 1,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(100),
+        },
+        // 供应商 2（另一个 provider）的请求，不应出现在 providerId=1 过滤结果中。
+        SeedRow {
+            request_id: "w2".into(),
+            provider_id: 2,
+            model_id: "claude-sonnet".into(),
+            success: true,
+            start_time: t0 + 1,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(200),
+        },
+        // 窗口外请求，不应出现。
+        SeedRow {
+            request_id: "w3".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: t0 - 1,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(999),
+        },
+    ] {
+        insert_request(&db, row).await;
+    }
+
+    // 带 startTime/endTime + providerId 过滤。
+    let (status, json) = get_json(
+        app.clone(),
+        &format!("/api/stats/charts?startTime={t0}&endTime={}&providerId={}", t0 + 3 * HOUR_MS, DEFAULT_PROVIDER_ID),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+    let call_trend = data["callTrend"].as_array().unwrap();
+    // 3 小时窗口 → 3 个桶（小时粒度）。
+    assert_eq!(call_trend.len(), 3);
+    let total_calls: i64 = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).sum();
+    assert_eq!(total_calls, 1); // 只有 w1
+    let call_by_model = data["callByModel"].as_array().unwrap();
+    assert_eq!(call_by_model.len(), 1);
+    assert_eq!(call_by_model[0]["modelId"], "gpt-4o");
+    assert_eq!(call_by_model[0]["value"], 1);
+
+    // 不带 providerId：两个供应商都出现。
+    let (status, json) = get_json(
+        app,
+        &format!("/api/stats/charts?startTime={t0}&endTime={}", t0 + 3 * HOUR_MS),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+    let call_by_model = data["callByModel"].as_array().unwrap();
+    assert_eq!(call_by_model.len(), 2);
+}
+
+#[tokio::test]
+async fn test_charts_day_granularity_for_long_window() {
+    let (app, db) = setup_app().await;
+    // 5 天窗口 → 天桶粒度（5 个桶），验证 >48h 用天桶。
+    // t0 对齐到整天起点（小时对齐后再按 24h 对齐），保证桶边界整齐。
+    let t0 = ((1_700_000_000_000i64 / HOUR_MS) / 24) * 24 * HOUR_MS;
+    let day_ms = 24 * HOUR_MS;
+    for row in [
+        SeedRow {
+            request_id: "d1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: t0 + 1,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(100),
+        },
+        SeedRow {
+            request_id: "d2".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: t0 + 2 * day_ms + 1,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(200),
+        },
+    ] {
+        insert_request(&db, row).await;
+    }
+
+    let (status, json) = get_json(
+        app,
+        &format!("/api/stats/charts?startTime={t0}&endTime={}", t0 + 5 * day_ms),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+    let call_trend = data["callTrend"].as_array().unwrap();
+    assert_eq!(call_trend.len(), 5);
+    // 相邻桶间隔一天。
+    let starts: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["bucketStart"].as_i64().unwrap())
+        .collect();
+    for w in starts.windows(2) {
+        assert_eq!(w[1] - w[0], day_ms);
+    }
+    let values: Vec<i64> = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).collect();
+    assert_eq!(values, vec![1, 0, 1, 0, 0]);
+}

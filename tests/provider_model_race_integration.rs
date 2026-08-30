@@ -507,3 +507,57 @@ async fn test_pm_rank_requires_auth() {
     .await;
     assert_eq!(status, 401);
 }
+
+#[tokio::test]
+async fn test_pm_rank_provider_filter() {
+    let (app, db) = setup_app().await;
+    // 供应商 A 两个模型、B 一个模型；带 providerId=1 只返回 A 的模型。
+    seed_provider_model(&db, 3, 1, "deepseek-v3").await;
+    for row in [
+        SeedRow {
+            request_id: "f1".into(),
+            total_tokens: Some(100),
+            ..SeedRow::new("f1", 1, "gpt-4o", T0)
+        },
+        SeedRow {
+            request_id: "f2".into(),
+            total_tokens: Some(200),
+            ..SeedRow::new("f2", 1, "deepseek-v3", T0 + 1)
+        },
+        SeedRow {
+            request_id: "f3".into(),
+            total_tokens: Some(300),
+            ..SeedRow::new("f3", 2, "claude-sonnet", T0)
+        },
+    ] {
+        insert_request(&db, row).await;
+    }
+
+    let (status, json) = get_json(
+        app.clone(),
+        &format!("/api/stats/provider-model-rank?providerId=1&startTime={T0}&endTime={}", T0 + 2),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let items = json["data"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    // 全是供应商 A 的模型。
+    for item in items {
+        assert_eq!(item["providerName"], "供应商A");
+    }
+    let model_ids: Vec<&str> = items
+        .iter()
+        .map(|i| i["modelId"].as_str().unwrap())
+        .collect();
+    assert!(model_ids.contains(&"gpt-4o"));
+    assert!(model_ids.contains(&"deepseek-v3"));
+
+    // 不带 providerId：三个模型都返回。
+    let (status, json) = get_json(
+        app,
+        &format!("/api/stats/provider-model-rank?startTime={T0}&endTime={}", T0 + 2),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(json["data"]["items"].as_array().unwrap().len(), 3);
+}
