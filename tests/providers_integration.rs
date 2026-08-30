@@ -46,6 +46,24 @@ fn create_body(name: &str, base_url: &str, api_key: &str, extra: &str) -> String
     .to_string()
 }
 
+/// 创建一个名称与 Base URL 一致的 Provider，返回其 id。
+async fn create_named_provider(app: &axum::Router, name: &str) -> i64 {
+    let (status, body) = send_json(
+        app,
+        "POST",
+        "/api/providers",
+        &create_body(
+            name,
+            &format!("https://{name}.example.com/v1"),
+            "sk-1",
+            r#"{}"#,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "创建 {name} 失败: {body}");
+    body["data"]["id"].as_i64().unwrap()
+}
+
 #[tokio::test]
 async fn test_create_provider_encrypts_api_key_and_masks_response() {
     temp_env::async_with_vars([(ENCRYPTION_KEY_ENV, Some(TEST_KEY))], async {
@@ -316,4 +334,114 @@ async fn test_create_provider_rejects_bad_extra_json() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["msg"].as_str().unwrap().contains("额外字段"));
+}
+
+#[tokio::test]
+async fn test_list_providers_returns_insert_order_by_default() {
+    let (app, _db) = setup_app().await;
+    for name in ["Alpha", "Bravo", "Charlie"] {
+        create_named_provider(&app, name).await;
+    }
+
+    // 未重排时全部 sort_order 为 0，按 id 升序（即插入顺序）。
+    let (status, body) = send_json(&app, "GET", "/api/providers", "{}").await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Alpha", "Bravo", "Charlie"]);
+}
+
+#[tokio::test]
+async fn test_reorder_providers_updates_list_order() {
+    let (app, db) = setup_app().await;
+    let mut ids: Vec<i32> = Vec::new();
+    for name in ["Alpha", "Bravo", "Charlie"] {
+        ids.push(create_named_provider(&app, name).await as i32);
+    }
+
+    // 倒序重排：Charlie、Alpha、Bravo。
+    let reordered = vec![ids[2], ids[0], ids[1]];
+    let (status, _) = send_json(
+        &app,
+        "PUT",
+        "/api/providers/reorder",
+        &serde_json::json!({ "ids": reordered }).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send_json(&app, "GET", "/api/providers", "{}").await;
+    assert_eq!(status, StatusCode::OK);
+    let got: Vec<i32> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].as_i64().unwrap() as i32)
+        .collect();
+    assert_eq!(got, reordered);
+
+    // sort_order 按数组下标落库。
+    for (index, id) in reordered.iter().enumerate() {
+        let model = llm_gateway::entity::provider::Entity::find_by_id(*id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(model.sort_order, index as i32);
+    }
+}
+
+#[tokio::test]
+async fn test_reorder_providers_rolls_back_when_id_missing() {
+    let (app, _db) = setup_app().await;
+    let mut ids: Vec<i32> = Vec::new();
+    for name in ["Alpha", "Bravo"] {
+        ids.push(create_named_provider(&app, name).await as i32);
+    }
+
+    // 列表中混入不存在的 id → 整体拒绝，顺序保持不变（原子回滚）。
+    let (status, body) = send_json(
+        &app,
+        "PUT",
+        "/api/providers/reorder",
+        &serde_json::json!({ "ids": [ids[1], 999, ids[0]] }).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body["msg"].as_str().unwrap().contains("999"));
+
+    let (_, body) = send_json(&app, "GET", "/api/providers", "{}").await;
+    let names: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Alpha", "Bravo"]);
+}
+
+#[tokio::test]
+async fn test_reorder_providers_rejects_empty_and_duplicate_ids() {
+    let (app, _db) = setup_app().await;
+    let id = create_named_provider(&app, "Solo").await;
+
+    // 空列表。
+    let (status, body) = send_json(&app, "PUT", "/api/providers/reorder", r#"{"ids":[]}"#).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["msg"].as_str().unwrap().contains("不能为空"));
+
+    // 重复 id。
+    let (status, body) = send_json(
+        &app,
+        "PUT",
+        "/api/providers/reorder",
+        &serde_json::json!({ "ids": [id, id] }).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["msg"].as_str().unwrap().contains("重复"));
 }

@@ -119,6 +119,21 @@ export function useUpdateProvider() {
 	});
 }
 
+/** 批量重排供应商列表顺序（按 ids 数组顺序），成功后刷新列表。 */
+export function useReorderProviders() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (ids: number[]) => {
+			const res = await api
+				.put("providers/reorder", { json: { ids } })
+				.json<ApiResponse<unknown>>();
+			return unwrap(res);
+		},
+		// 成功/失败都重新拉取服务端数据：成功确认新顺序，失败则回滚乐观更新。
+		onSettled: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+	});
+}
+
 export function useDeleteProvider() {
 	const queryClient = useQueryClient();
 	return useMutation({

@@ -42,6 +42,9 @@ pub struct Model {
     /// 额外字段,JSON 字符串。
     #[sea_orm(default_value = "{}")]
     pub extra: String,
+    /// 列表排序权重,越小越靠前。
+    #[sea_orm(default_value = "0")]
+    pub sort_order: i32,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

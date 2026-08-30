@@ -11,6 +11,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 
 use crate::crypto;
 use crate::entity::provider::{self, ActiveModel, Entity};
@@ -23,6 +24,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_providers))
         .route("/", post(create_provider))
+        .route("/reorder", put(reorder_providers))
         .route("/{id}", get(get_provider_detail))
         .route("/{id}", put(update_provider))
         .route("/{id}", delete(delete_provider))
@@ -109,6 +111,8 @@ struct UpdateProviderRequest {
     billing_mode: Option<i32>,
     custom_header: Option<String>,
     extra: Option<String>,
+    /// 列表排序权重（越小越靠前），批量重排请使用 PUT /reorder。
+    sort_order: Option<i32>,
 }
 
 /// 校验协议类型与付费模式是否在合法枚举范围内。
@@ -220,6 +224,7 @@ async fn load_detail(
 
 async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
     match Entity::find()
+        .order_by_asc(provider::Column::SortOrder)
         .order_by_asc(provider::Column::Id)
         .all(&state.db)
         .await
@@ -332,6 +337,7 @@ async fn update_provider(
     }
     active.custom_header = Set(custom_header);
     active.extra = Set(extra);
+    active.sort_order = Set(req.sort_order.unwrap_or(active.sort_order.unwrap()));
     active.updated_at = Set(chrono::Utc::now());
 
     match active.update(&state.db).await {
@@ -347,6 +353,65 @@ async fn update_provider(
         Err(e) if is_unique_violation(&e) => {
             response::bad_request("同名 Provider 已存在，名称需要唯一")
         }
+        Err(e) => response::db_error(e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReorderProvidersRequest {
+    /// 目标顺序的 Provider id 列表（可只包含需要调整的部分）。
+    ids: Vec<i32>,
+}
+
+/// 批量重排供应商列表顺序：按 ids 数组下标写入 sort_order（0 起）。
+/// 允许部分重排（未传入的 id 保持原相对顺序）；id 缺失、重复或不存在则整体回滚。
+async fn reorder_providers(
+    State(state): State<AppState>,
+    Json(req): Json<ReorderProvidersRequest>,
+) -> impl IntoResponse {
+    if req.ids.is_empty() {
+        return response::bad_request("排序列表不能为空");
+    }
+    let mut seen = HashSet::new();
+    for id in &req.ids {
+        if !seen.insert(*id) {
+            return response::bad_request(format!("排序列表中 Provider {id} 重复"));
+        }
+    }
+
+    let txn = match state.db.begin().await {
+        Ok(txn) => txn,
+        Err(e) => return response::db_error(e.to_string()),
+    };
+
+    // 先校验全部 id 存在，再统一写入，保证原子性。
+    let found: Vec<provider::Model> = match Entity::find()
+        .filter(provider::Column::Id.is_in(req.ids.clone()))
+        .all(&txn)
+        .await
+    {
+        Ok(models) => models,
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    let found_ids: HashSet<i32> = found.into_iter().map(|m| m.id).collect();
+    if let Some(missing) = req.ids.iter().find(|id| !found_ids.contains(id)) {
+        return response::not_found(format!("Provider {missing} 不存在"));
+    }
+
+    for (index, id) in req.ids.iter().enumerate() {
+        if let Err(e) = Entity::update_many()
+            .filter(provider::Column::Id.eq(*id))
+            .col_expr(provider::Column::SortOrder, (index as i32).into())
+            .exec(&txn)
+            .await
+        {
+            return response::db_error(e.to_string());
+        }
+    }
+
+    match txn.commit().await {
+        Ok(()) => (StatusCode::OK, Json(Response::success(()))),
         Err(e) => response::db_error(e.to_string()),
     }
 }

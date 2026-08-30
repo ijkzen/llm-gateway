@@ -48,3 +48,9 @@ class ResizeObserverMock {
 if (typeof window !== "undefined" && typeof window.ResizeObserver === "undefined") {
 	window.ResizeObserver = ResizeObserverMock as unknown as typeof ResizeObserver;
 }
+
+// jsdom 未实现 Element.prototype.scrollIntoView，组件里调用会抛
+// "scrollIntoView is not a function"，这里补一个 no-op 桩。
+if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
+	Element.prototype.scrollIntoView = () => {};
+}

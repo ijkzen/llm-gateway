@@ -292,6 +292,20 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         changed |= ensure_migration(db, 10, &["SELECT 1"]).await?;
     }
 
+    // Migration 11: provider 列表排序字段（sort_order，越小越靠前）。
+    // 新库已由第一遍 create_table_from_entity 建表并带该列，此处兜底历史库。
+    let sort_order_exists = column_exists(db, "provider", "sort_order").await?;
+    if sort_order_exists {
+        changed |= ensure_migration(db, 11, &["SELECT 1"]).await?;
+    } else {
+        changed |= ensure_migration(
+            db,
+            11,
+            &["ALTER TABLE provider ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"],
+        )
+        .await?;
+    }
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)
