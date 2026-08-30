@@ -872,14 +872,14 @@ async fn test_charts_hour_granularity_local_alignment() {
     // 窗口：本地 2026-08-31 00:00 ~ 03:30（东八区）。tzOffsetMinutes=480。
     let start = local_ms_cn(2026, 8, 31, 0, 0);
     let end = local_ms_cn(2026, 8, 31, 3, 30);
-    for (i, (offset_ms, tokens)) in [(0, 10), (1 * HOUR_MS, 20), (2 * HOUR_MS + 1000, 30)]
+    for (i, (offset_ms, tokens)) in [(0, 10), (HOUR_MS, 20), (2 * HOUR_MS + 1000, 30)]
         .into_iter()
         .enumerate()
     {
         insert_request(
             &db,
             SeedRow {
-                request_id: format!("h-{i}").into(),
+                request_id: format!("h-{i}"),
                 provider_id: DEFAULT_PROVIDER_ID,
                 model_id: "gpt-4o".into(),
                 success: true,
@@ -936,7 +936,7 @@ async fn test_charts_day_granularity_week_has_seven_points() {
         insert_request(
             &db,
             SeedRow {
-                request_id: format!("d-{i}").into(),
+                request_id: format!("d-{i}"),
                 provider_id: DEFAULT_PROVIDER_ID,
                 model_id: "gpt-4o".into(),
                 success: true,
@@ -991,7 +991,7 @@ async fn test_charts_month_granularity_natural_months() {
         insert_request(
             &db,
             SeedRow {
-                request_id: format!("m-{i}").into(),
+                request_id: format!("m-{i}"),
                 provider_id: DEFAULT_PROVIDER_ID,
                 model_id: "gpt-4o".into(),
                 success: true,
@@ -1047,7 +1047,7 @@ async fn test_charts_year_granularity_natural_years() {
         insert_request(
             &db,
             SeedRow {
-                request_id: format!("y-{i}").into(),
+                request_id: format!("y-{i}"),
                 provider_id: DEFAULT_PROVIDER_ID,
                 model_id: "gpt-4o".into(),
                 success: true,
@@ -1145,7 +1145,7 @@ async fn test_summary_success_rate_rounded_to_five_decimals() {
         insert_request(
             &db,
             SeedRow {
-                request_id: format!("sr-{i}").into(),
+                request_id: format!("sr-{i}"),
                 provider_id: DEFAULT_PROVIDER_ID,
                 model_id: "gpt-4o".into(),
                 success,

@@ -155,10 +155,10 @@ async fn get_json(app: axum::Router, uri: &str) -> (u16, serde_json::Value) {
 
 /// 种入供应商 A/B 各自模型的指标数据：
 /// - A/gpt-4o：r1(成功, 流式 ttft=100, 输入100/缓存40, 输出100 tps=50, token=150, rt=1000)
-///              r2(成功, 流式 ttft=300, 输入100/缓存0, 输出300 tps=100, token=250, rt=2000)
-///              r3(失败, token=999 —— 应被 success=1 排除)
+///   r2(成功, 流式 ttft=300, 输入100/缓存0, 输出300 tps=100, token=250, rt=2000)
+///   r3(失败, token=999 —— 应被 success=1 排除)
 /// - B/claude-sonnet：r4(成功, 流式 ttft=500, 输入200/缓存100, 输出200 tps=200, token=100, rt=3000)
-///                     r5(成功, 非流式 ttft NULL —— 只影响 ttft 分母，其余指标计入)
+///   r5(成功, 非流式 ttft NULL —— 只影响 ttft 分母，其余指标计入)
 async fn seed_rank_data(db: &DatabaseConnection) {
     for row in [
         SeedRow {

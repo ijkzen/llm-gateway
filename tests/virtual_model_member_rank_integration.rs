@@ -98,6 +98,7 @@ async fn seed_member(
     .unwrap();
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn insert_request(
     db: &DatabaseConnection,
     request_id: &str,
