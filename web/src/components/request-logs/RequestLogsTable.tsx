@@ -38,9 +38,52 @@ import {
 	useReactTable,
 } from "@tanstack/react-table";
 import { RotateCcw } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const PLAIN_HEADER_CLASS = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
+
+/** 列显隐与每页条数的 localStorage 持久化键。 */
+const COLUMN_VISIBILITY_KEY = "request-logs:column-visibility";
+const PAGE_SIZE_KEY = "request-logs:page-size";
+/** 每页条数可选值。 */
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 20;
+
+/** 读 localStorage 的列显隐（JSON 对象）；无数据/解析失败返回空对象（全部列显示）。 */
+function loadColumnVisibility(): VisibilityState {
+	try {
+		const raw = window.localStorage.getItem(COLUMN_VISIBILITY_KEY);
+		if (!raw) {
+			return {};
+		}
+		const parsed: unknown = JSON.parse(raw);
+		return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as VisibilityState)
+			: {};
+	} catch {
+		return {};
+	}
+}
+
+/** 读 localStorage 的每页条数；无数据/非法值返回默认 20。 */
+function loadPageSize(): number {
+	try {
+		const raw = window.localStorage.getItem(PAGE_SIZE_KEY);
+		const value = Number(raw);
+		return (PAGE_SIZE_OPTIONS as readonly number[]).includes(value) ? value : DEFAULT_PAGE_SIZE;
+	} catch {
+		return DEFAULT_PAGE_SIZE;
+	}
+}
+
+/** 写 localStorage（隐私模式等写失败时静默忽略）。 */
+function saveToStorage(key: string, value: string): void {
+	try {
+		window.localStorage.setItem(key, value);
+	} catch {
+		// 忽略：localStorage 不可用时持久化失效但不影响功能。
+	}
+}
 
 /** 默认时间窗口状态：今天（自然日 [0点, 当前]）。 */
 function defaultTimeWindow(): RaceWindowState {
@@ -73,10 +116,19 @@ function fmtMs(v: number | null | undefined): string {
 export function RequestLogsTable() {
 	// 默认按时间降序（最新在前），列头显示排序指示，亦显式通知后端。
 	const [sorting, setSorting] = useState<SortingState>([{ id: "startTime", desc: true }]);
-	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+	// 列显隐与每页条数从 localStorage 恢复；无数据时默认全部列 + 20 条。
+	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>(loadColumnVisibility);
 	const [page, setPage] = useState(1);
-	const [pageSize, setPageSize] = useState(20);
+	const [pageSize, setPageSize] = useState<number>(loadPageSize);
 	const [detailRow, setDetailRow] = useState<RequestLogRow | null>(null);
+
+	// 用户调整列显隐 / 每页条数后写回 localStorage，刷新保持。
+	useEffect(() => {
+		saveToStorage(COLUMN_VISIBILITY_KEY, JSON.stringify(columnVisibility));
+	}, [columnVisibility]);
+	useEffect(() => {
+		saveToStorage(PAGE_SIZE_KEY, String(pageSize));
+	}, [pageSize]);
 
 	// 过滤条件：先过滤（虚拟模型/供应商/供应商模型/结果状态/API Key），再选时间段。
 	const [vmId, setVmId] = useState<number | undefined>(undefined);
@@ -438,7 +490,7 @@ export function RequestLogsTable() {
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
-							{[10, 20, 50, 100].map((size) => (
+							{PAGE_SIZE_OPTIONS.map((size) => (
 								<SelectItem key={size} value={String(size)}>
 									{size} / 页
 								</SelectItem>

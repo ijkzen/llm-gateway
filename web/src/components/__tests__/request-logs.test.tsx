@@ -68,6 +68,7 @@ function mockQuery(data: { items: ReturnType<typeof makeRow>[]; total: number })
 describe("RequestLogsTable", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		window.localStorage.clear();
 		mocks.useVirtualModels.mockReturnValue({
 			data: [{ virtualModelId: 1, displayId: "vm-a" }],
 		});
@@ -187,5 +188,60 @@ describe("RequestLogsTable", () => {
 		expect(lastCall?.endTime).toBeGreaterThan(firstEnd ?? 0);
 
 		vi.useRealTimers();
+	});
+
+	it("localStorage 无数据时默认全部列 + 每页 20", () => {
+		mockQuery({ items: [makeRow()], total: 1 });
+		render(<RequestLogsTable />);
+
+		// 默认每页 20 条。
+		const lastCall = mocks.useRequestLogs.mock.calls[0]?.[0];
+		expect(lastCall?.pageSize).toBe(20);
+		// 列显隐为空对象 → 全部列显示（表头齐全；过滤卡片有同名 label 故用 getAll）。
+		expect(screen.getAllByText("虚拟模型").length).toBeGreaterThan(0);
+		expect(screen.getAllByText("API Key").length).toBeGreaterThan(0);
+		expect(screen.getAllByText("上游模型").length).toBeGreaterThan(0);
+	});
+
+	it("勾选隐藏列后写入 localStorage，重新渲染保持隐藏", () => {
+		mockQuery({ items: [makeRow()], total: 1 });
+		const { unmount } = render(<RequestLogsTable />);
+
+		// Radix DropdownMenu 在 jsdom 下通过键盘事件打开。
+		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
+		fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "结果" }));
+
+		const stored = JSON.parse(
+			window.localStorage.getItem("request-logs:column-visibility") ?? "{}",
+		);
+		expect(stored).toEqual({ success: false });
+
+		// 重新渲染（模拟刷新）：结果列保持隐藏。
+		unmount();
+		mockQuery({ items: [makeRow()], total: 1 });
+		render(<RequestLogsTable />);
+		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
+		expect(screen.getByRole("menuitemcheckbox", { name: "结果" })).toHaveAttribute(
+			"data-state",
+			"unchecked",
+		);
+	});
+
+	it("切换每页条数后写入 localStorage，重新渲染保持", () => {
+		mockQuery({ items: [], total: 0 });
+		const { unmount } = render(<RequestLogsTable />);
+
+		// 每页切到 10 条。
+		fireEvent.click(screen.getByRole("combobox", { name: "每页条数" }));
+		fireEvent.click(screen.getByRole("option", { name: "10 / 页" }));
+		expect(window.localStorage.getItem("request-logs:page-size")).toBe("10");
+
+		// 重新渲染（模拟刷新）：每页仍 10 条。
+		unmount();
+		mockQuery({ items: [], total: 0 });
+		render(<RequestLogsTable />);
+		const calls = mocks.useRequestLogs.mock.calls;
+		const lastCall = calls[calls.length - 1]?.[0];
+		expect(lastCall?.pageSize).toBe(10);
 	});
 });
