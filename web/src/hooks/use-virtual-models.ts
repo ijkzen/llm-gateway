@@ -56,6 +56,7 @@ export interface UpdateVirtualModelPayload {
 
 export const virtualModelKeys = {
 	all: ["virtual-models"] as const,
+	detail: (id: number) => ["virtual-models", id] as const,
 };
 
 export function useVirtualModels() {
@@ -65,6 +66,18 @@ export function useVirtualModels() {
 			const res = await api.get("virtual-models").json<ApiResponse<VirtualModel[]>>();
 			return unwrap(res);
 		},
+	});
+}
+
+/** 虚拟模型详情（二级数据面板页头用）。 */
+export function useVirtualModelDetail(id: number | null) {
+	return useQuery<VirtualModel>({
+		queryKey: virtualModelKeys.detail(id ?? -1),
+		queryFn: async () => {
+			const res = await api.get(`virtual-models/${id}`).json<ApiResponse<VirtualModel>>();
+			return unwrap(res);
+		},
+		enabled: id !== null,
 	});
 }
 

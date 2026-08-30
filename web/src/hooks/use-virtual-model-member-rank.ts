@@ -10,11 +10,13 @@ export type RaceSortKey =
 	| "tps"
 	| "cacheHitRate";
 
-export interface VirtualModelRankItem {
-	/** 虚拟模型 ID。 */
-	virtualModelId: number;
-	/** 虚拟模型对外 ID（虚拟模型已删除时为空串）。 */
-	virtualModelDisplayId: string;
+export interface VirtualModelMemberRankItem {
+	/** 成员所属供应商名称（供应商已删除时为空串）。 */
+	providerName: string;
+	/** 成员模型 ID（供应商侧真实 ID）。 */
+	modelId: string;
+	/** 成员是否启用（virtual_model_item.enable）。 */
+	memberEnable: boolean;
 	/** 成功请求数。 */
 	requestCount: number;
 	/** 总计 token（成功请求的 total_tokens 合计）。 */
@@ -29,10 +31,10 @@ export interface VirtualModelRankItem {
 	cacheHitRate: number;
 }
 
-export interface VirtualModelRankResponse {
+export interface VirtualModelMemberRankResponse {
 	startTime: number;
 	endTime: number;
-	items: VirtualModelRankItem[];
+	items: VirtualModelMemberRankItem[];
 }
 
 export interface RaceWindow {
@@ -47,37 +49,45 @@ export interface RaceSort {
 	sortOrder: "asc" | "desc";
 }
 
-export const virtualModelRaceKeys = {
-	rank: (window: RaceWindow, sort: RaceSort) =>
+export const virtualModelMemberRankKeys = {
+	rank: (window: RaceWindow, sort: RaceSort, virtualModelId: number) =>
 		[
 			"stats",
-			"virtual-model-rank",
+			"virtual-model-member-rank",
 			window.startTime,
 			window.endTime,
 			sort.sortBy,
 			sort.sortOrder,
+			virtualModelId,
 		] as const,
 };
 
 /**
- * 虚拟模型赛马排行查询（全部虚拟模型 + 后端排序）。
+ * 虚拟模型成员模型排行查询（配置成员全量 + 后端排序）。
  * @param window 时间窗口
  * @param sort 排序指标与方向
- * @param enabled 是否启用（配合懒加载 useInView 使用，未进入视口不发请求）
+ * @param enabled 是否启用
+ * @param virtualModelId 虚拟模型 ID（必填）
  */
-export function useVirtualModelRace(window: RaceWindow, sort: RaceSort, enabled: boolean) {
-	return useQuery<VirtualModelRankResponse>({
-		queryKey: virtualModelRaceKeys.rank(window, sort),
+export function useVirtualModelMemberRank(
+	window: RaceWindow,
+	sort: RaceSort,
+	enabled: boolean,
+	virtualModelId: number,
+) {
+	return useQuery<VirtualModelMemberRankResponse>({
+		queryKey: virtualModelMemberRankKeys.rank(window, sort, virtualModelId),
 		queryFn: async () => {
 			const params = new URLSearchParams({
 				sortBy: sort.sortBy,
 				sortOrder: sort.sortOrder,
 				startTime: String(window.startTime),
 				endTime: String(window.endTime),
+				virtualModelId: String(virtualModelId),
 			});
 			const res = await api
-				.get(`stats/virtual-model-rank?${params.toString()}`)
-				.json<ApiResponse<VirtualModelRankResponse>>();
+				.get(`stats/virtual-model-member-rank?${params.toString()}`)
+				.json<ApiResponse<VirtualModelMemberRankResponse>>();
 			return unwrap(res);
 		},
 		enabled,

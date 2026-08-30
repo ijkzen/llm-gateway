@@ -568,3 +568,62 @@ async fn test_charts_day_granularity_for_long_window() {
     let values: Vec<i64> = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).collect();
     assert_eq!(values, vec![1, 0, 1, 0, 0]);
 }
+
+#[tokio::test]
+async fn test_charts_virtual_model_filter() {
+    let (app, db) = setup_app().await;
+    // 固定窗口内两个虚拟模型各一笔；带 virtualModelId 只返回该虚拟模型。
+    let t0 = (1_700_000_000_000i64 / HOUR_MS) * HOUR_MS;
+    // 直接插 request（virtual_model_id=2 的行需要绕过 insert_request 的硬编码 1）。
+    let end_time = t0 + 500;
+    for (rid, vm_id, model) in [
+        ("vmf1", 1, "gpt-4o"),
+        ("vmf2", 2, "claude-sonnet"),
+    ] {
+        request_entity::ActiveModel {
+            request_id: Set(rid.to_string()),
+            virtual_model_id: Set(vm_id),
+            provider_id: Set(DEFAULT_PROVIDER_ID),
+            model_id: Set(model.to_string()),
+            stream: Set(false),
+            ttft: Set(None),
+            input_tokens: Set(Some(10)),
+            input_cache_tokens: Set(0),
+            input_cache_rate: Set(0.0),
+            output_tokens: Set(None),
+            output_tokens_time: Set(None),
+            tps: Set(0.0),
+            start_time: Set(t0 + 1),
+            end_time: Set(end_time),
+            request_time: Set(500),
+            success: Set(true),
+            fail_reason: Set(None),
+            total_tokens: Set(Some(100)),
+            api_key_name: Set("itest-key".to_string()),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+    }
+
+    // 带 virtualModelId=1：只返回 gpt-4o。
+    let (status, json) = get_json(
+        app.clone(),
+        &format!("/api/stats/charts?startTime={t0}&endTime={}&virtualModelId=1", t0 + 2 * HOUR_MS),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+    let call_by_model = data["callByModel"].as_array().unwrap();
+    assert_eq!(call_by_model.len(), 1);
+    assert_eq!(call_by_model[0]["modelId"], "gpt-4o");
+
+    // 不带过滤：两个虚拟模型的模型都出现。
+    let (status, json) = get_json(
+        app,
+        &format!("/api/stats/charts?startTime={t0}&endTime={}", t0 + 2 * HOUR_MS),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(json["data"]["callByModel"].as_array().unwrap().len(), 2);
+}

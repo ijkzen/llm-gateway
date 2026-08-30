@@ -6,6 +6,11 @@ import type {
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// VirtualModelRaceCard 用 useNavigate 跳转二级页，测试中 stub。
+vi.mock("react-router-dom", () => ({
+	useNavigate: () => vi.fn(),
+}));
+
 const mocks = vi.hoisted(() => ({
 	data: undefined as VirtualModelRankResponse | undefined,
 	isLoading: false,
@@ -29,6 +34,7 @@ vi.mock("@/hooks/use-in-view", () => ({
 
 function makeItem(overrides: Partial<VirtualModelRankItem> = {}): VirtualModelRankItem {
 	return {
+		virtualModelId: 1,
 		virtualModelDisplayId: "deepseek-v4-flash",
 		requestCount: 10,
 		totalTokens: 1_000_000,

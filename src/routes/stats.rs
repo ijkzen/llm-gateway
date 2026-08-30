@@ -21,6 +21,7 @@ pub fn routes() -> Router<AppState> {
         .route("/provider-rank", get(provider_rank))
         .route("/virtual-model-rank", get(virtual_model_rank))
         .route("/provider-model-rank", get(provider_model_rank))
+        .route("/virtual-model-member-rank", get(virtual_model_member_rank))
 }
 
 #[derive(Serialize)]
@@ -120,6 +121,8 @@ struct ChartsQuery {
     end_time: Option<i64>,
     /// 按供应商过滤（可选）。
     provider_id: Option<i32>,
+    /// 按虚拟模型过滤（可选）。
+    virtual_model_id: Option<i32>,
 }
 
 /// 图表数据：调用/ token 的趋势 + 按上游模型的分布。
@@ -154,6 +157,10 @@ async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>)
     if let Some(provider_id) = query.provider_id {
         where_sql.push_str(" AND r.provider_id = ?");
         params.push(provider_id.into());
+    }
+    if let Some(virtual_model_id) = query.virtual_model_id {
+        where_sql.push_str(" AND r.virtual_model_id = ?");
+        params.push(virtual_model_id.into());
     }
 
     let trend_sql = |value_expr: &str| {
@@ -270,8 +277,10 @@ struct RankQuery {
     start_time: Option<i64>,
     /// 窗口终点（毫秒时间戳，不含）。
     end_time: Option<i64>,
-    /// 按供应商过滤（可选；仅 provider_model_rank 使用）。
+    /// 按供应商过滤（可选；provider_model_rank 使用）。
     provider_id: Option<i32>,
+    /// 按虚拟模型过滤（可选；virtual_model_member_rank 使用）。
+    virtual_model_id: Option<i32>,
 }
 
 /// 解析排序指标白名单；非法值返回 None（调用方转 400）。
@@ -445,6 +454,8 @@ async fn provider_rank(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct VirtualModelRankItem {
+    /// 虚拟模型 ID（聚合维度；已删除虚拟模型仍保留原始 id）。
+    virtual_model_id: i32,
     /// 虚拟模型对外 ID（虚拟模型已删除时为空串）。
     virtual_model_display_id: String,
     /// 成功请求数。
@@ -485,7 +496,8 @@ async fn virtual_model_rank(
 
     // 按 id 分组（同一 display_id 的虚拟模型也各自成行），JOIN 出 display_id。
     let sql = format!(
-        "SELECT COALESCE(vm.display_id, '') AS virtual_model_display_id,{RANK_METRIC_SQL} \
+        "SELECT r.virtual_model_id AS virtual_model_id, \
+                COALESCE(vm.display_id, '') AS virtual_model_display_id,{RANK_METRIC_SQL} \
          FROM request r LEFT JOIN virtual_model vm ON vm.virtual_model_id = r.virtual_model_id \
          WHERE r.success = 1 AND r.start_time >= ? AND r.start_time < ? \
          GROUP BY r.virtual_model_id"
@@ -506,6 +518,7 @@ async fn virtual_model_rank(
     let mut items = rows
         .iter()
         .map(|row| VirtualModelRankItem {
+            virtual_model_id: row.try_get::<i32>("", "virtual_model_id").unwrap_or(0),
             virtual_model_display_id: row.try_get("", "virtual_model_display_id").unwrap_or_default(),
             request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
             total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
@@ -639,6 +652,163 @@ async fn provider_model_rank(
     sort_rank_rows(&mut items, is_asc, value_of);
 
     Ok(Json(Response::success(ProviderModelRankResponse {
+        start_time: start,
+        end_time: end,
+        items,
+    })))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VirtualModelMemberRankItem {
+    /// 成员所属供应商名称（供应商已删除时为空串）。
+    provider_name: String,
+    /// 成员模型 ID（供应商侧真实 ID）。
+    model_id: String,
+    /// 成员是否启用（virtual_model_item.enable；停用成员可正常展示但指标多为 0）。
+    member_enable: bool,
+    /// 成功请求数（该虚拟模型下实际服务过该成员的行数）。
+    request_count: i64,
+    /// 总计 token（成功请求的 total_tokens 合计）。
+    total_tokens: i64,
+    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
+    ttft: f64,
+    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
+    request_time: f64,
+    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
+    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
+    tps: f64,
+    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
+    cache_hit_rate: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VirtualModelMemberRankResponse {
+    start_time: i64,
+    end_time: i64,
+    items: Vec<VirtualModelMemberRankItem>,
+}
+
+/// 虚拟模型成员模型排行：以成员配置表（virtual_model_item）为左表反查——
+/// 展示该虚拟模型配置的全部成员（即使某成员在窗口内无流量，指标为 0），
+/// 指标从 request 聚合（该虚拟模型实际服务该成员的行，仅 success=1）。
+///
+/// 关联键说明：request.model_id 存的是 provider_model.provider_model_id
+/// （字符串），聚合子查询按 (provider_id, model_id) 分组后与
+/// (pm.provider_id, pm.provider_model_id) 关联。
+async fn virtual_model_member_rank(
+    State(state): State<AppState>,
+    Query(query): Query<RankQuery>,
+) -> Result<Json<Response<VirtualModelMemberRankResponse>>, response::ErrorResponse<VirtualModelMemberRankResponse>> {
+    let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
+        Ok(v) => v,
+        Err(e) => return Err(e),
+    };
+    let Some(virtual_model_id) = query.virtual_model_id else {
+        return Err(response::bad_request("缺少 virtualModelId 参数"));
+    };
+    let db = &state.db;
+
+    // 聚合子查询：该虚拟模型下实际服务的成员（按 provider_id + model_id 分组）。
+    // 6 指标表达式与 RANK_METRIC_SQL 同口径，但需带上关联键列。
+    let sql = format!(
+        "SELECT COALESCE(p.name, '') AS provider_name, \
+                pm.provider_model_id AS model_id, \
+                vmi.enable AS member_enable, \
+                COALESCE(agg.request_count, 0) AS request_count, \
+                COALESCE(agg.total_tokens, 0) AS total_tokens, \
+                COALESCE(agg.ttft, 0) AS ttft, \
+                COALESCE(agg.request_time, 0) AS request_time, \
+                COALESCE(agg.tps, 0) AS tps, \
+                COALESCE(agg.cache_hit_rate, 0) AS cache_hit_rate \
+         FROM virtual_model_item vmi \
+         JOIN provider_model pm ON pm.model_id = vmi.model_id \
+         LEFT JOIN provider p ON p.id = pm.provider_id \
+         LEFT JOIN ( \
+             SELECT r.provider_id, r.model_id AS provider_model_id, \
+                    COUNT(*) AS request_count, \
+                    COALESCE(SUM(r.total_tokens), 0) AS total_tokens, \
+                    AVG(r.ttft) AS ttft, \
+                    AVG(r.request_time) AS request_time, \
+                    CASE \
+                        WHEN SUM(CASE WHEN r.tps > 0 AND r.output_tokens > 0 THEN r.output_tokens / r.tps ELSE 0 END) > 0 \
+                        THEN COALESCE(SUM(r.output_tokens), 0) / SUM(CASE WHEN r.tps > 0 AND r.output_tokens > 0 THEN r.output_tokens / r.tps ELSE 0 END) \
+                        ELSE 0 \
+                    END AS tps, \
+                    CASE \
+                        WHEN SUM(r.input_tokens) > 0 \
+                        THEN 1.0 * SUM(r.input_cache_tokens) / SUM(r.input_tokens) \
+                        ELSE 0 \
+                    END AS cache_hit_rate \
+             FROM request r \
+             WHERE r.success = 1 AND r.virtual_model_id = ? AND r.start_time >= ? AND r.start_time < ? \
+             GROUP BY r.provider_id, r.model_id \
+         ) agg ON agg.provider_id = pm.provider_id AND agg.provider_model_id = pm.provider_model_id \
+         WHERE vmi.virtual_model_id = ?"
+    );
+
+    let rows = match db
+        .query_all_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            [
+                virtual_model_id.into(),
+                start.into(),
+                end.into(),
+                virtual_model_id.into(),
+            ],
+        ))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => return Err(response::db_error(e.to_string())),
+    };
+
+    let mut items = rows
+        .iter()
+        .map(|row| VirtualModelMemberRankItem {
+            provider_name: row.try_get("", "provider_name").unwrap_or_default(),
+            model_id: row.try_get("", "model_id").unwrap_or_default(),
+            member_enable: row.try_get::<bool>("", "member_enable").unwrap_or(true),
+            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
+            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
+            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
+            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
+            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
+            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+        })
+        .collect::<Vec<_>>();
+
+    let is_asc = order_dir == "ASC";
+    let value_of = |item: &VirtualModelMemberRankItem| -> f64 {
+        match sort_key {
+            RankSortKey::TotalTokens => item.total_tokens as f64,
+            RankSortKey::RequestCount => item.request_count as f64,
+            RankSortKey::Ttft => item.ttft,
+            RankSortKey::RequestTime => item.request_time,
+            RankSortKey::Tps => item.tps,
+            RankSortKey::CacheHitRate => item.cache_hit_rate,
+        }
+    };
+    // 无流量成员（request_count=0）始终排最后，避免升序时 0 值抢前；
+    // 有流量成员组内按指标升/降序。
+    items.sort_by(|a, b| {
+        let a_has_traffic = a.request_count > 0;
+        let b_has_traffic = b.request_count > 0;
+        match (a_has_traffic, b_has_traffic) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => {
+                let cmp = value_of(a)
+                    .partial_cmp(&value_of(b))
+                    .unwrap_or(std::cmp::Ordering::Equal);
+                if is_asc { cmp } else { cmp.reverse() }
+            }
+        }
+    });
+
+    Ok(Json(Response::success(VirtualModelMemberRankResponse {
         start_time: start,
         end_time: end,
         items,

@@ -35,6 +35,8 @@ export interface ChartsParams {
 	endTime?: number;
 	/** 按供应商过滤（可选）。 */
 	providerId?: number;
+	/** 按虚拟模型过滤（可选）。 */
+	virtualModelId?: number;
 }
 
 export const dashboardStatsKeys = {
@@ -46,6 +48,7 @@ export const dashboardStatsKeys = {
 			params.startTime ?? null,
 			params.endTime ?? null,
 			params.providerId ?? null,
+			params.virtualModelId ?? null,
 		] as const,
 };
 
@@ -70,6 +73,9 @@ export function useDashboardCharts(params: ChartsParams = {}) {
 			if (params.startTime !== undefined) query.set("startTime", String(params.startTime));
 			if (params.endTime !== undefined) query.set("endTime", String(params.endTime));
 			if (params.providerId !== undefined) query.set("providerId", String(params.providerId));
+			if (params.virtualModelId !== undefined) {
+				query.set("virtualModelId", String(params.virtualModelId));
+			}
 			const suffix = query.size > 0 ? `?${query.toString()}` : "";
 			const res = await api.get(`stats/charts${suffix}`).json<ApiResponse<DashboardCharts>>();
 			return unwrap(res);

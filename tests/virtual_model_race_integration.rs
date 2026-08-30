@@ -208,6 +208,7 @@ async fn test_vm_rank_aggregates_all_six_metrics() {
     // 默认排序：totalTokens 降序 → A(400) 在前。
     let a = &items[0];
     let b = &items[1];
+    assert_eq!(a["virtualModelId"], 1);
     assert_eq!(a["virtualModelDisplayId"], "vm-a");
     assert_eq!(a["requestCount"], 2); // 失败行排除
     assert_eq!(a["totalTokens"], 400.0);
@@ -215,6 +216,7 @@ async fn test_vm_rank_aggregates_all_six_metrics() {
     assert_eq!(a["requestTime"], 1500.0); // (1000+2000)/2
     assert!((a["tps"].as_f64().unwrap() - 80.0).abs() < 0.001); // (100+300)/(100/50+300/100)
     assert!((a["cacheHitRate"].as_f64().unwrap() - 0.2).abs() < 0.001); // 40/200
+    assert_eq!(b["virtualModelId"], 2);
     assert_eq!(b["virtualModelDisplayId"], "vm-b");
     assert_eq!(b["requestCount"], 2);
     assert_eq!(b["totalTokens"], 200.0);
