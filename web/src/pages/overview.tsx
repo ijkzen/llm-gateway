@@ -3,6 +3,7 @@ import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
+import { ProviderModelRaceSection } from "@/components/provider-model-race/ProviderModelRaceSection";
 import { ProviderRaceSection } from "@/components/provider-race/ProviderRaceSection";
 import { SegmentedControl } from "@/components/segmented-control";
 import { StatsCard } from "@/components/stats-card";
@@ -182,6 +183,7 @@ export default function OverviewPage() {
 			<TokenAnalysisCard charts={chartsQuery.data} />
 			<ProviderRaceSection />
 			<VirtualModelRaceSection />
+			<ProviderModelRaceSection />
 		</div>
 	);
 }

@@ -20,6 +20,7 @@ pub fn routes() -> Router<AppState> {
         .route("/charts", get(charts))
         .route("/provider-rank", get(provider_rank))
         .route("/virtual-model-rank", get(virtual_model_rank))
+        .route("/provider-model-rank", get(provider_model_rank))
 }
 
 #[derive(Serialize)]
@@ -477,6 +478,107 @@ async fn virtual_model_rank(
     sort_rank_rows(&mut items, is_asc, value_of);
 
     Ok(Json(Response::success(VirtualModelRankResponse {
+        start_time: start,
+        end_time: end,
+        items,
+    })))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderModelRankItem {
+    /// 实际服务的供应商名称（供应商已删除时为空串）。
+    provider_name: String,
+    /// 模型 ID（供应商侧真实 ID；provider_model 行已删时退化为 request 里的原始串）。
+    model_id: String,
+    /// 成功请求数。
+    request_count: i64,
+    /// 总计 token（成功请求的 total_tokens 合计）。
+    total_tokens: i64,
+    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
+    ttft: f64,
+    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
+    request_time: f64,
+    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
+    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
+    tps: f64,
+    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
+    cache_hit_rate: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderModelRankResponse {
+    start_time: i64,
+    end_time: i64,
+    items: Vec<ProviderModelRankItem>,
+}
+
+/// 供应商模型平铺赛马：规格与供应商/虚拟模型赛马完全一致（6 指标 + 排序 +
+/// 时间窗口），行的含义 = 供应商的每个模型。按 (provider_id, model_id) 分组
+/// （按 id 而非名称，避免不同供应商的相同模型 ID 被合并），JOIN provider 出
+/// 供应商名、LEFT JOIN provider_model 兜底模型名（模型行已删时退化为 request
+/// 里的原始 model_id）。
+async fn provider_model_rank(
+    State(state): State<AppState>,
+    Query(query): Query<RankQuery>,
+) -> Result<Json<Response<ProviderModelRankResponse>>, response::ErrorResponse<ProviderModelRankResponse>> {
+    let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
+        Ok(v) => v,
+        Err(e) => return Err(e),
+    };
+    let db = &state.db;
+
+    let sql = format!(
+        "SELECT COALESCE(p.name, '') AS provider_name, \
+                COALESCE(pm.provider_model_id, r.model_id) AS model_id,{RANK_METRIC_SQL} \
+         FROM request r \
+         LEFT JOIN provider p ON p.id = r.provider_id \
+         LEFT JOIN provider_model pm ON pm.provider_id = r.provider_id AND pm.provider_model_id = r.model_id \
+         WHERE r.success = 1 AND r.start_time >= ? AND r.start_time < ? \
+         GROUP BY r.provider_id, r.model_id"
+    );
+
+    let rows = match db
+        .query_all_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            [start.into(), end.into()],
+        ))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => return Err(response::db_error(e.to_string())),
+    };
+
+    let mut items = rows
+        .iter()
+        .map(|row| ProviderModelRankItem {
+            provider_name: row.try_get("", "provider_name").unwrap_or_default(),
+            model_id: row.try_get("", "model_id").unwrap_or_default(),
+            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
+            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
+            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
+            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
+            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
+            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+        })
+        .collect::<Vec<_>>();
+
+    let is_asc = order_dir == "ASC";
+    let value_of = |item: &ProviderModelRankItem| -> f64 {
+        match sort_key {
+            RankSortKey::TotalTokens => item.total_tokens as f64,
+            RankSortKey::RequestCount => item.request_count as f64,
+            RankSortKey::Ttft => item.ttft,
+            RankSortKey::RequestTime => item.request_time,
+            RankSortKey::Tps => item.tps,
+            RankSortKey::CacheHitRate => item.cache_hit_rate,
+        }
+    };
+    sort_rank_rows(&mut items, is_asc, value_of);
+
+    Ok(Json(Response::success(ProviderModelRankResponse {
         start_time: start,
         end_time: end,
         items,
