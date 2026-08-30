@@ -34,6 +34,8 @@ struct TrendPoint {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ModelValue {
+    /// 实际服务的供应商名称（供应商已删除时为空串）。
+    provider_name: String,
     model_id: String,
     value: i64,
 }
@@ -114,8 +116,9 @@ async fn charts(State(state): State<AppState>) -> impl IntoResponse {
     };
     let model_sql = |value_expr: &str| {
         format!(
-            "SELECT model_id, {value_expr} AS value \
-             FROM request WHERE start_time >= {window_start} GROUP BY model_id"
+            "SELECT COALESCE(p.name, '') AS provider_name, r.model_id, {value_expr} AS value \
+             FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
+             WHERE r.start_time >= {window_start} GROUP BY p.name, r.model_id"
         )
     };
 
@@ -167,6 +170,7 @@ async fn charts(State(state): State<AppState>) -> impl IntoResponse {
     let to_model_values = |rows: Vec<sea_orm::QueryResult>| {
         rows.iter()
             .map(|row| ModelValue {
+                provider_name: row.try_get("", "provider_name").unwrap_or_default(),
                 model_id: row.try_get("", "model_id").unwrap_or_default(),
                 value: row.try_get("", "value").unwrap_or(0),
             })

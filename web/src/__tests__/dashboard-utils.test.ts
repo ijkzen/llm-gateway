@@ -1,4 +1,4 @@
-import { formatTokenCount, topWithOther } from "@/lib/utils";
+import { formatTokenCount, middleEllipsis, topWithOther } from "@/lib/utils";
 import { describe, expect, it } from "vitest";
 
 describe("formatTokenCount", () => {
@@ -51,5 +51,26 @@ describe("topWithOther", () => {
 	it("恰好等于 limit 时不合并", () => {
 		const items = Array.from({ length: 10 }, (_, i) => ({ modelId: `m${i}`, value: i }));
 		expect(topWithOther(items, { modelId: "其他", value: 0 })).toHaveLength(10);
+	});
+});
+
+describe("middleEllipsis", () => {
+	it("不超过 maxLength 时原样返回", () => {
+		expect(middleEllipsis("deepseek-chat", 16)).toBe("deepseek-chat");
+		expect(middleEllipsis("恰好十六个字符呀啊啊啊啊啊", 16)).toBe("恰好十六个字符呀啊啊啊啊啊");
+	});
+
+	it("超过时保留首尾、中间以 … 省略", () => {
+		expect(middleEllipsis("阿里云・deepseek-chat", 16)).toBe("阿里云・deep…ek-chat");
+	});
+
+	it("总长度含省略号，首部比尾部多留一位", () => {
+		const result = middleEllipsis("1234567890abcdef", 10);
+		expect(result).toBe("12345…cdef");
+		expect(result.length).toBe(10);
+	});
+
+	it("对代理对（emoji）按码点省略不截断", () => {
+		expect(middleEllipsis("😀😀😀😀😀😀", 4)).toBe("😀😀…😀");
 	});
 });

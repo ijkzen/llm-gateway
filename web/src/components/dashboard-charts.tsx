@@ -1,12 +1,12 @@
 import {
 	ChartContainer,
 	ChartLegend,
-	ChartLegendContent,
 	ChartTooltip,
 	ChartTooltipContent,
 } from "@/components/ui/chart";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ModelValue, TrendPoint } from "@/hooks/use-dashboard-stats";
-import { topWithOther } from "@/lib/utils";
+import { middleEllipsis, topWithOther } from "@/lib/utils";
 import {
 	Bar,
 	BarChart,
@@ -34,9 +34,28 @@ export function chartColorAt(index: number): string {
 	return CHART_COLORS[index % CHART_COLORS.length] ?? "hsl(var(--chart-1))";
 }
 
+/** 展示标签：供应商・模型（供应商缺失时退化为模型名）。 */
+export function modelLabel(item: Pick<ModelValue, "providerName" | "modelId">): string {
+	return item.providerName ? `${item.providerName}・${item.modelId}` : item.modelId;
+}
+
+interface ChartItem extends ModelValue {
+	/** 唯一展示标签（provider.name 唯一 ⇒ 供应商・模型 全局唯一）。 */
+	label: string;
+}
+
+function toChartItems(items: ModelValue[]): ChartItem[] {
+	return items.map((item) => ({ ...item, label: modelLabel(item) }));
+}
+
 /** Top 10 + 其他（降序）。 */
-export function toRankedModels(items: ModelValue[]): ModelValue[] {
-	return topWithOther(items, { modelId: OTHER_LABEL, value: 0 });
+export function toRankedModels(items: ModelValue[]): ChartItem[] {
+	return topWithOther(toChartItems(items), {
+		providerName: "",
+		modelId: OTHER_LABEL,
+		label: OTHER_LABEL,
+		value: 0,
+	});
 }
 
 function formatHourLabel(bucketStart: number): string {
@@ -99,8 +118,45 @@ interface ModelChartProps {
 	formatValue?: (value: number) => string;
 }
 
-function toPieConfig(data: ModelValue[]) {
-	return Object.fromEntries(data.map((item) => [item.modelId, { label: item.modelId }]));
+function formatValueText(value: number, formatValue?: (value: number) => string): string {
+	return formatValue ? formatValue(value) : value.toLocaleString();
+}
+
+function toPieConfig(data: ChartItem[]) {
+	return Object.fromEntries(data.map((item) => [item.label, { label: item.label }]));
+}
+
+/** 图例项：色块 + 中间省略的「供应商・模型」文本，hover 显示完整名称。 */
+function ModelLegendItem({ label, color }: { label: string; color?: string }) {
+	return (
+		<div className="flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground">
+			<div className="h-2 w-2 shrink-0 rounded-[2px]" style={{ backgroundColor: color }} />
+			<Tooltip>
+				<TooltipTrigger asChild>
+					<span className="cursor-default">{middleEllipsis(label, 18)}</span>
+				</TooltipTrigger>
+				<TooltipContent side="top">{label}</TooltipContent>
+			</Tooltip>
+		</div>
+	);
+}
+
+/** 饼图 / 条形图共享的图例内容：取「供应商・模型」组合 label 作唯一 key。 */
+function ModelLegendContent({
+	payload,
+}: {
+	payload?: Array<{ value: string; color?: string }>;
+}) {
+	if (!payload?.length) {
+		return null;
+	}
+	return (
+		<div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 pt-3">
+			{payload.map((item) => (
+				<ModelLegendItem key={item.value} label={item.value} color={item.color} />
+			))}
+		</div>
+	);
 }
 
 /** 按模型占比的饼图（Top 10 + 其他）。 */
@@ -112,29 +168,27 @@ export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 				<ChartTooltip
 					content={
 						<ChartTooltipContent
-							nameKey="modelId"
-							hideLabel
-							formatter={(value) => (
-								<span className="font-mono font-medium tabular-nums text-foreground">
-									{formatValue ? formatValue(Number(value)) : Number(value).toLocaleString()}
-								</span>
+							nameKey="label"
+							formatter={(value, name) => (
+								<div className="flex items-center gap-2">
+									<span className="text-foreground">{name}</span>
+									<span className="font-mono font-medium tabular-nums text-foreground">
+										{formatValueText(Number(value), formatValue)}
+									</span>
+								</div>
 							)}
 						/>
 					}
 				/>
-				<Pie data={ranked} dataKey="value" nameKey="modelId" strokeWidth={2}>
+				<Pie data={ranked} dataKey="value" nameKey="label" strokeWidth={2}>
 					{ranked.map((item, index) => (
-						<Cell key={item.modelId} fill={chartColorAt(index)} />
+						<Cell key={item.label} fill={chartColorAt(index)} />
 					))}
 				</Pie>
-				<ChartLegend content={<ChartLegendContent nameKey="modelId" />} />
+				<ChartLegend content={<ModelLegendContent />} />
 			</PieChart>
 		</ChartContainer>
 	);
-}
-
-function truncateModelId(modelId: string): string {
-	return modelId.length > 16 ? `${modelId.slice(0, 15)}…` : modelId;
 }
 
 /** 按模型降序的横向条形图（Top 10 + 其他）。 */
@@ -147,27 +201,30 @@ export function ModelRankBarChart({ data, formatValue }: ModelChartProps) {
 				<XAxis type="number" hide />
 				<YAxis
 					type="category"
-					dataKey="modelId"
+					dataKey="label"
 					tickLine={false}
 					axisLine={false}
 					width={120}
-					tickFormatter={truncateModelId}
+					tickFormatter={(label: string) => middleEllipsis(label, 16)}
 				/>
 				<ChartTooltip
 					content={
 						<ChartTooltipContent
-							hideLabel
-							formatter={(value) => (
-								<span className="font-mono font-medium tabular-nums text-foreground">
-									{formatValue ? formatValue(Number(value)) : Number(value).toLocaleString()}
-								</span>
+							nameKey="label"
+							formatter={(value, name) => (
+								<div className="flex items-center gap-2">
+									<span className="text-foreground">{name}</span>
+									<span className="font-mono font-medium tabular-nums text-foreground">
+										{formatValueText(Number(value), formatValue)}
+									</span>
+								</div>
 							)}
 						/>
 					}
 				/>
 				<Bar dataKey="value" radius={[0, 4, 4, 0]}>
 					{ranked.map((item, index) => (
-						<Cell key={item.modelId} fill={chartColorAt(index)} />
+						<Cell key={item.label} fill={chartColorAt(index)} />
 					))}
 				</Bar>
 			</BarChart>

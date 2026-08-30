@@ -5,12 +5,40 @@ use axum::http::Request;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 use tower::ServiceExt;
 
+use llm_gateway::entity::provider as provider_entity;
 use llm_gateway::entity::request as request_entity;
 
 const HOUR_MS: i64 = 3_600_000;
 
+/// 默认种子供应商（name 唯一，request 记录关联的 provider_id）。
+const DEFAULT_PROVIDER_ID: i32 = 1;
+const DEFAULT_PROVIDER_NAME: &str = "测试供应商";
+
+async fn seed_provider(db: &DatabaseConnection, id: i32, name: &str) {
+    let now = chrono::Utc::now();
+    provider_entity::ActiveModel {
+        id: Set(id),
+        name: Set(name.to_string()),
+        enable: Set(true),
+        base_url: Set("https://example.com".to_string()),
+        api_key: Set("encrypted".to_string()),
+        custom_header: Set("{}".to_string()),
+        status: Set(0),
+        protocol_type: Set(0),
+        billing_mode: Set(0),
+        extra: Set("{}".to_string()),
+        sort_order: Set(0),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(db)
+    .await
+    .unwrap();
+}
+
 struct SeedRow {
     request_id: String,
+    provider_id: i32,
     model_id: String,
     success: bool,
     start_time: i64,
@@ -24,7 +52,7 @@ async fn insert_request(db: &DatabaseConnection, row: SeedRow) {
     request_entity::ActiveModel {
         request_id: Set(row.request_id),
         virtual_model_id: Set(1),
-        provider_id: Set(1),
+        provider_id: Set(row.provider_id),
         model_id: Set(row.model_id),
         stream: Set(false),
         ttft: Set(None),
@@ -49,6 +77,7 @@ async fn insert_request(db: &DatabaseConnection, row: SeedRow) {
 
 async fn setup_app() -> (axum::Router, DatabaseConnection) {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    seed_provider(&db, DEFAULT_PROVIDER_ID, DEFAULT_PROVIDER_NAME).await;
     scheduler.start().await.unwrap();
     let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
     (app, db)
@@ -93,6 +122,7 @@ async fn test_summary_aggregates_all_history() {
     for (i, row) in [
         SeedRow {
             request_id: "r1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
             model_id: "gpt-4o".into(),
             success: true,
             start_time: now,
@@ -102,6 +132,7 @@ async fn test_summary_aggregates_all_history() {
         },
         SeedRow {
             request_id: "r2".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
             model_id: "gpt-4o".into(),
             success: true,
             start_time: now,
@@ -111,6 +142,7 @@ async fn test_summary_aggregates_all_history() {
         },
         SeedRow {
             request_id: "r3".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
             model_id: "claude-sonnet".into(),
             success: false,
             start_time: old,
@@ -121,6 +153,7 @@ async fn test_summary_aggregates_all_history() {
         // usage 缺失的一行：token 统计应忽略 NULL。
         SeedRow {
             request_id: "r4".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
             model_id: "gemini-pro".into(),
             success: true,
             start_time: now,
@@ -186,6 +219,7 @@ async fn test_charts_aggregates_by_hour_and_model() {
         // 当前小时：gpt-4o 两笔（含一笔失败，仍计入调用数）。
         SeedRow {
             request_id: "c1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
             model_id: "gpt-4o".into(),
             success: true,
             start_time: current_bucket_start + 1,
@@ -195,6 +229,7 @@ async fn test_charts_aggregates_by_hour_and_model() {
         },
         SeedRow {
             request_id: "c2".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
             model_id: "gpt-4o".into(),
             success: false,
             start_time: current_bucket_start + 2,
@@ -205,6 +240,7 @@ async fn test_charts_aggregates_by_hour_and_model() {
         // 上一小时：gpt-4o 一笔 + claude 一笔。
         SeedRow {
             request_id: "c3".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
             model_id: "gpt-4o".into(),
             success: true,
             start_time: prev_bucket_start + 1,
@@ -214,6 +250,7 @@ async fn test_charts_aggregates_by_hour_and_model() {
         },
         SeedRow {
             request_id: "c4".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
             model_id: "claude-sonnet".into(),
             success: true,
             start_time: prev_bucket_start + 2,
@@ -224,6 +261,7 @@ async fn test_charts_aggregates_by_hour_and_model() {
         // 窗口外：不应出现在任何图表数据中。
         SeedRow {
             request_id: "c5".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
             model_id: "old-model".into(),
             success: true,
             start_time: outside_window,
@@ -260,11 +298,13 @@ async fn test_charts_aggregates_by_hour_and_model() {
         .find(|m| m["modelId"] == "gpt-4o")
         .unwrap();
     assert_eq!(gpt["value"], 3);
+    assert_eq!(gpt["providerName"], DEFAULT_PROVIDER_NAME);
     let claude = call_by_model
         .iter()
         .find(|m| m["modelId"] == "claude-sonnet")
         .unwrap();
     assert_eq!(claude["value"], 1);
+    assert_eq!(claude["providerName"], DEFAULT_PROVIDER_NAME);
 
     let token_by_model = data["tokenByModel"].as_array().unwrap();
     let gpt_tokens = token_by_model
@@ -272,6 +312,7 @@ async fn test_charts_aggregates_by_hour_and_model() {
         .find(|m| m["modelId"] == "gpt-4o")
         .unwrap();
     assert_eq!(gpt_tokens["value"], 150);
+    assert_eq!(gpt_tokens["providerName"], DEFAULT_PROVIDER_NAME);
 }
 
 #[tokio::test]
@@ -288,4 +329,117 @@ async fn test_stats_requires_auth() {
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
     assert_eq!(response.status(), 401);
+}
+
+#[tokio::test]
+async fn test_charts_splits_same_model_across_providers() {
+    let (app, db) = setup_app().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    // 第二个供应商注册同名模型：分布应按 (provider, model) 拆成两行。
+    seed_provider(&db, 2, "第二供应商").await;
+
+    for (i, row) in [
+        SeedRow {
+            request_id: "p1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: now,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(50),
+        },
+        SeedRow {
+            request_id: "p2".into(),
+            provider_id: 2,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: now,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(30),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let _ = i;
+        insert_request(&db, row).await;
+    }
+
+    let (status, json) = get_json(app, "/api/stats/charts").await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+
+    let call_by_model = data["callByModel"].as_array().unwrap();
+    assert_eq!(call_by_model.len(), 2);
+    let first = call_by_model
+        .iter()
+        .find(|m| m["providerName"] == DEFAULT_PROVIDER_NAME && m["modelId"] == "gpt-4o")
+        .unwrap();
+    assert_eq!(first["value"], 1);
+    let second = call_by_model
+        .iter()
+        .find(|m| m["providerName"] == "第二供应商" && m["modelId"] == "gpt-4o")
+        .unwrap();
+    assert_eq!(second["value"], 1);
+
+    let token_by_model = data["tokenByModel"].as_array().unwrap();
+    assert_eq!(token_by_model.len(), 2);
+    let first_tokens = token_by_model
+        .iter()
+        .find(|m| m["providerName"] == DEFAULT_PROVIDER_NAME && m["modelId"] == "gpt-4o")
+        .unwrap();
+    assert_eq!(first_tokens["value"], 50);
+    let second_tokens = token_by_model
+        .iter()
+        .find(|m| m["providerName"] == "第二供应商" && m["modelId"] == "gpt-4o")
+        .unwrap();
+    assert_eq!(second_tokens["value"], 30);
+}
+
+#[tokio::test]
+async fn test_charts_provider_deleted_falls_back_to_empty_name() {
+    let (app, db) = setup_app().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    // 供应商已删除（provider 表无该行）：providerName 应为空串，仍按 model_id 聚合。
+    for (i, row) in [
+        SeedRow {
+            request_id: "d1".into(),
+            provider_id: 99,
+            model_id: "ghost-model".into(),
+            success: true,
+            start_time: now,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(10),
+        },
+        SeedRow {
+            request_id: "d2".into(),
+            provider_id: 99,
+            model_id: "ghost-model".into(),
+            success: true,
+            start_time: now,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(20),
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let _ = i;
+        insert_request(&db, row).await;
+    }
+
+    let (status, json) = get_json(app, "/api/stats/charts").await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+
+    let call_by_model = data["callByModel"].as_array().unwrap();
+    assert_eq!(call_by_model.len(), 1);
+    let ghost = &call_by_model[0];
+    assert_eq!(ghost["providerName"], "");
+    assert_eq!(ghost["modelId"], "ghost-model");
+    assert_eq!(ghost["value"], 2);
 }

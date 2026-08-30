@@ -14,6 +14,8 @@ export interface TrendPoint {
 }
 
 export interface ModelValue {
+	/** 实际服务的供应商名称（供应商已删除时为空串）。 */
+	providerName: string;
 	modelId: string;
 	value: number;
 }

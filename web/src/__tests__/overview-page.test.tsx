@@ -48,9 +48,9 @@ function makeSummary(overrides: Partial<DashboardSummary> = {}): DashboardSummar
 function makeCharts(overrides: Partial<DashboardCharts> = {}): DashboardCharts {
 	return {
 		callTrend: [{ bucketStart: 1_700_000_000_000, value: 5 }],
-		callByModel: [{ modelId: "gpt-4o", value: 5 }],
+		callByModel: [{ providerName: "", modelId: "gpt-4o", value: 5 }],
 		tokenTrend: [{ bucketStart: 1_700_000_000_000, value: 500 }],
-		tokenByModel: [{ modelId: "gpt-4o", value: 500 }],
+		tokenByModel: [{ providerName: "", modelId: "gpt-4o", value: 500 }],
 		...overrides,
 	};
 }

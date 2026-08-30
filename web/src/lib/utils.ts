@@ -9,6 +9,19 @@ function trimTrailingZeros(text: string): string {
 	return text.replace(/\.?0+$/, "");
 }
 
+/** 超过 maxLength 时按码点保留首尾、中间以 … 省略（如 "阿里云・deepseek-chat" → "阿里云…eepseek-chat"）。 */
+export function middleEllipsis(text: string, maxLength: number): string {
+	if (text.length <= maxLength) {
+		return text;
+	}
+	const chars = Array.from(text);
+	const ellipsis = "…";
+	const keep = Math.max(0, maxLength - ellipsis.length);
+	const head = Math.ceil(keep / 2);
+	const tail = Math.floor(keep / 2);
+	return `${chars.slice(0, head).join("")}${ellipsis}${chars.slice(-tail).join("")}`;
+}
+
 /** token 数量按中文计数习惯缩写：>= 1 亿用「亿」（两位小数），>= 1 万用「万」（一位小数）。 */
 export function formatTokenCount(value: number): string {
 	if (value >= 100_000_000) {
