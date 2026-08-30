@@ -61,8 +61,10 @@ fn merge_natural_periods(
     // 本地日索引 = (ts + offset) / DAY_MS；本地 0 点毫秒 = index * DAY_MS - offset_ms。
     // 注意 local_minus_utc() 返回秒（+08:00 → 28800），需 ×1000 转毫秒。
     let offset_ms = i64::from(tz.local_minus_utc()) * 1000;
-    let mut call_map: std::collections::BTreeMap<(i32, u32), i64> = std::collections::BTreeMap::new();
-    let mut token_map: std::collections::BTreeMap<(i32, u32), i64> = std::collections::BTreeMap::new();
+    let mut call_map: std::collections::BTreeMap<(i32, u32), i64> =
+        std::collections::BTreeMap::new();
+    let mut token_map: std::collections::BTreeMap<(i32, u32), i64> =
+        std::collections::BTreeMap::new();
     let collect = |index: i64| -> Option<(i32, u32)> {
         let day_ms = index * DAY_MS - offset_ms;
         chrono::DateTime::from_timestamp_millis(day_ms)
@@ -87,8 +89,10 @@ fn merge_natural_periods(
     }
 
     // 补零：窗口首日/末日所在月（年）及其间的全部自然月（年）。
-    let first_local = chrono::DateTime::from_timestamp_millis(window_start).map(|t| t.with_timezone(&tz));
-    let last_local = chrono::DateTime::from_timestamp_millis(window_end - 1).map(|t| t.with_timezone(&tz));
+    let first_local =
+        chrono::DateTime::from_timestamp_millis(window_start).map(|t| t.with_timezone(&tz));
+    let last_local =
+        chrono::DateTime::from_timestamp_millis(window_end - 1).map(|t| t.with_timezone(&tz));
     if let (Some(first), Some(last)) = (first_local, last_local) {
         if month_mode {
             let mut y = first.year();
@@ -115,14 +119,13 @@ fn merge_natural_periods(
     }
 
     // 桶起点 = 该月/年 1 日 0 点（本地）。
-    let to_bucket_start =
-        |(y, m): (i32, u32)| -> Option<i64> {
-            let (by, bm) = if month_mode { (y, m) } else { (y, 1) };
-            chrono::NaiveDate::from_ymd_opt(by, bm, 1)
-                .and_then(|d| d.and_hms_opt(0, 0, 0))
-                .and_then(|dt| dt.and_local_timezone(tz).single())
-                .map(|dt| dt.timestamp_millis())
-        };
+    let to_bucket_start = |(y, m): (i32, u32)| -> Option<i64> {
+        let (by, bm) = if month_mode { (y, m) } else { (y, 1) };
+        chrono::NaiveDate::from_ymd_opt(by, bm, 1)
+            .and_then(|d| d.and_hms_opt(0, 0, 0))
+            .and_then(|dt| dt.and_local_timezone(tz).single())
+            .map(|dt| dt.timestamp_millis())
+    };
     let mut starts = Vec::with_capacity(call_map.len());
     let mut calls = Vec::with_capacity(call_map.len());
     let mut tokens = Vec::with_capacity(call_map.len());
@@ -265,7 +268,10 @@ struct ChartsQuery {
 /// 显式 granularity + tzOffsetMinutes 时按客户端本地自然边界分桶：
 /// 小时/天桶对齐本地整点/午夜，月/年桶按自然月/年归并；两者缺省时
 /// 按窗口长度回退（≤48h 小时桶、≤62 天天桶、其余 30 天块）。
-async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>) -> impl IntoResponse {
+async fn charts(
+    State(state): State<AppState>,
+    Query(query): Query<ChartsQuery>,
+) -> impl IntoResponse {
     let explicit_granularity = match Granularity::parse(query.granularity.as_deref()) {
         Ok(g) => g,
         Err(msg) => return response::bad_request(msg),
@@ -384,7 +390,8 @@ async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>)
     };
 
     // 桶填充：从窗口起点所在桶到终点所在桶，按桶粒度对齐。
-    let (call_trend, token_trend) = if matches!(granularity, Granularity::Month | Granularity::Year) {
+    let (call_trend, token_trend) = if matches!(granularity, Granularity::Month | Granularity::Year)
+    {
         // 月/年：先按本地日索引收集，再归并自然月/年（含窗口内补零）。
         let collect = |rows: &[sea_orm::QueryResult]| {
             rows.iter()
@@ -406,12 +413,18 @@ async fn charts(State(state): State<AppState>, Query(query): Query<ChartsQuery>)
         let call_trend = starts
             .iter()
             .zip(call_values)
-            .map(|(&bucket_start, value)| TrendPoint { bucket_start, value })
+            .map(|(&bucket_start, value)| TrendPoint {
+                bucket_start,
+                value,
+            })
             .collect::<Vec<_>>();
         let token_trend = starts
             .iter()
             .zip(token_values)
-            .map(|(&bucket_start, value)| TrendPoint { bucket_start, value })
+            .map(|(&bucket_start, value)| TrendPoint {
+                bucket_start,
+                value,
+            })
             .collect::<Vec<_>>();
         (call_trend, token_trend)
     } else {
@@ -700,7 +713,10 @@ struct VirtualModelRankResponse {
 async fn virtual_model_rank(
     State(state): State<AppState>,
     Query(query): Query<RankQuery>,
-) -> Result<Json<Response<VirtualModelRankResponse>>, response::ErrorResponse<VirtualModelRankResponse>> {
+) -> Result<
+    Json<Response<VirtualModelRankResponse>>,
+    response::ErrorResponse<VirtualModelRankResponse>,
+> {
     let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
         Ok(v) => v,
         Err(e) => return Err(e),
@@ -732,7 +748,9 @@ async fn virtual_model_rank(
         .iter()
         .map(|row| VirtualModelRankItem {
             virtual_model_id: row.try_get::<i32>("", "virtual_model_id").unwrap_or(0),
-            virtual_model_display_id: row.try_get("", "virtual_model_display_id").unwrap_or_default(),
+            virtual_model_display_id: row
+                .try_get("", "virtual_model_display_id")
+                .unwrap_or_default(),
             request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
             total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
             ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
@@ -802,7 +820,10 @@ struct ProviderModelRankResponse {
 async fn provider_model_rank(
     State(state): State<AppState>,
     Query(query): Query<RankQuery>,
-) -> Result<Json<Response<ProviderModelRankResponse>>, response::ErrorResponse<ProviderModelRankResponse>> {
+) -> Result<
+    Json<Response<ProviderModelRankResponse>>,
+    response::ErrorResponse<ProviderModelRankResponse>,
+> {
     let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
         Ok(v) => v,
         Err(e) => return Err(e),
@@ -918,7 +939,10 @@ struct VirtualModelMemberRankResponse {
 async fn virtual_model_member_rank(
     State(state): State<AppState>,
     Query(query): Query<RankQuery>,
-) -> Result<Json<Response<VirtualModelMemberRankResponse>>, response::ErrorResponse<VirtualModelMemberRankResponse>> {
+) -> Result<
+    Json<Response<VirtualModelMemberRankResponse>>,
+    response::ErrorResponse<VirtualModelMemberRankResponse>,
+> {
     let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
         Ok(v) => v,
         Err(e) => return Err(e),
@@ -1286,7 +1310,9 @@ async fn virtual_model_metrics(
         StatusCode::OK,
         Json(Response::success(VirtualModelMetricsResponse {
             virtual_model_id,
-            virtual_model_display_id: row.try_get("", "virtual_model_display_id").unwrap_or_default(),
+            virtual_model_display_id: row
+                .try_get("", "virtual_model_display_id")
+                .unwrap_or_default(),
             request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
             total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
             ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
@@ -1318,10 +1344,19 @@ mod tests {
     #[test]
     fn parse_granularity_accepts_all_kinds() {
         assert_eq!(Granularity::parse(None), Ok(None));
-        assert_eq!(Granularity::parse(Some("hour")), Ok(Some(Granularity::Hour)));
+        assert_eq!(
+            Granularity::parse(Some("hour")),
+            Ok(Some(Granularity::Hour))
+        );
         assert_eq!(Granularity::parse(Some("day")), Ok(Some(Granularity::Day)));
-        assert_eq!(Granularity::parse(Some("month")), Ok(Some(Granularity::Month)));
-        assert_eq!(Granularity::parse(Some("year")), Ok(Some(Granularity::Year)));
+        assert_eq!(
+            Granularity::parse(Some("month")),
+            Ok(Some(Granularity::Month))
+        );
+        assert_eq!(
+            Granularity::parse(Some("year")),
+            Ok(Some(Granularity::Year))
+        );
         assert!(Granularity::parse(Some("week")).is_err());
     }
 

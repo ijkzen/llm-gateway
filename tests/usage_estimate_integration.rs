@@ -158,7 +158,10 @@ async fn test_estimate_full_coverage() {
     let data = &body["data"];
     assert_eq!(data["providerId"], 1);
     assert_eq!(data["window"], "weekly");
-    assert_eq!(data["estimatable"], true, "已过去时段完整覆盖应可预估：{data}");
+    assert_eq!(
+        data["estimatable"], true,
+        "已过去时段完整覆盖应可预估：{data}"
+    );
     // 已用 token = 3*100 + 200 = 500；比例 0.5 → 预估总量 1000。
     assert_eq!(data["usedTokens"], 500);
     assert_eq!(data["estimatedTotalTokens"], 1000);
@@ -179,7 +182,14 @@ async fn test_estimate_gap_coverage_not_estimatable() {
     // 已过去 4 天中只有 3 天有数据（缺第 4 天）。
     let window_start = resets_at - 7 * DAY_MS; // = now - 3 天
     for day in 0..3 {
-        seed_request(&db, &format!("r-{day}"), 1, window_start + day * DAY_MS, 100).await;
+        seed_request(
+            &db,
+            &format!("r-{day}"),
+            1,
+            window_start + day * DAY_MS,
+            100,
+        )
+        .await;
     }
 
     let (status, body) = send_get(&app, "/api/providers/1/usage/estimate").await;
@@ -188,7 +198,10 @@ async fn test_estimate_gap_coverage_not_estimatable() {
     assert_eq!(data["estimatable"], false, "覆盖缺口应无法预估：{data}");
     assert_eq!(data["coveredDays"], 3);
     assert_eq!(data["totalDays"], 4);
-    assert!(data["estimatedTotalTokens"].is_null(), "无预估值时该字段为 null");
+    assert!(
+        data["estimatedTotalTokens"].is_null(),
+        "无预估值时该字段为 null"
+    );
 }
 
 /// 非订阅制 → 400。

@@ -489,7 +489,11 @@ async fn test_charts_with_window_and_provider_filter() {
     // 带 startTime/endTime + providerId 过滤。
     let (status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/charts?startTime={t0}&endTime={}&providerId={}", t0 + 3 * HOUR_MS, DEFAULT_PROVIDER_ID),
+        &format!(
+            "/api/stats/charts?startTime={t0}&endTime={}&providerId={}",
+            t0 + 3 * HOUR_MS,
+            DEFAULT_PROVIDER_ID
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -497,7 +501,10 @@ async fn test_charts_with_window_and_provider_filter() {
     let call_trend = data["callTrend"].as_array().unwrap();
     // 3 小时窗口 → 3 个桶（小时粒度）。
     assert_eq!(call_trend.len(), 3);
-    let total_calls: i64 = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).sum();
+    let total_calls: i64 = call_trend
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .sum();
     assert_eq!(total_calls, 1); // 只有 w1
     let call_by_model = data["callByModel"].as_array().unwrap();
     assert_eq!(call_by_model.len(), 1);
@@ -507,7 +514,10 @@ async fn test_charts_with_window_and_provider_filter() {
     // 不带 providerId：两个供应商都出现。
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/charts?startTime={t0}&endTime={}", t0 + 3 * HOUR_MS),
+        &format!(
+            "/api/stats/charts?startTime={t0}&endTime={}",
+            t0 + 3 * HOUR_MS
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -550,7 +560,10 @@ async fn test_charts_day_granularity_for_long_window() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/charts?startTime={t0}&endTime={}", t0 + 5 * day_ms),
+        &format!(
+            "/api/stats/charts?startTime={t0}&endTime={}",
+            t0 + 5 * day_ms
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -565,7 +578,10 @@ async fn test_charts_day_granularity_for_long_window() {
     for w in starts.windows(2) {
         assert_eq!(w[1] - w[0], day_ms);
     }
-    let values: Vec<i64> = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).collect();
+    let values: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .collect();
     assert_eq!(values, vec![1, 0, 1, 0, 0]);
 }
 
@@ -576,10 +592,7 @@ async fn test_charts_virtual_model_filter() {
     let t0 = (1_700_000_000_000i64 / HOUR_MS) * HOUR_MS;
     // 直接插 request（virtual_model_id=2 的行需要绕过 insert_request 的硬编码 1）。
     let end_time = t0 + 500;
-    for (rid, vm_id, model) in [
-        ("vmf1", 1, "gpt-4o"),
-        ("vmf2", 2, "claude-sonnet"),
-    ] {
+    for (rid, vm_id, model) in [("vmf1", 1, "gpt-4o"), ("vmf2", 2, "claude-sonnet")] {
         request_entity::ActiveModel {
             request_id: Set(rid.to_string()),
             virtual_model_id: Set(vm_id),
@@ -609,7 +622,10 @@ async fn test_charts_virtual_model_filter() {
     // 带 virtualModelId=1：只返回 gpt-4o。
     let (status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/charts?startTime={t0}&endTime={}&virtualModelId=1", t0 + 2 * HOUR_MS),
+        &format!(
+            "/api/stats/charts?startTime={t0}&endTime={}&virtualModelId=1",
+            t0 + 2 * HOUR_MS
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -621,7 +637,10 @@ async fn test_charts_virtual_model_filter() {
     // 不带过滤：两个虚拟模型的模型都出现。
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/charts?startTime={t0}&endTime={}", t0 + 2 * HOUR_MS),
+        &format!(
+            "/api/stats/charts?startTime={t0}&endTime={}",
+            t0 + 2 * HOUR_MS
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -751,8 +770,7 @@ async fn test_provider_metrics_aggregates_success_rows_in_window() {
         app,
         &format!(
             "/api/stats/provider-metrics?providerId={}&startTime={t0}&endTime={}",
-            DEFAULT_PROVIDER_ID,
-            now
+            DEFAULT_PROVIDER_ID, now
         ),
     )
     .await;
@@ -764,7 +782,10 @@ async fn test_provider_metrics_aggregates_success_rows_in_window() {
     assert_eq!(data["totalTokens"], 450);
     // 缓存命中率 = 40 / (100+200) = 0.13333…，后端 ROUND(...,5) 保留 5 位。
     let cache_rate = data["cacheHitRate"].as_f64().unwrap();
-    assert!((cache_rate - 0.13333).abs() < 1e-9, "cacheHitRate={cache_rate}");
+    assert!(
+        (cache_rate - 0.13333).abs() < 1e-9,
+        "cacheHitRate={cache_rate}"
+    );
 }
 
 /// provider-metrics：缺参 / 窗口非法返回 400。
@@ -826,7 +847,10 @@ async fn test_virtual_model_metrics_aggregates() {
     assert_eq!(data["totalTokens"], 400);
     // 缓存命中率 = 50 / 200 = 0.25。
     let cache_rate = data["cacheHitRate"].as_f64().unwrap();
-    assert!((cache_rate - 0.25).abs() < 1e-9, "cacheHitRate={cache_rate}");
+    assert!(
+        (cache_rate - 0.25).abs() < 1e-9,
+        "cacheHitRate={cache_rate}"
+    );
 }
 
 // ---------- 显式 granularity + tzOffsetMinutes 分桶 ----------
@@ -848,7 +872,10 @@ async fn test_charts_hour_granularity_local_alignment() {
     // 窗口：本地 2026-08-31 00:00 ~ 03:30（东八区）。tzOffsetMinutes=480。
     let start = local_ms_cn(2026, 8, 31, 0, 0);
     let end = local_ms_cn(2026, 8, 31, 3, 30);
-    for (i, (offset_ms, tokens)) in [(0, 10), (1 * HOUR_MS, 20), (2 * HOUR_MS + 1000, 30)].into_iter().enumerate() {
+    for (i, (offset_ms, tokens)) in [(0, 10), (1 * HOUR_MS, 20), (2 * HOUR_MS + 1000, 30)]
+        .into_iter()
+        .enumerate()
+    {
         insert_request(
             &db,
             SeedRow {
@@ -867,7 +894,9 @@ async fn test_charts_hour_granularity_local_alignment() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/charts?startTime={start}&endTime={end}&granularity=hour&tzOffsetMinutes=480"),
+        &format!(
+            "/api/stats/charts?startTime={start}&endTime={end}&granularity=hour&tzOffsetMinutes=480"
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -875,15 +904,24 @@ async fn test_charts_hour_granularity_local_alignment() {
     let call_trend = data["callTrend"].as_array().unwrap();
     // 0:00~3:30 → 0、1、2、3 共 4 个整点桶。
     assert_eq!(call_trend.len(), 4);
-    let starts: Vec<i64> = call_trend.iter().map(|p| p["bucketStart"].as_i64().unwrap()).collect();
+    let starts: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["bucketStart"].as_i64().unwrap())
+        .collect();
     assert_eq!(starts[0], start);
     assert_eq!(starts[1], start + HOUR_MS);
     assert_eq!(starts[2], start + 2 * HOUR_MS);
     assert_eq!(starts[3], start + 3 * HOUR_MS);
-    let values: Vec<i64> = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).collect();
+    let values: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .collect();
     assert_eq!(values, vec![1, 1, 1, 0]);
     let token_trend = data["tokenTrend"].as_array().unwrap();
-    let token_values: Vec<i64> = token_trend.iter().map(|p| p["value"].as_i64().unwrap()).collect();
+    let token_values: Vec<i64> = token_trend
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .collect();
     assert_eq!(token_values, vec![10, 20, 30, 0]);
 }
 
@@ -913,19 +951,27 @@ async fn test_charts_day_granularity_week_has_seven_points() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/charts?startTime={start}&endTime={end}&granularity=day&tzOffsetMinutes=480"),
+        &format!(
+            "/api/stats/charts?startTime={start}&endTime={end}&granularity=day&tzOffsetMinutes=480"
+        ),
     )
     .await;
     assert_eq!(status, 200);
     let data = &json["data"];
     let call_trend = data["callTrend"].as_array().unwrap();
     assert_eq!(call_trend.len(), 7);
-    let starts: Vec<i64> = call_trend.iter().map(|p| p["bucketStart"].as_i64().unwrap()).collect();
+    let starts: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["bucketStart"].as_i64().unwrap())
+        .collect();
     assert_eq!(starts[0], start);
     for w in starts.windows(2) {
         assert_eq!(w[1] - w[0], 24 * HOUR_MS);
     }
-    let values: Vec<i64> = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).collect();
+    let values: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .collect();
     assert_eq!(values, vec![1, 0, 1, 0, 0, 1, 0]);
 }
 
@@ -967,13 +1013,24 @@ async fn test_charts_month_granularity_natural_months() {
     let data = &json["data"];
     let call_trend = data["callTrend"].as_array().unwrap();
     assert_eq!(call_trend.len(), 3);
-    let starts: Vec<i64> = call_trend.iter().map(|p| p["bucketStart"].as_i64().unwrap()).collect();
+    let starts: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["bucketStart"].as_i64().unwrap())
+        .collect();
     assert_eq!(starts[0], local_ms_cn(2026, 6, 1, 0, 0));
     assert_eq!(starts[1], local_ms_cn(2026, 7, 1, 0, 0));
     assert_eq!(starts[2], local_ms_cn(2026, 8, 1, 0, 0));
-    let values: Vec<i64> = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).collect();
+    let values: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .collect();
     assert_eq!(values, vec![1, 2, 1]);
-    let token_values: Vec<i64> = data["tokenTrend"].as_array().unwrap().iter().map(|p| p["value"].as_i64().unwrap()).collect();
+    let token_values: Vec<i64> = data["tokenTrend"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .collect();
     assert_eq!(token_values, vec![10, 50, 40]);
 }
 
@@ -983,7 +1040,10 @@ async fn test_charts_year_granularity_natural_years() {
     // 窗口：本地 2025-07-01 ~ 2026-09-01（东八区）。数据落在 2025 与 2026。
     let start = local_ms_cn(2025, 7, 1, 0, 0);
     let end = local_ms_cn(2026, 9, 1, 0, 0);
-    for (i, ts) in [start, local_ms_cn(2026, 3, 5, 0, 0)].into_iter().enumerate() {
+    for (i, ts) in [start, local_ms_cn(2026, 3, 5, 0, 0)]
+        .into_iter()
+        .enumerate()
+    {
         insert_request(
             &db,
             SeedRow {
@@ -1002,17 +1062,25 @@ async fn test_charts_year_granularity_natural_years() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/charts?startTime={start}&endTime={end}&granularity=year&tzOffsetMinutes=480"),
+        &format!(
+            "/api/stats/charts?startTime={start}&endTime={end}&granularity=year&tzOffsetMinutes=480"
+        ),
     )
     .await;
     assert_eq!(status, 200);
     let data = &json["data"];
     let call_trend = data["callTrend"].as_array().unwrap();
     assert_eq!(call_trend.len(), 2);
-    let starts: Vec<i64> = call_trend.iter().map(|p| p["bucketStart"].as_i64().unwrap()).collect();
+    let starts: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["bucketStart"].as_i64().unwrap())
+        .collect();
     assert_eq!(starts[0], local_ms_cn(2025, 1, 1, 0, 0));
     assert_eq!(starts[1], local_ms_cn(2026, 1, 1, 0, 0));
-    let values: Vec<i64> = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).collect();
+    let values: Vec<i64> = call_trend
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .collect();
     assert_eq!(values, vec![1, 1]);
 }
 
@@ -1022,7 +1090,11 @@ async fn test_charts_invalid_granularity_rejected() {
     let now = chrono::Utc::now().timestamp_millis();
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/charts?startTime={}&endTime={}&granularity=week", now - HOUR_MS, now),
+        &format!(
+            "/api/stats/charts?startTime={}&endTime={}&granularity=week",
+            now - HOUR_MS,
+            now
+        ),
     )
     .await;
     assert_eq!(status, 400);
@@ -1058,7 +1130,10 @@ async fn test_charts_granularity_without_window_defaults_to_past_24h() {
     let data = &json["data"];
     let call_trend = data["callTrend"].as_array().unwrap();
     assert_eq!(call_trend.len(), 24);
-    let total: i64 = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).sum();
+    let total: i64 = call_trend
+        .iter()
+        .map(|p| p["value"].as_i64().unwrap())
+        .sum();
     assert_eq!(total, 1);
 }
 

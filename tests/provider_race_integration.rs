@@ -238,7 +238,10 @@ async fn test_rank_sort_by_and_order() {
     // ttft 升序（默认方向）→ A(200) 在前。
     let (status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/provider-rank?sortBy=ttft&startTime={T0}&endTime={}", T0 + 3),
+        &format!(
+            "/api/stats/provider-rank?sortBy=ttft&startTime={T0}&endTime={}",
+            T0 + 3
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -249,7 +252,10 @@ async fn test_rank_sort_by_and_order() {
     // ttft 降序 → B(500) 在前。
     let (status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/provider-rank?sortBy=ttft&sortOrder=desc&startTime={T0}&endTime={}", T0 + 3),
+        &format!(
+            "/api/stats/provider-rank?sortBy=ttft&sortOrder=desc&startTime={T0}&endTime={}",
+            T0 + 3
+        ),
     )
     .await;
     let items = json["data"]["items"].as_array().unwrap();
@@ -258,7 +264,10 @@ async fn test_rank_sort_by_and_order() {
     // cacheHitRate 降序 → B(0.25) 在前。
     let (status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/provider-rank?sortBy=cacheHitRate&startTime={T0}&endTime={}", T0 + 3),
+        &format!(
+            "/api/stats/provider-rank?sortBy=cacheHitRate&startTime={T0}&endTime={}",
+            T0 + 3
+        ),
     )
     .await;
     let items = json["data"]["items"].as_array().unwrap();
@@ -268,7 +277,10 @@ async fn test_rank_sort_by_and_order() {
     // requestCount 升序 → 都是 2，保持稳定（A 在前，default 排序稳定）。
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-rank?sortBy=requestCount&sortOrder=asc&startTime={T0}&endTime={}", T0 + 3),
+        &format!(
+            "/api/stats/provider-rank?sortBy=requestCount&sortOrder=asc&startTime={T0}&endTime={}",
+            T0 + 3
+        ),
     )
     .await;
     let items = json["data"]["items"].as_array().unwrap();
@@ -312,7 +324,10 @@ async fn test_rank_respects_half_open_window() {
     // 窗口 [T0, T0+1000)：r1（T0-1）与 r2（T0+1000）都应被排除。
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-rank?startTime={T0}&endTime={}", T0 + 1_000),
+        &format!(
+            "/api/stats/provider-rank?startTime={T0}&endTime={}",
+            T0 + 1_000
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -381,7 +396,10 @@ async fn test_rank_invalid_sort_by_rejected() {
     let (app, _db) = setup_app().await;
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-rank?sortBy=foo&startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/provider-rank?sortBy=foo&startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 400);

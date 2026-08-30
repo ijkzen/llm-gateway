@@ -602,21 +602,28 @@ async fn get_provider_usage_estimate(
         .windows
         .iter()
         .find(|w| w.available && w.window == WindowKind::Weekly)
-        .or_else(|| data.windows.iter().find(|w| w.available && w.window == WindowKind::Monthly));
+        .or_else(|| {
+            data.windows
+                .iter()
+                .find(|w| w.available && w.window == WindowKind::Monthly)
+        });
     let Some(qw) = window else {
-        return (StatusCode::OK, Json(Response::success(UsageEstimateResponse {
-            provider_id: id,
-            window: "none".to_string(),
-            window_start: 0,
-            window_end: 0,
-            covered_days: 0,
-            total_days: 0,
-            used_tokens: 0,
-            used: None,
-            limit: None,
-            estimated_total_tokens: None,
-            estimatable: false,
-        })));
+        return (
+            StatusCode::OK,
+            Json(Response::success(UsageEstimateResponse {
+                provider_id: id,
+                window: "none".to_string(),
+                window_start: 0,
+                window_end: 0,
+                covered_days: 0,
+                total_days: 0,
+                used_tokens: 0,
+                used: None,
+                limit: None,
+                estimated_total_tokens: None,
+                estimatable: false,
+            })),
+        );
     };
 
     let window_name = match qw.window {
@@ -624,7 +631,11 @@ async fn get_provider_usage_estimate(
         WindowKind::Monthly => "monthly",
         _ => "other",
     };
-    let window_len_ms = if qw.window == WindowKind::Weekly { WEEK_MS } else { MONTH_MS };
+    let window_len_ms = if qw.window == WindowKind::Weekly {
+        WEEK_MS
+    } else {
+        MONTH_MS
+    };
 
     // 窗口终点 = resets_at（取当前时刻兜底），起点 = 终点 - 窗口长度。
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -688,7 +699,11 @@ async fn get_provider_usage_estimate(
             used_tokens,
             used: qw.used,
             limit: qw.limit,
-            estimated_total_tokens: if estimatable { estimated_total_tokens } else { None },
+            estimated_total_tokens: if estimatable {
+                estimated_total_tokens
+            } else {
+                None
+            },
             estimatable,
         })),
     )

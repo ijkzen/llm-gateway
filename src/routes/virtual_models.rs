@@ -235,10 +235,7 @@ async fn load_item_responses<C: ConnectionTrait>(
 /// 策略 0（订阅制优先）：订阅制成员在前、按量付费在后；策略 1（按量付费优先）
 /// 反之；策略 2/3（轮转/随机）不按付费模式分组。启用/停用两个大组内部都
 /// 先做策略分组，再按 provider_model_id 字母升序。
-fn sort_items(
-    items: &mut [VirtualModelItemResponse],
-    load_balancing_strategy: i32,
-) {
+fn sort_items(items: &mut [VirtualModelItemResponse], load_balancing_strategy: i32) {
     let subscription_first = load_balancing_strategy == 0;
     let payg_first = load_balancing_strategy == 1;
     items.sort_by(|a, b| {

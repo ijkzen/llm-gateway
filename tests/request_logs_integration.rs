@@ -151,9 +151,39 @@ async fn test_filters_vm_api_key_time() {
 async fn test_filters_provider_model_success() {
     let (app, db) = setup_app().await;
     // provider 1 / gpt-4o（成功）、provider 1 / gpt-4o（失败）、provider 2 / claude（成功）。
-    seed_request_full(&db, "p1-ok", 1, 1, "gpt-4o", "key-a", 1_700_000_000_000, true).await;
-    seed_request_full(&db, "p1-bad", 1, 1, "gpt-4o", "key-a", 1_700_000_100_000, false).await;
-    seed_request_full(&db, "p2-ok", 1, 2, "claude-3", "key-a", 1_700_000_200_000, true).await;
+    seed_request_full(
+        &db,
+        "p1-ok",
+        1,
+        1,
+        "gpt-4o",
+        "key-a",
+        1_700_000_000_000,
+        true,
+    )
+    .await;
+    seed_request_full(
+        &db,
+        "p1-bad",
+        1,
+        1,
+        "gpt-4o",
+        "key-a",
+        1_700_000_100_000,
+        false,
+    )
+    .await;
+    seed_request_full(
+        &db,
+        "p2-ok",
+        1,
+        2,
+        "claude-3",
+        "key-a",
+        1_700_000_200_000,
+        true,
+    )
+    .await;
 
     // 按供应商过滤。
     let (status, body) = get(&app, "/api/request-logs?providerId=2").await;
@@ -179,7 +209,11 @@ async fn test_filters_provider_model_success() {
     assert_eq!(body["data"]["items"][0]["requestId"], "p1-bad");
 
     // 组合：供应商 + 模型 + 结果。
-    let (status, body) = get(&app, "/api/request-logs?providerId=1&modelId=gpt-4o&success=true").await;
+    let (status, body) = get(
+        &app,
+        "/api/request-logs?providerId=1&modelId=gpt-4o&success=true",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["data"]["total"], 1);
     assert_eq!(body["data"]["items"][0]["requestId"], "p1-ok");

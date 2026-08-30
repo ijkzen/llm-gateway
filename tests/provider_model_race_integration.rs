@@ -227,7 +227,10 @@ async fn test_pm_rank_aggregates_all_six_metrics() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-model-rank?startTime={T0}&endTime={}", T0 + 3),
+        &format!(
+            "/api/stats/provider-model-rank?startTime={T0}&endTime={}",
+            T0 + 3
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -285,7 +288,10 @@ async fn test_pm_rank_same_model_id_across_providers_not_merged() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-model-rank?startTime={T0}&endTime={}", T0 + 2),
+        &format!(
+            "/api/stats/provider-model-rank?startTime={T0}&endTime={}",
+            T0 + 2
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -306,7 +312,10 @@ async fn test_pm_rank_sort_by_and_order() {
     // ttft 升序（默认方向）→ A/gpt-4o(200) 在前。
     let (status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/provider-model-rank?sortBy=ttft&startTime={T0}&endTime={}", T0 + 3),
+        &format!(
+            "/api/stats/provider-model-rank?sortBy=ttft&startTime={T0}&endTime={}",
+            T0 + 3
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -316,7 +325,10 @@ async fn test_pm_rank_sort_by_and_order() {
     // ttft 降序 → B/claude-sonnet(500) 在前。
     let (_status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/provider-model-rank?sortBy=ttft&sortOrder=desc&startTime={T0}&endTime={}", T0 + 3),
+        &format!(
+            "/api/stats/provider-model-rank?sortBy=ttft&sortOrder=desc&startTime={T0}&endTime={}",
+            T0 + 3
+        ),
     )
     .await;
     let items = json["data"]["items"].as_array().unwrap();
@@ -325,7 +337,10 @@ async fn test_pm_rank_sort_by_and_order() {
     // cacheHitRate 降序 → B(0.25) 在前。
     let (_status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/provider-model-rank?sortBy=cacheHitRate&startTime={T0}&endTime={}", T0 + 3),
+        &format!(
+            "/api/stats/provider-model-rank?sortBy=cacheHitRate&startTime={T0}&endTime={}",
+            T0 + 3
+        ),
     )
     .await;
     let items = json["data"]["items"].as_array().unwrap();
@@ -378,7 +393,10 @@ async fn test_pm_rank_respects_half_open_window() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-model-rank?startTime={T0}&endTime={}", T0 + 1_000),
+        &format!(
+            "/api/stats/provider-model-rank?startTime={T0}&endTime={}",
+            T0 + 1_000
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -407,7 +425,10 @@ async fn test_pm_rank_all_returned_no_limit() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-model-rank?startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/provider-model-rank?startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -434,7 +455,10 @@ async fn test_pm_rank_orphan_model_falls_back_to_raw_model_id() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-model-rank?startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/provider-model-rank?startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -461,7 +485,10 @@ async fn test_pm_rank_deleted_provider_shows_empty_name() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-model-rank?startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/provider-model-rank?startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -476,7 +503,10 @@ async fn test_pm_rank_invalid_sort_by_rejected() {
     let (app, _db) = setup_app().await;
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-model-rank?sortBy=foo&startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/provider-model-rank?sortBy=foo&startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 400);
@@ -503,7 +533,10 @@ async fn test_pm_rank_requires_auth() {
     let app = common::build_app(db, scheduler, log_tx);
     let (status, _json) = get_json(
         app,
-        &format!("/api/stats/provider-model-rank?startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/provider-model-rank?startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 401);
@@ -536,7 +569,10 @@ async fn test_pm_rank_provider_filter() {
 
     let (status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/provider-model-rank?providerId=1&startTime={T0}&endTime={}", T0 + 2),
+        &format!(
+            "/api/stats/provider-model-rank?providerId=1&startTime={T0}&endTime={}",
+            T0 + 2
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -556,7 +592,10 @@ async fn test_pm_rank_provider_filter() {
     // 不带 providerId：三个模型都返回。
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/provider-model-rank?startTime={T0}&endTime={}", T0 + 2),
+        &format!(
+            "/api/stats/provider-model-rank?startTime={T0}&endTime={}",
+            T0 + 2
+        ),
     )
     .await;
     assert_eq!(status, 200);

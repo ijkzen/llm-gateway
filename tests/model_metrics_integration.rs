@@ -200,7 +200,10 @@ async fn test_model_metrics_missing_params_rejected() {
     // 缺 modelId。
     let (status, json) = get_json(
         app.clone(),
-        &format!("/api/stats/model-metrics?providerId=1&startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/model-metrics?providerId=1&startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 400);
@@ -208,16 +211,16 @@ async fn test_model_metrics_missing_params_rejected() {
     // 缺 providerId。
     let (status, _json) = get_json(
         app.clone(),
-        &format!("/api/stats/model-metrics?modelId=gpt-4o&startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/model-metrics?modelId=gpt-4o&startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 400);
     // 缺时间。
-    let (status, _json) = get_json(
-        app,
-        "/api/stats/model-metrics?providerId=1&modelId=gpt-4o",
-    )
-    .await;
+    let (status, _json) =
+        get_json(app, "/api/stats/model-metrics?providerId=1&modelId=gpt-4o").await;
     assert_eq!(status, 400);
 }
 

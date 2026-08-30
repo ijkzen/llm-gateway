@@ -52,7 +52,12 @@ async fn seed_provider(db: &DatabaseConnection, id: i32, name: &str) {
     .unwrap();
 }
 
-async fn seed_provider_model(db: &DatabaseConnection, model_id: i32, provider_id: i32, provider_model_id: &str) {
+async fn seed_provider_model(
+    db: &DatabaseConnection,
+    model_id: i32,
+    provider_id: i32,
+    provider_model_id: &str,
+) {
     let now = chrono::Utc::now();
     provider_model_entity::ActiveModel {
         model_id: Set(model_id),
@@ -176,15 +181,78 @@ async fn test_member_rank_returns_all_configured_members() {
     let (app, db) = setup_app().await;
     // vm-1 下三笔请求：A/gpt-4o 两笔（含流式 ttft=100/300、token 150+250）、
     // A/deepseek-v3 一笔（token 100）；B/claude-sonnet 无流量（停用成员）。
-    insert_request(&db, "m1", 1, 1, "gpt-4o", T0, Some(150), true, Some(100), Some(100), 50.0, Some(100), 40).await;
-    insert_request(&db, "m2", 1, 1, "gpt-4o", T0 + 1, Some(250), true, Some(300), Some(300), 100.0, Some(100), 0).await;
-    insert_request(&db, "m3", 1, 1, "deepseek-v3", T0, Some(100), false, None, None, 0.0, Some(100), 0).await;
+    insert_request(
+        &db,
+        "m1",
+        1,
+        1,
+        "gpt-4o",
+        T0,
+        Some(150),
+        true,
+        Some(100),
+        Some(100),
+        50.0,
+        Some(100),
+        40,
+    )
+    .await;
+    insert_request(
+        &db,
+        "m2",
+        1,
+        1,
+        "gpt-4o",
+        T0 + 1,
+        Some(250),
+        true,
+        Some(300),
+        Some(300),
+        100.0,
+        Some(100),
+        0,
+    )
+    .await;
+    insert_request(
+        &db,
+        "m3",
+        1,
+        1,
+        "deepseek-v3",
+        T0,
+        Some(100),
+        false,
+        None,
+        None,
+        0.0,
+        Some(100),
+        0,
+    )
+    .await;
     // vm-2 的请求不应出现在 vm-1 的结果里。
-    insert_request(&db, "m4", 2, 2, "kimi-k2", T0, Some(500), true, Some(200), Some(200), 80.0, Some(100), 0).await;
+    insert_request(
+        &db,
+        "m4",
+        2,
+        2,
+        "kimi-k2",
+        T0,
+        Some(500),
+        true,
+        Some(200),
+        Some(200),
+        80.0,
+        Some(100),
+        0,
+    )
+    .await;
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/virtual-model-member-rank?virtualModelId=1&startTime={T0}&endTime={}", T0 + 2),
+        &format!(
+            "/api/stats/virtual-model-member-rank?virtualModelId=1&startTime={T0}&endTime={}",
+            T0 + 2
+        ),
     )
     .await;
     assert_eq!(status, 200);
@@ -205,13 +273,19 @@ async fn test_member_rank_returns_all_configured_members() {
     assert_eq!(gpt["ttft"], 200.0); // (100+300)/2
     assert!((gpt["tps"].as_f64().unwrap() - 80.0).abs() < 0.001); // 400/(100/50+300/100)=400/5=80
 
-    let ds = by_model.iter().find(|i| i["modelId"] == "deepseek-v3").unwrap();
+    let ds = by_model
+        .iter()
+        .find(|i| i["modelId"] == "deepseek-v3")
+        .unwrap();
     assert_eq!(ds["memberEnable"], true);
     assert_eq!(ds["requestCount"], 1);
     assert_eq!(ds["totalTokens"], 100.0);
 
     // 停用且无流量的成员：指标全 0。
-    let claude = by_model.iter().find(|i| i["modelId"] == "claude-sonnet").unwrap();
+    let claude = by_model
+        .iter()
+        .find(|i| i["modelId"] == "claude-sonnet")
+        .unwrap();
     assert_eq!(claude["memberEnable"], false);
     assert_eq!(claude["requestCount"], 0);
     assert_eq!(claude["totalTokens"], 0.0);
@@ -225,7 +299,10 @@ async fn test_member_rank_missing_virtual_model_id_rejected() {
     let (app, _db) = setup_app().await;
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/virtual-model-member-rank?startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/virtual-model-member-rank?startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 400);
@@ -235,8 +312,38 @@ async fn test_member_rank_missing_virtual_model_id_rejected() {
 #[tokio::test]
 async fn test_member_rank_sort_by_and_order() {
     let (app, db) = setup_app().await;
-    insert_request(&db, "s1", 1, 1, "gpt-4o", T0, Some(150), true, Some(100), Some(100), 50.0, Some(100), 40).await;
-    insert_request(&db, "s2", 1, 1, "deepseek-v3", T0, Some(250), true, Some(500), Some(200), 100.0, Some(100), 0).await;
+    insert_request(
+        &db,
+        "s1",
+        1,
+        1,
+        "gpt-4o",
+        T0,
+        Some(150),
+        true,
+        Some(100),
+        Some(100),
+        50.0,
+        Some(100),
+        40,
+    )
+    .await;
+    insert_request(
+        &db,
+        "s2",
+        1,
+        1,
+        "deepseek-v3",
+        T0,
+        Some(250),
+        true,
+        Some(500),
+        Some(200),
+        100.0,
+        Some(100),
+        0,
+    )
+    .await;
 
     // ttft 升序（默认）：gpt-4o(100) 在前；无流量的 claude-sonnet 排最后。
     let (status, json) = get_json(
@@ -268,7 +375,10 @@ async fn test_member_rank_requires_auth() {
     let app = common::build_app(db, scheduler, log_tx);
     let (status, _json) = get_json(
         app,
-        &format!("/api/stats/virtual-model-member-rank?virtualModelId=1&startTime={T0}&endTime={}", T0 + 1),
+        &format!(
+            "/api/stats/virtual-model-member-rank?virtualModelId=1&startTime={T0}&endTime={}",
+            T0 + 1
+        ),
     )
     .await;
     assert_eq!(status, 401);

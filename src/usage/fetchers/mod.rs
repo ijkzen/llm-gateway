@@ -76,7 +76,8 @@ pub(crate) fn num(v: &Value) -> Option<f64> {
 }
 
 /// 东八区固定偏移，用于解释厂商返回的无时区时间字符串。
-const CN_TZ: chrono::FixedOffset = chrono::FixedOffset::east_opt(8 * 3600).expect("+08:00 固定偏移");
+const CN_TZ: chrono::FixedOffset =
+    chrono::FixedOffset::east_opt(8 * 3600).expect("+08:00 固定偏移");
 
 /// 兼容多种重置时间写法：ISO/RFC3339 字符串、`yyyy-MM-dd HH:mm` 字符串、
 /// 毫秒或秒级时间戳（字段名变体由调用方逐个尝试后传入）。
@@ -115,7 +116,10 @@ mod tests {
         // 东八区 2026-09-14 12:00 = UTC 2026-09-14 04:00。
         let v = serde_json::json!("2026-09-14 12:00");
         let ts = reset_ts(&v).expect("naive string should parse");
-        assert_eq!(ts, DateTime::parse_from_rfc3339("2026-09-14T04:00:00Z").unwrap());
+        assert_eq!(
+            ts,
+            DateTime::parse_from_rfc3339("2026-09-14T04:00:00Z").unwrap()
+        );
     }
 
     #[test]
@@ -123,6 +127,9 @@ mod tests {
         // 带时区的 ISO 字符串不受 CN_TZ 影响。
         let v = serde_json::json!("2026-09-14T12:00:00+08:00");
         let ts = reset_ts(&v).expect("iso string should parse");
-        assert_eq!(ts, DateTime::parse_from_rfc3339("2026-09-14T04:00:00Z").unwrap());
+        assert_eq!(
+            ts,
+            DateTime::parse_from_rfc3339("2026-09-14T04:00:00Z").unwrap()
+        );
     }
 }
