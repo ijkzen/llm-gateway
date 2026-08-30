@@ -1,4 +1,4 @@
-import { formatTokenCount, middleEllipsis, topWithOther } from "@/lib/utils";
+import { formatContextLength, formatTokenCount, middleEllipsis, topWithOther } from "@/lib/utils";
 import { describe, expect, it } from "vitest";
 
 describe("formatTokenCount", () => {
@@ -72,5 +72,25 @@ describe("middleEllipsis", () => {
 
 	it("对代理对（emoji）按码点省略不截断", () => {
 		expect(middleEllipsis("😀😀😀😀😀😀", 4)).toBe("😀😀…😀");
+	});
+});
+
+describe("formatContextLength", () => {
+	it("小于 1000 原样返回", () => {
+		expect(formatContextLength(0)).toBe("0");
+		expect(formatContextLength(999)).toBe("999");
+	});
+
+	it("1000 进制 K 缩写（去尾零）", () => {
+		expect(formatContextLength(1_000)).toBe("1K");
+		expect(formatContextLength(128_000)).toBe("128K");
+		expect(formatContextLength(131_072)).toBe("131.1K");
+		expect(formatContextLength(200_000)).toBe("200K");
+	});
+
+	it("M 缩写", () => {
+		expect(formatContextLength(1_000_000)).toBe("1M");
+		expect(formatContextLength(1_048_576)).toBe("1M");
+		expect(formatContextLength(2_500_000)).toBe("2.5M");
 	});
 });

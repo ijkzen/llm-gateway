@@ -36,7 +36,7 @@ import {
 	useUpdateVirtualModel,
 } from "@/hooks/use-virtual-models";
 import { FALLBACK_STRATEGIES, LOAD_BALANCING_STRATEGIES } from "@/lib/constants";
-import { cn } from "@/lib/utils";
+import { cn, formatContextLength } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -356,7 +356,7 @@ export function VirtualModelEditDialog({
 																	</p>
 																	<p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
 																		<span className="shrink-0">
-																			{model.contextLength.toLocaleString()} ctx
+																			{formatContextLength(model.contextLength)} ctx
 																		</span>
 																		{providerDisabled && (
 																			<span className="shrink-0 text-amber-600 dark:text-amber-400">
@@ -420,7 +420,7 @@ export function VirtualModelEditDialog({
 																	{model.providerModelId}
 																</span>
 																<span className="shrink-0 text-xs text-muted-foreground">
-																	{model.contextLength.toLocaleString()} ctx
+																	{formatContextLength(model.contextLength)} ctx
 																</span>
 															</div>
 														))

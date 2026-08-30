@@ -42,6 +42,20 @@ export function formatPercent(rate: number): string {
 	return `${Number((rate * 100).toFixed(5))}%`;
 }
 
+/**
+ * 模型上下文长度按 1000 进制缩写（业界惯例，128K = 128,000 tokens）：
+ * 128000 → 128K、131072 → 131.1K、1000000 → 1M；小于 1000 原样返回。
+ */
+export function formatContextLength(value: number): string {
+	if (value >= 1_000_000) {
+		return `${trimTrailingZeros((value / 1_000_000).toFixed(1))}M`;
+	}
+	if (value >= 1_000) {
+		return `${trimTrailingZeros((value / 1_000).toFixed(1))}K`;
+	}
+	return String(value);
+}
+
 /** 按 value 降序取前 limit 名，其余合并为 other（value 求和）。 */
 export function topWithOther<T extends { value: number }>(items: T[], other: T, limit = 10): T[] {
 	const sorted = [...items].sort((a, b) => b.value - a.value);
