@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type UsageWindow, useProviderUsage } from "@/hooks/use-provider-usage";
 import type { UsageEstimate } from "@/hooks/use-usage-estimate";
-import { cn } from "@/lib/utils";
+import { cn, formatTokenCount } from "@/lib/utils";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { useState } from "react";
 
@@ -178,7 +178,7 @@ export function ProviderUsageCard({
 					<p className="text-right text-xs text-muted-foreground">
 						预估月 Token：
 						<span className="font-mono font-medium tabular-nums">
-							{formatAmount(monthlyTokens)}
+							{formatTokenCount(monthlyTokens)}
 						</span>
 					</p>
 				)}
