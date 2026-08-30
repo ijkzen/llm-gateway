@@ -77,7 +77,7 @@ describe("VirtualModelRaceCard（虚拟模型赛马）", () => {
 		expect(screen.getByText("100 万")).toBeTruthy();
 		expect(screen.getByText("120.5 ms")).toBeTruthy();
 		expect(screen.getByText("55.25")).toBeTruthy();
-		expect(screen.getByText("32.0%")).toBeTruthy();
+		expect(screen.getByText("32%")).toBeTruthy();
 	});
 
 	it("虚拟模型已删除（空 displayId）显示「未知模型」占位", () => {

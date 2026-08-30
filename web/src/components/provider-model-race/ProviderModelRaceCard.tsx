@@ -11,7 +11,7 @@ import {
 	useProviderModelRace,
 } from "@/hooks/use-provider-model-race";
 import { formatPeriodLabel } from "@/lib/race-period";
-import { formatTokenCount } from "@/lib/utils";
+import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -46,7 +46,7 @@ const COLUMNS: ReadonlyArray<{
 	{
 		key: "cacheHitRate",
 		label: "缓存命中率",
-		format: (v) => `${(v * 100).toFixed(1)}%`,
+		format: formatPercent,
 		defaultDesc: true,
 	},
 ];

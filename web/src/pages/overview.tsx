@@ -17,16 +17,9 @@ import { VirtualModelRaceSection } from "@/components/virtual-model-race/Virtual
 import { useDashboardCharts, useDashboardSummary } from "@/hooks/use-dashboard-stats";
 import { OVERVIEW_PAGE } from "@/lib/pages";
 import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
-import { formatTokenCount } from "@/lib/utils";
+import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-react";
 import { useState } from "react";
-
-function formatPercent(rate: number): string {
-	// 先对原始比率（0~1）截断保留 5 位小数，再转百分比展示：
-	// 如 0.1234567 → 0.12345 → 12.345%；避免 99.789% 被舍入成 100%。
-	const truncated = Math.floor(rate * 100_000 + 1e-6);
-	return `${truncated / 1000}%`;
-}
 
 /** 首页调用/Token 分析共享的时间段（默认当天）。 */
 function defaultChartsWindow(): RaceWindowState {

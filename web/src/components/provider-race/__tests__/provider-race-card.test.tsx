@@ -76,7 +76,7 @@ describe("ProviderRaceCard（供应商赛马）", () => {
 		expect(screen.getByText("100 万")).toBeTruthy();
 		expect(screen.getByText("120.5 ms")).toBeTruthy();
 		expect(screen.getByText("55.25")).toBeTruthy();
-		expect(screen.getByText("32.0%")).toBeTruthy();
+		expect(screen.getByText("32%")).toBeTruthy();
 	});
 
 	it("点击表头切换排序方向（升/降交替）", () => {

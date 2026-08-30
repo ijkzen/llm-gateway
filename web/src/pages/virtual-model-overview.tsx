@@ -17,7 +17,7 @@ import {
 } from "@/hooks/use-virtual-model-member-rank";
 import { useVirtualModelDetail } from "@/hooks/use-virtual-models";
 import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race-period";
-import { formatTokenCount } from "@/lib/utils";
+import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -66,7 +66,7 @@ const COLUMNS: ReadonlyArray<{
 	{
 		key: "cacheHitRate",
 		label: "缓存命中率",
-		format: (v) => `${(v * 100).toFixed(1)}%`,
+		format: formatPercent,
 		defaultDesc: true,
 	},
 ];

@@ -78,7 +78,7 @@ describe("ProviderModelRaceCard（供应商模型赛马）", () => {
 		expect(screen.getByText("100 万")).toBeTruthy();
 		expect(screen.getByText("120.5 ms")).toBeTruthy();
 		expect(screen.getByText("55.25")).toBeTruthy();
-		expect(screen.getByText("32.0%")).toBeTruthy();
+		expect(screen.getByText("32%")).toBeTruthy();
 	});
 
 	it("供应商已删除（空 providerName）时名称列退化为纯模型 ID", () => {

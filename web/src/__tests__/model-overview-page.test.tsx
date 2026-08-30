@@ -164,6 +164,6 @@ describe("ModelOverviewPage（模型详情三级页）", () => {
 		expect(screen.getByText("TPS")).toBeTruthy();
 		expect(screen.getByText("平均耗时")).toBeTruthy();
 		expect(screen.getByText("缓存命中率")).toBeTruthy();
-		expect(screen.getByText("32.0%")).toBeTruthy();
+		expect(screen.getByText("32%")).toBeTruthy();
 	});
 });

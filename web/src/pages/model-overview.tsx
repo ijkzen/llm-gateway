@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useModelMetrics } from "@/hooks/use-model-metrics";
 import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race-period";
-import { formatTokenCount } from "@/lib/utils";
+import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { Coins, DatabaseZap, Gauge, ListChecks, Timer, TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
@@ -232,7 +232,7 @@ export default function ModelOverviewPage() {
 							<StatsCard
 								icon={DatabaseZap}
 								label="缓存命中率"
-								value={`${(metrics.data.cacheHitRate * 100).toFixed(1)}%`}
+								value={formatPercent(metrics.data.cacheHitRate)}
 								subLabel="缓存 / 输入 token"
 							/>
 						</div>

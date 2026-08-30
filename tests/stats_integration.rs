@@ -762,9 +762,9 @@ async fn test_provider_metrics_aggregates_success_rows_in_window() {
     assert_eq!(data["providerName"], DEFAULT_PROVIDER_NAME);
     assert_eq!(data["requestCount"], 2);
     assert_eq!(data["totalTokens"], 450);
-    // 缓存命中率 = 40 / (100+200) = 0.1333…
+    // 缓存命中率 = 40 / (100+200) = 0.13333…，后端 ROUND(...,5) 保留 5 位。
     let cache_rate = data["cacheHitRate"].as_f64().unwrap();
-    assert!((cache_rate - 40.0 / 300.0).abs() < 1e-9, "cacheHitRate={cache_rate}");
+    assert!((cache_rate - 0.13333).abs() < 1e-9, "cacheHitRate={cache_rate}");
 }
 
 /// provider-metrics：缺参 / 窗口非法返回 400。
@@ -1060,4 +1060,31 @@ async fn test_charts_granularity_without_window_defaults_to_past_24h() {
     assert_eq!(call_trend.len(), 24);
     let total: i64 = call_trend.iter().map(|p| p["value"].as_i64().unwrap()).sum();
     assert_eq!(total, 1);
+}
+
+#[tokio::test]
+async fn test_summary_success_rate_rounded_to_five_decimals() {
+    let (app, db) = setup_app().await;
+    // 2 成功 1 失败：成功率 = 2/3 = 0.66666...，应四舍五入保留 5 位 = 0.66667。
+    for (i, success) in [true, true, false].into_iter().enumerate() {
+        insert_request(
+            &db,
+            SeedRow {
+                request_id: format!("sr-{i}").into(),
+                provider_id: DEFAULT_PROVIDER_ID,
+                model_id: "gpt-4o".into(),
+                success,
+                start_time: chrono::Utc::now().timestamp_millis(),
+                input_tokens: Some(1),
+                input_cache_tokens: 0,
+                total_tokens: Some(10),
+            },
+        )
+        .await;
+    }
+
+    let (status, json) = get_json(app, "/api/stats/summary").await;
+    assert_eq!(status, 200);
+    let rate = json["data"]["successRate"].as_f64().unwrap();
+    assert!((rate - 0.66667).abs() < 1e-9, "successRate={rate}");
 }

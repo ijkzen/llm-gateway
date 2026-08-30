@@ -19,7 +19,7 @@ import { useProviderDetail } from "@/hooks/use-providers";
 import { useProviderMetrics } from "@/hooks/use-stats-metrics";
 import { useUsageEstimate } from "@/hooks/use-usage-estimate";
 import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race-period";
-import { formatTokenCount } from "@/lib/utils";
+import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
@@ -68,7 +68,7 @@ const COLUMNS: ReadonlyArray<{
 	{
 		key: "cacheHitRate",
 		label: "缓存命中率",
-		format: (v) => `${(v * 100).toFixed(1)}%`,
+		format: formatPercent,
 		defaultDesc: true,
 	},
 ];

@@ -2,7 +2,7 @@ import { RaceWindowControl, type RaceWindowState } from "@/components/race-windo
 import { StatsCard } from "@/components/stats-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatTokenCount } from "@/lib/utils";
+import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { Coins, DatabaseZap, Gauge, ListChecks, Timer } from "lucide-react";
 
 /** 6 指标卡共用的指标项定义（key / 标题 / 格式化 / 图标）。 */
@@ -54,7 +54,7 @@ export const METRICS_ITEMS: readonly MetricsItem[] = [
 		key: "cacheHitRate",
 		label: "缓存命中率",
 		icon: DatabaseZap,
-		format: (v) => `${(v * 100).toFixed(1)}%`,
+		format: formatPercent,
 		subLabel: "缓存 / 输入 token",
 	},
 ];

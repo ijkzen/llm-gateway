@@ -55,16 +55,16 @@ function formatAmount(amount: number): string {
 }
 
 function WindowRow({ window }: { window: UsageWindow }) {
-	const remaining =
-		window.remainingPercent ??
-		(window.usedPercent !== undefined ? 100 - window.usedPercent : undefined);
+	// 后端已在接口出口按 remaining_percent_value() 推导并取整（round2），
+	// 前端直接使用，不再自行推导/取整。
+	const remaining = window.remainingPercent;
 	const reset = formatReset(window.resetsAt);
 	return (
 		<div className="space-y-1.5">
 			<div className="flex items-baseline justify-between gap-2 text-sm">
 				<span className="text-muted-foreground">{WINDOW_LABELS[window.window]}</span>
 				<span className="font-medium tabular-nums">
-					{remaining !== undefined ? `剩余 ${Math.round(remaining)}%` : "—"}
+					{remaining !== undefined ? `剩余 ${remaining}%` : "—"}
 				</span>
 			</div>
 			{remaining !== undefined && (

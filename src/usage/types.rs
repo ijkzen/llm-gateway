@@ -60,24 +60,26 @@ pub struct QuotaWindow {
 impl QuotaWindow {
     /// 该窗口的剩余百分比（0-100）：优先取 remaining_percent，其次由
     /// used_percent 推导，最后用 used/limit 直接算；窗口不可用或无法推导时
-    /// 返回 None。供订阅制排序（`src/proxy/usage_rank.rs`）与额度耗尽判定
-    /// （`src/usage/persist.rs`）共用。
+    /// 返回 None。出口统一四舍五入保留 2 位小数（如 63.499 → 63.5），与
+    /// clamp_percent 的 round2 口径一致，前端只负责展示不再取整。供订阅制
+    /// 排序（`src/proxy/usage_rank.rs`）与额度耗尽判定（`src/usage/persist.rs`）共用。
     pub fn remaining_percent_value(&self) -> Option<f64> {
         if !self.available {
             return None;
         }
-        if let Some(p) = self.remaining_percent {
-            return Some(p);
-        }
-        if let Some(p) = self.used_percent {
-            return Some(100.0 - p);
-        }
-        match (self.used, self.limit) {
-            (Some(used), Some(limit)) if limit > 0.0 => {
-                Some(((limit - used) / limit * 100.0).clamp(0.0, 100.0))
+        let value = if let Some(p) = self.remaining_percent {
+            p
+        } else if let Some(p) = self.used_percent {
+            100.0 - p
+        } else {
+            match (self.used, self.limit) {
+                (Some(used), Some(limit)) if limit > 0.0 => {
+                    ((limit - used) / limit * 100.0).clamp(0.0, 100.0)
+                }
+                _ => return None,
             }
-            _ => None,
-        }
+        };
+        Some(round2(value))
     }
 
     pub fn unavailable(window: WindowKind) -> Self {
@@ -150,6 +152,20 @@ impl QuotaWindow {
             w.remaining_percent = Some(100.0 - used_percent);
         }
         w
+    }
+}
+
+impl UsageData {
+    /// 返回 remaining_percent 已按 remaining_percent_value() 推导并取整的副本：
+    /// 接口出口统一调用，前端直接使用该字段，无需自行推导/取整。
+    pub fn with_normalized_remaining(&self) -> Self {
+        let mut data = self.clone();
+        for window in &mut data.windows {
+            if let Some(p) = window.remaining_percent_value() {
+                window.remaining_percent = Some(p);
+            }
+        }
+        data
     }
 }
 
@@ -265,6 +281,40 @@ mod tests {
         assert!(!windows[0].available);
         assert!(windows[1].available);
         assert!(!windows[2].available);
+    }
+
+    #[test]
+    fn remaining_percent_value_rounds_to_two_decimals() {
+        // 直取 remaining_percent：长尾值被取整。
+        let w = QuotaWindow {
+            window: WindowKind::Weekly,
+            available: true,
+            used_percent: None,
+            remaining_percent: Some(63.499),
+            resets_at: None,
+            used: None,
+            limit: None,
+            unit: None,
+        };
+        assert_eq!(w.remaining_percent_value(), Some(63.5));
+        // used_percent 推导：100 - 42.5 = 57.5。
+        let w = QuotaWindow::from_used_percent(WindowKind::Weekly, 42.5, None);
+        assert_eq!(w.remaining_percent_value(), Some(57.5));
+        // used/limit 计算：浮点噪声被取整（(100-30)/100*100 = 70.00000001 → 70）。
+        let w = QuotaWindow {
+            window: WindowKind::Weekly,
+            available: true,
+            used_percent: None,
+            remaining_percent: None,
+            resets_at: None,
+            used: Some(30.0),
+            limit: Some(100.0),
+            unit: None,
+        };
+        assert_eq!(w.remaining_percent_value(), Some(70.0));
+        // 不可用窗口返回 None。
+        let w = QuotaWindow::unavailable(WindowKind::Weekly);
+        assert_eq!(w.remaining_percent_value(), None);
     }
 
     #[test]

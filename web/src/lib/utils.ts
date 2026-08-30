@@ -33,6 +33,15 @@ export function formatTokenCount(value: number): string {
 	return value.toLocaleString("zh-CN");
 }
 
+/**
+ * 比率（0~1）转百分比展示：只做 ×100 单位换算，不改变后端给定的精度
+ * （后端各接口已按 5 位小数完备处理，如 0.13333 → "13.333%"）。
+ * toFixed(5) 仅消除 IEEE754 乘法噪声（0.29*100 → 28.999…），不截断精度。
+ */
+export function formatPercent(rate: number): string {
+	return `${Number((rate * 100).toFixed(5))}%`;
+}
+
 /** 按 value 降序取前 limit 名，其余合并为 other（value 求和）。 */
 export function topWithOther<T extends { value: number }>(items: T[], other: T, limit = 10): T[] {
 	const sorted = [...items].sort((a, b) => b.value - a.value);

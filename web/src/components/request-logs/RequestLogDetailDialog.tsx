@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { useProviderDetail } from "@/hooks/use-providers";
 import type { RequestLogRow } from "@/hooks/use-request-logs";
+import { formatPercent } from "@/lib/utils";
 
 interface RequestLogDetailDialogProps {
 	row: RequestLogRow | null;
@@ -98,9 +99,7 @@ export function RequestLogDetailDialog({ row, onOpenChange }: RequestLogDetailDi
 									: row.totalTokens.toLocaleString("zh-CN")}
 							</Field>
 							<Field label="缓存命中 Token">{row.inputCacheTokens.toLocaleString("zh-CN")}</Field>
-							<Field label="缓存命中率">
-								{Number.parseFloat((row.inputCacheRate * 100).toFixed(5))}%
-							</Field>
+							<Field label="缓存命中率">{formatPercent(row.inputCacheRate)}</Field>
 							<Field label="TPS">{row.tps.toFixed(2)}</Field>
 							<Field label="请求 ID">{fmt(row.requestId)}</Field>
 						</div>

@@ -214,7 +214,9 @@ async fn summary(State(state): State<AppState>) -> impl IntoResponse {
     let cache_tokens: i64 = row.try_get("", "cache_tokens").unwrap_or(0);
 
     let success_rate = if total_requests > 0 {
-        success_count as f64 / total_requests as f64
+        // 保留 5 位小数，与缓存命中率的口径一致。
+        let rate = success_count as f64 / total_requests as f64;
+        (rate * 100_000.0).round() / 100_000.0
     } else {
         0.0
     };
@@ -543,7 +545,7 @@ const RANK_METRIC_SQL: &str = r#"
        END AS tps,
        CASE
            WHEN SUM(r.input_tokens) > 0
-           THEN 1.0 * SUM(r.input_cache_tokens) / SUM(r.input_tokens)
+           THEN ROUND(1.0 * SUM(r.input_cache_tokens) / SUM(r.input_tokens), 5)
            ELSE 0
        END AS cache_hit_rate
 "#;

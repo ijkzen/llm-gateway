@@ -509,10 +509,16 @@ async fn get_provider_usage(
     if !force_refresh
         && let Ok(Some(data)) = crate::usage::persist::read_usage_cache(&state.db, id).await
     {
-        return (StatusCode::OK, Json(Response::success(data)));
+        return (
+            StatusCode::OK,
+            Json(Response::success(data.with_normalized_remaining())),
+        );
     }
     match crate::usage::persist::fetch_and_store(&state.db, id).await {
-        Ok(data) => (StatusCode::OK, Json(Response::success(data))),
+        Ok(data) => (
+            StatusCode::OK,
+            Json(Response::success(data.with_normalized_remaining())),
+        ),
         Err(e) if e.is_client_error() => response::bad_request(e.to_string()),
         Err(e) => response::bad_gateway(e.to_string()),
     }
