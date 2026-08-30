@@ -49,6 +49,15 @@ vi.mock("@/hooks/use-provider-race", () => ({
 	}),
 }));
 
+vi.mock("@/hooks/use-virtual-model-race", () => ({
+	useVirtualModelRace: () => ({
+		data: { startTime: 0, endTime: 0, items: [] },
+		isLoading: false,
+		isError: false,
+		refetch: vi.fn(),
+	}),
+}));
+
 function makeSummary(overrides: Partial<DashboardSummary> = {}): DashboardSummary {
 	return {
 		totalRequests: 12345,

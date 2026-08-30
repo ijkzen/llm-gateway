@@ -9,6 +9,7 @@ import { StatsCard } from "@/components/stats-card";
 import { StatsCardsSkeleton } from "@/components/stats-cards-skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { VirtualModelRaceSection } from "@/components/virtual-model-race/VirtualModelRaceSection";
 import {
 	type DashboardCharts,
 	useDashboardCharts,
@@ -180,6 +181,7 @@ export default function OverviewPage() {
 			<CallAnalysisCard charts={chartsQuery.data} />
 			<TokenAnalysisCard charts={chartsQuery.data} />
 			<ProviderRaceSection />
+			<VirtualModelRaceSection />
 		</div>
 	);
 }
