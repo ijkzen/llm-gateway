@@ -6,8 +6,8 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
-    Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, DbErr,
+    EntityTrait, QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,6 +29,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{id}", put(update_provider))
         .route("/{id}", delete(delete_provider))
         .route("/{id}/usage", get(get_provider_usage))
+        .route("/{id}/usage/estimate", get(get_provider_usage_estimate))
         .nest(
             "/{provider_id}/models",
             crate::routes::provider_models::scoped_routes(),
@@ -515,6 +516,169 @@ async fn get_provider_usage(
         Err(e) if e.is_client_error() => response::bad_request(e.to_string()),
         Err(e) => response::bad_gateway(e.to_string()),
     }
+}
+
+/// 订阅周期窗口长度（毫秒）：周 = 7 天，月 = 30 天。
+const WEEK_MS: i64 = 7 * 24 * 3_600_000;
+const MONTH_MS: i64 = 30 * 24 * 3_600_000;
+/// 一天（毫秒）。
+const DAY_MS: i64 = 24 * 3_600_000;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageEstimateResponse {
+    provider_id: i32,
+    /// 用于预估的窗口：weekly / monthly。
+    window: String,
+    /// 窗口起点（毫秒时间戳，由 resets_at 反推）。
+    window_start: i64,
+    /// 窗口终点（毫秒时间戳，即 resets_at）。
+    window_end: i64,
+    /// 窗口内实际有请求数据的日期数。
+    covered_days: i64,
+    /// 窗口总天数（周=7，月=30）。
+    total_days: i64,
+    /// 窗口内请求表统计的已用 token（成功行 total_tokens 合计）。
+    used_tokens: i64,
+    /// 用量卡该窗口已用配额（厂商单位，如 credits）。
+    used: Option<f64>,
+    /// 用量卡该窗口总配额（厂商单位）。
+    limit: Option<f64>,
+    /// 预估订阅周期内可用 token 总量（按已用配额比例折算）。
+    estimated_total_tokens: Option<i64>,
+    /// 是否可预估：请求数据覆盖完整且配额比例可折算时为 true。
+    estimatable: bool,
+}
+
+/// 订阅制供应商的订阅周期 Token 总量预估。
+///
+/// 仅订阅制（billing_mode=1）且开启用量查询（extra.usage=true）的供应商可用。
+/// 取用量卡 weekly/monthly 可用窗口（周优先），窗口起点由 resets_at 反推
+/// （周 = resets_at - 7 天，月 = resets_at - 30 天），统计请求表在该窗口内
+/// 该供应商的成功请求 token 总量。若窗口内请求数据天数覆盖不全（有日期
+/// 缺口），或用量卡拿不到已用/总量/百分比，则无法准确预估（estimatable=false）。
+async fn get_provider_usage_estimate(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> impl IntoResponse {
+    use crate::usage::types::WindowKind;
+
+    let model = match Entity::find_by_id(id).one(&state.db).await {
+        Ok(Some(m)) => m,
+        Ok(None) => return response::not_found(format!("Provider {id} 不存在")),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    // 仅订阅制可预估。
+    if model.billing_mode != 1 {
+        return response::bad_request("仅订阅制供应商支持用量预估".to_string());
+    }
+    let extra = match serde_json::from_str::<Value>(&model.extra) {
+        Ok(Value::Object(map)) => map,
+        _ => Default::default(),
+    };
+    let usage_enabled = extra.get("usage").and_then(Value::as_bool).unwrap_or(false);
+    if !usage_enabled {
+        return response::bad_request(crate::usage::error::UsageError::NotEnabled.to_string());
+    }
+
+    // 用量数据：数据库缓存新鲜直出，过期/缺失才真实抓取。
+    let data = match crate::usage::persist::read_usage_cache(&state.db, id).await {
+        Ok(Some(data)) => data,
+        _ => match crate::usage::persist::fetch_and_store(&state.db, id).await {
+            Ok(data) => data,
+            Err(e) if e.is_client_error() => return response::bad_request(e.to_string()),
+            Err(e) => return response::bad_gateway(e.to_string()),
+        },
+    };
+
+    // 选取可用窗口：weekly 优先，其次 monthly。
+    let window = data
+        .windows
+        .iter()
+        .find(|w| w.available && w.window == WindowKind::Weekly)
+        .or_else(|| data.windows.iter().find(|w| w.available && w.window == WindowKind::Monthly));
+    let Some(qw) = window else {
+        return (StatusCode::OK, Json(Response::success(UsageEstimateResponse {
+            provider_id: id,
+            window: "none".to_string(),
+            window_start: 0,
+            window_end: 0,
+            covered_days: 0,
+            total_days: 0,
+            used_tokens: 0,
+            used: None,
+            limit: None,
+            estimated_total_tokens: None,
+            estimatable: false,
+        })));
+    };
+
+    let window_name = match qw.window {
+        WindowKind::Weekly => "weekly",
+        WindowKind::Monthly => "monthly",
+        _ => "other",
+    };
+    let window_len_ms = if qw.window == WindowKind::Weekly { WEEK_MS } else { MONTH_MS };
+
+    // 窗口终点 = resets_at（取当前时刻兜底），起点 = 终点 - 窗口长度。
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let window_end = qw.resets_at.map(|t| t.timestamp_millis()).unwrap_or(now_ms);
+    let window_start = window_end - window_len_ms;
+    let total_days = window_len_ms / DAY_MS;
+
+    // 请求表统计：窗口内该供应商成功请求的 token 总量 + 覆盖天数（按天分桶）。
+    let sql = format!(
+        "SELECT COALESCE(SUM(r.total_tokens), 0) AS used_tokens, \
+                COUNT(DISTINCT r.start_time / {DAY_MS}) AS covered_days \
+         FROM request r \
+         WHERE r.provider_id = ? AND r.success = 1 \
+           AND r.start_time >= ? AND r.start_time < ?"
+    );
+    let row = match state
+        .db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            [id.into(), window_start.into(), window_end.into()],
+        ))
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return response::db_error("用量预估查询无结果".to_string()),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    let used_tokens: i64 = row.try_get("", "used_tokens").unwrap_or(0);
+    let covered_days: i64 = row.try_get("", "covered_days").unwrap_or(0);
+
+    // 覆盖检查：窗口内每天都有请求数据才可预估。
+    let covered = covered_days >= total_days;
+
+    // 折算基准：优先 used/limit 绝对值，其次 used_percent。
+    let ratio: Option<f64> = match (qw.used, qw.limit) {
+        (Some(used), Some(limit)) if limit > 0.0 => Some(used / limit),
+        _ => qw.used_percent.map(|p| p / 100.0),
+    };
+    let ratio = ratio.filter(|r| *r > 0.0);
+
+    let estimatable = covered && ratio.is_some();
+    let estimated_total_tokens = ratio.map(|r| (used_tokens as f64 / r).round() as i64);
+
+    (
+        StatusCode::OK,
+        Json(Response::success(UsageEstimateResponse {
+            provider_id: id,
+            window: window_name.to_string(),
+            window_start,
+            window_end,
+            covered_days,
+            total_days,
+            used_tokens,
+            used: qw.used,
+            limit: qw.limit,
+            estimated_total_tokens: if estimatable { estimated_total_tokens } else { None },
+            estimatable,
+        })),
+    )
 }
 
 /// SQLite 唯一约束冲突（name UNIQUE）。

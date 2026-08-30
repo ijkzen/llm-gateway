@@ -42,6 +42,22 @@ vi.mock("@/hooks/use-virtual-model-member-rank", () => ({
 	}),
 }));
 
+vi.mock("@/hooks/use-stats-metrics", () => ({
+	useVirtualModelMetrics: () => ({
+		data: {
+			virtualModelId: 3,
+			virtualModelDisplayId: mocks.displayId,
+			requestCount: 10,
+			totalTokens: 2000,
+			ttft: 100,
+			requestTime: 500,
+			tps: 20,
+			cacheHitRate: 0.3,
+		},
+		isLoading: false,
+	}),
+}));
+
 // 图表组件依赖浏览器布局，stub 标记视图。
 vi.mock("@/components/dashboard-charts", () => ({
 	TrendLineChart: () => <div data-testid="trend-chart" />,

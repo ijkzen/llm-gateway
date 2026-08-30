@@ -688,3 +688,143 @@ async fn test_charts_provider_and_model_filter() {
         .sum();
     assert_eq!(total_calls, 1);
 }
+
+/// provider-metrics：供应商级 6 指标聚合（成功行 + 窗口过滤）。
+#[tokio::test]
+async fn test_provider_metrics_aggregates_success_rows_in_window() {
+    let (app, db) = setup_app().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let t0 = now - 24 * HOUR_MS;
+
+    // 成功 2 条 + 失败 1 条（失败不计入指标）。
+    for row in [
+        SeedRow {
+            request_id: "pm-ok1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: t0,
+            input_tokens: Some(100),
+            input_cache_tokens: 40,
+            total_tokens: Some(150),
+        },
+        SeedRow {
+            request_id: "pm-ok2".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "claude-3".into(),
+            success: true,
+            start_time: t0 + HOUR_MS,
+            input_tokens: Some(200),
+            input_cache_tokens: 0,
+            total_tokens: Some(300),
+        },
+        SeedRow {
+            request_id: "pm-fail".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: false,
+            start_time: t0 + 2 * HOUR_MS,
+            input_tokens: Some(999),
+            input_cache_tokens: 0,
+            total_tokens: Some(999),
+        },
+    ] {
+        insert_request(&db, row).await;
+    }
+    // 窗口外的成功行不计入。
+    insert_request(
+        &db,
+        SeedRow {
+            request_id: "pm-outside".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: now,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(20),
+        },
+    )
+    .await;
+
+    let (status, json) = get_json(
+        app,
+        &format!(
+            "/api/stats/provider-metrics?providerId={}&startTime={t0}&endTime={}",
+            DEFAULT_PROVIDER_ID,
+            now
+        ),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+    assert_eq!(data["providerId"], DEFAULT_PROVIDER_ID);
+    assert_eq!(data["providerName"], DEFAULT_PROVIDER_NAME);
+    assert_eq!(data["requestCount"], 2);
+    assert_eq!(data["totalTokens"], 450);
+    // 缓存命中率 = 40 / (100+200) = 0.1333…
+    let cache_rate = data["cacheHitRate"].as_f64().unwrap();
+    assert!((cache_rate - 40.0 / 300.0).abs() < 1e-9, "cacheHitRate={cache_rate}");
+}
+
+/// provider-metrics：缺参 / 窗口非法返回 400。
+#[tokio::test]
+async fn test_provider_metrics_validation() {
+    let (app, _db) = setup_app().await;
+
+    let (status, _) = get_json(app.clone(), "/api/stats/provider-metrics").await;
+    assert_eq!(status, 400);
+    let (status, _) = get_json(
+        app.clone(),
+        "/api/stats/provider-metrics?providerId=1&startTime=100&endTime=100",
+    )
+    .await;
+    assert_eq!(status, 400);
+}
+
+/// virtual-model-metrics：按虚拟模型过滤聚合。
+#[tokio::test]
+async fn test_virtual_model_metrics_aggregates() {
+    let (app, db) = setup_app().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let t0 = now - HOUR_MS;
+
+    for row in [
+        SeedRow {
+            request_id: "vm-m1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: t0,
+            input_tokens: Some(100),
+            input_cache_tokens: 50,
+            total_tokens: Some(200),
+        },
+        SeedRow {
+            request_id: "vm-m2".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: t0 + 100,
+            input_tokens: Some(100),
+            input_cache_tokens: 0,
+            total_tokens: Some(200),
+        },
+    ] {
+        insert_request(&db, row).await;
+    }
+
+    let (status, json) = get_json(
+        app,
+        &format!("/api/stats/virtual-model-metrics?virtualModelId=1&startTime={t0}&endTime={now}"),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+    assert_eq!(data["virtualModelId"], 1);
+    assert_eq!(data["requestCount"], 2);
+    assert_eq!(data["totalTokens"], 400);
+    // 缓存命中率 = 50 / 200 = 0.25。
+    let cache_rate = data["cacheHitRate"].as_f64().unwrap();
+    assert!((cache_rate - 0.25).abs() < 1e-9, "cacheHitRate={cache_rate}");
+}

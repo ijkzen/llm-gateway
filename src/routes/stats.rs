@@ -23,6 +23,8 @@ pub fn routes() -> Router<AppState> {
         .route("/provider-model-rank", get(provider_model_rank))
         .route("/virtual-model-member-rank", get(virtual_model_member_rank))
         .route("/model-metrics", get(model_metrics))
+        .route("/provider-metrics", get(provider_metrics))
+        .route("/virtual-model-metrics", get(virtual_model_metrics))
 }
 
 #[derive(Serialize)]
@@ -915,6 +917,174 @@ async fn model_metrics(
             provider_id,
             provider_name: row.try_get("", "provider_name").unwrap_or_default(),
             model_id,
+            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
+            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
+            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
+            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
+            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
+            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+        })),
+    )
+}
+
+/// 供应商指标查询参数：providerId + 时间窗口。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderMetricsQuery {
+    /// 供应商 ID（必填）。
+    provider_id: Option<i32>,
+    /// 窗口起点（毫秒时间戳，含）。
+    start_time: Option<i64>,
+    /// 窗口终点（毫秒时间戳，不含）。
+    end_time: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderMetricsResponse {
+    /// 供应商 ID。
+    provider_id: i32,
+    /// 供应商名称（供应商已删除时为空串）。
+    provider_name: String,
+    /// 成功请求数。
+    request_count: i64,
+    /// 总计 token（成功请求的 total_tokens 合计）。
+    total_tokens: i64,
+    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
+    ttft: f64,
+    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
+    request_time: f64,
+    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推）。
+    tps: f64,
+    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
+    cache_hit_rate: f64,
+}
+
+/// 供应商级 6 指标聚合：按 provider_id 过滤返回单行，供二级页顶部指标卡。
+async fn provider_metrics(
+    State(state): State<AppState>,
+    Query(query): Query<ProviderMetricsQuery>,
+) -> impl IntoResponse {
+    let Some(provider_id) = query.provider_id else {
+        return response::bad_request("缺少 providerId 参数");
+    };
+    let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
+        return response::bad_request("缺少 startTime / endTime 参数");
+    };
+    if end <= start {
+        return response::bad_request("endTime 必须大于 startTime");
+    }
+    let db = &state.db;
+
+    let sql = format!(
+        "SELECT COALESCE(p.name, '') AS provider_name,{RANK_METRIC_SQL} \
+         FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
+         WHERE r.success = 1 AND r.provider_id = ? \
+           AND r.start_time >= ? AND r.start_time < ?"
+    );
+
+    let row = match db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            [provider_id.into(), start.into(), end.into()],
+        ))
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return response::db_error("供应商指标查询无结果".to_string()),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+
+    (
+        StatusCode::OK,
+        Json(Response::success(ProviderMetricsResponse {
+            provider_id,
+            provider_name: row.try_get("", "provider_name").unwrap_or_default(),
+            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
+            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
+            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
+            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
+            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
+            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+        })),
+    )
+}
+
+/// 虚拟模型指标查询参数：virtualModelId + 时间窗口。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct VirtualModelMetricsQuery {
+    /// 虚拟模型 ID（必填）。
+    virtual_model_id: Option<i32>,
+    /// 窗口起点（毫秒时间戳，含）。
+    start_time: Option<i64>,
+    /// 窗口终点（毫秒时间戳，不含）。
+    end_time: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VirtualModelMetricsResponse {
+    /// 虚拟模型 ID。
+    virtual_model_id: i32,
+    /// 虚拟模型对外 ID（虚拟模型已删除时为空串）。
+    virtual_model_display_id: String,
+    /// 成功请求数。
+    request_count: i64,
+    /// 总计 token（成功请求的 total_tokens 合计）。
+    total_tokens: i64,
+    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
+    ttft: f64,
+    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
+    request_time: f64,
+    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推）。
+    tps: f64,
+    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
+    cache_hit_rate: f64,
+}
+
+/// 虚拟模型级 6 指标聚合：按 virtual_model_id 过滤返回单行，供二级页顶部指标卡。
+async fn virtual_model_metrics(
+    State(state): State<AppState>,
+    Query(query): Query<VirtualModelMetricsQuery>,
+) -> impl IntoResponse {
+    let Some(virtual_model_id) = query.virtual_model_id else {
+        return response::bad_request("缺少 virtualModelId 参数");
+    };
+    let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
+        return response::bad_request("缺少 startTime / endTime 参数");
+    };
+    if end <= start {
+        return response::bad_request("endTime 必须大于 startTime");
+    }
+    let db = &state.db;
+
+    let sql = format!(
+        "SELECT COALESCE(vm.display_id, '') AS virtual_model_display_id,{RANK_METRIC_SQL} \
+         FROM request r LEFT JOIN virtual_model vm ON vm.virtual_model_id = r.virtual_model_id \
+         WHERE r.success = 1 AND r.virtual_model_id = ? \
+           AND r.start_time >= ? AND r.start_time < ?"
+    );
+
+    let row = match db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            [virtual_model_id.into(), start.into(), end.into()],
+        ))
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return response::db_error("虚拟模型指标查询无结果".to_string()),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+
+    (
+        StatusCode::OK,
+        Json(Response::success(VirtualModelMetricsResponse {
+            virtual_model_id,
+            virtual_model_display_id: row.try_get("", "virtual_model_display_id").unwrap_or_default(),
             request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
             total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
             ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),

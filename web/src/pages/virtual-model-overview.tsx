@@ -1,4 +1,5 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
+import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
@@ -7,6 +8,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
+import { useVirtualModelMetrics } from "@/hooks/use-stats-metrics";
 import {
 	type RaceSort,
 	type RaceSortKey,
@@ -20,8 +22,9 @@ import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-/** 二级页三个图表区块的独立时间段状态。 */
+/** 二级页四个图表区块的独立时间段状态。 */
 interface VirtualModelOverviewWindows {
+	metrics: RaceWindowState;
 	call: RaceWindowState;
 	token: RaceWindowState;
 	race: RaceWindowState;
@@ -202,10 +205,15 @@ export default function VirtualModelOverviewPage() {
 	const virtualModelId = Number.parseInt(virtualModelIdParam ?? "", 10);
 	const [searchParams] = useSearchParams();
 
-	// 三块独立时间段，初始值来自 URL（无参数默认当天）。
+	// 四块独立时间段，初始值来自 URL（无参数默认当天）。
 	const [windows, setWindows] = useState<VirtualModelOverviewWindows>(() => {
 		const initial = initialWindowFromUrl(searchParams);
-		return { call: { ...initial }, token: { ...initial }, race: { ...initial } };
+		return {
+			metrics: { ...initial },
+			call: { ...initial },
+			token: { ...initial },
+			race: { ...initial },
+		};
 	});
 	// 各块固化 now（标题稳定）。
 	const [now] = useState(() => Date.now());
@@ -213,8 +221,15 @@ export default function VirtualModelOverviewPage() {
 	const detail = useVirtualModelDetail(Number.isFinite(virtualModelId) ? virtualModelId : null);
 	const displayId = detail.data?.displayId ?? `虚拟模型 #${virtualModelId}`;
 
+	const metricsWindow = raceWindowBounds(windows.metrics, now);
 	const callWindow = raceWindowBounds(windows.call, now);
 	const tokenWindow = raceWindowBounds(windows.token, now);
+
+	const vmMetrics = useVirtualModelMetrics(
+		virtualModelId,
+		metricsWindow,
+		Number.isFinite(virtualModelId),
+	);
 
 	const callCharts = useDashboardCharts({
 		startTime: callWindow.startTime,
@@ -238,6 +253,18 @@ export default function VirtualModelOverviewPage() {
 				<Boxes className="size-5 text-muted-foreground" />
 				<h1 className="text-2xl font-bold tracking-tight">{displayId} · 数据面板</h1>
 			</div>
+
+			{/* 顶部：6 指标概览（独立时间段；虚拟模型无用量信息） */}
+			<MetricsSummaryCard
+				data={vmMetrics.data}
+				isLoading={vmMetrics.isLoading}
+				windowState={windows.metrics}
+				now={now}
+				onWindowChange={(patch) =>
+					setWindows((prev) => ({ ...prev, metrics: { ...prev.metrics, ...patch } }))
+				}
+				subtitle={windowSubtitle(windows.metrics)}
+			/>
 
 			{/* 调用分析：独立时间段（CallAnalysisCard 自带卡片壳） */}
 			<div className="space-y-2">

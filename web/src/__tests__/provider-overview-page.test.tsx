@@ -49,6 +49,26 @@ vi.mock("@/hooks/use-provider-model-race", () => ({
 	}),
 }));
 
+vi.mock("@/hooks/use-stats-metrics", () => ({
+	useProviderMetrics: () => ({
+		data: {
+			providerId: 3,
+			providerName: mocks.providerName,
+			requestCount: 10,
+			totalTokens: 2000,
+			ttft: 100,
+			requestTime: 500,
+			tps: 20,
+			cacheHitRate: 0.3,
+		},
+		isLoading: false,
+	}),
+}));
+
+vi.mock("@/hooks/use-usage-estimate", () => ({
+	useUsageEstimate: () => ({ data: undefined }),
+}));
+
 // 图表组件依赖浏览器布局，stub 标记视图。
 vi.mock("@/components/dashboard-charts", () => ({
 	TrendLineChart: () => <div data-testid="trend-chart" />,
@@ -141,5 +161,25 @@ describe("ProviderOverviewPage（供应商二级数据面板）", () => {
 		renderPage();
 		expect(screen.getByText("deepseek-v3")).toBeTruthy();
 		expect(screen.getByText("100 万")).toBeTruthy();
+	});
+
+	it("顶部指标概览卡片渲染 6 个指标", () => {
+		mocks.callCharts = makeCharts();
+		mocks.tokenCharts = makeCharts();
+		renderPage();
+
+		// 指标概览卡片标题。
+		expect(screen.getByText("指标概览")).toBeTruthy();
+		// 6 个指标项（总计 Token / 请求数 / TTFT / 平均耗时 / TPS / 缓存命中率）；
+		// 部分标签与赛马表头重名，用 getAllByText 断言至少出现一次。
+		expect(screen.getAllByText("总计 Token").length).toBeGreaterThanOrEqual(1);
+		expect(screen.getAllByText("请求数").length).toBeGreaterThanOrEqual(1);
+		expect(screen.getAllByText("TTFT").length).toBeGreaterThanOrEqual(1);
+		expect(screen.getAllByText("平均耗时").length).toBeGreaterThanOrEqual(1);
+		expect(screen.getAllByText("TPS").length).toBeGreaterThanOrEqual(1);
+		expect(screen.getAllByText("缓存命中率").length).toBeGreaterThanOrEqual(1);
+		// mock 数据：totalTokens=2000 → "2,000"；requestCount=10 → "10"。
+		expect(screen.getByText("2,000")).toBeTruthy();
+		expect(screen.getByText("10")).toBeTruthy();
 	});
 });
