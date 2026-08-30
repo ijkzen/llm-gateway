@@ -123,11 +123,48 @@ describe("RequestLogsTable", () => {
 		mockQuery({ items: [makeRow()], total: 1 });
 		render(<RequestLogsTable />);
 
-		// 默认快捷时间段是 24h，重置后仍为 24h（startTime 有值）。
+		// 先切一个过滤条件（虚拟模型选 vm-a），再重置。
+		const vmSelect = screen.getByLabelText("按虚拟模型过滤");
+		fireEvent.click(vmSelect);
+		const vmOption = screen.getAllByRole("option", { name: "vm-a" })[0];
+		expect(vmOption).toBeDefined();
+		if (vmOption) {
+			fireEvent.click(vmOption);
+		}
+
 		const reset = screen.getByRole("button", { name: /重置/ });
 		fireEvent.click(reset);
-		// 虚拟模型下拉回到「全部」。
-		const vmSelect = screen.getByLabelText("按虚拟模型过滤");
-		expect(vmSelect).toBeInTheDocument();
+		// 虚拟模型下拉回到「全部」（combobox 值文本）。
+		const vmCombobox = screen.getByRole("combobox", { name: "按虚拟模型过滤" });
+		expect(vmCombobox).toHaveTextContent("全部");
+	});
+
+	it("默认时间组件选中「天」，重置后回到「天」", () => {
+		mockQuery({ items: [], total: 0 });
+		render(<RequestLogsTable />);
+
+		// 默认「天」处于按下态。
+		const dayButton = screen.getByRole("button", { name: "天" });
+		expect(dayButton).toHaveAttribute("aria-pressed", "true");
+
+		// 切到「周」再重置，回到「天」。
+		fireEvent.click(screen.getByRole("button", { name: "周" }));
+		expect(screen.getByRole("button", { name: "周" })).toHaveAttribute("aria-pressed", "true");
+
+		fireEvent.click(screen.getByRole("button", { name: /重置/ }));
+		expect(screen.getByRole("button", { name: "天" })).toHaveAttribute("aria-pressed", "true");
+	});
+
+	it("时间过滤通过 startTime/endTime 传给请求", () => {
+		mockQuery({ items: [], total: 0 });
+		render(<RequestLogsTable />);
+
+		// 默认「天」：startTime = 今天 0 点，endTime = 当前时刻。
+		const params = mocks.useRequestLogs.mock.calls[0]?.[0];
+		expect(params).toBeDefined();
+		const start = new Date(params?.startTime ?? 0);
+		expect(start.getHours()).toBe(0);
+		expect(start.getMinutes()).toBe(0);
+		expect(typeof params.endTime).toBe("number");
 	});
 });

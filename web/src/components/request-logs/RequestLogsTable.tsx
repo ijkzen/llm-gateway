@@ -1,10 +1,14 @@
 import { DataTableColumnHeader } from "@/components/data-table/column-header";
 import { DataTableViewOptions } from "@/components/data-table/view-options";
 import { EmptyState } from "@/components/empty-state";
+import {
+	RaceWindowControl,
+	type RaceWindowState,
+	raceWindowBounds,
+} from "@/components/race-window-control";
 import { RequestLogDetailDialog } from "@/components/request-logs/RequestLogDetailDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
 	Select,
 	SelectContent,
@@ -38,13 +42,19 @@ import { useMemo, useState } from "react";
 
 const PLAIN_HEADER_CLASS = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
 
-/** 快捷时间段选项。 */
-const QUICK_RANGES = [
-	{ value: "1h", label: "最近 1 小时", ms: 60 * 60 * 1000 },
-	{ value: "24h", label: "最近 24 小时", ms: 24 * 60 * 60 * 1000 },
-	{ value: "7d", label: "最近 7 天", ms: 7 * 24 * 60 * 60 * 1000 },
-	{ value: "all", label: "全部", ms: null },
-] as const;
+/** 默认时间窗口状态：今天（自然日 [0点, 当前]）。 */
+function defaultTimeWindow(): RaceWindowState {
+	const now = Date.now();
+	const start = new Date(now);
+	start.setHours(0, 0, 0, 0);
+	return {
+		period: "day",
+		offset: 0,
+		customStart: start.getTime(),
+		customEnd: now,
+		appliedCustom: null,
+	};
+}
 
 function fmtTime(ms: number): string {
 	return new Date(ms).toLocaleString("zh-CN", { hour12: false });
@@ -74,11 +84,10 @@ export function RequestLogsTable() {
 	const [modelId, setModelId] = useState<string | undefined>(undefined);
 	const [success, setSuccess] = useState<boolean | undefined>(undefined);
 	const [apiKey, setApiKey] = useState<string | undefined>(undefined);
-	const [startTime, setStartTime] = useState<number | undefined>(undefined);
-	const [endTime, setEndTime] = useState<number | undefined>(undefined);
-	const [quickRange, setQuickRange] = useState<string>("24h");
-	const [customStart, setCustomStart] = useState("");
-	const [customEnd, setCustomEnd] = useState("");
+	// 时间过滤：通用时间组件（天/周/月/年/自定义），默认今天。
+	const [timeWindow, setTimeWindow] = useState<RaceWindowState>(defaultTimeWindow);
+	const [now] = useState(() => Date.now());
+	const timeBounds = raceWindowBounds(timeWindow, now);
 
 	const { data: virtualModels } = useVirtualModels();
 	const { data: providers } = useProviders();
@@ -105,34 +114,15 @@ export function RequestLogsTable() {
 		modelId,
 		success,
 		apiKey,
-		startTime,
-		endTime,
+		startTime: timeBounds.startTime,
+		endTime: timeBounds.endTime,
 		sortBy,
 		sortOrder,
 	});
 	const { data, isLoading, isError, refetch } = query;
 
-	const applyQuickRange = (value: string) => {
-		setQuickRange(value);
-		const range = QUICK_RANGES.find((r) => r.value === value);
-		setStartTime(range?.ms ? Date.now() - range.ms : undefined);
-		setEndTime(undefined);
-		setPage(1);
-	};
-
-	const applyCustomRange = () => {
-		setStartTime(customStart ? new Date(customStart).getTime() : undefined);
-		setEndTime(customEnd ? new Date(customEnd).getTime() : undefined);
-		setQuickRange("all");
-		setPage(1);
-	};
-
 	const resetAll = () => {
-		setQuickRange("24h");
-		setCustomStart("");
-		setCustomEnd("");
-		setStartTime(Date.now() - 24 * 60 * 60 * 1000);
-		setEndTime(undefined);
+		setTimeWindow(defaultTimeWindow());
 		setVmId(undefined);
 		setProviderId(undefined);
 		setModelId(undefined);
@@ -235,160 +225,132 @@ export function RequestLogsTable() {
 
 	return (
 		<div className="space-y-4">
-			{/* 过滤工具栏：先过滤（虚拟模型/供应商/模型/结果/API Key），再选时间段 */}
-			<div className="flex flex-wrap items-end gap-3 rounded-2xl border border-white/70 bg-white/65 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-				<div className="space-y-1">
-					<p className="text-xs text-muted-foreground">虚拟模型</p>
-					<Select
-						value={vmId !== undefined ? String(vmId) : "all"}
-						onValueChange={(v) => {
-							setVmId(v === "all" ? undefined : Number(v));
-							setPage(1);
-						}}
-					>
-						<SelectTrigger className="w-[160px]" aria-label="按虚拟模型过滤">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">全部</SelectItem>
-							{virtualModels?.map((vm) => (
-								<SelectItem key={vm.virtualModelId} value={String(vm.virtualModelId)}>
-									{vm.displayId}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+			{/* 过滤卡片：条件（上）+ 时间（下），重置按钮在右上角 */}
+			<div className="rounded-2xl border border-white/70 bg-white/65 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
+				<div className="mb-3 flex items-center justify-end">
+					<Button type="button" variant="outline" size="sm" onClick={resetAll}>
+						<RotateCcw className="mr-1.5 size-4" />
+						重置
+					</Button>
 				</div>
-				<div className="space-y-1">
-					<p className="text-xs text-muted-foreground">供应商</p>
-					<Select
-						value={providerId !== undefined ? String(providerId) : "all"}
-						onValueChange={(v) => {
-							setProviderId(v === "all" ? undefined : Number(v));
-							// 供应商变化后旧模型过滤不再适用，清空并回到全部。
-							setModelId(undefined);
-							setPage(1);
-						}}
-					>
-						<SelectTrigger className="w-[160px]" aria-label="按供应商过滤">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">全部</SelectItem>
-							{providers?.map((p) => (
-								<SelectItem key={p.id} value={String(p.id)}>
-									{p.name}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</div>
-				<div className="space-y-1">
-					<p className="text-xs text-muted-foreground">供应商模型</p>
-					<Select
-						value={modelId ?? "all"}
-						onValueChange={(v) => {
-							setModelId(v === "all" ? undefined : v);
-							setPage(1);
-						}}
-					>
-						<SelectTrigger className="w-[180px]" aria-label="按供应商模型过滤">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">全部</SelectItem>
-							{providerModelOptions.map((model) => (
-								<SelectItem key={model.modelId} value={model.providerModelId}>
-									{model.providerModelId}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</div>
-				<div className="space-y-1">
-					<p className="text-xs text-muted-foreground">结果</p>
-					<Select
-						value={success === undefined ? "all" : success ? "true" : "false"}
-						onValueChange={(v) => {
-							setSuccess(v === "all" ? undefined : v === "true");
-							setPage(1);
-						}}
-					>
-						<SelectTrigger className="w-[100px]" aria-label="按结果状态过滤">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">全部</SelectItem>
-							<SelectItem value="true">成功</SelectItem>
-							<SelectItem value="false">失败</SelectItem>
-						</SelectContent>
-					</Select>
-				</div>
-				<div className="space-y-1">
-					<p className="text-xs text-muted-foreground">API Key</p>
-					<Select
-						value={apiKey ?? "all"}
-						onValueChange={(v) => {
-							setApiKey(v === "all" ? undefined : v);
-							setPage(1);
-						}}
-					>
-						<SelectTrigger className="w-[160px]" aria-label="按 API Key 过滤">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">全部</SelectItem>
-							{apiKeys?.map((key) => (
-								<SelectItem key={key.id} value={key.name}>
-									{key.name}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</div>
-				<Button type="button" variant="outline" size="sm" onClick={resetAll} className="ml-auto">
-					<RotateCcw className="mr-1.5 size-4" />
-					重置
-				</Button>
-			</div>
-
-			{/* 时间段：快捷范围 + 自定义起止 */}
-			<div className="flex flex-wrap items-end gap-3 rounded-2xl border border-white/70 bg-white/65 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-				<div className="space-y-1">
-					<p className="text-xs text-muted-foreground">时间段</p>
-					<Select value={quickRange} onValueChange={applyQuickRange}>
-						<SelectTrigger className="w-[140px]" aria-label="快捷时间段">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							{QUICK_RANGES.map((r) => (
-								<SelectItem key={r.value} value={r.value}>
-									{r.label}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</div>
-				<div className="space-y-1">
-					<p className="text-xs text-muted-foreground">自定义起止</p>
-					<div className="flex items-center gap-2">
-						<Input
-							type="datetime-local"
-							className="h-9 w-auto"
-							value={customStart}
-							onChange={(e) => setCustomStart(e.target.value)}
-						/>
-						<span className="text-xs text-muted-foreground">至</span>
-						<Input
-							type="datetime-local"
-							className="h-9 w-auto"
-							value={customEnd}
-							onChange={(e) => setCustomEnd(e.target.value)}
-						/>
-						<Button type="button" variant="outline" size="sm" onClick={applyCustomRange}>
-							应用
-						</Button>
+				<div className="flex flex-wrap items-end gap-3">
+					<div className="space-y-1">
+						<p className="text-xs text-muted-foreground">虚拟模型</p>
+						<Select
+							value={vmId !== undefined ? String(vmId) : "all"}
+							onValueChange={(v) => {
+								setVmId(v === "all" ? undefined : Number(v));
+								setPage(1);
+							}}
+						>
+							<SelectTrigger className="w-[160px]" aria-label="按虚拟模型过滤">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="all">全部</SelectItem>
+								{virtualModels?.map((vm) => (
+									<SelectItem key={vm.virtualModelId} value={String(vm.virtualModelId)}>
+										{vm.displayId}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
 					</div>
+					<div className="space-y-1">
+						<p className="text-xs text-muted-foreground">供应商</p>
+						<Select
+							value={providerId !== undefined ? String(providerId) : "all"}
+							onValueChange={(v) => {
+								setProviderId(v === "all" ? undefined : Number(v));
+								// 供应商变化后旧模型过滤不再适用，清空并回到全部。
+								setModelId(undefined);
+								setPage(1);
+							}}
+						>
+							<SelectTrigger className="w-[160px]" aria-label="按供应商过滤">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="all">全部</SelectItem>
+								{providers?.map((p) => (
+									<SelectItem key={p.id} value={String(p.id)}>
+										{p.name}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
+					<div className="space-y-1">
+						<p className="text-xs text-muted-foreground">供应商模型</p>
+						<Select
+							value={modelId ?? "all"}
+							onValueChange={(v) => {
+								setModelId(v === "all" ? undefined : v);
+								setPage(1);
+							}}
+						>
+							<SelectTrigger className="w-[180px]" aria-label="按供应商模型过滤">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="all">全部</SelectItem>
+								{providerModelOptions.map((model) => (
+									<SelectItem key={model.modelId} value={model.providerModelId}>
+										{model.providerModelId}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
+					<div className="space-y-1">
+						<p className="text-xs text-muted-foreground">结果</p>
+						<Select
+							value={success === undefined ? "all" : success ? "true" : "false"}
+							onValueChange={(v) => {
+								setSuccess(v === "all" ? undefined : v === "true");
+								setPage(1);
+							}}
+						>
+							<SelectTrigger className="w-[100px]" aria-label="按结果状态过滤">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="all">全部</SelectItem>
+								<SelectItem value="true">成功</SelectItem>
+								<SelectItem value="false">失败</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+					<div className="space-y-1">
+						<p className="text-xs text-muted-foreground">API Key</p>
+						<Select
+							value={apiKey ?? "all"}
+							onValueChange={(v) => {
+								setApiKey(v === "all" ? undefined : v);
+								setPage(1);
+							}}
+						>
+							<SelectTrigger className="w-[160px]" aria-label="按 API Key 过滤">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="all">全部</SelectItem>
+								{apiKeys?.map((key) => (
+									<SelectItem key={key.id} value={key.name}>
+										{key.name}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					</div>
+				</div>
+				<div className="mt-3 flex flex-wrap items-center gap-3 border-t border-foreground/5 pt-3">
+					<span className="text-xs text-muted-foreground">时间</span>
+					<RaceWindowControl
+						state={timeWindow}
+						now={now}
+						onChange={(patch) => setTimeWindow((prev) => ({ ...prev, ...patch }))}
+					/>
 				</div>
 			</div>
 
