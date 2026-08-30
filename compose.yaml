@@ -23,6 +23,8 @@ services:
       RUST_LOG: info,sqlx::query=warn
       CRON_JOB_QUEUE_SIZE: "1000"
       CRON_JOB_MAX_CONCURRENT: "10"
+      # cron 表达式按服务器本地时区解释（与 Dockerfile ENV 一致，运行时兜底）
+      TZ: Asia/Shanghai
       # 供应商 API Key 的 AES-256-GCM 加密密钥（必配，否则明文落库）
       # 生成方式：openssl rand -hex 32
       API_KEY_ENCRYPTION_KEY: ${API_KEY_ENCRYPTION_KEY:?请在 .env 中配置 API_KEY_ENCRYPTION_KEY}

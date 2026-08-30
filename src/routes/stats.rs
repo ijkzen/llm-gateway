@@ -930,8 +930,7 @@ async fn virtual_model_member_rank(
 
     // 聚合子查询：该虚拟模型下实际服务的成员（按 provider_id + model_id 分组）。
     // 6 指标表达式与 RANK_METRIC_SQL 同口径，但需带上关联键列。
-    let sql = format!(
-        "SELECT pm.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name, \
+    let sql = "SELECT pm.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name, \
                 pm.provider_model_id AS model_id, \
                 vmi.enable AS member_enable, \
                 COALESCE(agg.request_count, 0) AS request_count, \
@@ -963,8 +962,7 @@ async fn virtual_model_member_rank(
              WHERE r.success = 1 AND r.virtual_model_id = ? AND r.start_time >= ? AND r.start_time < ? \
              GROUP BY r.provider_id, r.model_id \
          ) agg ON agg.provider_id = pm.provider_id AND agg.provider_model_id = pm.provider_model_id \
-         WHERE vmi.virtual_model_id = ?"
-    );
+         WHERE vmi.virtual_model_id = ?";
 
     let rows = match db
         .query_all_raw(Statement::from_sql_and_values(

@@ -53,10 +53,14 @@ WORKDIR /app
 
 ENV release=1
 ENV APP_ENV=prod
+# cron 表达式按服务器本地时区解释（src/cron/parser.rs 使用 chrono::Local），
+# 设置东八区与前端浏览器展示一致；东八区无 DST，无 tokio-cron-scheduler 时区快照问题。
+# debian slim 不含 zoneinfo 数据，必须安装 tzdata 否则 TZ 静默回退 UTC。
+ENV TZ=Asia/Shanghai
 
-# healthcheck 需要 curl（debian slim 默认没有）；建非 root 运行用户
+# healthcheck 需要 curl（debian slim 默认没有）；tzdata 提供 TZ=Asia/Shanghai 的时区数据；建非 root 运行用户
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl passwd \
+    && apt-get install -y --no-install-recommends curl passwd tzdata \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 app \
     && mkdir -p /config/db /config/logs \

@@ -170,9 +170,9 @@ mod tests {
 
     #[test]
     fn token_plan_monthly_only() {
+        // currentPeriodEnd 为无时区字符串，按东八区解释（见 fetchers/mod.rs reset_ts）。
         let detail: Value = serde_json::from_str(
-            r#"{ "code": 0, "data": { "planCode": "pro", "currentPeriodEnd": "2026-09-14 00:00", "expired": false } }"#,
-        )
+            r#"{ "code": 0, "data": { "planCode": "pro", "currentPeriodEnd": "2026-09-14 00:00", "expired": false } }"#,        )
         .unwrap();
         let usage = r#"{ "code": 0, "data": { "monthUsage": { "percent": 12.3 } } }"#;
         let FetchOutput::Quota { plan, windows } =

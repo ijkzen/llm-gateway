@@ -87,7 +87,7 @@
 │   │   └── fetchers/       # 各厂商：api_key/balance/cloud_balance(阿里BSS+火山billing AK/SK)/copilot/volcengine/xiaomi/stepfun/alibaba
 │   ├── cron/               # 定时任务核心模块
 │   │   ├── mod.rs          # JobContext/JobHandler/JobInfo/SchedulerError 定义
-│   │   ├── parser.rs       # 表达式解析、下次运行时间与频率计算（本地时区）
+│   │   ├── parser.rs       # 表达式解析、下次运行时间与频率计算（服务器本地时区，部署即东八区）
 │   │   ├── repository.rs   # CronJobRepository trait 与 SeaORM 实现
 │   │   ├── scheduler.rs    # SchedulerRuntime：任务加载、启停、增删改
 │   │   ├── scheduler/tests.rs # scheduler 单元测试（FailingRepo 用宏生成透传委托）
@@ -278,7 +278,7 @@ Dockerfile 为多阶段构建：
 - **日志 API**：`GET /api/cron-jobs/{name}/logs`（最近 30 次执行列表）、`GET /api/cron-jobs/{name}/logs/{run_id}`（某次执行的全部日志，404 若不存在）、`GET /api/cron-jobs/{name}/logs/stream`（SSE：连接时若任务在执行中先发 `snapshot` 回放已落库日志，否则发 `idle`；后续推送 `log`/`run_started`/`run_ended`；接收端积压时发 `reset` 让前端重拉）。
 
 - **禁用 = 从调度器移除**：tokio-cron-scheduler 的 `set_stop()` 在其内存存储实现下并不会阻止任务触发，因此禁用任务时是将 job 从 `JobScheduler` 中移除、但保留在内存列表中（仍可查看与手动“立即执行”）；启用时重新创建 job。
-- **时区**：Cron 表达式按**服务器本地时区**解释（`0 0 8 * * *` = 本地时间每天 8 点），与前端本地时间展示一致。注意 tokio-cron-scheduler 在创建 job 时快照 UTC 偏移，有夏令时的地区跨切换点时需要重建 job 才会使用新偏移。
+- **时区**：Cron 表达式按**服务器本地时区**解释（`0 0 8 * * *` = 本地时间每天 8 点），与前端浏览器本地时间展示一致。部署容器（根 `Dockerfile` 与 `deploy/Dockerfile`，均安装了 tzdata）设置 `TZ=Asia/Shanghai`，compose 文件亦有 `TZ: Asia/Shanghai` 兜底，因此生产环境 cron 语义为东八区。注意 tokio-cron-scheduler 在创建 job 时快照 UTC 偏移，有夏令时的地区跨切换点时需要重建 job 才会使用新偏移；东八区无夏令时，不受影响。
 - **支持的表达式**：
   - 标准 Cron：5 字段（自动补秒为 `0`）或 6 字段（秒 分 时 日 月 周）。
   - 便捷宏：`@yearly`、`@monthly`、`@weekly`、`@daily`、`@hourly`。
@@ -296,6 +296,7 @@ Dockerfile 为多阶段构建：
 - 生产容器：
   - 暴露端口 `4007`。
   - 需要挂载 `/config/db` 与 `/config/logs` 以保证数据与日志持久化。
+  - 运行时镜像（根 `Dockerfile` 的 debian 层与 `deploy/Dockerfile` 的 alpine 层）安装了 tzdata 并设置 `TZ=Asia/Shanghai`（cron 表达式按东八区解释，见调度器说明-时区）；compose 文件的 `TZ` 环境变量作为运行时兜底。`.deploy/deploy.sh` 部署后验证容器时区为 `CST`。
 
 ## 安全注意事项
 
