@@ -1,5 +1,8 @@
 import {
 	chartGranularity,
+	defaultCustomWindow,
+	formatCompactPeriodLabel,
+	formatDateTimeLabel,
 	formatPeriodLabel,
 	periodBounds,
 	toLocalInputValue,
@@ -164,5 +167,64 @@ describe("chartGranularity 桶粒度推导", () => {
 	it("自定义 >366 天 → year", () => {
 		expect(chartGranularity("custom", t0, t0 + 367 * D)).toBe("year");
 		expect(chartGranularity("custom", t0, t0 + 2 * 366 * D)).toBe("year");
+	});
+});
+
+describe("formatCompactPeriodLabel 紧凑周期标题", () => {
+	// 锚点：2026-08-30（周日）15:30 本地；周一起点为 08-24。
+	it("天 → 2026/08/31", () => {
+		expect(formatCompactPeriodLabel("day", 0, NOW_MS)).toBe("2026/08/30");
+		expect(formatCompactPeriodLabel("day", -1, NOW_MS)).toBe("2026/08/29");
+		expect(formatCompactPeriodLabel("day", 1, NOW_MS)).toBe("2026/08/31");
+	});
+
+	it("周 → 2026-36W（当前周）", () => {
+		// 2026-08-24 周一起点所在周 = ISO 第 35 周（formatPeriodLabel 已有断言）。
+		expect(formatCompactPeriodLabel("week", 0, NOW_MS)).toBe("2026-35W");
+		expect(formatCompactPeriodLabel("week", -1, NOW_MS)).toBe("2026-34W");
+	});
+
+	it("月 → 2026/08", () => {
+		expect(formatCompactPeriodLabel("month", 0, NOW_MS)).toBe("2026/08");
+		expect(formatCompactPeriodLabel("month", -1, NOW_MS)).toBe("2026/07");
+	});
+
+	it("年 → 2026", () => {
+		expect(formatCompactPeriodLabel("year", 0, NOW_MS)).toBe("2026");
+		expect(formatCompactPeriodLabel("year", -1, NOW_MS)).toBe("2025");
+	});
+});
+
+describe("formatDateTimeLabel 自定义单行格式", () => {
+	it("普通时刻 → yyyy/MM/dd HH:mm:ss", () => {
+		const ms = new Date(2026, 7, 31, 14, 5, 9).getTime();
+		expect(formatDateTimeLabel(ms)).toBe("2026/08/31 14:05:09");
+	});
+
+	it("整点补零", () => {
+		const ms = new Date(2026, 7, 31, 0, 0, 0).getTime();
+		expect(formatDateTimeLabel(ms)).toBe("2026/08/30 24:00:00");
+	});
+
+	it("次日 0 点 → 前一日 24:00:00", () => {
+		const ms = new Date(2026, 8, 1, 0, 0, 0).getTime();
+		expect(formatDateTimeLabel(ms)).toBe("2026/08/31 24:00:00");
+	});
+
+	it("月初 0 点 → 上月末 24:00:00", () => {
+		const ms = new Date(2026, 8, 1, 0, 0, 0).getTime();
+		expect(formatDateTimeLabel(ms)).toBe("2026/08/31 24:00:00");
+	});
+});
+
+describe("defaultCustomWindow 自定义默认窗口", () => {
+	it("开始 = 7 天前 0 点，结束 = 明天 0 点", () => {
+		const { startTime, endTime } = defaultCustomWindow(NOW_MS);
+		// 2026-08-30 15:30 → 开始 2026-08-23 00:00，结束 2026-08-31 00:00。
+		expect(new Date(startTime).getHours()).toBe(0);
+		expect(new Date(startTime).getDate()).toBe(23);
+		expect(new Date(endTime).getHours()).toBe(0);
+		expect(new Date(endTime).getDate()).toBe(31);
+		expect(endTime - startTime).toBe(8 * 24 * 60 * 60 * 1000);
 	});
 });

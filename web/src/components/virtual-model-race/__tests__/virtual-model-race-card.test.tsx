@@ -120,9 +120,13 @@ describe("VirtualModelRaceCard（虚拟模型赛马）", () => {
 		expect(screen.getByRole("button", { name: "周" })).toHaveAttribute("aria-pressed", "true");
 
 		fireEvent.click(screen.getByRole("button", { name: "自定义" }));
-		expect(screen.getByRole("button", { name: "应用" })).toBeTruthy();
+		// 自定义模式出现两行起止文本；点击弹出弹窗后才显示输入框。
+		expect(screen.getByTestId("custom-range-label")).toBeTruthy();
+		expect(screen.queryByTestId("custom-start")).toBeNull();
+		fireEvent.click(screen.getByTestId("custom-range-label"));
 		expect(screen.getByTestId("custom-start")).toBeTruthy();
 		expect(screen.getByTestId("custom-end")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "确认" })).toBeTruthy();
 	});
 
 	it("左右箭头在非自定义模式下可见", () => {

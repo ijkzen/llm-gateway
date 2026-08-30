@@ -1,13 +1,23 @@
 import { SegmentedControl } from "@/components/segmented-control";
 import { Button } from "@/components/ui/button";
+import {
+	Dialog,
+	DialogContent,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
 	type RacePeriod,
-	formatPeriodLabel,
+	defaultCustomWindow,
+	formatCompactPeriodLabel,
+	formatDateTimeLabel,
 	periodBounds,
 	toLocalInputValue,
 } from "@/lib/race-period";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import { useState } from "react";
 
 const PERIOD_OPTIONS = [
 	{ value: "day", label: "天" },
@@ -35,12 +45,6 @@ interface RaceWindowControlProps {
 	showLabel?: boolean;
 }
 
-function formatDateTime(ms: number): string {
-	const date = new Date(ms);
-	const pad = (n: number) => n.toString().padStart(2, "0");
-	return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 /** datetime-local 值 → 毫秒时间戳；空值返回当前时刻（避免 NaN）。 */
 function parseLocalInput(value: string): number {
 	const ms = new Date(value).getTime();
@@ -49,7 +53,7 @@ function parseLocalInput(value: string): number {
 
 /**
  * 赛马时间窗口共享控件：天/周/月/年 SegmentedControl + 左右箭头切换周期 +
- * 自定义秒级起止输入。首页三张赛马卡片与二级页图表区块共用。
+ * 自定义两行起止文本（点击弹窗选时间）。首页与二级/三级页共用。
  */
 export function RaceWindowControl({
 	state,
@@ -58,23 +62,62 @@ export function RaceWindowControl({
 	showLabel = true,
 }: RaceWindowControlProps) {
 	const { period, offset, customStart, customEnd } = state;
+	const [dialogOpen, setDialogOpen] = useState(false);
+	const [draftStart, setDraftStart] = useState(customStart);
+	const [draftEnd, setDraftEnd] = useState(customEnd);
 
 	const changePeriod = (next: RacePeriod | "custom") => {
 		onChange({ period: next });
-		if (next === "custom") {
-			// 进入自定义：用当前输入值作为初始窗口并立即生效。
-			onChange({ appliedCustom: { startTime: customStart, endTime: customEnd } });
+		if (next === "custom" && !state.appliedCustom) {
+			// 首次进入自定义：默认「过去 7 天」（7 天前 0 点 ~ 明天 0 点）并立即生效。
+			const defaults = defaultCustomWindow(now);
+			onChange({
+				customStart: defaults.startTime,
+				customEnd: defaults.endTime,
+				appliedCustom: defaults,
+			});
 		}
 	};
+
+	const openDialog = () => {
+		// 弹窗草稿以当前已应用（或输入）的起止为准。
+		const start = state.appliedCustom?.startTime ?? customStart;
+		const end = state.appliedCustom?.endTime ?? customEnd;
+		setDraftStart(start);
+		setDraftEnd(end);
+		setDialogOpen(true);
+	};
+
+	const confirmCustom = () => {
+		if (draftEnd > draftStart) {
+			onChange({
+				customStart: draftStart,
+				customEnd: draftEnd,
+				appliedCustom: { startTime: draftStart, endTime: draftEnd },
+			});
+		}
+		setDialogOpen(false);
+	};
+
+	// 展示用的起止（未应用时退化为输入值）。
+	const displayStart = state.appliedCustom?.startTime ?? customStart;
+	const displayEnd = state.appliedCustom?.endTime ?? customEnd;
 
 	return (
 		<div className="flex flex-wrap items-center gap-2">
 			<SegmentedControl options={PERIOD_OPTIONS} value={period} onChange={changePeriod} />
 			{period === "custom" ? (
 				showLabel && (
-					<span className="text-xs text-muted-foreground">
-						{formatDateTime(customStart)} ~ {formatDateTime(customEnd)}
-					</span>
+					<button
+						type="button"
+						onClick={openDialog}
+						aria-label="自定义时间范围"
+						data-testid="custom-range-label"
+						className="space-y-0.5 rounded-lg px-2 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+					>
+						<div className="font-mono tabular-nums">开始 {formatDateTimeLabel(displayStart)}</div>
+						<div className="font-mono tabular-nums">结束 {formatDateTimeLabel(displayEnd)}</div>
+					</button>
 				)
 			) : (
 				<div className="flex items-center gap-1">
@@ -89,7 +132,7 @@ export function RaceWindowControl({
 					</Button>
 					{showLabel && (
 						<span className="min-w-24 text-center text-xs font-medium text-foreground">
-							{formatPeriodLabel(period, offset, now)}
+							{formatCompactPeriodLabel(period, offset, now)}
 						</span>
 					)}
 					<Button
@@ -104,39 +147,48 @@ export function RaceWindowControl({
 				</div>
 			)}
 
-			{period === "custom" && (
-				<div className="flex flex-wrap items-center gap-2">
-					<Input
-						type="datetime-local"
-						step={1}
-						data-testid="custom-start"
-						className="h-8 w-auto text-xs"
-						value={toLocalInputValue(customStart)}
-						onChange={(e) => onChange({ customStart: parseLocalInput(e.target.value) })}
-					/>
-					<span className="text-xs text-muted-foreground">~</span>
-					<Input
-						type="datetime-local"
-						step={1}
-						data-testid="custom-end"
-						className="h-8 w-auto text-xs"
-						value={toLocalInputValue(customEnd)}
-						onChange={(e) => onChange({ customEnd: parseLocalInput(e.target.value) })}
-					/>
-					<Button
-						variant="outline"
-						size="sm"
-						className="h-8 text-xs"
-						onClick={() => {
-							if (customEnd > customStart) {
-								onChange({ appliedCustom: { startTime: customStart, endTime: customEnd } });
-							}
-						}}
-					>
-						应用
-					</Button>
-				</div>
-			)}
+			<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+				<DialogContent className="sm:max-w-sm">
+					<DialogHeader>
+						<DialogTitle>自定义时间范围</DialogTitle>
+					</DialogHeader>
+					<div className="space-y-4 py-2">
+						<div className="space-y-1.5">
+							<p className="text-xs text-muted-foreground">开始时间</p>
+							<Input
+								type="datetime-local"
+								step={1}
+								data-testid="custom-start"
+								className="h-9 w-full"
+								value={toLocalInputValue(draftStart)}
+								onChange={(e) => setDraftStart(parseLocalInput(e.target.value))}
+							/>
+						</div>
+						<div className="space-y-1.5">
+							<p className="text-xs text-muted-foreground">结束时间</p>
+							<Input
+								type="datetime-local"
+								step={1}
+								data-testid="custom-end"
+								className="h-9 w-full"
+								value={toLocalInputValue(draftEnd)}
+								onChange={(e) => setDraftEnd(parseLocalInput(e.target.value))}
+							/>
+						</div>
+						{draftEnd <= draftStart && (
+							<p className="text-xs text-destructive">结束时间必须晚于开始时间</p>
+						)}
+					</div>
+					<DialogFooter>
+						<Button variant="outline" size="sm" onClick={() => setDialogOpen(false)}>
+							取消
+						</Button>
+						<Button size="sm" onClick={confirmCustom}>
+							确认
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

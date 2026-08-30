@@ -232,11 +232,21 @@ describe("OverviewPage 时间组件（默认今天）", () => {
 		).toBeGreaterThan(0);
 	});
 
-	it("切换到「自定义」显示输入框与副标题", () => {
+	it("切换到「自定义」显示两行起止文本，点击弹出弹窗选时间", () => {
 		render(<OverviewPage />);
 
 		fireEvent.click(withinChartsWindow().getByRole("button", { name: "自定义" }));
-		expect(withinChartsWindow().getByTestId("custom-start")).toBeTruthy();
-		expect(withinChartsWindow().getByText("自定义时间范围")).toBeTruthy();
+		// 两行文本展示开始/结束（默认过去 7 天）。
+		expect(withinChartsWindow().getByTestId("custom-range-label")).toBeTruthy();
+		expect(withinChartsWindow().getByText(/^开始 /)).toBeTruthy();
+		expect(withinChartsWindow().getByText(/^结束 /)).toBeTruthy();
+		// 默认窗口：开始 = 7 天前 0 点，结束 = 明天 0 点（显示为今天 24:00:00）。
+		expect(mocks.chartsParams?.granularity).toBe("day");
+
+		// 点击两行文本 → 弹出弹窗，内含起止输入框与确认按钮。
+		fireEvent.click(withinChartsWindow().getByTestId("custom-range-label"));
+		expect(screen.getByTestId("custom-start")).toBeTruthy();
+		expect(screen.getByTestId("custom-end")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "确认" })).toBeTruthy();
 	});
 });

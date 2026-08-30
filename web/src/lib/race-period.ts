@@ -130,10 +130,7 @@ export function formatPeriodLabel(period: RacePeriod, offset: number, now: numbe
 			return `${start.getFullYear()}年${start.getMonth() + 1}月${start.getDate()}日${currentSuffix}`;
 		case "week": {
 			// 周数按 ISO 8601：周一为一周起点。
-			const jan1 = new Date(start.getFullYear(), 0, 1);
-			const weekNumber = Math.ceil(
-				((start.getTime() - jan1.getTime()) / DAY_MS + jan1.getDay() + 1) / 7,
-			);
+			const weekNumber = isoWeekNumber(start);
 			return `${start.getFullYear()}年第${weekNumber}周${currentSuffix}`;
 		}
 		case "month":
@@ -184,4 +181,59 @@ export function chartGranularity(
 		return "month";
 	}
 	return "year";
+}
+
+/** ISO 周数（周一为一周起点，与 startOfWeek 口径一致）。 */
+function isoWeekNumber(date: Date): number {
+	const jan1 = new Date(date.getFullYear(), 0, 1);
+	return Math.ceil(((date.getTime() - jan1.getTime()) / DAY_MS + jan1.getDay() + 1) / 7);
+}
+
+/** 两位补零。 */
+function pad2(n: number): string {
+	return n.toString().padStart(2, "0");
+}
+
+/**
+ * 周期窗口的紧凑标题（不带「当前」标记）：
+ * 天 → 2026/08/31；周 → 2026-36W；月 → 2026/08；年 → 2026。
+ */
+export function formatCompactPeriodLabel(period: RacePeriod, offset: number, now: number): string {
+	const bounds = periodBounds(period, offset, now);
+	const start = new Date(bounds.startTime);
+	switch (period) {
+		case "day":
+			return `${start.getFullYear()}/${pad2(start.getMonth() + 1)}/${pad2(start.getDate())}`;
+		case "week":
+			return `${start.getFullYear()}-${isoWeekNumber(start)}W`;
+		case "month":
+			return `${start.getFullYear()}/${pad2(start.getMonth() + 1)}`;
+		case "year":
+			return `${start.getFullYear()}`;
+	}
+}
+
+/**
+ * 自定义时间单行展示：`2026/08/31 24:00:00`。
+ * 次日 0 点显示为前一日 24:00:00（跨日 0 点语义），其余按 yyyy/MM/dd HH:mm:ss。
+ */
+export function formatDateTimeLabel(ms: number): string {
+	const date = new Date(ms);
+	const isMidnight = date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0;
+	if (isMidnight) {
+		const prev = new Date(ms - 1);
+		return `${prev.getFullYear()}/${pad2(prev.getMonth() + 1)}/${pad2(prev.getDate())} 24:00:00`;
+	}
+	return `${date.getFullYear()}/${pad2(date.getMonth() + 1)}/${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+}
+
+/** 自定义窗口默认值：开始 = 7 天前 0 点，结束 = 明天 0 点（覆盖「过去 7 天含今天」）。 */
+export function defaultCustomWindow(now: number): { startTime: number; endTime: number } {
+	const start = new Date(now);
+	start.setDate(start.getDate() - 7);
+	start.setHours(0, 0, 0, 0);
+	const end = new Date(now);
+	end.setDate(end.getDate() + 1);
+	end.setHours(0, 0, 0, 0);
+	return { startTime: start.getTime(), endTime: end.getTime() };
 }
