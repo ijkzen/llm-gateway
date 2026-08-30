@@ -356,7 +356,7 @@ export function VirtualModelEditDialog({
 																	</p>
 																	<p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
 																		<span className="shrink-0">
-																			{formatContextLength(model.contextLength)} ctx
+																			{formatContextLength(model.contextLength)}
 																		</span>
 																		{providerDisabled && (
 																			<span className="shrink-0 text-amber-600 dark:text-amber-400">
@@ -420,7 +420,7 @@ export function VirtualModelEditDialog({
 																	{model.providerModelId}
 																</span>
 																<span className="shrink-0 text-xs text-muted-foreground">
-																	{formatContextLength(model.contextLength)} ctx
+																	{formatContextLength(model.contextLength)}
 																</span>
 															</div>
 														))
