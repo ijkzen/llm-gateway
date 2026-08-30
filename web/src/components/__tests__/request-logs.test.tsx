@@ -39,7 +39,6 @@ function makeRow(overrides: Partial<Parameters<typeof mocks.useRequestLogs>[0]> 
 		outputTokens: 50,
 		outputTokensTime: 500,
 		tps: 100,
-		networkLatency: 20,
 		startTime: 1700000000000,
 		endTime: 1700000001000,
 		requestTime: 1000,
@@ -82,7 +81,7 @@ describe("RequestLogsTable", () => {
 		fireEvent.click(screen.getByText("vm-a"));
 		await waitFor(() => expect(screen.getByText(/请求 req-1/)).toBeInTheDocument());
 		// 弹窗包含失败原因等字段。
-		expect(screen.getByText("网络延迟")).toBeInTheDocument();
+		expect(screen.getByText("首 token 耗时 (TTFT)")).toBeInTheDocument();
 		expect(screen.getByText("缓存命中率")).toBeInTheDocument();
 		// 供应商名称通过详情接口查询展示。
 		expect(screen.getAllByText("Provider Beta").length).toBeGreaterThan(0);

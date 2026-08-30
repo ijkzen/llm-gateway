@@ -80,7 +80,6 @@ export function RequestLogDetailDialog({ row, onOpenChange }: RequestLogDetailDi
 							<Field label="开始时间">{fmtTime(row.startTime)}</Field>
 							<Field label="结束时间">{fmtTime(row.endTime)}</Field>
 							<Field label="总耗时">{fmtMs(row.requestTime)}</Field>
-							<Field label="网络延迟">{fmtMs(row.networkLatency)}</Field>
 							<Field label="首 token 耗时 (TTFT)">{fmtMs(row.ttft)}</Field>
 							<Field label="输出耗时">{fmtMs(row.outputTokensTime)}</Field>
 							<Field label="输入 Token">

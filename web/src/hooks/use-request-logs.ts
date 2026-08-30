@@ -16,7 +16,6 @@ export interface RequestLogRow {
 	outputTokens?: number | null;
 	outputTokensTime?: number | null;
 	tps: number;
-	networkLatency: number;
 	startTime: number;
 	endTime: number;
 	requestTime: number;

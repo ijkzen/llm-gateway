@@ -1,11 +1,13 @@
 //! 上游 HTTP 客户端。
 //!
 //! 连接按 `scheme://host:port` 池化复用：首次请求独立建连（精确测量 TCP 建连
-//! 与 TLS 握手耗时，作为 request 表的 `network_latency`），响应体读完连接归还
-//! 池，后续请求直接复用；连接空闲超过 10 分钟被释放。仅支持 HTTP/1.1 上游。
+//! 与 TLS 握手耗时），响应体读完连接归还池，后续请求直接复用；连接空闲超过
+//! 10 分钟被释放。仅支持 HTTP/1.1 上游。
 //!
-//! 指标语义：复用连接的 `network_latency` 记 0（本次请求未发生建连），TTFT
-//! 起点取请求发出时刻；新建连接保持原语义（建连完成时刻）。
+//! 指标语义：`UpstreamReply::start_at_ms` 是本次请求的网络阶段起点（新建连接
+//! = TCP 建连开始时刻，复用连接 = 请求发出时刻），作为 TTFT 与新 tps 的计时
+//! 起点；`connect_done_at_ms` 保留为复用连接时 TTFT 起点的近似（旧连接建连完成
+//! 时刻）。
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -148,11 +150,13 @@ fn elapsed_ms(started: Instant) -> u64 {
 }
 
 /// 建立 TCP（可选 TLS）连接并记录各阶段耗时。DNS 解析不计入。
+/// 返回 (连接, 各阶段耗时, 建连开始 wall-clock 毫秒时间戳)。
 async fn connect_stream(
     scheme: &str,
     host: &str,
     port: u16,
-) -> Result<(TimedStream, ConnectTiming), UpstreamError> {
+) -> Result<(TimedStream, ConnectTiming, i64), UpstreamError> {
+    let connect_start_at_ms = now_ms();
     let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
         .await
         .map_err(|e| UpstreamError::Connect(format!("DNS 解析失败（{host}）：{e}")))?
@@ -179,7 +183,11 @@ async fn connect_stream(
         stream.set_nodelay(true).ok();
 
         if scheme != "https" {
-            return Ok((TimedStream::Plain(stream), ConnectTiming { tcp_ms, tls_ms: 0 }));
+            return Ok((
+                TimedStream::Plain(stream),
+                ConnectTiming { tcp_ms, tls_ms: 0 },
+                connect_start_at_ms,
+            ));
         }
 
         let tls_started = Instant::now();
@@ -204,6 +212,7 @@ async fn connect_stream(
                 tcp_ms,
                 tls_ms: elapsed_ms(tls_started),
             },
+            connect_start_at_ms,
         ));
     }
     Err(last_err.unwrap_or_else(|| UpstreamError::Connect("连接失败".to_string())))
@@ -231,10 +240,11 @@ pub struct UpstreamCall {
 pub struct UpstreamReply {
     pub status: StatusCode,
     pub body: PooledBody,
-    /// 本次请求发生的建连耗时（毫秒）。复用连接为 0；新建连接为 TCP+TLS 实测。
-    pub connect_ms: u64,
-    /// TTFT 计时起点（wall-clock 毫秒时间戳）。新建连接为建连完成时刻，
-    /// 复用连接为请求发出时刻。
+    /// 本次请求网络阶段起点（wall-clock 毫秒时间戳）：新建连接为 TCP 建连开始
+    /// 时刻，复用连接为请求发出时刻。作为 TTFT 与新 tps 分母的计时起点。
+    pub start_at_ms: i64,
+    /// 建连完成（或复用连接最初建连完成）时刻。复用连接时作为 TTFT 起点的
+    /// 近似（比建连开始晚建连时长）。
     pub connect_done_at_ms: i64,
 }
 
@@ -247,8 +257,8 @@ pub async fn call(call: UpstreamCall, pool: &UpstreamPool) -> Result<UpstreamRep
 
     let mut timing = ConnectTiming::default();
     let mut sender = pool.checkout(&key);
-    if sender.is_none() {
-        let (stream, measured) = connect_stream(&scheme, &host, port).await?;
+    let (mut start_at_ms, mut connect_done_at_ms) = if sender.is_none() {
+        let (stream, measured, connect_start) = connect_stream(&scheme, &host, port).await?;
         timing = measured;
         let (send, conn) = http1::handshake(TokioIo::new(stream))
             .await
@@ -259,10 +269,13 @@ pub async fn call(call: UpstreamCall, pool: &UpstreamPool) -> Result<UpstreamRep
             }
         });
         sender = Some(send);
-    }
+        (connect_start, now_ms())
+    } else {
+        // 复用连接：起点=请求发出时刻；TTFT 起点近似=连接最初建连完成时刻。
+        let now = now_ms();
+        (now, now)
+    };
 
-    // TTFT 起点：此刻拿到连接（新建=建连完成时刻，复用=请求发出时刻）。
-    let connect_done_at_ms = now_ms();
     let mut attempt = 0;
     loop {
         let mut send = sender.take().expect("sender present");
@@ -272,13 +285,20 @@ pub async fn call(call: UpstreamCall, pool: &UpstreamPool) -> Result<UpstreamRep
         match reply {
             Ok((status, body)) => {
                 let body = PooledBody::new(body, key.clone(), send, pool.clone());
-                return Ok(UpstreamReply { status, body, connect_ms: timing.total_ms(), connect_done_at_ms });
+                return Ok(UpstreamReply {
+                    status,
+                    body,
+                    start_at_ms,
+                    connect_done_at_ms,
+                });
             }
             Err(UpstreamError::Request(_)) if attempt == 0 && timing.total_ms() == 0 => {
                 // 复用连接可能已被对端静默关闭：丢弃并新建连接重试一次。
                 attempt += 1;
-                let (stream, measured) = connect_stream(&scheme, &host, port).await?;
+                let (stream, measured, connect_start) = connect_stream(&scheme, &host, port).await?;
                 timing = measured;
+                start_at_ms = connect_start;
+                connect_done_at_ms = now_ms();
                 let (send, conn) = http1::handshake(TokioIo::new(stream))
                     .await
                     .map_err(|e| UpstreamError::Request(format!("HTTP 握手失败：{e}")))?;

@@ -14,7 +14,7 @@
   - 登录认证（单用户）：首次启动走初始化流程创建管理员（argon2 哈希），Cookie Session（7 天）保护 `/api/*`；设置页可修改密码（吊销其他会话）。
   - 供应商 API Key 管理：服务端生成 `lg-` 密钥，AES-256-GCM 加密存储（含 SHA-256 `key_hash` 供鉴权查找）。
   - `/v1` OpenAI 兼容转发：对外仅提供 `POST /v1/chat/completions`（Bearer API Key 鉴权），按虚拟模型 LB 策略选成员转发到 OpenAI Compatible / OpenAI Responses / Anthropic / Gemini 四种上游协议（转换逻辑参考 nyro 与 LiteLLM），支持流式与非流式、failover 重试（408/429/500/502/503/529）。
-  - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率、建连耗时 `network_latency` 等 20 个字段），供后续指标展示。
+  - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率等 19 个字段），供后续指标展示。ttft 起点=建连开始（新建连接）或请求发出（复用连接）；tps=output_tokens/(ttft+输出耗时)（流式）或 output_tokens/(end_time−请求发出)（非流式）。
   - 数据面板：`/api/stats/summary`（全量历史累计：请求数/成功率/总 token/加权缓存命中率）+ `/api/stats/charts`（过去 24 小时：按小时分桶趋势 + 按上游 `model_id` 分布）；前端 overview 页（侧边栏「数据面板」）用 Recharts + shadcn chart 展示 4 指标卡与两组三态图表（折线/饼图/降序条形图，Top 10 + 其他）。
   - 供应商用量查询：`GET /api/providers/{id}/usage?refresh=1`（`src/usage/`）。对 `extra.usage=true` 的供应商按 base_url host（火山/阶跃再看 path 区分订阅 Plan 与按量账户）分发到各厂商 fetcher（API key 直查 / Copilot OAuth / 火山与阿里 AK/SK 签名 / CookieCloud cookie 系），归一化为订阅制窗口（5h/周/月，厂商不提供的窗口 `available=false`）或按量余额条目；成功结果写**数据库缓存**（`provider_usage_cache` 表，10 分钟内直出，过期/缺失才真实抓取并重新落库；更新/删除供应商时失效；`?refresh=1` 强制重取），详情页内嵌「用量信息」卡片（进度条按剩余百分比着色）。
   - 用量自动刷新与额度门控：内置定时任务 `usage_refresh`（`@every 5m`，`src/cron/seed.rs` 种子行）刷新全部用量供应商（**不含 enable 过滤**，停用的也持续监测）并落库；订阅制供应商额度耗尽（任一厂商已提供的窗口剩余为 0）时自动停用该 Provider 及名下全部虚拟模型子模型，恢复后自动启用（`src/usage/persist.rs::apply_usage_gate`）。
@@ -32,7 +32,7 @@
 - **日志捕获与实时推送**: 自定义 `JobLogLayer`（tracing-subscriber Layer）捕获任务 span 内日志，经 std 通道桥接到 `tokio::sync::broadcast`（容量 8192）；SSE 用 axum 自带 `response::sse`（0.8 默认可用，无需 feature）+ `tokio-stream` 的 `BroadcastStream`。
 - **日志**: `tracing` + `tracing-subscriber`（JSON 格式输出到 stdout 与按日滚动的日志文件）。
 - **认证**: `argon2`（密码哈希）；会话存 `session` 表（只存令牌 SHA-256），HttpOnly Cookie；`src/auth/` 提供 `/api/*` 会话中间件与 `/v1/*` Bearer 中间件。
-- **转发上游客户端**: 自研 `src/proxy/upstream.rs` + `src/proxy/pool.rs`（hyper 1 + tokio-rustls + webpki-roots，仅 HTTP/1.1）：连接按 `scheme://host:port` 池化复用（响应体读完归还，空闲超 10 分钟由后台任务释放，复用连接 `network_latency` 记 0）；新建连接才精确计时 TCP 建连 + TLS 握手作为 `network_latency`；协议转换在 `src/proxy/convert/`。
+- **转发上游客户端**: 自研 `src/proxy/upstream.rs` + `src/proxy/pool.rs`（hyper 1 + tokio-rustls + webpki-roots，仅 HTTP/1.1）：连接按 `scheme://host:port` 池化复用（响应体读完归还，空闲超 10 分钟由后台任务释放）；TTFT 起点=建连开始（新建连接）/请求发出（复用连接），建连耗时并入 ttft（无独立 network_latency 字段）；协议转换在 `src/proxy/convert/`。
 - **静态资源**: `rust-embed` 将 `web/dist` 打包进二进制。
 - **配置**: 仅通过环境变量读取，无额外配置框架。
 
@@ -72,7 +72,7 @@
 │   ├── auth/mod.rs         # 登录认证：argon2 密码哈希、session 表、/api 与 /v1 拦截中间件
 │   ├── proxy/              # /v1 转发核心模块
 │   │   ├── mod.rs          # 转发管线：虚拟模型路由、LB 选路、failover、request 表落库
-│   │   ├── upstream.rs     # 上游 HTTP 客户端（hyper + tokio-rustls，连接池化复用，新建连接计时 TCP/TLS）
+│   │   ├── upstream.rs     # 上游 HTTP 客户端（hyper + tokio-rustls，连接池化复用，TTFT 起点=建连开始/请求发出）
 │   │   ├── pool.rs         # 上游连接池（按 host 隔离，响应体读完归还，空闲 10 分钟释放）
 │   │   ├── convert/        # 协议转换：openai(直通)/responses/anthropic/gemini（请求+响应+流式+usage 归一）
 │   │   ├── metrics.rs      # request 表记录与流式指标（ttft/输出耗时）

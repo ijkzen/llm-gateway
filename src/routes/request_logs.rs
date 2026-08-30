@@ -32,7 +32,8 @@ const SORTABLE_COLUMNS: &[(&str, &str)] = &[
     ("apiKeyName", "api_key_name"),
     ("virtualModelId", "virtual_model_id"),
     ("modelId", "model_id"),
-    ("networkLatency", "network_latency"),
+    ("ttft", "ttft"),
+    ("tps", "tps"),
 ];
 
 #[derive(Deserialize)]
@@ -64,7 +65,6 @@ struct RequestLogRow {
     output_tokens: Option<i64>,
     output_tokens_time: Option<i64>,
     tps: f64,
-    network_latency: i64,
     start_time: i64,
     end_time: i64,
     request_time: i64,
@@ -191,7 +191,6 @@ fn row_to_entry(row: &sea_orm::QueryResult) -> Result<RequestLogRow, sea_orm::Tr
         output_tokens: row.try_get("", "output_tokens")?,
         output_tokens_time: row.try_get("", "output_tokens_time")?,
         tps: row.try_get("", "tps")?,
-        network_latency: row.try_get("", "network_latency")?,
         start_time: row.try_get("", "start_time")?,
         end_time: row.try_get("", "end_time")?,
         request_time: row.try_get("", "request_time")?,

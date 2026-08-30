@@ -34,7 +34,6 @@ async fn insert_request(db: &DatabaseConnection, row: SeedRow) {
         output_tokens: Set(None),
         output_tokens_time: Set(None),
         tps: Set(0.0),
-        network_latency: Set(10),
         start_time: Set(row.start_time),
         end_time: Set(end_time),
         request_time: Set(500),

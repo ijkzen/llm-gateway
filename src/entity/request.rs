@@ -4,16 +4,18 @@ use serde::{Deserialize, Serialize};
 /// Request: 每次 /v1 转发请求的指标记录（成功与失败均落一行）。
 ///
 /// 字段口径：
-/// - `ttft`：流式首 token 耗时（毫秒），从「上游建连完成（复用连接为请求发出）
-///   时刻」到「收到首个内容块」（含上游排队/处理等待），非流式为 NULL。
+/// - `ttft`：流式首 token 耗时（毫秒），从「TTFT 起点」到「收到首个内容块」。
+///   TTFT 起点：新建连接=TCP 建连开始时刻（不含 DNS），复用连接=请求发出时刻；
+///   含建连耗时与上游排队/处理等待，非流式为 NULL。
 /// - `input_tokens`：归一后的输入 token（含缓存命中部分）；上游未返回 usage 时为 NULL。
 /// - `input_cache_tokens`：缓存命中 token（Anthropic 的 cache_read + cache_creation）。
 /// - `output_tokens`：输出 token 总数（含推理/思考 token）；usage 缺失时为 NULL。
 /// - `output_tokens_time`：输出阶段耗时（毫秒）；流式为末 token − 首 token，
-///   非流式为响应体接收完成 − 响应头到达。
-/// - `network_latency`：本次请求发生的建连耗时（毫秒）：新建连接为 TCP 建连 +
-///   TLS 握手实测；复用池内连接为 0（本次未建连）。
-/// - `tps`：output_tokens / output_tokens_time（秒），分母无效时为 0。
+///   非流式为响应体接收完成 − 请求发出时刻（含建连与上游处理）。
+/// - `tps`：output_tokens / 网络阶段总耗时（秒）。流式分母 = ttft + 输出耗时；
+///   非流式分母 = end_time − 请求发出时刻。均不含网关路由/LB/构造/DNS。
+/// - `request_time`：end_time − start_time（start_time 为成员尝试开始时刻，
+///   含网关前置）。
 ///
 /// 注意：`output_tokens_time` 是「token 到达窗口」，上游对短回复常缓冲后
 /// 一次性冲刷，窗口会被压缩到几十毫秒甚至 0（单 chunk 突发，此时 tps 为 0
@@ -44,8 +46,7 @@ pub struct Model {
     #[sea_orm(nullable)]
     pub output_tokens_time: Option<i64>,
     pub tps: f64,
-    pub network_latency: i64,
-    /// 收到请求的时刻（毫秒时间戳）。
+    /// 成员尝试开始时刻（毫秒时间戳）：连接池 checkout/建连前，最接近网络阶段起点。
     pub start_time: i64,
     /// 完成回写或连接中断的时刻（毫秒时间戳）。
     pub end_time: i64,

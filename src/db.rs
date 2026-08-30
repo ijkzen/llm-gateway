@@ -266,6 +266,28 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     )
     .await?;
 
+    // Migration 10: 删除 request.network_latency（建连耗时并入 ttft，见
+    // entity::request 口径）；重建 start_time 索引（历史库的旧索引在 DROP
+    // COLUMN 时可能失效）并新增 ttft/tps 排序索引（新指标口径的查询路径）。
+    let network_latency_exists = column_exists(db, "request", "network_latency").await?;
+    if network_latency_exists {
+        changed |= ensure_migration(
+            db,
+            10,
+            &[
+                "ALTER TABLE request DROP COLUMN network_latency",
+                "DROP INDEX IF EXISTS idx_request_start_time",
+                "CREATE INDEX idx_request_start_time ON request (start_time)",
+                "CREATE INDEX idx_request_ttft ON request (ttft)",
+                "CREATE INDEX idx_request_tps ON request (tps)",
+            ],
+        )
+        .await?;
+    } else {
+        // 新库从未建过该列，仅记录版本。
+        changed |= ensure_migration(db, 10, &["SELECT 1"]).await?;
+    }
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)

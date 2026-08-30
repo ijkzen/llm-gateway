@@ -564,7 +564,6 @@ pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
 
 /// 转发入口：处理 POST /v1/chat/completions。
 pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: Value) -> Response {
-    let start_time = now_ms();
     let request_id = Uuid::new_v4().to_string();
     let requested_model = client_body
         .get("model")
@@ -646,6 +645,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
     let mut last_failure: Option<(Member, String, StatusCode)> = None;
     for (index, member) in ordered.iter().enumerate() {
         let has_more = index + 1 < ordered.len();
+        let start_time = now_ms();
         let decrypted_key = match crypto::decrypt(&member.api_key_encrypted) {
             Ok(key) => key,
             Err(e) => {
@@ -656,7 +656,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                 }
                 record_failure(
                     &state.db, &request_id, virtual_model.virtual_model_id, member, &api_key.name,
-                    start_time, false, client_stream, &message, 0,
+                    start_time, false, client_stream, &message, start_time,
                 );
                 return openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error");
             }
@@ -672,7 +672,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                 }
                 record_failure(
                     &state.db, &request_id, virtual_model.virtual_model_id, member, &api_key.name,
-                    start_time, false, client_stream, &message, 0,
+                    start_time, false, client_stream, &message, start_time,
                 );
                 return openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error");
             }
@@ -688,7 +688,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                 }
                 record_failure(
                     &state.db, &request_id, virtual_model.virtual_model_id, member, &api_key.name,
-                    start_time, false, client_stream, &message, 0,
+                    start_time, false, client_stream, &message, start_time,
                 );
                 return openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error");
             }
@@ -704,7 +704,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             }
             record_failure(
                 &state.db, &request_id, virtual_model.virtual_model_id, member, &api_key.name,
-                start_time, false, client_stream, &message, reply.connect_ms,
+                start_time, false, client_stream, &message, reply.start_at_ms,
             );
             let error_type = if status.is_client_error() {
                 "invalid_request_error"
@@ -715,7 +715,6 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
         }
 
         // 成功：按协议与客户端流式标记分派响应路径。
-        let headers_at = now_ms();
         return dispatch_success(
             state,
             SuccessContext {
@@ -726,7 +725,6 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                 start_time,
                 member: member.clone(),
                 reply,
-                headers_at,
                 client_stream,
                 include_usage,
                 json_mode_tool,
@@ -743,9 +741,10 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             StatusCode::BAD_GATEWAY,
         )
     });
+    let start_time = now_ms();
     record_failure(
         &state.db, &request_id, virtual_model.virtual_model_id, &member, &api_key.name,
-        start_time, false, client_stream, &message, 0,
+        start_time, false, client_stream, &message, start_time,
     );
     openai_error(status, message, "api_error", "upstream_error")
 }
@@ -759,7 +758,6 @@ struct SuccessContext {
     start_time: i64,
     member: Member,
     reply: UpstreamReply,
-    headers_at: i64,
     client_stream: bool,
     include_usage: bool,
     json_mode_tool: bool,
@@ -775,7 +773,6 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
         start_time,
         member,
         mut reply,
-        headers_at,
         client_stream,
         include_usage,
         json_mode_tool,
@@ -800,8 +797,8 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 model_id: member.model_id.clone(),
                 stream: false,
                 ttft: None,
-                output_tokens_time: Some((body_done - headers_at).max(0)),
-                network_latency: i64::try_from(reply.connect_ms).unwrap_or(i64::MAX),
+                output_tokens_time: Some((body_done - reply.start_at_ms).max(0)),
+                ttft_start_ms: reply.start_at_ms,
                 start_time,
                 end_time: body_done,
                 usage,
@@ -817,7 +814,8 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
             let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
             let db = state.db.clone();
             let mut scanner = openai::OpenAiStreamScanner::default();
-            let mut stream_metrics = StreamMetrics::new(reply.connect_done_at_ms);
+            let reply_start_at = reply.start_at_ms;
+            let mut stream_metrics = StreamMetrics::new(reply.start_at_ms);
             tokio::spawn(async move {
                 let mut body = reply.body;
                 let mut disconnect = false;
@@ -850,7 +848,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     stream: true,
                     ttft: stream_metrics.ttft_ms(),
                     output_tokens_time: stream_metrics.output_duration_ms(),
-                    network_latency: i64::try_from(reply.connect_ms).unwrap_or(i64::MAX),
+                    ttft_start_ms: reply_start_at,
                     start_time,
                     end_time,
                     usage,
@@ -868,11 +866,11 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 &request_id,
                 &requested_model,
             )));
-            let events = collect_stream_events(&mut reply.body, &mut converter, &mut StreamMetrics::new(reply.connect_done_at_ms)).await;
+            let events = collect_stream_events(&mut reply.body, &mut converter, &mut StreamMetrics::new(reply.start_at_ms)).await;
             if let Some(error) = events.error {
                 record_failure(
                     &state.db, &request_id, virtual_model_id, &member, &api_key_name, start_time,
-                    client_stream, client_stream, &error, reply.connect_ms,
+                    client_stream, client_stream, &error, reply.start_at_ms,
                 );
                 let status = StatusCode::BAD_GATEWAY;
                 return openai_error(status, error, "api_error", "upstream_error");
@@ -891,9 +889,9 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 output_tokens_time: if client_stream {
                     events.stream_metrics.output_duration_ms()
                 } else {
-                    Some((end_time - headers_at).max(0))
+                    Some((end_time - reply.start_at_ms).max(0))
                 },
-                network_latency: i64::try_from(reply.connect_ms).unwrap_or(i64::MAX),
+                ttft_start_ms: reply.start_at_ms,
                 start_time,
                 end_time,
                 usage,
@@ -946,7 +944,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                         let message = format!("解析上游响应失败：{e}");
                         record_failure(
                             &state.db, &request_id, virtual_model_id, &member, &api_key_name,
-                            start_time, false, false, &message, reply.connect_ms,
+                            start_time, false, false, &message, reply.start_at_ms,
                         );
                         return openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error");
                     }
@@ -966,8 +964,8 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                             model_id: member.model_id.clone(),
                             stream: false,
                             ttft: None,
-                            output_tokens_time: Some((body_done - headers_at).max(0)),
-                            network_latency: i64::try_from(reply.connect_ms).unwrap_or(i64::MAX),
+                            output_tokens_time: Some((body_done - reply.start_at_ms).max(0)),
+                            ttft_start_ms: reply.start_at_ms,
                             start_time,
                             end_time: body_done,
                             usage,
@@ -981,7 +979,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     Err(message) => {
                         record_failure(
                             &state.db, &request_id, virtual_model_id, &member, &api_key_name,
-                            start_time, false, false, &message, reply.connect_ms,
+                            start_time, false, false, &message, reply.start_at_ms,
                         );
                         openai_error(StatusCode::BAD_GATEWAY, message, "api_error", "upstream_error")
                     }
@@ -991,8 +989,8 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
             // 流式：逐事件转换并推送给客户端。
             let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
             let db = state.db.clone();
-            let mut stream_metrics = StreamMetrics::new(reply.connect_done_at_ms);
-            let connect_ms = reply.connect_ms;
+            let reply_start_at = reply.start_at_ms;
+            let mut stream_metrics = StreamMetrics::new(reply.start_at_ms);
             tokio::spawn(async move {
                 let mut body = reply.body;
                 let mut splitter = crate::proxy::sse::SseSplitter::default();
@@ -1067,7 +1065,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     stream: true,
                     ttft: stream_metrics.ttft_ms(),
                     output_tokens_time: stream_metrics.output_duration_ms(),
-                    network_latency: i64::try_from(connect_ms).unwrap_or(i64::MAX),
+                    ttft_start_ms: reply_start_at,
                     start_time,
                     end_time,
                     usage,
@@ -1170,7 +1168,7 @@ fn record_failure(
     stream: bool,
     _client_stream: bool,
     message: &str,
-    connect_ms: u64,
+    ttft_start_ms: i64,
 ) {
     RequestRecord {
         request_id: request_id.to_string(),
@@ -1180,7 +1178,7 @@ fn record_failure(
         stream,
         ttft: None,
         output_tokens_time: None,
-        network_latency: connect_ms as i64,
+        ttft_start_ms,
         start_time,
         end_time: now_ms(),
         usage: Usage::default(),
