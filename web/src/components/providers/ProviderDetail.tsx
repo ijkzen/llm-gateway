@@ -14,9 +14,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import { type Provider, useProviderDetail, useUpdateProvider } from "@/hooks/use-providers";
+import {
+	type Provider,
+	type ProviderDetail as ProviderDetailData,
+	providerKeys,
+	useProviderDetail,
+	useUpdateProvider,
+} from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
-import { Eye, EyeOff, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { type ApiResponse, api, unwrap } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { Copy, Eye, EyeOff, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 
 interface ProviderDetailProps {
@@ -57,6 +65,7 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailProps) {
 	const { toastSuccess, toastError } = useToastActions();
 	const updateProvider = useUpdateProvider();
+	const queryClient = useQueryClient();
 	const [showKey, setShowKey] = useState(false);
 
 	const { data: detail, isLoading: detailLoading } = useProviderDetail(provider?.id ?? null);
@@ -83,6 +92,31 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 				onError: (error) => toastError("操作失败", error),
 			},
 		);
+	};
+
+	const handleCopyKey = async () => {
+		if (!provider) return;
+		try {
+			// 已展开的用已加载明文，否则命令式拉取详情。
+			const plain =
+				effectiveShowKey && detail
+					? detail.apiKey
+					: (
+							await queryClient.fetchQuery({
+								queryKey: providerKeys.detail(provider.id),
+								queryFn: async () => {
+									const res = await api
+										.get(`providers/${provider.id}`)
+										.json<ApiResponse<ProviderDetailData>>();
+									return unwrap(res);
+								},
+							})
+						).apiKey;
+			await navigator.clipboard.writeText(plain);
+			toastSuccess("已复制到剪贴板");
+		} catch (error) {
+			toastError("复制失败", error as Error);
+		}
 	};
 
 	return (
@@ -125,6 +159,16 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 									onClick={() => setShowKey((v) => !v)}
 								>
 									{effectiveShowKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+								</Button>
+								<Button
+									type="button"
+									variant="ghost"
+									size="icon"
+									className="size-7 shrink-0"
+									aria-label="复制 API Key"
+									onClick={handleCopyKey}
+								>
+									<Copy className="size-4" />
 								</Button>
 							</span>
 						)}
