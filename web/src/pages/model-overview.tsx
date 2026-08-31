@@ -1,3 +1,4 @@
+import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { TrendLineChart } from "@/components/dashboard-charts";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import {
@@ -18,12 +19,13 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router-dom";
 
-/** 三级页四个区块的独立时间段状态。 */
+/** 三级页五个区块的独立时间段状态。 */
 interface ModelOverviewWindows {
 	call: RaceWindowState;
 	token: RaceWindowState;
 	metrics: RaceWindowState;
 	insight: RaceWindowState;
+	apiKey: RaceWindowState;
 }
 
 /** 从 URL query 解析初始时间段（缺省当天）；入口赛马行点击时携带。 */
@@ -50,7 +52,7 @@ export default function ModelOverviewPage() {
 	const modelId = decodeURIComponent(modelIdParam ?? "");
 	const [searchParams] = useSearchParams();
 
-	// 四块独立时间段，初始值来自 URL（无参数默认当天）。
+	// 五块独立时间段，初始值来自 URL（无参数默认当天）。
 	const [windows, setWindows] = useState<ModelOverviewWindows>(() => {
 		const initial = initialWindowFromUrl(searchParams);
 		return {
@@ -58,6 +60,7 @@ export default function ModelOverviewPage() {
 			token: { ...initial },
 			metrics: { ...initial },
 			insight: { ...initial },
+			apiKey: { ...initial },
 		};
 	});
 	const [now] = useState(() => Date.now());
@@ -289,6 +292,25 @@ export default function ModelOverviewPage() {
 						granularity={insightGranularity}
 					/>
 				)}
+			</div>
+
+			{/* API Key 赛马：独立时间段（按当前供应商+模型过滤） */}
+			<div className="space-y-2">
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.apiKey)}</p>
+					<RaceWindowControl
+						state={windows.apiKey}
+						now={now}
+						onChange={(patch) =>
+							setWindows((prev) => ({ ...prev, apiKey: { ...prev.apiKey, ...patch } }))
+						}
+					/>
+				</div>
+				<ApiKeyRaceCard
+					filter={
+						Number.isFinite(providerId) && modelId.length > 0 ? { providerId, modelId } : undefined
+					}
+				/>
 			</div>
 		</div>
 	);

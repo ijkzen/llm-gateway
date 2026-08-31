@@ -59,6 +59,19 @@ vi.mock("@/hooks/use-model-metrics", () => ({
 	}),
 }));
 
+vi.mock("@/hooks/use-api-key-race", () => ({
+	useApiKeyRace: () => ({
+		data: { startTime: 0, endTime: 0, items: [] },
+		isLoading: false,
+		isError: false,
+		refetch: vi.fn(),
+	}),
+}));
+
+vi.mock("@/hooks/use-in-view", () => ({
+	useInView: () => ({ ref: { current: null }, inView: true }),
+}));
+
 // 图表组件依赖浏览器布局，stub 标记视图。
 vi.mock("@/components/dashboard-charts", () => ({
 	TrendLineChart: () => <div data-testid="trend-chart" />,

@@ -1,4 +1,5 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
+import { ApiKeyRaceSection } from "@/components/api-key-race/ApiKeyRaceSection";
 import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
@@ -164,6 +165,7 @@ export default function OverviewPage() {
 				subtitle={windowSubtitle}
 				granularity={granularity}
 			/>
+			<ApiKeyRaceSection />
 			<ProviderRaceSection />
 			<VirtualModelRaceSection />
 			<ProviderModelRaceSection />

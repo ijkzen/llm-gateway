@@ -241,6 +241,7 @@ pub fn routes() -> Router<AppState> {
         .route("/virtual-model-rank", get(virtual_model_rank))
         .route("/provider-model-rank", get(provider_model_rank))
         .route("/virtual-model-member-rank", get(virtual_model_member_rank))
+        .route("/api-key-rank", get(api_key_rank))
         .route("/model-metrics", get(model_metrics))
         .route("/provider-metrics", get(provider_metrics))
         .route("/virtual-model-metrics", get(virtual_model_metrics))
@@ -1077,6 +1078,8 @@ struct RankQuery {
     provider_id: Option<i32>,
     /// 按虚拟模型过滤（可选；virtual_model_member_rank 使用）。
     virtual_model_id: Option<i32>,
+    /// 按模型过滤（可选；api_key_rank 三级页使用，须与 provider_id 同传）。
+    model_id: Option<String>,
 }
 
 /// 解析排序指标白名单；非法值返回 None（调用方转 400）。
@@ -1632,6 +1635,133 @@ async fn virtual_model_member_rank(
     });
 
     Ok(Json(Response::success(VirtualModelMemberRankResponse {
+        start_time: start,
+        end_time: end,
+        items,
+    })))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiKeyRaceRankItem {
+    /// 调用方 API Key 名称（request.api_key_name；Key 已删除的历史行仍按原名聚合）。
+    api_key_name: String,
+    /// 成功请求数。
+    request_count: i64,
+    /// 总计 token（成功请求的 total_tokens 合计）。
+    total_tokens: i64,
+    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
+    ttft: f64,
+    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
+    request_time: f64,
+    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
+    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
+    tps: f64,
+    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
+    cache_hit_rate: f64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiKeyRaceRankResponse {
+    start_time: i64,
+    end_time: i64,
+    items: Vec<ApiKeyRaceRankItem>,
+}
+
+/// API Key 维度赛马：按 request.api_key_name 分组聚合 6 指标，规格与
+/// 供应商赛马一致（排序 + 时间窗口）。可选过滤：
+/// - provider_id：二级页（供应商详情）——只看该供应商的调用；
+/// - virtual_model_id：二级页（虚拟模型详情）——只看该虚拟模型的调用；
+/// - provider_id + model_id：三级页（模型详情）——只看该供应商下某模型的调用。
+async fn api_key_rank(
+    State(state): State<AppState>,
+    Query(query): Query<RankQuery>,
+) -> Result<Json<Response<ApiKeyRaceRankResponse>>, response::ErrorResponse<ApiKeyRaceRankResponse>>
+{
+    let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
+        Ok(v) => v,
+        Err(e) => return Err(e),
+    };
+    // 过滤组合契约：三种互斥形态（providerId / virtualModelId / providerId+modelId），
+    // 组合之外（providerId+virtualModelId 同传、modelId 无 providerId）返回 400，
+    // 避免静默叠加两个维度造成语义混乱。
+    if query.provider_id.is_some() && query.virtual_model_id.is_some() {
+        return Err(response::bad_request(AppSettings::lang_sync().tr(
+            "providerId 与 virtualModelId 不能同时指定",
+            "providerId and virtualModelId cannot be combined",
+        )));
+    }
+    if query.model_id.is_some() && query.provider_id.is_none() {
+        return Err(response::bad_request(AppSettings::lang_sync().tr(
+            "modelId 须与 providerId 同时指定",
+            "modelId requires providerId",
+        )));
+    }
+    let db = &state.db;
+
+    // 过滤条件拼接：provider_id / virtual_model_id / provider_id + model_id 三种组合。
+    let mut where_sql = String::from("r.success = 1 AND r.start_time >= ? AND r.start_time < ?");
+    let mut params: Vec<sea_orm::Value> = vec![start.into(), end.into()];
+    if let Some(provider_id) = query.provider_id {
+        where_sql.push_str(" AND r.provider_id = ?");
+        params.push(provider_id.into());
+    }
+    if let Some(virtual_model_id) = query.virtual_model_id {
+        where_sql.push_str(" AND r.virtual_model_id = ?");
+        params.push(virtual_model_id.into());
+    }
+    if let Some(model_id) = query.model_id.as_deref() {
+        where_sql.push_str(" AND r.model_id = ?");
+        params.push(model_id.into());
+    }
+
+    let sql = format!(
+        "SELECT r.api_key_name AS api_key_name,{RANK_METRIC_SQL} \
+         FROM request r \
+         WHERE {where_sql} \
+         GROUP BY r.api_key_name"
+    );
+
+    let rows = match db
+        .query_all_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            params,
+        ))
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => return Err(response::db_error(e.to_string())),
+    };
+
+    let mut items = rows
+        .iter()
+        .map(|row| ApiKeyRaceRankItem {
+            api_key_name: row.try_get("", "api_key_name").unwrap_or_default(),
+            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
+            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
+            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
+            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
+            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
+            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+        })
+        .collect::<Vec<_>>();
+
+    let is_asc = order_dir == "ASC";
+    let value_of = |item: &ApiKeyRaceRankItem| -> f64 {
+        match sort_key {
+            RankSortKey::TotalTokens => item.total_tokens as f64,
+            RankSortKey::RequestCount => item.request_count as f64,
+            RankSortKey::Ttft => item.ttft,
+            RankSortKey::RequestTime => item.request_time,
+            RankSortKey::Tps => item.tps,
+            RankSortKey::CacheHitRate => item.cache_hit_rate,
+        }
+    };
+    sort_rank_rows(&mut items, is_asc, value_of);
+
+    Ok(Json(Response::success(ApiKeyRaceRankResponse {
         start_time: start,
         end_time: end,
         items,

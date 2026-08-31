@@ -65,6 +65,19 @@ vi.mock("@/hooks/use-virtual-model-member-rank", () => ({
 	}),
 }));
 
+vi.mock("@/hooks/use-api-key-race", () => ({
+	useApiKeyRace: () => ({
+		data: { startTime: 0, endTime: 0, items: [] },
+		isLoading: false,
+		isError: false,
+		refetch: vi.fn(),
+	}),
+}));
+
+vi.mock("@/hooks/use-in-view", () => ({
+	useInView: () => ({ ref: { current: null }, inView: true }),
+}));
+
 vi.mock("@/hooks/use-stats-metrics", () => ({
 	useVirtualModelMetrics: () => ({
 		data: {

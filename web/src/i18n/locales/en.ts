@@ -558,6 +558,7 @@ const en: Translation = {
 		openModelDetail: "Click to view this model's details",
 		unknownProvider: "Unknown provider",
 		unknownVirtualModel: "Unknown model",
+		unknownKey: "Unknown API Key",
 		disabledSuffix: " (disabled)",
 		metricLabel: {
 			totalTokens: "Total Tokens",
@@ -592,6 +593,7 @@ const en: Translation = {
 		providerModelRace: "Provider Model Race",
 		virtualModelRace: "Virtual Model Race",
 		internalModelRace: "Internal Model Race",
+		apiKeyRace: "API Key Race",
 		metricOverview: "Metric Overview",
 		modelMetric: "Model Metrics",
 		callTrend: "Call Trend",
@@ -607,6 +609,7 @@ const en: Translation = {
 		providerColumn: "Provider",
 		virtualModelColumn: "Virtual Model",
 		modelColumn: "Model",
+		apiKeyColumn: "API Key",
 		viewModelDetail: "Click to view this model's details",
 		insightTitle: "Performance & Reliability",
 		insightFailure: "Failures",

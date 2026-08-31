@@ -553,6 +553,7 @@ const zhCN = {
 		openModelDetail: "点击查看该模型详情",
 		unknownProvider: "未知供应商",
 		unknownVirtualModel: "未知模型",
+		unknownKey: "未知 API Key",
 		disabledSuffix: "（停用）",
 		metricLabel: {
 			totalTokens: "总计 Token",
@@ -587,6 +588,7 @@ const zhCN = {
 		providerModelRace: "供应商模型赛马",
 		virtualModelRace: "虚拟模型赛马",
 		internalModelRace: "内部模型赛马",
+		apiKeyRace: "API Key 赛马",
 		metricOverview: "指标概览",
 		modelMetric: "模型指标",
 		callTrend: "调用趋势",
@@ -602,6 +604,7 @@ const zhCN = {
 		providerColumn: "供应商",
 		virtualModelColumn: "虚拟模型",
 		modelColumn: "模型",
+		apiKeyColumn: "API Key",
 		viewModelDetail: "点击查看该模型详情",
 		insightTitle: "性能与可靠性分析",
 		insightFailure: "失败诊断",

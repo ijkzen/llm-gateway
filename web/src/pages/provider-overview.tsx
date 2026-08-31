@@ -1,4 +1,5 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
+import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
@@ -27,13 +28,14 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-/** 二级页五个图表区块的独立时间段状态。 */
+/** 二级页六个图表区块的独立时间段状态。 */
 interface ProviderOverviewWindows {
 	metrics: RaceWindowState;
 	call: RaceWindowState;
 	token: RaceWindowState;
 	race: RaceWindowState;
 	insight: RaceWindowState;
+	apiKey: RaceWindowState;
 }
 
 /** 从 URL query 解析初始时间段（缺省当天）；首页赛马行点击时携带。 */
@@ -194,7 +196,7 @@ export default function ProviderOverviewPage() {
 	const providerId = Number.parseInt(providerIdParam ?? "", 10);
 	const [searchParams] = useSearchParams();
 
-	// 四块独立时间段，初始值来自 URL（无参数默认当天）。
+	// 六块独立时间段，初始值来自 URL（无参数默认当天）。
 	const [windows, setWindows] = useState<ProviderOverviewWindows>(() => {
 		const initial = initialWindowFromUrl(searchParams);
 		return {
@@ -203,6 +205,7 @@ export default function ProviderOverviewPage() {
 			token: { ...initial },
 			race: { ...initial },
 			insight: { ...initial },
+			apiKey: { ...initial },
 		};
 	});
 	// 各块固化 now（标题稳定）。
@@ -379,6 +382,21 @@ export default function ProviderOverviewPage() {
 						granularity={insightGranularity}
 					/>
 				)}
+			</div>
+
+			{/* API Key 赛马：独立时间段（可靠性分析之下、内部模型赛马之上） */}
+			<div className="space-y-2">
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.apiKey)}</p>
+					<RaceWindowControl
+						state={windows.apiKey}
+						now={now}
+						onChange={(patch) =>
+							setWindows((prev) => ({ ...prev, apiKey: { ...prev.apiKey, ...patch } }))
+						}
+					/>
+				</div>
+				<ApiKeyRaceCard filter={Number.isFinite(providerId) ? { providerId } : undefined} />
 			</div>
 
 			{/* 供应商内部模型赛马：独立时间段 */}
