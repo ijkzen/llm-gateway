@@ -228,6 +228,22 @@ Dockerfile 为多阶段构建：
 
 ## 代码风格与开发约定
 
+### 提交前置动作（强制门禁）
+
+**任何代码提交前，必须先完成以下校验且全部通过（全绿），否则不允许提交**：
+
+```bash
+cargo fmt                          # 后端全库格式化（非局部）
+cargo clippy --all-targets --all-features -- -D warnings   # 修复到零警告
+cargo test --all-targets           # 后端全量测试
+cd web && pnpm lint                # 前端 biome check .（tab 缩进、双引号、100 列）
+pnpm vitest run                    # 前端全量测试
+```
+
+- 以上为 CI 的实际门禁（`ci.yml`：`cargo fmt --check` + `clippy -D warnings` + `cargo test --all-targets`；前端本地仍须 `pnpm lint` 全绿）。
+- **既有代码引发的差异/警告/错误也必须一并修复**，不允许带警告提交，也不要回退 rustfmt/clippy 版本或跳过。
+- 发布流程（release-management skill）中的「全量质量门」即本约定，必须全绿。
+
 ### Rust
 
 - 使用 2024 edition。
