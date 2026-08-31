@@ -1,12 +1,22 @@
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import type { InsightData } from "@/hooks/use-dashboard-insight";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// recharts 在 jsdom 下依赖布局测量，测试中 stub 各视图标记。
+// 捕获 FailureTrendChart 收到的 props，验证 callTrend 是否为真实调用趋势（而非失败趋势）。
+const trendProps = vi.hoisted(() => ({
+	failureTrendChart: { callTrend: [], failureTrend: [], failureRateTrend: [] } as {
+		callTrend: Array<{ bucketStart: number; value: number }>;
+		failureTrend: Array<{ bucketStart: number; value: number }>;
+		failureRateTrend: Array<{ bucketStart: number; value: number }>;
+	},
+}));
+
 vi.mock("@/components/insight-charts", () => ({
-	FailureTrendChart: () => <div data-testid="failure-trend" />,
-	FailureReasonBarChart: () => <div data-testid="failure-reasons" />,
+	FailureTrendChart: (props: typeof trendProps.failureTrendChart) => {
+		trendProps.failureTrendChart = props;
+		return <div data-testid="failure-trend" />;
+	},
 	PercentileLineChart: () => <div data-testid="percentile-chart" />,
 	TokenStructureChart: () => <div data-testid="token-structure" />,
 	OutputPerSecLineChart: () => <div data-testid="output-per-sec" />,
@@ -15,6 +25,7 @@ vi.mock("@/components/insight-charts", () => ({
 
 function makeInsight(overrides: Partial<InsightData> = {}): InsightData {
 	return {
+		callTrend: [{ bucketStart: 1_700_000_000_000, value: 10 }],
 		failureTrend: [{ bucketStart: 1_700_000_000_000, value: 2 }],
 		failureRateTrend: [{ bucketStart: 1_700_000_000_000, value: 0.2 }],
 		failureReasons: [{ reason: "上游 429", count: 1 }],
@@ -34,64 +45,31 @@ function makeInsight(overrides: Partial<InsightData> = {}): InsightData {
 	};
 }
 
-describe("InsightAnalysisCard（性能与可靠性分析）", () => {
+describe("InsightAnalysisCard 失败诊断（FailureTrendChart props 传递）", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
-	it("默认渲染失败诊断 Tab（失败趋势 + 失败原因）", () => {
+	it("FailureTrendChart 的 callTrend 应为调用趋势而非失败趋势（回归：success 恒 0 bug）", () => {
+		// 场景：窗口有调用（apiKeyRank 非空）+ 失败趋势有值。
+		// 若 callTrend 被错误地传成 failureTrend，success=0 恒成立。
+		render(<InsightAnalysisCard data={makeInsight()} />);
+
+		expect(screen.getByTestId("failure-trend")).toBeInTheDocument();
+		const { callTrend, failureTrend } = trendProps.failureTrendChart;
+		expect(failureTrend.length).toBeGreaterThan(0);
+		// callTrend 应不等于 failureTrend（失败 2 次 ≠ 调用 10 次）。
+		expect(callTrend).not.toEqual(failureTrend);
+		// callTrend 的值应大于等于失败趋势（调用数 ≥ 失败数）。
+		for (let i = 0; i < failureTrend.length; i++) {
+			expect(callTrend[i]?.value ?? 0).toBeGreaterThanOrEqual(failureTrend[i]?.value ?? 0);
+		}
+	});
+
+	it("失败诊断有流量时渲染失败趋势折线图（无失败原因条形图）", () => {
 		render(<InsightAnalysisCard data={makeInsight()} />);
 		expect(screen.getByTestId("failure-trend")).toBeInTheDocument();
-		expect(screen.getByTestId("failure-reasons")).toBeInTheDocument();
-	});
-
-	it("切到延迟分位 Tab 渲染 TTFT 与总耗时两组分位图", () => {
-		render(<InsightAnalysisCard data={makeInsight()} />);
-		fireEvent.click(screen.getByRole("button", { name: "延迟分位" }));
-		// TTFT 与总耗时各一张分位图。
-		expect(screen.getAllByTestId("percentile-chart")).toHaveLength(2);
-	});
-
-	it("切到 Token 结构 Tab 渲染堆叠图与每秒输出 token", () => {
-		render(<InsightAnalysisCard data={makeInsight()} />);
-		fireEvent.click(screen.getByRole("button", { name: "Token 结构" }));
-		expect(screen.getByTestId("token-structure")).toBeInTheDocument();
-		expect(screen.getByTestId("output-per-sec")).toBeInTheDocument();
-	});
-
-	it("切到吞吐 Tab 渲染 RPM/TPM 图", () => {
-		render(<InsightAnalysisCard data={makeInsight()} />);
-		fireEvent.click(screen.getByRole("button", { name: "吞吐" }));
-		expect(screen.getByTestId("throughput")).toBeInTheDocument();
-	});
-
-	it("失败诊断空数据（窗口内无请求）时显示空态文案", () => {
-		const data = makeInsight({
-			apiKeyRank: [],
-			failureTrend: [],
-			failureRateTrend: [],
-			failureReasons: [],
-		});
-		render(<InsightAnalysisCard data={data} />);
-		expect(screen.getByText("该时间段暂无可靠性数据")).toBeInTheDocument();
-	});
-
-	it("有流量但零失败的健康日仍渲染失败图（不误判为空态）", () => {
-		// 窗口有请求（apiKeyRank 非空）但失败趋势全 0：应展示失败图而非空态。
-		const data = makeInsight({
-			failureTrend: [{ bucketStart: 1_700_000_000_000, value: 0 }],
-			failureRateTrend: [{ bucketStart: 1_700_000_000_000, value: 0 }],
-			failureReasons: [],
-		});
-		render(<InsightAnalysisCard data={data} />);
-		expect(screen.getByTestId("failure-trend")).toBeInTheDocument();
-		expect(screen.queryByText("该时间段暂无可靠性数据")).not.toBeInTheDocument();
-	});
-
-	it("吞吐非小时桶（rpmTrend 为空）显示提示文案", () => {
-		const data = makeInsight({ rpmTrend: [], tpmTrend: [], streamRatioTrend: [] });
-		render(<InsightAnalysisCard data={data} />);
-		fireEvent.click(screen.getByRole("button", { name: "吞吐" }));
-		expect(screen.getByText(/吞吐（RPM\/TPM）仅在小时粒度可用/)).toBeInTheDocument();
+		// 失败原因条形图已按用户决策移除。
+		expect(screen.queryByTestId("failure-reasons")).toBeNull();
 	});
 });

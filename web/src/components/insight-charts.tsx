@@ -8,31 +8,7 @@ import type { FloatTrendPoint, PercentilePoint, TrendPoint } from "@/hooks/use-d
 import i18n from "@/i18n";
 import type { ChartGranularity } from "@/lib/race-period";
 import { formatPercent } from "@/lib/utils";
-import {
-	Area,
-	AreaChart,
-	Bar,
-	BarChart,
-	CartesianGrid,
-	Cell,
-	Line,
-	LineChart,
-	XAxis,
-	YAxis,
-} from "recharts";
-
-/** 图表配色（与 dashboard-charts 的 CHART_COLORS 同源，避免跨模块耦合）。 */
-const CHART_COLORS = [
-	"hsl(var(--chart-1))",
-	"hsl(var(--chart-2))",
-	"hsl(var(--chart-3))",
-	"hsl(var(--chart-4))",
-	"hsl(var(--chart-5))",
-] as const;
-
-function chartColorAt(index: number): string {
-	return CHART_COLORS[index % CHART_COLORS.length] ?? "hsl(var(--chart-1))";
-}
+import { Area, AreaChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 
 /** 按桶粒度格式化 X 轴标签（与 dashboard-charts 的 formatBucketLabel 同语义）。 */
 function formatBucketLabel(bucketStart: number, granularity: ChartGranularity): string {
@@ -220,57 +196,6 @@ export function FailureTrendChart({
 				/>
 				<ChartLegend />
 			</AreaChart>
-		</ChartContainer>
-	);
-}
-
-/** 失败原因分布横向条形图（空串原因显示「无原因」）。 */
-export function FailureReasonBarChart({
-	reasons,
-	noReasonLabel,
-}: {
-	reasons: Array<{ reason: string; count: number }>;
-	noReasonLabel: string;
-}) {
-	const data = reasons.map((item) => ({
-		label: item.reason || noReasonLabel,
-		value: item.count,
-	}));
-	const height = Math.max(200, data.length * 36 + 16);
-	return (
-		<ChartContainer
-			config={Object.fromEntries(data.map((item) => [item.label, { label: item.label }]))}
-			className="w-full"
-			style={{ height }}
-		>
-			<BarChart data={data} layout="vertical" margin={{ left: 8, right: 24, top: 4 }}>
-				<XAxis type="number" hide />
-				<YAxis
-					type="category"
-					dataKey="label"
-					tickLine={false}
-					axisLine={false}
-					width={130}
-					tickFormatter={(label: string) => (label.length > 16 ? `${label.slice(0, 16)}…` : label)}
-				/>
-				<ChartTooltip
-					content={
-						<ChartTooltipContent
-							labelKey="label"
-							formatter={(value) => (
-								<span className="font-mono font-medium tabular-nums text-foreground">
-									{Number(value).toLocaleString()}
-								</span>
-							)}
-						/>
-					}
-				/>
-				<Bar dataKey="value" radius={[0, 4, 4, 0]}>
-					{data.map((item, index) => (
-						<Cell key={item.label} fill={chartColorAt(index)} />
-					))}
-				</Bar>
-			</BarChart>
 		</ChartContainer>
 	);
 }

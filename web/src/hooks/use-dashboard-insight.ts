@@ -37,6 +37,8 @@ export interface ApiKeyRankItem {
 
 /** /api/stats/insight 响应：性能与可靠性分析四组数据。 */
 export interface InsightData {
+	/** 每桶全部调用数（成功+失败；失败趋势图堆叠基准）。 */
+	callTrend: TrendPoint[];
 	failureTrend: TrendPoint[];
 	failureRateTrend: FloatTrendPoint[];
 	failureReasons: FailureReasonItem[];

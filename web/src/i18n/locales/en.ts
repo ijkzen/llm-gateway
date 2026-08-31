@@ -619,7 +619,6 @@ const en: Translation = {
 		ttftPercentiles: "Time to First Token (TTFT) percentiles",
 		latencyPercentiles: "Total latency (requestTime) percentiles",
 		outputPerSec: "Output tokens per second",
-		noReason: "No reason",
 		hourlyThroughputOnly:
 			"Throughput (RPM/TPM) is only available at hourly granularity; switch to a range within a day",
 		insightNoData: "No reliability data in this period",

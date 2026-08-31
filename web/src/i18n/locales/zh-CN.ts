@@ -614,7 +614,6 @@ const zhCN = {
 		ttftPercentiles: "首 token 耗时（TTFT）分位",
 		latencyPercentiles: "总耗时（requestTime）分位",
 		outputPerSec: "每秒输出 token",
-		noReason: "无原因",
 		hourlyThroughputOnly: "吞吐（RPM/TPM）仅在小时粒度可用，请切换到「天」以内的时间范围",
 		insightNoData: "该时间段暂无可靠性数据",
 	},

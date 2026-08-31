@@ -327,6 +327,8 @@ struct ApiKeyRankItem {
 #[serde(rename_all = "camelCase")]
 struct InsightResponse {
     // 失败诊断
+    /// 每桶全部调用数（成功+失败；成功/失败堆叠面积图基准）。
+    call_trend: Vec<TrendPoint>,
     failure_trend: Vec<TrendPoint>,
     failure_rate_trend: Vec<FloatTrendPoint>,
     failure_reasons: Vec<FailureReasonItem>,
@@ -924,6 +926,7 @@ async fn insight(
     let out_time_rates_map = to_map(&out_time_rows);
 
     let failure_trend = fill_int_series(&fails_map);
+    let call_trend = fill_int_series(&calls_map);
     let input_token_trend = fill_int_series(&inputs_map);
     let output_token_trend = fill_int_series(&outputs_map);
     let output_per_sec_trend = fill_float_series(&out_time_rates_map);
@@ -1027,6 +1030,7 @@ async fn insight(
     (
         StatusCode::OK,
         Json(Response::success(InsightResponse {
+            call_trend,
             failure_trend,
             failure_rate_trend,
             failure_reasons: reason_map

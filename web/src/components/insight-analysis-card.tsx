@@ -1,6 +1,5 @@
 import { EmptyState } from "@/components/empty-state";
 import {
-	FailureReasonBarChart,
 	FailureTrendChart,
 	OutputPerSecLineChart,
 	PercentileLineChart,
@@ -65,20 +64,12 @@ export function InsightAnalysisCard({ data, subtitle, granularity }: InsightAnal
 					(noFailureData ? (
 						<EmptyState title={t("dashboard.insightNoData")} />
 					) : (
-						<>
-							<FailureTrendChart
-								callTrend={data.failureTrend}
-								failureTrend={data.failureTrend}
-								failureRateTrend={data.failureRateTrend}
-								granularity={granularity}
-							/>
-							{data.failureReasons.length > 0 ? (
-								<FailureReasonBarChart
-									reasons={data.failureReasons}
-									noReasonLabel={t("dashboard.noReason")}
-								/>
-							) : null}
-						</>
+						<FailureTrendChart
+							callTrend={data.callTrend}
+							failureTrend={data.failureTrend}
+							failureRateTrend={data.failureRateTrend}
+							granularity={granularity}
+						/>
 					))}
 				{tab === "latency" &&
 					(noLatencyData ? (

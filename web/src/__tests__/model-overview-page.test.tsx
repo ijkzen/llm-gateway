@@ -30,6 +30,7 @@ vi.mock("@/hooks/use-dashboard-stats", () => ({
 vi.mock("@/hooks/use-dashboard-insight", () => ({
 	useDashboardInsight: () => ({
 		data: {
+			callTrend: [],
 			failureTrend: [],
 			failureRateTrend: [],
 			failureReasons: [],

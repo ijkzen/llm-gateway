@@ -1221,6 +1221,7 @@ async fn test_insight_empty_table_returns_zeros() {
     let data = &json["data"];
 
     // 缺省窗口=过去 24 小时（小时桶）→ 24 个桶。
+    assert_eq!(data["callTrend"].as_array().unwrap().len(), 24);
     assert_eq!(data["failureTrend"].as_array().unwrap().len(), 24);
     assert_eq!(data["failureRateTrend"].as_array().unwrap().len(), 24);
     assert_eq!(data["inputTokenTrend"].as_array().unwrap().len(), 24);
@@ -1312,6 +1313,11 @@ async fn test_insight_failure_diagnostics() {
     let failure_trend = data["failureTrend"].as_array().unwrap();
     assert_eq!(failure_trend.len(), 1);
     assert_eq!(failure_trend[0]["value"], 1);
+
+    // callTrend = 全部调用（2 成功 + 1 失败）= 3；堆叠面积基准应含成功与失败。
+    let call_trend = data["callTrend"].as_array().unwrap();
+    assert_eq!(call_trend.len(), 1);
+    assert_eq!(call_trend[0]["value"], 3);
 
     let failure_rate_trend = data["failureRateTrend"].as_array().unwrap();
     assert_eq!(failure_rate_trend.len(), 1);
