@@ -147,6 +147,33 @@ async fn update_setting(
                     // 落库成功后刷新进程内缓存（失败时数据库已是新值，
                     // 缓存以数据库为准，不阻塞响应）。
                     state.settings.update(&key, &req.value).await;
+
+                    // 语言切换：把未自定义标题/描述的任务同步为目标语言默认文案。
+                    if key == KEY_LANGUAGE {
+                        let new_lang = match req.value.parse::<Lang>() {
+                            Ok(l) => l,
+                            Err(_) => lang,
+                        };
+                        let repo =
+                            crate::cron::repository::SeaOrmCronJobRepository::new(state.db.clone());
+                        match state
+                            .scheduler
+                            .sync_titles_to_language(&repo, new_lang)
+                            .await
+                        {
+                            Ok(n) if n > 0 => {
+                                tracing::info!(
+                                    "Synced {n} cron job title(s)/description(s) after language change"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => tracing::error!(
+                                "Failed to sync cron job titles after language change: {}",
+                                e
+                            ),
+                        }
+                    }
+
                     (StatusCode::OK, Json(Response::success(())))
                 }
                 Err(e) => response::db_error(e.to_string()),

@@ -10,6 +10,35 @@ use crate::entity::cron_job;
 /// 同时执行订阅额度耗尽自动停用/恢复（见 `src/usage/persist.rs`）。
 pub const USAGE_REFRESH_JOB: &str = "usage_refresh";
 
+/// 内置任务的默认标题（按语言）。语言切换同步未自定义任务时复用。
+pub fn default_title(name: &str, lang: crate::i18n::Lang) -> String {
+    match name {
+        USAGE_REFRESH_JOB => lang
+            .tr("供应商用量刷新", "Provider Usage Refresh")
+            .to_string(),
+        _ => lang.tr("定时任务", "Cron Job").to_string(),
+    }
+}
+
+/// 内置任务的默认描述（按语言）。
+pub fn default_description(name: &str, lang: crate::i18n::Lang) -> String {
+    match name {
+        USAGE_REFRESH_JOB => lang
+            .tr(
+                "每 5 分钟刷新所有已开启用量展示的供应商用量并写入数据库缓存；\
+                 订阅额度耗尽时自动停用对应供应商及其虚拟模型子模型，恢复后自动启用",
+                "Refreshes usage for all providers with usage query enabled every 5 \
+                 minutes and writes the database cache; automatically disables a \
+                 provider (and its virtual model members) when its subscription \
+                 quota is exhausted, and re-enables it once restored",
+            )
+            .to_string(),
+        _ => lang
+            .tr("系统内置定时任务", "Built-in scheduled job")
+            .to_string(),
+    }
+}
+
 /// 确保 `usage_refresh` 任务行存在（不存在则插入，幂等）。
 pub async fn ensure_usage_refresh_job(db: &DatabaseConnection) -> anyhow::Result<()> {
     let exists = cron_job::Entity::find()
@@ -20,14 +49,11 @@ pub async fn ensure_usage_refresh_job(db: &DatabaseConnection) -> anyhow::Result
         return Ok(());
     }
     let now = chrono::Utc::now();
+    let lang = crate::i18n::Lang::default();
     cron_job::ActiveModel {
         name: Set(USAGE_REFRESH_JOB.to_string()),
-        title: Set("供应商用量刷新".to_string()),
-        description: Set(
-            "每 5 分钟刷新所有已开启用量展示的供应商用量并写入数据库缓存；\
-             订阅额度耗尽时自动停用对应供应商及其虚拟模型子模型，恢复后自动启用"
-                .to_string(),
-        ),
+        title: Set(default_title(USAGE_REFRESH_JOB, lang)),
+        description: Set(default_description(USAGE_REFRESH_JOB, lang)),
         expression: Set("@every 5m".to_string()),
         enabled: Set(true),
         group: Set("system".to_string()),

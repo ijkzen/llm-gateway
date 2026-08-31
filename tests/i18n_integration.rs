@@ -270,3 +270,93 @@ async fn test_usage_balance_label_localization() {
         "Remaining Credits"
     );
 }
+
+#[tokio::test]
+async fn test_language_switch_syncs_default_cron_titles_but_keeps_customized() {
+    use llm_gateway::cron::seed::USAGE_REFRESH_JOB;
+    use llm_gateway::cron::seed::{default_description, default_title};
+    use llm_gateway::i18n::Lang;
+
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    seed_settings(&db, "zh-CN", "Asia/Shanghai").await;
+    let settings = AppSettings::load_from_db(&db).await.unwrap();
+    scheduler
+        .register_handler(
+            USAGE_REFRESH_JOB,
+            std::sync::Arc::new(|_ctx: llm_gateway::cron::JobContext| {
+                Box::pin(async move { Ok(()) })
+            }),
+        )
+        .await;
+    scheduler
+        .register_handler(
+            "custom_job",
+            std::sync::Arc::new(|_ctx: llm_gateway::cron::JobContext| {
+                Box::pin(async move { Ok(()) })
+            }),
+        )
+        .await;
+
+    let repo = SeaOrmCronJobRepository::new(db.clone());
+    // 内置任务：默认文案（中文）。
+    let default_job = JobDefinition {
+        name: USAGE_REFRESH_JOB.to_string(),
+        title: default_title(USAGE_REFRESH_JOB, Lang::Zh),
+        description: default_description(USAGE_REFRESH_JOB, Lang::Zh),
+        expression: "@every 5m".to_string(),
+        enabled: true,
+        group: "system".to_string(),
+    };
+    repo.insert(&default_job, None).await.unwrap();
+    // 用户自定义过的任务：标题/描述与默认文案不同。
+    let custom_job = JobDefinition {
+        name: "custom_job".to_string(),
+        title: "我的自定义任务".to_string(),
+        description: "自定义描述".to_string(),
+        expression: "@hourly".to_string(),
+        enabled: true,
+        group: "default".to_string(),
+    };
+    repo.insert(&custom_job, None).await.unwrap();
+    scheduler.load_from_db(&repo).await.unwrap();
+    scheduler.start().await.unwrap();
+
+    let app =
+        common::build_authed_app_with_settings(db.clone(), scheduler, log_tx, settings.clone())
+            .await;
+
+    // 切英文 → 内置任务标题/描述变英文，自定义任务不动。
+    let response = put_setting(&app, "language", "en").await;
+    assert_eq!(response.status(), 200);
+
+    let default_model = repo.find_by_name(USAGE_REFRESH_JOB).await.unwrap().unwrap();
+    assert_eq!(
+        default_model.title,
+        default_title(USAGE_REFRESH_JOB, Lang::En),
+        "default title should follow language"
+    );
+    assert_eq!(
+        default_model.description,
+        default_description(USAGE_REFRESH_JOB, Lang::En),
+        "default description should follow language"
+    );
+
+    let custom_model = repo.find_by_name("custom_job").await.unwrap().unwrap();
+    assert_eq!(
+        custom_model.title, "我的自定义任务",
+        "customized title must not change"
+    );
+    assert_eq!(
+        custom_model.description, "自定义描述",
+        "customized description must not change"
+    );
+
+    // 切回中文 → 内置任务恢复中文默认。
+    let response = put_setting(&app, "language", "zh-CN").await;
+    assert_eq!(response.status(), 200);
+    let default_model = repo.find_by_name(USAGE_REFRESH_JOB).await.unwrap().unwrap();
+    assert_eq!(
+        default_model.title,
+        default_title(USAGE_REFRESH_JOB, Lang::Zh)
+    );
+}

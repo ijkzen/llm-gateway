@@ -564,6 +564,8 @@ const zhCN = {
 		},
 	},
 	dataTable: {
+		showColumns: "显示列",
+		toggleColumns: "切换列显隐",
 		sortAsc: "升序",
 		sortDesc: "降序",
 		hide: "隐藏",

@@ -190,6 +190,73 @@ impl SchedulerRuntime {
         jobs.contains_key(name)
     }
 
+    /// 语言切换后同步任务标题/描述：当前值等于任一语言默认值（即未被用户
+    /// 手动修改过）的任务，更新为目标语言的默认文案；用户自定义过的保持不动。
+    /// 返回更新的任务数。
+    pub async fn sync_titles_to_language<R: CronJobRepository>(
+        &self,
+        repo: &R,
+        lang: crate::i18n::Lang,
+    ) -> Result<usize, SchedulerError> {
+        let names: Vec<String> = {
+            let jobs = self.jobs.read().await;
+            jobs.keys().cloned().collect()
+        };
+
+        let mut updated = 0;
+        for name in names {
+            let model = match repo.find_by_name(&name).await {
+                Ok(Some(model)) => model,
+                _ => continue,
+            };
+            let zh_title = crate::cron::seed::default_title(&name, crate::i18n::Lang::Zh);
+            let en_title = crate::cron::seed::default_title(&name, crate::i18n::Lang::En);
+            let zh_desc = crate::cron::seed::default_description(&name, crate::i18n::Lang::Zh);
+            let en_desc = crate::cron::seed::default_description(&name, crate::i18n::Lang::En);
+
+            let target_title = crate::cron::seed::default_title(&name, lang);
+            let target_desc = crate::cron::seed::default_description(&name, lang);
+            let title_is_default = model.title == zh_title || model.title == en_title;
+            let desc_is_default = model.description == zh_desc || model.description == en_desc;
+            if !title_is_default && !desc_is_default {
+                continue;
+            }
+
+            let mut definition = JobDefinition::from(&model);
+            if title_is_default && definition.title != target_title {
+                definition.title = target_title.clone();
+            }
+            if desc_is_default && definition.description != target_desc {
+                definition.description = target_desc.clone();
+            }
+            if definition.title == model.title && definition.description == model.description {
+                continue;
+            }
+
+            if let Err(e) = self.update_job_in_memory(&name, &definition).await {
+                tracing::error!(
+                    "Failed to sync title/description for '{}' after language change: {}",
+                    name,
+                    e
+                );
+                continue;
+            }
+            if let Err(e) = repo
+                .update_job_full(&name, &definition, model.last_run_at, model.next_run_at)
+                .await
+            {
+                tracing::error!(
+                    "Failed to persist title/description for '{}' after language change: {}",
+                    name,
+                    e
+                );
+                continue;
+            }
+            updated += 1;
+        }
+        Ok(updated)
+    }
+
     /// Rebuilds every job in the scheduler after the cron timezone setting
     /// changed. Cron jobs are recreated with the new timezone and their
     /// `next_run_at` recomputed from now; `@every` jobs keep their interval

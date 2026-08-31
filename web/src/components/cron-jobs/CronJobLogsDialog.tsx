@@ -180,9 +180,10 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 						<div className="flex items-center justify-between border-b border-slate-200/70 bg-white/50 px-3 py-2 dark:border-white/10 dark:bg-white/5">
 							<div className="flex items-center gap-2 text-sm font-medium">
 								{t("cronJobs.realTimeLogs")}
-								{stream.currentRun && !stream.ended && (
+								{stream.currentRun && (
 									<span className="text-xs text-muted-foreground">
-										{t("cronJobs.runningEllipsis")}
+										{t("cronJobs.startedAt")} {formatDateTime(stream.currentRun.started_at)}
+										{!stream.ended && t("cronJobs.runningEllipsis")}
 									</span>
 								)}
 							</div>
@@ -210,7 +211,9 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 											{stream.ended.status === "success"
 												? t("cronJobs.status.success")
 												: t("cronJobs.status.failed")}{" "}
-											· {t("cronJobs.endedAtLabel")} {formatDateTime(stream.ended.ended_at)}
+											· {t("cronJobs.startedAt")}{" "}
+											{stream.currentRun ? formatDateTime(stream.currentRun.started_at) : "—"} ~{" "}
+											{t("cronJobs.endedAtLabel")} {formatDateTime(stream.ended.ended_at)}
 											{stream.ended.truncated && t("cronJobs.truncatedAtLimit")}
 										</div>
 									)}

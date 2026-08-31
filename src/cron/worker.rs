@@ -211,6 +211,7 @@ async fn execute_with_logging(
     let mut seq: i32 = 0;
     let mut log_count: i32 = 0;
     let mut truncated = false;
+    let lang = settings.lang().await;
 
     // 执行期间消费日志事件并落库。
     loop {
@@ -218,7 +219,7 @@ async fn execute_with_logging(
             msg = log_rx.recv() => {
                 match msg {
                     Ok(event) if event.job_name == name => {
-                        persist_log_event(&log_repo, &event, &run_id, &mut seq, &mut log_count, &mut truncated).await;
+                        persist_log_event(&log_repo, &event, &run_id, &mut seq, &mut log_count, &mut truncated, lang).await;
                     }
                     Ok(_) => {}
                     Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -242,6 +243,7 @@ async fn execute_with_logging(
                     &mut seq,
                     &mut log_count,
                     &mut truncated,
+                    lang,
                 )
                 .await;
             }
@@ -267,14 +269,13 @@ async fn execute_with_logging(
         // 失败原因作为系统日志追加（重要信息，不受单次上限限制）。
         seq += 1;
         log_count += 1;
+        let msg = if lang == crate::i18n::Lang::En {
+            format!("job execution failed: {e}")
+        } else {
+            format!("任务执行失败：{e}")
+        };
         if let Err(err) = log_repo
-            .insert_log(
-                &run_id,
-                seq,
-                "ERROR",
-                &format!("任务执行失败：{e}"),
-                Utc::now(),
-            )
+            .insert_log(&run_id, seq, "ERROR", &msg, Utc::now())
             .await
         {
             tracing::warn!("Failed to persist failure log for '{}': {}", name, err);
@@ -328,6 +329,7 @@ async fn persist_log_event(
     seq: &mut i32,
     log_count: &mut i32,
     truncated: &mut bool,
+    lang: crate::i18n::Lang,
 ) {
     if event.run_id != run_id {
         return;
@@ -338,7 +340,11 @@ async fn persist_log_event(
     if *log_count >= MAX_LOG_PER_RUN {
         if !*truncated {
             *truncated = true;
-            let msg = format!("日志条数已达上限（{MAX_LOG_PER_RUN}），后续日志已截断");
+            let msg = if lang == crate::i18n::Lang::En {
+                format!("log limit reached ({MAX_LOG_PER_RUN}); further logs truncated")
+            } else {
+                format!("日志条数已达上限（{MAX_LOG_PER_RUN}），后续日志已截断")
+            };
             if let Err(e) = repo
                 .insert_log(run_id, *seq + 1, "WARN", &msg, Utc::now())
                 .await

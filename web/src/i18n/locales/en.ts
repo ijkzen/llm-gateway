@@ -569,6 +569,8 @@ const en: Translation = {
 		},
 	},
 	dataTable: {
+		showColumns: "Columns",
+		toggleColumns: "Toggle column visibility",
 		sortAsc: "Ascending",
 		sortDesc: "Descending",
 		hide: "Hide",
