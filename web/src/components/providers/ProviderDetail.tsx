@@ -14,16 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import {
-	type Provider,
-	type ProviderDetail as ProviderDetailData,
-	providerKeys,
-	useProviderDetail,
-	useUpdateProvider,
-} from "@/hooks/use-providers";
+import { type Provider, fetchProviderApiKey, useUpdateProvider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
-import { type ApiResponse, api, unwrap } from "@/lib/api";
-import { useQueryClient } from "@tanstack/react-query";
 import { Copy, Eye, EyeOff, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -67,20 +59,18 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const updateProvider = useUpdateProvider();
-	const queryClient = useQueryClient();
-	const [showKey, setShowKey] = useState(false);
-
-	const { data: detail, isLoading: detailLoading } = useProviderDetail(provider?.id ?? null);
+	// 明文仅本地展示用，不在任何缓存中保存；每次点开/复制都重新请求。
+	const [plainKey, setPlainKey] = useState<string | null>(null);
+	const [keyLoading, setKeyLoading] = useState(false);
 
 	// 切换选择时重置明文展示状态。
 	const activeId = provider?.id;
 	const previousId = useRef(activeId);
 	if (previousId.current !== activeId) {
 		previousId.current = activeId;
-		setShowKey(false);
+		setPlainKey(null);
+		setKeyLoading(false);
 	}
-	const effectiveShowKey =
-		showKey && activeId !== null && detail?.id === activeId && !detailLoading;
 
 	if (!provider) {
 		return (
@@ -101,24 +91,27 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 		);
 	};
 
-	const handleCopyKey = async () => {
-		if (!provider) return;
+	/** 点小眼睛：脱敏 → 请求明文展示；明文 → 本地切回脱敏（不发请求）。 */
+	const handleToggleKey = async () => {
+		if (plainKey !== null) {
+			setPlainKey(null);
+			return;
+		}
+		setKeyLoading(true);
 		try {
-			// 已展开的用已加载明文，否则命令式拉取详情。
-			const plain =
-				effectiveShowKey && detail
-					? detail.apiKey
-					: (
-							await queryClient.fetchQuery({
-								queryKey: providerKeys.detail(provider.id),
-								queryFn: async () => {
-									const res = await api
-										.get(`providers/${provider.id}`)
-										.json<ApiResponse<ProviderDetailData>>();
-									return unwrap(res);
-								},
-							})
-						).apiKey;
+			const key = await fetchProviderApiKey(provider.id);
+			setPlainKey(key);
+		} catch (error) {
+			toastError(t("apiKeys.showKeyFailed"), error as Error);
+		} finally {
+			setKeyLoading(false);
+		}
+	};
+
+	/** 一键复制：无论当前是否已展示明文，都重新请求明文后写入剪贴板。 */
+	const handleCopyKey = async () => {
+		try {
+			const plain = await fetchProviderApiKey(provider.id);
 			await navigator.clipboard.writeText(plain);
 			toastSuccess(t("common.copiedToClipboard"));
 		} catch (error) {
@@ -149,23 +142,22 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 			<CardContent className="flex-1 space-y-6 py-6">
 				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 					<DetailRow label={t("providers.apiKey")}>
-						{detailLoading ? (
+						{keyLoading ? (
 							<Skeleton className="h-5 w-40" />
 						) : (
 							<span className="flex items-center gap-2 font-mono">
 								<KeyRound className="size-4 shrink-0 text-muted-foreground" />
-								<span className="truncate">
-									{effectiveShowKey ? detail?.apiKey : provider.apiKeyMasked}
-								</span>
+								<span className="truncate">{plainKey ?? provider.apiKeyMasked}</span>
 								<Button
 									type="button"
 									variant="ghost"
 									size="icon"
 									className="size-7 shrink-0"
-									aria-label={effectiveShowKey ? t("apiKeys.hideKey") : t("apiKeys.showKey")}
-									onClick={() => setShowKey((v) => !v)}
+									disabled={keyLoading}
+									aria-label={plainKey ? t("apiKeys.hideKey") : t("apiKeys.showKey")}
+									onClick={handleToggleKey}
 								>
-									{effectiveShowKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+									{plainKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
 								</Button>
 								<Button
 									type="button"

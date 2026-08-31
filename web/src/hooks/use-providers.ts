@@ -16,9 +16,13 @@ export interface Provider {
 	updatedAt: string;
 }
 
-/** 详情接口额外返回明文 apiKey（前端通过小眼睛切换展示）。 */
-export interface ProviderDetail extends Provider {
-	apiKey: string;
+/**
+ * 按需获取 Provider 明文 API Key（详情接口不返回明文）。
+ * 仅命令式调用，不经过 React Query 缓存，每次点击「显示/复制」都重新请求。
+ */
+export async function fetchProviderApiKey(id: number): Promise<string> {
+	const res = await api.get(`providers/${id}/api-key`).json<ApiResponse<{ apiKey: string }>>();
+	return (await unwrap(res)).apiKey;
 }
 
 export interface ProviderTemplate {
@@ -68,10 +72,10 @@ export function useProviders() {
 }
 
 export function useProviderDetail(id: number | null) {
-	return useQuery<ProviderDetail>({
+	return useQuery<Provider>({
 		queryKey: providerKeys.detail(id ?? -1),
 		queryFn: async () => {
-			const res = await api.get(`providers/${id}`).json<ApiResponse<ProviderDetail>>();
+			const res = await api.get(`providers/${id}`).json<ApiResponse<Provider>>();
 			return unwrap(res);
 		},
 		enabled: id !== null,

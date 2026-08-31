@@ -173,7 +173,7 @@ async fn test_create_provider_rejects_duplicate_name() {
 }
 
 #[tokio::test]
-async fn test_get_provider_detail_returns_plaintext_api_key() {
+async fn test_get_provider_detail_does_not_return_plaintext_api_key() {
     temp_env::async_with_vars([(ENCRYPTION_KEY_ENV, Some(TEST_KEY))], async {
         let (app, _db) = setup_app().await;
         let (_, created) = send_json(
@@ -187,8 +187,42 @@ async fn test_get_provider_detail_returns_plaintext_api_key() {
 
         let (status, body) = send_json(&app, "GET", &format!("/api/providers/{id}"), "{}").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["data"]["apiKey"], "sk-plain-9");
+        assert!(
+            body["data"].get("apiKey").is_none(),
+            "详情接口不得返回明文 api_key"
+        );
         assert_eq!(body["data"]["apiKeyMasked"], "sk-****in-9");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_get_provider_api_key_endpoint_returns_plaintext() {
+    temp_env::async_with_vars([(ENCRYPTION_KEY_ENV, Some(TEST_KEY))], async {
+        let (app, _db) = setup_app().await;
+        let (_, created) = send_json(
+            &app,
+            "POST",
+            "/api/providers",
+            &create_body("ApiKey", "https://api.apikey.com/v1", "sk-plain-9", r#"{}"#),
+        )
+        .await;
+        let id = created["data"]["id"].as_i64().unwrap();
+
+        let (status, body) =
+            send_json(&app, "GET", &format!("/api/providers/{id}/api-key"), "{}").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["apiKey"], "sk-plain-9");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_get_provider_api_key_endpoint_not_found() {
+    temp_env::async_with_vars([(ENCRYPTION_KEY_ENV, Some(TEST_KEY))], async {
+        let (app, _db) = setup_app().await;
+        let (status, _body) = send_json(&app, "GET", "/api/providers/99999/api-key", "{}").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     })
     .await;
 }

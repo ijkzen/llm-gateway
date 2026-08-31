@@ -29,6 +29,7 @@ pub fn routes() -> Router<AppState> {
         .route("/{id}", get(get_provider_detail))
         .route("/{id}", put(update_provider))
         .route("/{id}", delete(delete_provider))
+        .route("/{id}/api-key", get(get_provider_api_key))
         .route("/{id}/usage", get(get_provider_usage))
         .route("/{id}/usage/estimate", get(get_provider_usage_estimate))
         .nest(
@@ -79,12 +80,10 @@ impl ProviderResponse {
     }
 }
 
-/// 详情响应：在列表字段基础上附带解密后的明文 api_key。
+/// 明文 API Key 响应：仅通过 `GET /api/providers/{id}/api-key` 按需返回。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProviderDetailResponse {
-    #[serde(flatten)]
-    base: ProviderResponse,
+struct ProviderApiKeyResponse {
     api_key: String,
 }
 
@@ -253,17 +252,12 @@ fn mask_api_key(stored: &str) -> String {
     }
 }
 
-async fn load_detail(
-    db: &DatabaseConnection,
-    id: i32,
-) -> Result<Option<ProviderDetailResponse>, DbErr> {
-    Ok(Entity::find_by_id(id).one(db).await?.map(|model| {
-        let plain = crypto::decrypt(&model.api_key).unwrap_or_default();
-        ProviderDetailResponse {
-            api_key: plain,
-            base: ProviderResponse::from_model(model),
-        }
-    }))
+/// 详情响应：与列表一致，api_key 始终脱敏（明文仅通过 /api-key 端点按需提供）。
+async fn load_detail(db: &DatabaseConnection, id: i32) -> Result<Option<ProviderResponse>, DbErr> {
+    Ok(Entity::find_by_id(id)
+        .one(db)
+        .await?
+        .map(ProviderResponse::from_model))
 }
 
 async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
@@ -563,6 +557,35 @@ async fn get_provider_detail(
     let lang = state.settings.lang().await;
     match load_detail(&state.db, id).await {
         Ok(Some(detail)) => (StatusCode::OK, Json(Response::success(detail))),
+        Ok(None) => {
+            let msg = if lang == Lang::En {
+                format!("provider {id} does not exist")
+            } else {
+                format!("Provider {id} 不存在")
+            };
+            response::not_found(msg)
+        }
+        Err(e) => response::db_error(e.to_string()),
+    }
+}
+
+/// 按需返回某个 Provider 的明文 API Key（仅登录会话可访问）。
+///
+/// 详情接口不携带明文，前端在用户点击「显示/复制」时才请求本端点，
+/// 且每次点击都重新请求，明文不进入前端缓存。
+async fn get_provider_api_key(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
+    match Entity::find_by_id(id).one(&state.db).await {
+        Ok(Some(model)) => {
+            let plain = crypto::decrypt(&model.api_key).unwrap_or_default();
+            (
+                StatusCode::OK,
+                Json(Response::success(ProviderApiKeyResponse { api_key: plain })),
+            )
+        }
         Ok(None) => {
             let msg = if lang == Lang::En {
                 format!("provider {id} does not exist")
