@@ -70,7 +70,7 @@ DATABASE_URL=sqlite://db/app.db?mode=rwc BIND_ADDRESS=0.0.0.0:4007 cargo run
 docker pull ghcr.io/ijkzen/llm-gateway:latest
 
 # 生产建议固定版本 tag（避免拉取到后续不兼容的新版本）
-docker pull ghcr.io/ijkzen/llm-gateway:v0.1.3
+docker pull ghcr.io/ijkzen/llm-gateway:v0.1.4
 
 # 尝鲜最新 main 提交（未正式发布，勿用于生产）
 docker pull ghcr.io/ijkzen/llm-gateway:nightly
