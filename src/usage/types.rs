@@ -158,6 +158,40 @@ impl QuotaWindow {
 }
 
 impl UsageData {
+    /// 订阅制「当前是否可用」判定：全部厂商已提供的窗口剩余 > 0 → true；
+    /// 任一已提供窗口剩余为 0 → false；无任何可用窗口数据（无法判定）→ None。
+    /// 调用方在 None 时必须保持原状，避免上游抖动误伤。
+    /// （用量门控 `src/usage/persist.rs` 与 LB 选路 `src/proxy/mod.rs` 共用。）
+    pub fn subscription_usable(&self) -> Option<bool> {
+        if self.kind != UsageKind::Quota {
+            return None;
+        }
+        let mut saw_available = false;
+        for window in &self.windows {
+            if let Some(p) = window.remaining_percent_value() {
+                saw_available = true;
+                if p <= 0.0 {
+                    return Some(false);
+                }
+            }
+        }
+        saw_available.then_some(true)
+    }
+
+    /// 按量付费「当前是否可用」判定：查得到余额且全部余额条目合计 > 0 → true；
+    /// 查得到余额且合计 = 0 → false（余额耗尽，不参与负载均衡）；
+    /// 非 balance 形态 / 完全查不到余额（无法判定）→ None，视为可用，避免上游抖动误伤。
+    pub fn balance_usable(&self) -> Option<bool> {
+        if self.kind != UsageKind::Balance {
+            return None;
+        }
+        if self.balances.is_empty() {
+            return None;
+        }
+        let total: f64 = self.balances.iter().map(|b| b.amount).sum();
+        Some(total > 0.0)
+    }
+
     /// 返回 remaining_percent 已按 remaining_percent_value() 推导并取整的副本：
     /// 接口出口统一调用，前端直接使用该字段，无需自行推导/取整。
     pub fn with_normalized_remaining(&self) -> Self {
@@ -411,5 +445,42 @@ mod tests {
         assert!(v["windows"][0].get("usedPercent").is_none());
         // 空 balances 不输出
         assert!(v.get("balances").is_none());
+    }
+
+    #[test]
+    fn balance_usable_three_way() {
+        let balance = |amounts: &[f64]| UsageData {
+            provider_id: 1,
+            fetched_at: Utc::now(),
+            kind: UsageKind::Balance,
+            plan: None,
+            windows: vec![],
+            balances: amounts
+                .iter()
+                .map(|a| BalanceItem {
+                    label: "余额".to_string(),
+                    amount: *a,
+                    currency: None,
+                })
+                .collect(),
+        };
+        // 查得到余额且合计 > 0 → 可用。
+        assert_eq!(balance(&[100.0]).balance_usable(), Some(true));
+        assert_eq!(balance(&[50.0, 0.5]).balance_usable(), Some(true));
+        // 查得到余额且合计 = 0 → 不可用（余额耗尽）。
+        assert_eq!(balance(&[0.0]).balance_usable(), Some(false));
+        assert_eq!(balance(&[0.0, 0.0]).balance_usable(), Some(false));
+        // 完全查不到余额（空 balances）→ 无法判定，视为可用。
+        assert_eq!(balance(&[]).balance_usable(), None);
+        // 非 balance 形态 → 无法判定。
+        let quota = UsageData {
+            provider_id: 1,
+            fetched_at: Utc::now(),
+            kind: UsageKind::Quota,
+            plan: None,
+            windows: empty_windows(),
+            balances: vec![],
+        };
+        assert_eq!(quota.balance_usable(), None);
     }
 }

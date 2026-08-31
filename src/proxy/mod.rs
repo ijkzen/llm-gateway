@@ -38,7 +38,7 @@ use crate::proxy::pool::PooledBody;
 use crate::proxy::upstream::{UpstreamCall, UpstreamReply};
 use crate::state::AppState;
 use crate::usage::persist::{fetch_and_store, read_usage_cache};
-use crate::usage::types::UsageData;
+use crate::usage::types::{UsageData, UsageKind, WindowKind};
 
 /// 上游协议（provider.protocol_type）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,6 +153,40 @@ async fn load_members(
         .collect())
 }
 
+/// 把用量数据格式化为可读字符串，用于 LB 决策日志：
+/// - 订阅制：`quota[5h:92.4%,week:70.3%,mon:85.2%]`（无数据的窗口显示 `-`）
+/// - 按量：`balance=7.65`（余额合计）
+/// - 无数据：`no-usage`
+fn format_usage(data: Option<&UsageData>) -> String {
+    let Some(data) = data else {
+        return "no-usage".to_string();
+    };
+    match data.kind {
+        UsageKind::Quota => {
+            let parts: Vec<String> = [
+                WindowKind::FiveHour,
+                WindowKind::Weekly,
+                WindowKind::Monthly,
+            ]
+            .iter()
+            .map(|kind| {
+                let pct = data
+                    .windows
+                    .iter()
+                    .find(|w| w.window == *kind)
+                    .and_then(|w| w.remaining_percent_value());
+                match pct {
+                    Some(p) => format!("{p}"),
+                    None => "-".to_string(),
+                }
+            })
+            .collect();
+            format!("quota[5h:{},week:{},mon:{}]", parts[0], parts[1], parts[2])
+        }
+        UsageKind::Balance => format!("balance={:.2}", usage_rank::balance_amount(Some(data))),
+    }
+}
+
 /// 按虚拟模型的负载均衡策略排序成员。
 ///
 /// 策略 0/1 分组后做组内用量感知排序（订阅制按 5h→周→月剩余百分比逐层比较、
@@ -165,6 +199,7 @@ async fn order_members(
     strategy: i32,
     lb_state: &LbState,
     virtual_model_id: i32,
+    request_id: &str,
 ) -> Vec<Member> {
     match strategy {
         // 订阅制优先 / 按量优先：先按付费模式分组，再组内按剩余用量排序。
@@ -180,8 +215,92 @@ async fn order_members(
                 };
                 group.push(member);
             }
-            let mut subs = rank_by_quota(state, subs).await;
-            let mut payg = rank_by_balance(state, payg).await;
+            // 决策过程日志：先打印订阅制与按量两组所有成员的用量明细，
+            // 再打印排序后的顺序，便于事后还原「为什么选它」。
+            // 用量一次解析全部成员（10 分钟缓存/抓取），两组共用同一份。
+            let usage_map = resolve_usage_map(
+                state,
+                &subs.iter().chain(&payg).cloned().collect::<Vec<_>>(),
+            )
+            .await;
+            let member_detail = |member: &Member, usage: &HashMap<i32, Option<UsageData>>| {
+                format!(
+                    "{}:{} billing={} {}",
+                    member.provider_id,
+                    member.model_id,
+                    member.billing_mode,
+                    format_usage(usage.get(&member.provider_id).and_then(Option::as_ref)),
+                )
+            };
+            let subs_desc: Vec<String> =
+                subs.iter().map(|m| member_detail(m, &usage_map)).collect();
+            let payg_desc: Vec<String> =
+                payg.iter().map(|m| member_detail(m, &usage_map)).collect();
+            tracing::info!(
+                request_id,
+                virtual_model_id,
+                strategy,
+                subscription_first,
+                subscription_members = ?subs_desc,
+                payg_members = ?payg_desc,
+                "LB 决策：成员用量明细",
+            );
+
+            let mut subs = rank_by_quota_with(state, subs, &usage_map).await;
+            let mut payg = rank_by_balance_with(state, payg, &usage_map).await;
+            // 订阅制额度耗尽即跳过：任一已提供窗口剩余为 0 的订阅成员视为当前
+            // 不可用（与用量门控 apply_usage_gate 同口径），从候选里剔除，让位给
+            // 还有额度的订阅成员或按量成员；无法判定（无窗口数据）的保持原状。
+            let mut skipped: Vec<String> = Vec::new();
+            subs.retain(|m| {
+                let usable = usage_map
+                    .get(&m.provider_id)
+                    .and_then(Option::as_ref)
+                    .and_then(UsageData::subscription_usable);
+                match usable {
+                    Some(false) => {
+                        skipped.push(member_detail(m, &usage_map));
+                        false
+                    }
+                    _ => true,
+                }
+            });
+            // 按量付费余额耗尽即跳过：查得到余额且合计为 0 的按量成员不可用
+            // （与订阅制同口径），从候选剔除；查不到余额（无法判定）的保持原状。
+            let mut skipped_balance: Vec<String> = Vec::new();
+            payg.retain(|m| {
+                let usable = usage_map
+                    .get(&m.provider_id)
+                    .and_then(Option::as_ref)
+                    .and_then(UsageData::balance_usable);
+                match usable {
+                    Some(false) => {
+                        skipped_balance.push(member_detail(m, &usage_map));
+                        false
+                    }
+                    _ => true,
+                }
+            });
+            let (first_group, second_group) = if subscription_first {
+                (subs.as_slice(), payg.as_slice())
+            } else {
+                (payg.as_slice(), subs.as_slice())
+            };
+            let ordered_desc: Vec<String> = first_group
+                .iter()
+                .chain(second_group)
+                .map(|m| member_detail(m, &usage_map))
+                .collect();
+            tracing::info!(
+                request_id,
+                virtual_model_id,
+                strategy,
+                skipped_quota_exhausted = ?skipped,
+                skipped_balance_exhausted = ?skipped_balance,
+                ordered = ?ordered_desc,
+                "LB 决策：排序结果",
+            );
+
             if subscription_first {
                 subs.append(&mut payg);
                 subs
@@ -213,11 +332,15 @@ async fn order_members(
 
 /// 订阅制组内排序：剩余百分比 5h→周→月 降序。先 shuffle 再稳定排序，
 /// 三层全平的成员保持随机相对顺序（即“同等条件随机选一个”）。
-async fn rank_by_quota(state: &AppState, mut members: Vec<Member>) -> Vec<Member> {
+/// `usage` 由调用方已解析（决策日志共用同一份，避免重复抓取）。
+async fn rank_by_quota_with(
+    _state: &AppState,
+    mut members: Vec<Member>,
+    usage: &HashMap<i32, Option<UsageData>>,
+) -> Vec<Member> {
     if members.len() <= 1 {
         return members;
     }
-    let usage = resolve_usage_map(state, &members).await;
     members.shuffle(&mut rand::thread_rng());
     // 自然序比较器（a vs b）；sort_by 升序，因此交换参数实现「剩余多的在前」。
     members.sort_by(|a, b| {
@@ -230,11 +353,15 @@ async fn rank_by_quota(state: &AppState, mut members: Vec<Member>) -> Vec<Member
 }
 
 /// 按量付费组内排序：剩余金额合计降序（同额保持原序）。
-async fn rank_by_balance(state: &AppState, mut members: Vec<Member>) -> Vec<Member> {
+/// `usage` 由调用方已解析（决策日志共用同一份，避免重复抓取）。
+async fn rank_by_balance_with(
+    _state: &AppState,
+    mut members: Vec<Member>,
+    usage: &HashMap<i32, Option<UsageData>>,
+) -> Vec<Member> {
     if members.len() <= 1 {
         return members;
     }
-    let usage = resolve_usage_map(state, &members).await;
     members.sort_by(|a, b| {
         usage_rank::cmp_balance(
             usage.get(&b.provider_id).and_then(Option::as_ref),
@@ -655,8 +782,23 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
         virtual_model.load_balancing_strategy,
         &state.lb_state,
         virtual_model.virtual_model_id,
+        &request_id,
     )
     .await;
+    if ordered.is_empty() {
+        tracing::warn!(
+            request_id,
+            virtual_model_id = virtual_model.virtual_model_id,
+            requested_model = %requested_model,
+            "虚拟模型成员全部因额度耗尽不可用，无可用候选",
+        );
+        return openai_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            format!("虚拟模型 '{requested_model}' 没有可用的成员（订阅制额度均已耗尽）"),
+            "server_error",
+            "no_available_members",
+        );
+    }
     let retry_enabled = virtual_model.fallback_strategy == 1;
 
     // 负载均衡决策日志：选路结果每请求 1 条 info；完整排序明细 debug

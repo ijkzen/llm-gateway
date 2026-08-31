@@ -16,7 +16,7 @@ use sea_orm::{
 use serde_json::Value;
 
 use crate::entity::{provider, usage_cache};
-use crate::usage::types::{UsageData, UsageKind};
+use crate::usage::types::UsageData;
 use crate::usage::{UsageCache, UsageError};
 
 /// 数据库缓存新鲜时长：10 分钟内直出缓存，过期则重新抓取。
@@ -153,27 +153,10 @@ pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> 
     Ok(ok)
 }
 
-/// 订阅制「当前是否可用」判定：全部厂商已提供的窗口剩余 > 0 → true；
-/// 任一已提供窗口剩余为 0 → false；无任何可用窗口数据（无法判定）→ None。
-/// 调用方在 None 时必须保持原状，避免上游抖动误伤。
-fn subscription_usable(data: &UsageData) -> Option<bool> {
-    if data.kind != UsageKind::Quota {
-        return None;
-    }
-    let mut saw_available = false;
-    for window in &data.windows {
-        if let Some(p) = window.remaining_percent_value() {
-            saw_available = true;
-            if p <= 0.0 {
-                return Some(false);
-            }
-        }
-    }
-    saw_available.then_some(true)
-}
-
 // Provider 及其虚拟模型子模型的启用状态开关已收编到 `crate::provider_repo`
 // （`set_provider_enabled` / `set_items_enabled`），接口与定时任务共用同一入口并输出日志。
+// 「订阅制是否可用」判定已收敛到 `UsageData::subscription_usable`（src/usage/types.rs），
+// 用量门控与 LB 选路共用同一口径。
 
 /// 订阅额度自动停用/恢复。仅对订阅制（billing_mode=1）且能判定的数据生效；
 /// 抓取失败/无窗口数据的场景由调用方保证不传入或不做动作。
@@ -185,7 +168,7 @@ pub async fn apply_usage_gate(
     if p.billing_mode != 1 {
         return Ok(());
     }
-    let usable = match subscription_usable(data) {
+    let usable = match data.subscription_usable() {
         Some(v) => v,
         None => return Ok(()),
     };
@@ -236,7 +219,7 @@ mod tests {
         let mut windows = empty_windows();
         set_window(&mut windows, window(WindowKind::FiveHour, 42.0));
         set_window(&mut windows, window(WindowKind::Weekly, 80.0));
-        assert_eq!(subscription_usable(&quota_data(1, windows)), Some(true));
+        assert_eq!(quota_data(1, windows).subscription_usable(), Some(true));
     }
 
     #[test]
@@ -246,13 +229,13 @@ mod tests {
         set_window(&mut windows, window(WindowKind::FiveHour, 5.0));
         set_window(&mut windows, window(WindowKind::Weekly, 0.0));
         set_window(&mut windows, window(WindowKind::Monthly, 90.0));
-        assert_eq!(subscription_usable(&quota_data(1, windows)), Some(false));
+        assert_eq!(quota_data(1, windows).subscription_usable(), Some(false));
     }
 
     #[test]
     fn subscription_usable_no_provided_window_is_none() {
         // 厂商未提供任何窗口数据 → 无法判定。
-        assert_eq!(subscription_usable(&quota_data(1, empty_windows())), None);
+        assert_eq!(quota_data(1, empty_windows()).subscription_usable(), None);
         // 余额形态的订阅供应商 → 无法判定。
         let balance = UsageData {
             provider_id: 1,
@@ -262,7 +245,7 @@ mod tests {
             windows: vec![],
             balances: vec![],
         };
-        assert_eq!(subscription_usable(&balance), None);
+        assert_eq!(balance.subscription_usable(), None);
     }
 
     #[tokio::test]
