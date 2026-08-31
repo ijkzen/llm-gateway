@@ -438,6 +438,20 @@ async fn create_virtual_model(
         return response::db_error(e.to_string());
     }
 
+    tracing::info!(
+        virtual_model_id = model.virtual_model_id,
+        display_id = %model.display_id,
+        enable = model.enable,
+        load_balancing_strategy = model.load_balancing_strategy,
+        fallback_strategy = model.fallback_strategy,
+        member_count = items.len(),
+        members = ?items
+            .iter()
+            .map(|i| (i.model_id, i.enable))
+            .collect::<Vec<_>>(),
+        "创建虚拟模型",
+    );
+
     match load_virtual_model_response(&state.db, model).await {
         Ok(resp) => (StatusCode::CREATED, Json(Response::success(resp))),
         Err(e) => response::db_error(e.to_string()),
@@ -479,7 +493,10 @@ async fn update_virtual_model(
         Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
     };
 
-    // 成员 diff 更新：传入 items 时以其为最终成员集合。
+    // 成员 diff 更新：传入 items 时以其为最终成员集合。收集变更信息供成功日志使用。
+    let mut added: Vec<i32> = Vec::new();
+    let mut toggled: Vec<(i32, bool)> = Vec::new();
+    let mut removed: Vec<i32> = Vec::new();
     if let Some(req_items) = &req.items {
         if req_items.is_empty() {
             return response::bad_request::<()>(
@@ -508,7 +525,7 @@ async fn update_virtual_model(
             .map(|item| (item.model_id, item))
             .collect();
         let keep_ids: HashSet<i32> = model_ids.iter().copied().collect();
-        let removed: Vec<i32> = current_map
+        removed = current_map
             .keys()
             .copied()
             .filter(|model_id| !keep_ids.contains(model_id))
@@ -516,7 +533,7 @@ async fn update_virtual_model(
         if !removed.is_empty()
             && let Err(e) = virtual_model_item::Entity::delete_many()
                 .filter(virtual_model_item::Column::VirtualModelId.eq(id))
-                .filter(virtual_model_item::Column::ModelId.is_in(removed))
+                .filter(virtual_model_item::Column::ModelId.is_in(removed.clone()))
                 .exec(&txn)
                 .await
         {
@@ -534,6 +551,7 @@ async fn update_virtual_model(
                     if let Err(e) = active.update(&txn).await {
                         return response::db_error::<()>(e.to_string()).into_response();
                     }
+                    toggled.push((item.model_id, item.enable));
                 }
                 Some(_) => {}
                 None => {
@@ -544,6 +562,7 @@ async fn update_virtual_model(
                         }
                         return response::db_error::<()>(e.to_string()).into_response();
                     }
+                    added.push(item.model_id);
                 }
             }
         }
@@ -561,6 +580,17 @@ async fn update_virtual_model(
             if let Err(e) = txn.commit().await {
                 return response::db_error::<()>(e.to_string()).into_response();
             }
+            tracing::info!(
+                virtual_model_id = model.virtual_model_id,
+                display_id = %model.display_id,
+                enable = model.enable,
+                load_balancing_strategy = model.load_balancing_strategy,
+                fallback_strategy = model.fallback_strategy,
+                added_members = ?added,
+                removed_members = ?removed,
+                toggled_members = ?toggled,
+                "更新虚拟模型",
+            );
             match load_virtual_model_response(&state.db, model).await {
                 Ok(resp) => (StatusCode::OK, Json(Response::success(resp))).into_response(),
                 Err(e) => response::db_error::<()>(e.to_string()).into_response(),
@@ -578,21 +608,36 @@ async fn delete_virtual_model(
     Path(id): Path<i32>,
 ) -> impl IntoResponse {
     let lang = state.settings.lang().await;
+    // 先查原记录（日志需要 display_id），不存在直接 404。
+    let existing = match Entity::find_by_id(id).one(&state.db).await {
+        Ok(Some(model)) => model,
+        Ok(None) => return not_found_virtual_model(lang, id),
+        Err(e) => return response::db_error(e.to_string()),
+    };
     // 级联硬删：同一事务内先删全部成员条目（释放成员模型），再删虚拟模型本身。
     let txn = match state.db.begin().await {
         Ok(txn) => txn,
         Err(e) => return response::db_error(e.to_string()),
     };
-    if let Err(e) = virtual_model_item::Entity::delete_many()
+    let deleted_item_count = match virtual_model_item::Entity::delete_many()
         .filter(virtual_model_item::Column::VirtualModelId.eq(id))
         .exec(&txn)
         .await
     {
-        return response::db_error(e.to_string());
-    }
+        Ok(result) => result.rows_affected,
+        Err(e) => return response::db_error(e.to_string()),
+    };
     match Entity::delete_by_id(id).exec(&txn).await {
         Ok(result) if result.rows_affected > 0 => match txn.commit().await {
-            Ok(()) => (StatusCode::OK, Json(Response::success(()))),
+            Ok(()) => {
+                tracing::info!(
+                    virtual_model_id = existing.virtual_model_id,
+                    display_id = %existing.display_id,
+                    deleted_item_count,
+                    "删除虚拟模型（级联删除全部成员）",
+                );
+                (StatusCode::OK, Json(Response::success(())))
+            }
             Err(e) => response::db_error(e.to_string()),
         },
         Ok(_) => not_found_virtual_model(lang, id),

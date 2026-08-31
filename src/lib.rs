@@ -9,6 +9,7 @@ pub mod i18n;
 pub mod logs_cleanup;
 pub mod middleware;
 pub mod provider_model;
+pub mod provider_repo;
 pub mod provider_template;
 pub mod proxy;
 pub mod response;

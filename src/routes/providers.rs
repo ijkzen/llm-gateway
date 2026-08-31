@@ -6,8 +6,8 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, DbErr,
-    EntityTrait, QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, DbErr, EntityTrait, QueryFilter,
+    QueryOrder, Set, Statement, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -323,7 +323,7 @@ async fn create_provider(
         ..Default::default()
     };
 
-    match active.insert(&state.db).await {
+    match crate::provider_repo::insert_provider(&state.db, active).await {
         Ok(model) => {
             let response = ProviderResponse::from_model(model);
             (StatusCode::CREATED, Json(Response::success(response)))
@@ -398,7 +398,7 @@ async fn update_provider(
     active.sort_order = Set(req.sort_order.unwrap_or(active.sort_order.unwrap()));
     active.updated_at = Set(chrono::Utc::now());
 
-    match active.update(&state.db).await {
+    match crate::provider_repo::update_provider(&state.db, active).await {
         Ok(model) => {
             // 凭据/字段可能变化，失效（内存 + 数据库）用量缓存避免展示旧结果。
             state.usage_cache.invalidate(id).await;
@@ -489,12 +489,26 @@ async fn reorder_providers(
 
 async fn delete_provider(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
     let lang = state.settings.lang().await;
+    // 先查原记录（日志需要 name），不存在直接 404。
+    let provider = match provider::Entity::find_by_id(id).one(&state.db).await {
+        Ok(Some(model)) => model,
+        Ok(None) => {
+            let msg = if lang == Lang::En {
+                format!("provider {id} does not exist")
+            } else {
+                format!("Provider {id} 不存在")
+            };
+            return response::not_found(msg);
+        }
+        Err(e) => return response::db_error(e.to_string()),
+    };
     // 级联硬删：同一事务内先删引用该供应商模型的虚拟模型成员（释放成员），
     // 再删该供应商名下全部模型，最后删供应商本身，避免 virtual_model_item 悬空。
     let txn = match state.db.begin().await {
         Ok(txn) => txn,
         Err(e) => return response::db_error(e.to_string()),
     };
+    let mut deleted_item_count: u64 = 0;
     let model_ids: Vec<i32> = match provider_model::Entity::find()
         .filter(provider_model::Column::ProviderId.eq(id))
         .all(&txn)
@@ -503,24 +517,33 @@ async fn delete_provider(State(state): State<AppState>, Path(id): Path<i32>) -> 
         Ok(models) => models.into_iter().map(|pm| pm.model_id).collect(),
         Err(e) => return response::db_error(e.to_string()),
     };
-    if !model_ids.is_empty()
-        && let Err(e) = virtual_model_item::Entity::delete_many()
+    if !model_ids.is_empty() {
+        match virtual_model_item::Entity::delete_many()
             .filter(virtual_model_item::Column::ModelId.is_in(model_ids))
             .exec(&txn)
             .await
-    {
-        return response::db_error(e.to_string());
+        {
+            Ok(result) => deleted_item_count = result.rows_affected,
+            Err(e) => return response::db_error(e.to_string()),
+        }
     }
-    if let Err(e) = provider_model::Entity::delete_many()
+    let deleted_model_count = match provider_model::Entity::delete_many()
         .filter(provider_model::Column::ProviderId.eq(id))
         .exec(&txn)
         .await
     {
-        return response::db_error(e.to_string());
-    }
-    match Entity::delete_by_id(id).exec(&txn).await {
-        Ok(result) if result.rows_affected > 0 => match txn.commit().await {
+        Ok(result) => result.rows_affected,
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    match crate::provider_repo::delete_provider(&txn, provider).await {
+        Ok(()) => match txn.commit().await {
             Ok(()) => {
+                tracing::info!(
+                    provider_id = id,
+                    deleted_model_count,
+                    deleted_item_count,
+                    "删除供应商（级联删除名下模型与虚拟模型成员）"
+                );
                 state.usage_cache.invalidate(id).await;
                 if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {
                     tracing::warn!(provider_id = id, "用量缓存失效失败：{e}");
@@ -529,14 +552,6 @@ async fn delete_provider(State(state): State<AppState>, Path(id): Path<i32>) -> 
             }
             Err(e) => response::db_error(e.to_string()),
         },
-        Ok(_) => {
-            let msg = if lang == Lang::En {
-                format!("provider {id} does not exist")
-            } else {
-                format!("Provider {id} 不存在")
-            };
-            response::not_found(msg)
-        }
         Err(e) => response::db_error(e.to_string()),
     }
 }

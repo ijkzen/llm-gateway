@@ -15,7 +15,7 @@ use sea_orm::{
 };
 use serde_json::Value;
 
-use crate::entity::{provider, provider_model, usage_cache, virtual_model_item};
+use crate::entity::{provider, usage_cache};
 use crate::usage::types::{UsageData, UsageKind};
 use crate::usage::{UsageCache, UsageError};
 
@@ -172,58 +172,8 @@ fn subscription_usable(data: &UsageData) -> Option<bool> {
     saw_available.then_some(true)
 }
 
-async fn set_provider_enabled(
-    db: &DatabaseConnection,
-    provider_id: i32,
-    enabled: bool,
-) -> Result<bool, DbErr> {
-    let Some(row) = provider::Entity::find_by_id(provider_id).one(db).await? else {
-        return Ok(false);
-    };
-    if row.enable == enabled {
-        return Ok(false);
-    }
-    let mut active: provider::ActiveModel = row.into();
-    active.enable = Set(enabled);
-    active.updated_at = Set(Utc::now());
-    active.update(db).await?;
-    Ok(true)
-}
-
-/// 级联开关该供应商名下全部虚拟模型子模型，返回实际变更的条目数。
-async fn set_items_enabled(
-    db: &DatabaseConnection,
-    provider_id: i32,
-    enabled: bool,
-) -> Result<usize, DbErr> {
-    let model_ids: Vec<i32> = provider_model::Entity::find()
-        .filter(provider_model::Column::ProviderId.eq(provider_id))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|m| m.model_id)
-        .collect();
-    if model_ids.is_empty() {
-        return Ok(0);
-    }
-    let items = virtual_model_item::Entity::find()
-        .filter(virtual_model_item::Column::ModelId.is_in(model_ids))
-        .all(db)
-        .await?;
-    let now = Utc::now();
-    let mut count = 0;
-    for item in items {
-        if item.enable == enabled {
-            continue;
-        }
-        let mut active: virtual_model_item::ActiveModel = item.into();
-        active.enable = Set(enabled);
-        active.updated_at = Set(now);
-        active.update(db).await?;
-        count += 1;
-    }
-    Ok(count)
-}
+// Provider 及其虚拟模型子模型的启用状态开关已收编到 `crate::provider_repo`
+// （`set_provider_enabled` / `set_items_enabled`），接口与定时任务共用同一入口并输出日志。
 
 /// 订阅额度自动停用/恢复。仅对订阅制（billing_mode=1）且能判定的数据生效；
 /// 抓取失败/无窗口数据的场景由调用方保证不传入或不做动作。
@@ -240,16 +190,16 @@ pub async fn apply_usage_gate(
         None => return Ok(()),
     };
     if usable && !p.enable {
-        set_provider_enabled(db, p.id, true).await?;
-        let items = set_items_enabled(db, p.id, true).await?;
+        crate::provider_repo::set_provider_enabled(db, p.id, true).await?;
+        let items = crate::provider_repo::set_items_enabled(db, p.id, true).await?;
         tracing::info!(
             provider_id = p.id,
             items,
             "订阅额度已恢复，自动启用供应商及其全部虚拟模型子模型"
         );
     } else if !usable && p.enable {
-        set_provider_enabled(db, p.id, false).await?;
-        let items = set_items_enabled(db, p.id, false).await?;
+        crate::provider_repo::set_provider_enabled(db, p.id, false).await?;
+        let items = crate::provider_repo::set_items_enabled(db, p.id, false).await?;
         tracing::info!(
             provider_id = p.id,
             items,

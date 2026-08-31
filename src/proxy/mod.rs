@@ -659,6 +659,33 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
     .await;
     let retry_enabled = virtual_model.fallback_strategy == 1;
 
+    // 负载均衡决策日志：选路结果每请求 1 条 info；完整排序明细 debug
+    // （默认 RUST_LOG=info 不输出，深排时临时调 debug）。
+    let ordered_desc: Vec<String> = ordered
+        .iter()
+        .map(|m| format!("{}:{}", m.provider_id, m.model_id))
+        .collect();
+    tracing::debug!(
+        request_id,
+        virtual_model_id = virtual_model.virtual_model_id,
+        requested_model = %requested_model,
+        strategy = virtual_model.load_balancing_strategy,
+        member_order = ?ordered_desc,
+        "LB 排序明细",
+    );
+    if let Some(first) = ordered.first() {
+        tracing::info!(
+            request_id,
+            virtual_model_id = virtual_model.virtual_model_id,
+            requested_model = %requested_model,
+            strategy = virtual_model.load_balancing_strategy,
+            member_count = ordered.len(),
+            selected_provider_id = first.provider_id,
+            selected_model_id = %first.model_id,
+            "LB 选路结果",
+        );
+    }
+
     let mut last_failure: Option<(Member, String, StatusCode)> = None;
     for (index, member) in ordered.iter().enumerate() {
         let has_more = index + 1 < ordered.len();
@@ -668,6 +695,15 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             Err(e) => {
                 let message = format!("解密供应商密钥失败：{e}");
                 if retry_enabled && has_more {
+                    tracing::warn!(
+                        request_id,
+                        virtual_model_id = virtual_model.virtual_model_id,
+                        provider_id = member.provider_id,
+                        model_id = %member.model_id,
+                        attempt_index = index,
+                        fail_reason = %message,
+                        "上游成员失败，降级重试下一成员",
+                    );
                     last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
@@ -697,6 +733,15 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                 Ok(result) => result,
                 Err(message) => {
                     if retry_enabled && has_more {
+                        tracing::warn!(
+                            request_id,
+                            virtual_model_id = virtual_model.virtual_model_id,
+                            provider_id = member.provider_id,
+                            model_id = %member.model_id,
+                            attempt_index = index,
+                            fail_reason = %message,
+                            "上游成员请求构造失败，降级重试下一成员",
+                        );
                         last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                         continue;
                     }
@@ -726,6 +771,15 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             Err(e) => {
                 let message = e.fail_reason();
                 if retry_enabled && has_more {
+                    tracing::warn!(
+                        request_id,
+                        virtual_model_id = virtual_model.virtual_model_id,
+                        provider_id = member.provider_id,
+                        model_id = %member.model_id,
+                        attempt_index = index,
+                        fail_reason = %message,
+                        "上游成员调用失败，降级重试下一成员",
+                    );
                     last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
@@ -755,6 +809,16 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             let message = extract_error_message(&String::from_utf8_lossy(&body));
             let status = reply.status;
             if retry_enabled && is_retryable_status(status) && has_more {
+                tracing::warn!(
+                    request_id,
+                    virtual_model_id = virtual_model.virtual_model_id,
+                    provider_id = member.provider_id,
+                    model_id = %member.model_id,
+                    attempt_index = index,
+                    http_status = status.as_u16(),
+                    fail_reason = %message,
+                    "上游成员返回可重试错误，降级重试下一成员",
+                );
                 last_failure = Some((member.clone(), message, status));
                 continue;
             }
@@ -805,6 +869,15 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             StatusCode::BAD_GATEWAY,
         )
     });
+    tracing::error!(
+        request_id,
+        virtual_model_id = virtual_model.virtual_model_id,
+        provider_id = member.provider_id,
+        model_id = %member.model_id,
+        http_status = status.as_u16(),
+        fail_reason = %message,
+        "虚拟模型全部成员失败",
+    );
     let start_time = now_ms();
     record_failure(
         &state.db,

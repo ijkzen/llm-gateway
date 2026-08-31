@@ -270,6 +270,18 @@ async fn create_provider_model(
 
     match active.insert(&state.db).await {
         Ok(model) => {
+            tracing::info!(
+                model_id = model.model_id,
+                provider_id = model.provider_id,
+                provider_model_id = %model.provider_model_id,
+                context_length = model.context_length,
+                max_output_tokens = model.max_output_tokens,
+                reasoning = model.reasoning,
+                tool_use = model.tool_use,
+                image_understand = model.image_understand,
+                video_understand = model.video_understand,
+                "创建供应商模型",
+            );
             let response = ProviderModelResponse::from_model(model);
             (StatusCode::CREATED, Json(Response::success(response)))
         }
@@ -361,7 +373,18 @@ async fn batch_create_provider_models(
         }
     }
     match txn.commit().await {
-        Ok(()) => (StatusCode::CREATED, Json(Response::success(created))),
+        Ok(()) => {
+            tracing::info!(
+                provider_id,
+                created_count = created.len(),
+                model_ids = ?created
+                    .iter()
+                    .map(|m| m.model_id)
+                    .collect::<Vec<_>>(),
+                "批量创建供应商模型",
+            );
+            (StatusCode::CREATED, Json(Response::success(created)))
+        }
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -398,6 +421,18 @@ async fn update_provider_model(
 
     match active.update(&state.db).await {
         Ok(model) => {
+            tracing::info!(
+                model_id = model.model_id,
+                provider_id = model.provider_id,
+                provider_model_id = %model.provider_model_id,
+                context_length = model.context_length,
+                max_output_tokens = model.max_output_tokens,
+                reasoning = model.reasoning,
+                tool_use = model.tool_use,
+                image_understand = model.image_understand,
+                video_understand = model.video_understand,
+                "更新供应商模型",
+            );
             let response = ProviderModelResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }
@@ -417,7 +452,10 @@ async fn delete_provider_model(
         .exec(&state.db)
         .await
     {
-        Ok(result) if result.rows_affected > 0 => (StatusCode::OK, Json(Response::success(()))),
+        Ok(result) if result.rows_affected > 0 => {
+            tracing::info!(provider_id, model_id, "删除供应商模型",);
+            (StatusCode::OK, Json(Response::success(())))
+        }
         Ok(_) => not_found_model(lang, model_id),
         Err(e) => response::db_error(e.to_string()),
     }
