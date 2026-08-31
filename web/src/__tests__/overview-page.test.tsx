@@ -37,6 +37,29 @@ vi.mock("@/hooks/use-dashboard-stats", () => ({
 	},
 }));
 
+vi.mock("@/hooks/use-dashboard-insight", () => ({
+	useDashboardInsight: () => ({
+		data: {
+			failureTrend: [],
+			failureRateTrend: [],
+			failureReasons: [],
+			ttftPercentiles: [],
+			latencyPercentiles: [],
+			inputTokenTrend: [],
+			outputTokenTrend: [],
+			cacheHitRateTrend: [],
+			outputTokensPerSecTrend: [],
+			apiKeyRank: [],
+			rpmTrend: [],
+			tpmTrend: [],
+			streamRatioTrend: [],
+		},
+		isLoading: false,
+		isError: false,
+		refetch: vi.fn(),
+	}),
+}));
+
 // 图表组件依赖浏览器布局尺寸，jsdom 下用 stub 标记当前视图。
 vi.mock("@/components/dashboard-charts", () => ({
 	TrendLineChart: () => <div data-testid="trend-chart" />,

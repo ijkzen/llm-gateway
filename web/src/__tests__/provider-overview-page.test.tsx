@@ -36,6 +36,29 @@ vi.mock("@/hooks/use-dashboard-stats", () => ({
 	},
 }));
 
+vi.mock("@/hooks/use-dashboard-insight", () => ({
+	useDashboardInsight: () => ({
+		data: {
+			failureTrend: [],
+			failureRateTrend: [],
+			failureReasons: [],
+			ttftPercentiles: [],
+			latencyPercentiles: [],
+			inputTokenTrend: [],
+			outputTokenTrend: [],
+			cacheHitRateTrend: [],
+			outputTokensPerSecTrend: [],
+			apiKeyRank: [],
+			rpmTrend: [],
+			tpmTrend: [],
+			streamRatioTrend: [],
+		},
+		isLoading: false,
+		isError: false,
+		refetch: vi.fn(),
+	}),
+}));
+
 vi.mock("@/hooks/use-providers", () => ({
 	useProviderDetail: () => ({ data: { name: mocks.providerName } }),
 }));

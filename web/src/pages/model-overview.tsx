@@ -1,4 +1,5 @@
 import { TrendLineChart } from "@/components/dashboard-charts";
+import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
@@ -7,6 +8,7 @@ import {
 import { StatsCard } from "@/components/stats-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useModelMetrics } from "@/hooks/use-model-metrics";
 import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race-period";
@@ -16,11 +18,12 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router-dom";
 
-/** 三级页三个区块的独立时间段状态。 */
+/** 三级页四个区块的独立时间段状态。 */
 interface ModelOverviewWindows {
 	call: RaceWindowState;
 	token: RaceWindowState;
 	metrics: RaceWindowState;
+	insight: RaceWindowState;
 }
 
 /** 从 URL query 解析初始时间段（缺省当天）；入口赛马行点击时携带。 */
@@ -47,16 +50,22 @@ export default function ModelOverviewPage() {
 	const modelId = decodeURIComponent(modelIdParam ?? "");
 	const [searchParams] = useSearchParams();
 
-	// 三块独立时间段，初始值来自 URL（无参数默认当天）。
+	// 四块独立时间段，初始值来自 URL（无参数默认当天）。
 	const [windows, setWindows] = useState<ModelOverviewWindows>(() => {
 		const initial = initialWindowFromUrl(searchParams);
-		return { call: { ...initial }, token: { ...initial }, metrics: { ...initial } };
+		return {
+			call: { ...initial },
+			token: { ...initial },
+			metrics: { ...initial },
+			insight: { ...initial },
+		};
 	});
 	const [now] = useState(() => Date.now());
 
 	const callWindow = raceWindowBounds(windows.call, now);
 	const tokenWindow = raceWindowBounds(windows.token, now);
 	const metricsWindow = raceWindowBounds(windows.metrics, now);
+	const insightWindow = raceWindowBounds(windows.insight, now);
 
 	// 图表桶粒度由所选时间窗口推导，并与本地时区偏移一起传给后端。
 	const tzOffsetMinutes = -new Date().getTimezoneOffset();
@@ -69,6 +78,11 @@ export default function ModelOverviewPage() {
 		windows.token.period,
 		tokenWindow.startTime,
 		tokenWindow.endTime,
+	);
+	const insightGranularity = chartGranularity(
+		windows.insight.period,
+		insightWindow.startTime,
+		insightWindow.endTime,
 	);
 
 	const callCharts = useDashboardCharts({
@@ -85,6 +99,14 @@ export default function ModelOverviewPage() {
 		providerId,
 		modelId,
 		granularity: tokenGranularity,
+		tzOffsetMinutes,
+	});
+	const insightQuery = useDashboardInsight({
+		startTime: insightWindow.startTime,
+		endTime: insightWindow.endTime,
+		providerId,
+		modelId,
+		granularity: insightGranularity,
 		tzOffsetMinutes,
 	});
 	const metrics = useModelMetrics(
@@ -241,6 +263,33 @@ export default function ModelOverviewPage() {
 					)}
 				</CardContent>
 			</Card>
+
+			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳） */}
+			<div className="space-y-2">
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.insight)}</p>
+					<RaceWindowControl
+						state={windows.insight}
+						now={now}
+						onChange={(patch) =>
+							setWindows((prev) => ({ ...prev, insight: { ...prev.insight, ...patch } }))
+						}
+					/>
+				</div>
+				{insightQuery.isLoading ? (
+					<Skeleton className="h-[260px] w-full" />
+				) : insightQuery.isError || !insightQuery.data ? (
+					<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
+						{t("overview.dataLoadFailed")}
+					</div>
+				) : (
+					<InsightAnalysisCard
+						data={insightQuery.data}
+						subtitle={windowSubtitle(windows.insight)}
+						granularity={insightGranularity}
+					/>
+				)}
+			</div>
 		</div>
 	);
 }

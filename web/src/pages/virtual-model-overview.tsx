@@ -1,5 +1,6 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
+import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
@@ -7,6 +8,7 @@ import {
 } from "@/components/race-window-control";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useVirtualModelMetrics } from "@/hooks/use-stats-metrics";
 import {
@@ -23,12 +25,13 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-/** 二级页四个图表区块的独立时间段状态。 */
+/** 二级页五个图表区块的独立时间段状态。 */
 interface VirtualModelOverviewWindows {
 	metrics: RaceWindowState;
 	call: RaceWindowState;
 	token: RaceWindowState;
 	race: RaceWindowState;
+	insight: RaceWindowState;
 }
 
 /** 从 URL query 解析初始时间段（缺省当天）；首页赛马行点击时携带。 */
@@ -217,6 +220,7 @@ export default function VirtualModelOverviewPage() {
 			call: { ...initial },
 			token: { ...initial },
 			race: { ...initial },
+			insight: { ...initial },
 		};
 	});
 	// 各块固化 now（标题稳定）。
@@ -229,6 +233,7 @@ export default function VirtualModelOverviewPage() {
 	const metricsWindow = raceWindowBounds(windows.metrics, now);
 	const callWindow = raceWindowBounds(windows.call, now);
 	const tokenWindow = raceWindowBounds(windows.token, now);
+	const insightWindow = raceWindowBounds(windows.insight, now);
 
 	const vmMetrics = useVirtualModelMetrics(
 		virtualModelId,
@@ -248,6 +253,11 @@ export default function VirtualModelOverviewPage() {
 		tokenWindow.startTime,
 		tokenWindow.endTime,
 	);
+	const insightGranularity = chartGranularity(
+		windows.insight.period,
+		insightWindow.startTime,
+		insightWindow.endTime,
+	);
 
 	const callCharts = useDashboardCharts({
 		startTime: callWindow.startTime,
@@ -261,6 +271,13 @@ export default function VirtualModelOverviewPage() {
 		endTime: tokenWindow.endTime,
 		virtualModelId,
 		granularity: tokenGranularity,
+		tzOffsetMinutes,
+	});
+	const insightQuery = useDashboardInsight({
+		startTime: insightWindow.startTime,
+		endTime: insightWindow.endTime,
+		virtualModelId,
+		granularity: insightGranularity,
 		tzOffsetMinutes,
 	});
 
@@ -340,6 +357,33 @@ export default function VirtualModelOverviewPage() {
 						charts={tokenCharts.data}
 						subtitle={windowSubtitle(windows.token)}
 						granularity={tokenGranularity}
+					/>
+				)}
+			</div>
+
+			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳） */}
+			<div className="space-y-2">
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.insight)}</p>
+					<RaceWindowControl
+						state={windows.insight}
+						now={now}
+						onChange={(patch) =>
+							setWindows((prev) => ({ ...prev, insight: { ...prev.insight, ...patch } }))
+						}
+					/>
+				</div>
+				{insightQuery.isLoading ? (
+					<Skeleton className="h-[260px] w-full" />
+				) : insightQuery.isError || !insightQuery.data ? (
+					<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
+						{t("overview.dataLoadFailed")}
+					</div>
+				) : (
+					<InsightAnalysisCard
+						data={insightQuery.data}
+						subtitle={windowSubtitle(windows.insight)}
+						granularity={insightGranularity}
 					/>
 				)}
 			</div>

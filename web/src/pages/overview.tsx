@@ -1,5 +1,6 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
 import { ErrorState } from "@/components/error-state";
+import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { ProviderModelRaceSection } from "@/components/provider-model-race/ProviderModelRaceSection";
@@ -14,6 +15,7 @@ import { StatsCardsSkeleton } from "@/components/stats-cards-skeleton";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualModelRaceSection } from "@/components/virtual-model-race/VirtualModelRaceSection";
+import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts, useDashboardSummary } from "@/hooks/use-dashboard-stats";
 import { OVERVIEW_PAGE } from "@/lib/pages";
 import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
@@ -55,9 +57,15 @@ export default function OverviewPage() {
 		granularity,
 		tzOffsetMinutes,
 	});
+	const insightQuery = useDashboardInsight({
+		startTime: chartsBounds.startTime,
+		endTime: chartsBounds.endTime,
+		granularity,
+		tzOffsetMinutes,
+	});
 
-	const isLoading = summaryQuery.isLoading || chartsQuery.isLoading;
-	const isError = summaryQuery.isError || chartsQuery.isError;
+	const isLoading = summaryQuery.isLoading || chartsQuery.isLoading || insightQuery.isLoading;
+	const isError = summaryQuery.isError || chartsQuery.isError || insightQuery.isError;
 
 	if (isLoading) {
 		return (
@@ -76,7 +84,7 @@ export default function OverviewPage() {
 		);
 	}
 
-	if (isError || !summaryQuery.data || !chartsQuery.data) {
+	if (isError || !summaryQuery.data || !chartsQuery.data || !insightQuery.data) {
 		return (
 			<div className="space-y-6">
 				<PageHeader title={t(OVERVIEW_PAGE.titleKey)} icon={ChartLine} />
@@ -85,6 +93,7 @@ export default function OverviewPage() {
 					onRetry={() => {
 						summaryQuery.refetch();
 						chartsQuery.refetch();
+						insightQuery.refetch();
 					}}
 				/>
 			</div>
@@ -147,6 +156,11 @@ export default function OverviewPage() {
 			/>
 			<TokenAnalysisCard
 				charts={chartsQuery.data}
+				subtitle={windowSubtitle}
+				granularity={granularity}
+			/>
+			<InsightAnalysisCard
+				data={insightQuery.data}
 				subtitle={windowSubtitle}
 				granularity={granularity}
 			/>
