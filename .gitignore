@@ -14,3 +14,4 @@ web/tsconfig.tsbuildinfo
 /deploy/llm-gateway
 /.deploy
 /.gitea
+/.agents/skills/local-deploy/
