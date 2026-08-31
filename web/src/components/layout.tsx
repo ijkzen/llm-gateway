@@ -27,8 +27,9 @@ import {
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { useLogout, useMe } from "@/hooks/use-auth";
+import { fetchHealth } from "@/lib/api";
 import { NAV_GROUPS } from "@/lib/pages";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronUp, LogOut, RefreshCw, Waypoints } from "lucide-react";
 import { Suspense } from "react";
 import { useTranslation } from "react-i18next";
@@ -41,6 +42,13 @@ export default function AppLayout() {
 	const queryClient = useQueryClient();
 	const { data: me } = useMe();
 	const logout = useLogout();
+	// 版本号动态读取（/api/healthz），发布新版无需改前端代码；取不到时只显示应用名。
+	const { data: health } = useQuery({
+		queryKey: ["health"],
+		queryFn: fetchHealth,
+		staleTime: 10 * 60 * 1000,
+		retry: false,
+	});
 
 	const handleLogout = () => {
 		logout.mutate(undefined, {
@@ -121,7 +129,7 @@ export default function AppLayout() {
 						</SidebarMenuItem>
 					</SidebarMenu>
 					<div className="px-4 py-2 text-xs text-muted-foreground">
-						<div>llm-gateway v0.1.0</div>
+						<div>llm-gateway{health?.version ? ` v${health.version}` : ""}</div>
 					</div>
 				</SidebarFooter>
 			</Sidebar>

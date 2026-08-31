@@ -79,6 +79,16 @@ export const api = ky.create({
 	},
 });
 
+export interface HealthInfo {
+	status: string;
+	version?: string;
+}
+
+/** 探活并读取服务版本（healthz 是健康检查接口，不走 ApiResponse 信封）。 */
+export async function fetchHealth(): Promise<HealthInfo> {
+	return (await api.get("healthz").json()) as HealthInfo;
+}
+
 export async function unwrap<T>(res: ApiResponse<T>): Promise<T> {
 	if (res.code !== "0") {
 		throw new ApiError(res.msg || i18n.t("common.error"), res.code);

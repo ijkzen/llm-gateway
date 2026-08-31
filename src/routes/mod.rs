@@ -47,5 +47,6 @@ pub fn create_app(state: &AppState) -> Router {
 }
 
 async fn healthz() -> Json<serde_json::Value> {
-    Json(json!({ "status": "ok" }))
+    // version 编译期注入，跟随 Cargo.toml 的 version，供前端侧边栏展示与部署探活。
+    Json(json!({ "status": "ok", "version": env!("CARGO_PKG_VERSION") }))
 }

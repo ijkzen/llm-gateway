@@ -1,0 +1,46 @@
+name: Nightly
+
+# 每个 main 提交都构建镜像并推送到 Nightly 渠道（ghcr.io/ijkzen/llm-gateway:nightly）。
+# 覆盖式发布，仅供尝鲜，不创建 GitHub Release、不打版本 tag。
+# 正式发布走 release.yml（v* tag → :vX.Y.Z + :latest）。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-nightly:
+    name: Build & Push Nightly Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push nightly image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly

@@ -150,9 +150,11 @@ async fn login_and_session_guard() {
     assert_eq!(status, 401);
     assert_eq!(body["code"], "UNAUTHORIZED");
 
-    // healthz 不需要登录。
-    let (status, _, _) = send_json(app.clone(), "GET", "/api/healthz", json!({})).await;
+    // healthz 不需要登录，并暴露编译期版本号（跟随 Cargo.toml）。
+    let (status, _, body) = send_json(app.clone(), "GET", "/api/healthz", json!({})).await;
     assert_eq!(status, 200);
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
 
     // 错误密码 → 401。
     let (status, _, body) = send_json(

@@ -1,0 +1,79 @@
+name: Release
+
+# 只匹配 v* tag 触发（本地改版本号 → 提交 → git tag vX.Y.Z && git push origin vX.Y.Z）。
+# 流程：版本一致性校验（Cargo.toml + package.json 必须等于 tag 版本）→ 测试 →
+# 构建 ghcr.io/ijkzen/llm-gateway:vX.Y.Z + :latest → 创建 GitHub Release 页（自动 changelog）。
+# 与 FRP 本地部署（.deploy/deploy.sh，镜像 tag 固定 llm-gateway:latest）无关。
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  release:
+    name: Release v${{ github.ref_name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.24.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
+      # 版本一致性校验：tag 名（去 v 前缀）必须等于 Cargo.toml 与 package.json 的 version
+      - name: Check release version
+        run: bash scripts/check-release-version.sh "${GITHUB_REF#refs/tags/v}"
+
+      - name: Run backend tests
+        run: cargo test --all-targets
+
+      - name: Run frontend tests
+        working-directory: web
+        run: pnpm vitest run
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push release image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true

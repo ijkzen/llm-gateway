@@ -1,7 +1,8 @@
 # llm-gateway
 
 [![CI](https://github.com/ijkzen/llm-gateway/actions/workflows/ci.yml/badge.svg)](https://github.com/ijkzen/llm-gateway/actions/workflows/ci.yml)
-[![Docker](https://github.com/ijkzen/llm-gateway/actions/workflows/docker.yml/badge.svg)](https://github.com/ijkzen/llm-gateway/actions/workflows/docker.yml)
+[![Nightly](https://github.com/ijkzen/llm-gateway/actions/workflows/nightly.yml/badge.svg)](https://github.com/ijkzen/llm-gateway/actions/workflows/nightly.yml)
+[![Release](https://github.com/ijkzen/llm-gateway/releases/latest/badge.svg)](https://github.com/ijkzen/llm-gateway/releases/latest)
 
 一个 Rust + React 的单体 LLM API 网关：统一管理多家 LLM 供应商的 API Key 与模型，
 通过「虚拟模型」做负载均衡与降级，并提供用量查询、额度门控与可视化数据面板。
@@ -65,8 +66,14 @@ DATABASE_URL=sqlite://db/app.db?mode=rwc BIND_ADDRESS=0.0.0.0:4007 cargo run
 ### Docker 运行
 
 ```bash
-# 从 GHCR 拉取镜像
+# 从 GHCR 拉取镜像（:latest 始终指向最新正式发布版本）
 docker pull ghcr.io/ijkzen/llm-gateway:latest
+
+# 生产建议固定版本 tag（避免拉取到后续不兼容的新版本）
+docker pull ghcr.io/ijkzen/llm-gateway:v0.1.0
+
+# 尝鲜最新 main 提交（未正式发布，勿用于生产）
+docker pull ghcr.io/ijkzen/llm-gateway:nightly
 
 # 运行（挂载 /config/db 与 /config/logs 持久化数据）
 docker run -d --name llm-gateway \
@@ -105,11 +112,19 @@ docker compose up -d
 
 ## GitHub Actions 构建
 
-- `.github/workflows/ci.yml`：push/PR 时运行测试、clippy、fmt，并构建前端。
-- `.github/workflows/docker.yml`：push 到 main / 打 tag 时构建 Docker 镜像并推送到
-  **GitHub Container Registry**（`ghcr.io/ijkzen/llm-gateway`），tag 为 `latest`、`<sha>` 与 `<git-tag>`。
+- `.github/workflows/ci.yml`：push 到 main / PR 时运行测试、clippy、fmt，并构建前端。
+- `.github/workflows/nightly.yml`：每次 push 到 main 构建镜像并推送到
+  **Nightly 渠道**（`ghcr.io/ijkzen/llm-gateway:nightly`，覆盖式），供尝鲜，不建 Release。
+- `.github/workflows/release.yml`：**只匹配 `v*` tag**。发布流程为：本地同步修改
+  `Cargo.toml` 与 `web/package.json` 版本号 → 提交 → `git tag vX.Y.Z && git push origin vX.Y.Z` →
+  CI 校验版本一致 → 运行测试 → 构建 `ghcr.io/ijkzen/llm-gateway:vX.Y.Z`（同时更新 `:latest`）→
+  创建 [GitHub Release](https://github.com/ijkzen/llm-gateway/releases) 页（自动生成 changelog）。
 
 镜像由仓库内 `Dockerfile` 多阶段构建（全公网依赖），可直接拉取使用。
+
+> **发布 ≠ 部署**：正式发布走上述 GitHub Release 流程；把最新代码部署到自建
+> FRP/阿里云服务器（`gateway.ijkzen.cn`）是独立的本地部署流程（zig 交叉编译 +
+> `.deploy/deploy.sh`），部署不修改版本号，两者互不影响。
 
 ## 测试
 

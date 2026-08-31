@@ -290,9 +290,17 @@ Dockerfile 为多阶段构建：
 ## 部署与 CI/CD
 
 - CI 位于 `.github/workflows/`：
-  - `ci.yml`：push/PR 时运行测试、clippy、fmt（先构建前端）。
-  - `docker.yml`：push 到 main / 打 `v*` tag 时用 `docker buildx` 构建镜像并推送到
-    **GitHub Container Registry**（`ghcr.io/ijkzen/llm-gateway`），tag 为 `latest` + `<sha>` 或 `<git-tag>`。
+  - `ci.yml`：push 到 main / PR 时运行测试、clippy、fmt（先构建前端）。
+  - `nightly.yml`：每次 push 到 main 用 `docker buildx` 构建镜像并推送到 **Nightly 渠道**
+    （`ghcr.io/ijkzen/llm-gateway:nightly`，覆盖式），供尝鲜，不建 Release。
+  - `release.yml`：**只匹配 `v*` tag**，正式发布渠道。流程：`bash scripts/check-release-version.sh`
+    校验 `Cargo.toml` 与 `web/package.json` 版本等于 tag 版本 → `cargo test` + `pnpm vitest run` →
+    构建推送 `ghcr.io/ijkzen/llm-gateway:vX.Y.Z`（同时更新 `:latest`）→ `softprops/action-gh-release`
+    创建 GitHub Release 页（自动 changelog）。
+- **发布版本 ≠ 本地部署**：正式发布（改版本号 + 打 `v*` tag + push，走 release.yml，只涉及 GitHub）
+  与 FRP/阿里云本地部署（zig 交叉编译 + `.deploy/deploy.sh`，镜像 tag 固定 `llm-gateway:latest`，
+  不读不写版本号）是两条互不相干的流程，发版操作步骤见
+  `.agents/skills/release-management/SKILL.md`。
 - 生产容器：
   - 暴露端口 `4007`。
   - 需要挂载 `/config/db` 与 `/config/logs` 以保证数据与日志持久化。
@@ -317,6 +325,11 @@ Dockerfile 为多阶段构建：
 6. **健康检查**: `/api/healthz` 只表示进程存活，不检查数据库等依赖。
 
 ## Agent skills
+
+### Release management
+
+正式发布生产/开源/Release 版本（改版本号 → 打 `v*` tag → push → Release CI）的完整流程。
+见 `.agents/skills/release-management/SKILL.md`。注意与 FRP 本地部署（`.deploy/deploy.sh`）区分。
 
 ### Issue tracker
 
