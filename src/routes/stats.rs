@@ -343,7 +343,7 @@ struct InsightResponse {
     // 吞吐 / 调用入口
     api_key_rank: Vec<ApiKeyRankItem>,
     rpm_trend: Vec<TrendPoint>,
-    tpm_trend: Vec<TrendPoint>,
+    tpm_trend: Vec<FloatTrendPoint>,
     stream_ratio_trend: Vec<FloatTrendPoint>,
 }
 
@@ -960,7 +960,7 @@ async fn insight(
     let stream_ratio_final = ratio_by_start(&calls_by_start, &streams_by_start);
     let cache_rate_final = ratio_by_start(&inputs_by_start, &caches_by_start);
 
-    // RPM/TPM：仅小时桶有意义（分母=窗口小时数）。RPM 按小时桶索引补零。
+    // RPM/TPM：仅小时桶有意义。RPM=每小时请求数（÷窗口小时数）；TPM=每小时 token 总量 ÷60 得每分钟。
     let (rpm_trend, tpm_trend) = if matches!(window.granularity, Granularity::Hour) {
         let hours = ((window.end - window.start) as f64 / HOUR_MS as f64).max(1.0);
         (
@@ -971,7 +971,14 @@ async fn insight(
                     value: ((point.value as f64 / hours).round()) as i64,
                 })
                 .collect::<Vec<_>>(),
-            fill_int_series(&tpm_map),
+            // 桶内 token 总量 ÷ 60 分钟 = 每分钟 token（保留小数）。
+            fill_int_series(&tpm_map)
+                .into_iter()
+                .map(|point| FloatTrendPoint {
+                    bucket_start: point.bucket_start,
+                    value: point.value as f64 / 60.0,
+                })
+                .collect::<Vec<_>>(),
         )
     } else {
         (Vec::new(), Vec::new())

@@ -16,7 +16,8 @@ const mocks = vi.hoisted(() => ({
 	summaryError: false,
 	chartsError: false,
 	refetch: vi.fn(),
-	chartsParams: undefined as Record<string, unknown> | undefined,
+	/** useDashboardCharts 每次调用参数（首页调用/token 两块各一次）。 */
+	chartsParamsList: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@/hooks/use-dashboard-stats", () => ({
@@ -27,7 +28,7 @@ vi.mock("@/hooks/use-dashboard-stats", () => ({
 		refetch: mocks.refetch,
 	}),
 	useDashboardCharts: (params?: unknown) => {
-		mocks.chartsParams = params as Record<string, unknown> | undefined;
+		mocks.chartsParamsList.push(params as Record<string, unknown>);
 		return {
 			data: mocks.charts,
 			isLoading: mocks.chartsLoading,
@@ -215,69 +216,87 @@ describe("OverviewPage（数据面板）", () => {
 	});
 });
 
-describe("OverviewPage 时间组件（默认今天）", () => {
-	const withinChartsWindow = () => {
-		const container = screen.getByTestId("charts-window");
+describe("OverviewPage 时间组件（默认今天，调用/Token/可靠性三块独立）", () => {
+	const withinWindow = (testId: string) => {
+		const container = screen.getByTestId(testId);
 		return within(container);
 	};
 
 	beforeEach(() => {
 		mocks.summary = makeSummary();
 		mocks.charts = makeCharts();
-		mocks.chartsParams = undefined;
+		mocks.chartsParamsList = [];
 	});
 
-	it("默认选中「天」，图表请求携带小时粒度与本地时区偏移", () => {
+	it("默认选中「天」，调用与 Token 图表请求均携带小时粒度与本地时区偏移", () => {
 		render(<OverviewPage />);
 
-		// 默认「天」处于按下态。
-		expect(withinChartsWindow().getByRole("button", { name: "天" })).toHaveAttribute(
+		// 三块控件默认「天」处于按下态。
+		for (const testId of ["call-window", "token-window", "insight-window"]) {
+			expect(withinWindow(testId).getByRole("button", { name: "天" })).toHaveAttribute(
+				"aria-pressed",
+				"true",
+			);
+		}
+		// 调用与 Token 各发一次 charts 请求，均携带显式窗口 + granularity=hour + tzOffsetMinutes。
+		expect(mocks.chartsParamsList.length).toBe(2);
+		for (const params of mocks.chartsParamsList) {
+			expect(params?.granularity).toBe("hour");
+			expect(typeof params?.tzOffsetMinutes).toBe("number");
+			expect(params?.startTime).toBeTypeOf("number");
+			expect(params?.endTime).toBeTypeOf("number");
+		}
+	});
+
+	it("调用分析切换到「周」后，仅调用请求携带 day 粒度，Token 仍为 hour", () => {
+		render(<OverviewPage />);
+
+		fireEvent.click(withinWindow("call-window").getByRole("button", { name: "周" }));
+		expect(withinWindow("call-window").getByRole("button", { name: "周" })).toHaveAttribute(
 			"aria-pressed",
 			"true",
 		);
-		// 请求携带显式窗口 + granularity=hour + tzOffsetMinutes。
-		expect(mocks.chartsParams).toBeTruthy();
-		expect(mocks.chartsParams?.granularity).toBe("hour");
-		expect(typeof mocks.chartsParams?.tzOffsetMinutes).toBe("number");
-		expect(mocks.chartsParams?.startTime).toBeTypeOf("number");
-		expect(mocks.chartsParams?.endTime).toBeTypeOf("number");
-	});
-
-	it("切换到「周」后请求携带 day 粒度", () => {
-		render(<OverviewPage />);
-
-		fireEvent.click(withinChartsWindow().getByRole("button", { name: "周" }));
-		expect(withinChartsWindow().getByRole("button", { name: "周" })).toHaveAttribute(
-			"aria-pressed",
-			"true",
-		);
-		expect(mocks.chartsParams?.granularity).toBe("day");
+		// 最近一次渲染的两次调用：一次 day（调用窗口）、一次 hour（token 窗口），顺序无关。
+		const recent = mocks.chartsParamsList
+			.slice(-2)
+			.map((p) => p?.granularity)
+			.sort();
+		expect(recent).toEqual(["day", "hour"]);
 	});
 
 	it("切换到「年」后请求携带 month 粒度，且副标题显示当前年份", () => {
 		render(<OverviewPage />);
 
-		fireEvent.click(withinChartsWindow().getByRole("button", { name: "年" }));
-		expect(mocks.chartsParams?.granularity).toBe("month");
+		fireEvent.click(withinWindow("call-window").getByRole("button", { name: "年" }));
+		const recent = mocks.chartsParamsList
+			.slice(-2)
+			.map((p) => p?.granularity)
+			.sort();
+		expect(recent).toEqual(["hour", "month"]);
 		// 副标题与控件标题都显示当前年份（同文本出现两处）。
 		expect(
-			withinChartsWindow().getAllByText(`${new Date().getFullYear()}年（当前）`).length,
+			withinWindow("call-window").getAllByText(`${new Date().getFullYear()}年（当前）`).length,
 		).toBeGreaterThan(0);
 	});
 
 	it("切换到「自定义」显示两行起止文本，点击弹出弹窗选时间", () => {
 		render(<OverviewPage />);
 
-		fireEvent.click(withinChartsWindow().getByRole("button", { name: "自定义" }));
+		fireEvent.click(withinWindow("call-window").getByRole("button", { name: "自定义" }));
 		// 两行文本展示开始/结束（默认过去 7 天）。
-		expect(withinChartsWindow().getByTestId("custom-range-label")).toBeTruthy();
-		expect(withinChartsWindow().getByText(/^开始 /)).toBeTruthy();
-		expect(withinChartsWindow().getByText(/^结束 /)).toBeTruthy();
+		expect(withinWindow("call-window").getByTestId("custom-range-label")).toBeTruthy();
+		expect(withinWindow("call-window").getByText(/^开始 /)).toBeTruthy();
+		expect(withinWindow("call-window").getByText(/^结束 /)).toBeTruthy();
 		// 默认窗口：开始 = 7 天前 0 点，结束 = 明天 0 点（显示为今天 24:00:00）。
-		expect(mocks.chartsParams?.granularity).toBe("day");
+		// 调用窗口为自定义（7 天 → day 粒度），token 窗口仍默认「天」（hour 粒度）。
+		const recent = mocks.chartsParamsList
+			.slice(-2)
+			.map((p) => p?.granularity)
+			.sort();
+		expect(recent).toEqual(["day", "hour"]);
 
 		// 点击两行文本 → 弹出弹窗，内含起止输入框与确认按钮。
-		fireEvent.click(withinChartsWindow().getByTestId("custom-range-label"));
+		fireEvent.click(withinWindow("call-window").getByTestId("custom-range-label"));
 		expect(screen.getByTestId("custom-start")).toBeTruthy();
 		expect(screen.getByTestId("custom-end")).toBeTruthy();
 		expect(screen.getByRole("button", { name: "确认" })).toBeTruthy();

@@ -1506,11 +1506,12 @@ async fn test_insight_token_structure_and_throughput() {
     let stream_ratio = data["streamRatioTrend"].as_array().unwrap();
     assert_eq!(stream_ratio[0]["value"].as_f64().unwrap(), 1.0);
 
-    // 小时桶 → RPM/TPM 有值（窗口 1 小时 → RPM=2；total_tokens=300+400=700 → TPM=700）。
+    // 小时桶 → RPM/TPM 有值（窗口 1 小时 → RPM=2；total_tokens=700 → TPM=700/60≈11.67 每分钟）。
     let rpm = data["rpmTrend"].as_array().unwrap();
     assert_eq!(rpm[0]["value"], 2);
     let tpm = data["tpmTrend"].as_array().unwrap();
-    assert_eq!(tpm[0]["value"], 700);
+    let tpm_val = tpm[0]["value"].as_f64().unwrap();
+    assert!((tpm_val - 700.0 / 60.0).abs() < 1e-9, "tpm={tpm_val}");
 }
 
 #[tokio::test]

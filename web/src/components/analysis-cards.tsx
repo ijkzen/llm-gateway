@@ -100,18 +100,27 @@ export function TokenAnalysisCard({ charts, subtitle, granularity }: AnalysisCar
 						data={charts.tokenTrend}
 						label={t("overview.tokens")}
 						formatValue={formatTokenCount}
+						kind="tokens"
 						granularity={granularity}
 					/>
 				)}
 				{view === "distribution" &&
 					(charts.tokenByModel.length > 0 ? (
-						<ModelPieChart data={charts.tokenByModel} formatValue={formatTokenCount} />
+						<ModelPieChart
+							data={charts.tokenByModel}
+							formatValue={formatTokenCount}
+							kind="tokens"
+						/>
 					) : (
 						<EmptyState title={t("dashboard.noTokenData")} />
 					))}
 				{view === "rank" &&
 					(charts.tokenByModel.length > 0 ? (
-						<ModelRankBarChart data={charts.tokenByModel} formatValue={formatTokenCount} />
+						<ModelRankBarChart
+							data={charts.tokenByModel}
+							formatValue={formatTokenCount}
+							kind="tokens"
+						/>
 					) : (
 						<EmptyState title={t("dashboard.noTokenData")} />
 					))}

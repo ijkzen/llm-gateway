@@ -104,6 +104,8 @@ const ChartTooltipContent = React.forwardRef<
 			indicator?: "line" | "dot" | "dashed";
 			nameKey?: string;
 			labelKey?: string;
+			/** 为 true 时系列名用该系列图例颜色渲染（tooltip 中带彩色标签行）。 */
+			coloredLabel?: boolean;
 		}
 >(
 	(
@@ -121,6 +123,7 @@ const ChartTooltipContent = React.forwardRef<
 			color,
 			nameKey,
 			labelKey,
+			coloredLabel = false,
 		},
 		ref,
 	) => {
@@ -174,6 +177,16 @@ const ChartTooltipContent = React.forwardRef<
 							const key = `${nameKey || item.name || item.dataKey || "value"}`;
 							const itemConfig = getPayloadConfigFromPayload(config, item, key);
 							const indicatorColor = color || item.payload.fill || item.color;
+							const hasFormatter = formatter && item?.value !== undefined && item.name;
+							// formatter 返回 null 表示该行不渲染（如「标签+数值」合并为单行时）。
+							const formatted =
+								formatter && item.value !== undefined && item.name
+									? formatter(item.value, item.name, item, index, item.payload)
+									: undefined;
+
+							if (formatted === null) {
+								return null;
+							}
 
 							return (
 								<div
@@ -183,10 +196,15 @@ const ChartTooltipContent = React.forwardRef<
 										indicator === "dot" && "items-center",
 									)}
 								>
-									{formatter && item?.value !== undefined && item.name ? (
-										formatter(item.value, item.name, item, index, item.payload)
+									{hasFormatter ? (
+										formatted
 									) : (
 										<>
+											{coloredLabel && item.name && (
+												<span className="font-medium" style={{ color: indicatorColor }}>
+													{itemConfig?.label || item.name}
+												</span>
+											)}
 											{itemConfig?.icon ? (
 												<itemConfig.icon />
 											) : (

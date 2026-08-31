@@ -10,6 +10,7 @@ import i18n from "@/i18n";
 import type { ChartGranularity } from "@/lib/race-period";
 import { cn, middleEllipsis, topWithOther } from "@/lib/utils";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
 	Bar,
 	BarChart,
@@ -103,12 +104,21 @@ interface TrendLineChartProps {
 	data: TrendPoint[];
 	label: string;
 	formatValue?: (value: number) => string;
+	/** 指标类型：calls 显示「调用 N 次」，tokens 保持现状（仅数值）（默认按调用）。 */
+	kind?: "calls" | "tokens";
 	/** 显式桶粒度（后端分桶结果已知时传入，避免由间距推断）。 */
 	granularity?: ChartGranularity;
 }
 
 /** 按时间窗口分桶的单条总量折线（粒度可显式指定，缺省由数据推断）。 */
-export function TrendLineChart({ data, label, formatValue, granularity }: TrendLineChartProps) {
+export function TrendLineChart({
+	data,
+	label,
+	formatValue,
+	kind = "calls",
+	granularity,
+}: TrendLineChartProps) {
+	const { t } = useTranslation();
 	const resolvedGranularity = granularity ?? inferGranularity(data.map((p) => p.bucketStart));
 	const chartData = data.map((point) => ({
 		label: formatBucketLabel(point.bucketStart, resolvedGranularity),
@@ -142,7 +152,14 @@ export function TrendLineChart({ data, label, formatValue, granularity }: TrendL
 						<ChartTooltipContent
 							formatter={(value) => (
 								<span className="font-mono font-medium tabular-nums text-foreground">
-									{formatValue ? formatValue(Number(value)) : Number(value).toLocaleString()}
+									{kind === "tokens" ? (
+										formatValueText(Number(value), formatValue)
+									) : (
+										<>
+											{t("dashboard.calls")} {formatValueText(Number(value), formatValue)}{" "}
+											{t("dashboard.callUnit")}
+										</>
+									)}
 								</span>
 							)}
 						/>
@@ -163,6 +180,8 @@ export function TrendLineChart({ data, label, formatValue, granularity }: TrendL
 interface ModelChartProps {
 	data: ModelValue[];
 	formatValue?: (value: number) => string;
+	/** 指标类型：calls 显示「调用 N 次」，tokens 显示「使用 N」（默认按调用）。 */
+	kind?: "calls" | "tokens";
 }
 
 function formatValueText(value: number, formatValue?: (value: number) => string): string {
@@ -238,10 +257,12 @@ function percentText(value: number, total: number): string {
 }
 
 /** 按模型占比的饼图（Top 10 + 其他）。 */
-export function ModelPieChart({ data, formatValue }: ModelChartProps) {
+export function ModelPieChart({ data, formatValue, kind = "calls" }: ModelChartProps) {
+	const { t } = useTranslation();
 	const ranked = toRankedModels(data);
 	const total = ranked.reduce((sum, item) => sum + item.value, 0);
 	const [activeLabel, setActiveLabel] = useState<string | null>(null);
+	const isTokens = kind === "tokens";
 
 	return (
 		<ChartContainer config={toPieConfig(ranked)} className="mx-auto h-[260px] w-full">
@@ -251,12 +272,16 @@ export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 						<ChartTooltipContent
 							labelKey="label"
 							formatter={(value) => (
-								<span className="font-mono font-medium tabular-nums text-foreground">
-									{formatValueText(Number(value), formatValue)}
-									<span className="ml-1 text-muted-foreground">
-										{percentText(Number(value), total)}
+								<div className="grid gap-1">
+									<span className="font-mono font-medium tabular-nums text-foreground">
+										{isTokens ? t("dashboard.used") : t("dashboard.calls")}{" "}
+										{formatValueText(Number(value), formatValue)}
+										{!isTokens && <span> {t("dashboard.callUnit")}</span>}
 									</span>
-								</span>
+									<span className="text-muted-foreground">
+										{t("dashboard.share")} {percentText(Number(value), total)}
+									</span>
+								</div>
 							)}
 						/>
 					}
@@ -281,9 +306,11 @@ export function ModelPieChart({ data, formatValue }: ModelChartProps) {
 }
 
 /** 按模型降序的横向条形图（Top 10 + 其他）。 */
-export function ModelRankBarChart({ data, formatValue }: ModelChartProps) {
+export function ModelRankBarChart({ data, formatValue, kind = "calls" }: ModelChartProps) {
+	const { t } = useTranslation();
 	const ranked = toRankedModels(data);
 	const height = Math.max(200, ranked.length * 36 + 16);
+	const isTokens = kind === "tokens";
 	return (
 		<ChartContainer config={toPieConfig(ranked)} className="w-full" style={{ height }}>
 			<BarChart data={ranked} layout="vertical" margin={{ left: 8, right: 24, top: 4 }}>
@@ -302,7 +329,9 @@ export function ModelRankBarChart({ data, formatValue }: ModelChartProps) {
 							labelKey="label"
 							formatter={(value) => (
 								<span className="font-mono font-medium tabular-nums text-foreground">
+									{isTokens ? t("dashboard.used") : t("dashboard.calls")}{" "}
 									{formatValueText(Number(value), formatValue)}
+									{!isTokens && <span> {t("dashboard.callUnit")}</span>}
 								</span>
 							)}
 						/>

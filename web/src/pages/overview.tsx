@@ -25,7 +25,7 @@ import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-r
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-/** 首页调用/Token 分析共享的时间段（默认当天）。 */
+/** 首页调用/Token/可靠性分析共享的初始时间段（默认当天）。 */
 function defaultChartsWindow(): RaceWindowState {
 	const now = Date.now();
 	const start = new Date(now);
@@ -39,34 +39,72 @@ function defaultChartsWindow(): RaceWindowState {
 	};
 }
 
+/** 首页三块分析图的独立时间段。 */
+interface OverviewWindows {
+	call: RaceWindowState;
+	token: RaceWindowState;
+	insight: RaceWindowState;
+}
+
+function initialWindows(): OverviewWindows {
+	const initial = defaultChartsWindow();
+	return { call: { ...initial }, token: { ...initial }, insight: { ...initial } };
+}
+
 export default function OverviewPage() {
 	const { t } = useTranslation();
 	const summaryQuery = useDashboardSummary();
-	// 调用/Token 分析共享同一个时间段（默认「今天」）。
-	const [chartsWindow, setChartsWindow] = useState<RaceWindowState>(defaultChartsWindow);
+	// 调用/Token/可靠性分析各自独立时间段（默认「今天」）。
+	const [windows, setWindows] = useState<OverviewWindows>(initialWindows);
 	const [now] = useState(() => Date.now());
-	const chartsBounds = raceWindowBounds(chartsWindow, now);
-	const granularity = chartGranularity(
-		chartsWindow.period,
-		chartsBounds.startTime,
-		chartsBounds.endTime,
+	const callWindow = raceWindowBounds(windows.call, now);
+	const tokenWindow = raceWindowBounds(windows.token, now);
+	const insightWindow = raceWindowBounds(windows.insight, now);
+	const callGranularity = chartGranularity(
+		windows.call.period,
+		callWindow.startTime,
+		callWindow.endTime,
+	);
+	const tokenGranularity = chartGranularity(
+		windows.token.period,
+		tokenWindow.startTime,
+		tokenWindow.endTime,
+	);
+	const insightGranularity = chartGranularity(
+		windows.insight.period,
+		insightWindow.startTime,
+		insightWindow.endTime,
 	);
 	const tzOffsetMinutes = -new Date().getTimezoneOffset();
-	const chartsQuery = useDashboardCharts({
-		startTime: chartsBounds.startTime,
-		endTime: chartsBounds.endTime,
-		granularity,
+	const callChartsQuery = useDashboardCharts({
+		startTime: callWindow.startTime,
+		endTime: callWindow.endTime,
+		granularity: callGranularity,
+		tzOffsetMinutes,
+	});
+	const tokenChartsQuery = useDashboardCharts({
+		startTime: tokenWindow.startTime,
+		endTime: tokenWindow.endTime,
+		granularity: tokenGranularity,
 		tzOffsetMinutes,
 	});
 	const insightQuery = useDashboardInsight({
-		startTime: chartsBounds.startTime,
-		endTime: chartsBounds.endTime,
-		granularity,
+		startTime: insightWindow.startTime,
+		endTime: insightWindow.endTime,
+		granularity: insightGranularity,
 		tzOffsetMinutes,
 	});
 
-	const isLoading = summaryQuery.isLoading || chartsQuery.isLoading || insightQuery.isLoading;
-	const isError = summaryQuery.isError || chartsQuery.isError || insightQuery.isError;
+	const isLoading =
+		summaryQuery.isLoading ||
+		callChartsQuery.isLoading ||
+		tokenChartsQuery.isLoading ||
+		insightQuery.isLoading;
+	const isError =
+		summaryQuery.isError ||
+		callChartsQuery.isError ||
+		tokenChartsQuery.isError ||
+		insightQuery.isError;
 
 	if (isLoading) {
 		return (
@@ -85,7 +123,13 @@ export default function OverviewPage() {
 		);
 	}
 
-	if (isError || !summaryQuery.data || !chartsQuery.data || !insightQuery.data) {
+	if (
+		isError ||
+		!summaryQuery.data ||
+		!callChartsQuery.data ||
+		!tokenChartsQuery.data ||
+		!insightQuery.data
+	) {
 		return (
 			<div className="space-y-6">
 				<PageHeader title={t(OVERVIEW_PAGE.titleKey)} icon={ChartLine} />
@@ -93,7 +137,8 @@ export default function OverviewPage() {
 					description={t("overview.errorDescription")}
 					onRetry={() => {
 						summaryQuery.refetch();
-						chartsQuery.refetch();
+						callChartsQuery.refetch();
+						tokenChartsQuery.refetch();
 						insightQuery.refetch();
 					}}
 				/>
@@ -102,10 +147,12 @@ export default function OverviewPage() {
 	}
 
 	const summary = summaryQuery.data;
-	const windowSubtitle =
-		chartsWindow.period === "custom"
+	const windowSubtitle = (windowState: RaceWindowState) =>
+		windowState.period === "custom"
 			? t("overview.customWindow")
-			: formatPeriodLabel(chartsWindow.period, chartsWindow.offset, now);
+			: formatPeriodLabel(windowState.period, windowState.offset, now);
+	const setWindow = (key: keyof OverviewWindows) => (patch: Partial<RaceWindowState>) =>
+		setWindows((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
 
 	return (
 		<div className="space-y-6">
@@ -138,33 +185,53 @@ export default function OverviewPage() {
 				/>
 			</div>
 
-			<div
-				className="flex flex-wrap items-center justify-between gap-2"
-				data-testid="charts-window"
-			>
-				<p className="text-xs text-muted-foreground">{windowSubtitle}</p>
-				<RaceWindowControl
-					state={chartsWindow}
-					now={now}
-					onChange={(patch) => setChartsWindow((prev) => ({ ...prev, ...patch }))}
+			{/* 调用分析：独立时间段（CallAnalysisCard 自带卡片壳） */}
+			<div className="space-y-2">
+				<div
+					className="flex flex-wrap items-center justify-between gap-2"
+					data-testid="call-window"
+				>
+					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.call)}</p>
+					<RaceWindowControl state={windows.call} now={now} onChange={setWindow("call")} />
+				</div>
+				<CallAnalysisCard
+					charts={callChartsQuery.data}
+					subtitle={windowSubtitle(windows.call)}
+					granularity={callGranularity}
 				/>
 			</div>
 
-			<CallAnalysisCard
-				charts={chartsQuery.data}
-				subtitle={windowSubtitle}
-				granularity={granularity}
-			/>
-			<TokenAnalysisCard
-				charts={chartsQuery.data}
-				subtitle={windowSubtitle}
-				granularity={granularity}
-			/>
-			<InsightAnalysisCard
-				data={insightQuery.data}
-				subtitle={windowSubtitle}
-				granularity={granularity}
-			/>
+			{/* Token 分析：独立时间段（TokenAnalysisCard 自带卡片壳） */}
+			<div className="space-y-2">
+				<div
+					className="flex flex-wrap items-center justify-between gap-2"
+					data-testid="token-window"
+				>
+					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.token)}</p>
+					<RaceWindowControl state={windows.token} now={now} onChange={setWindow("token")} />
+				</div>
+				<TokenAnalysisCard
+					charts={tokenChartsQuery.data}
+					subtitle={windowSubtitle(windows.token)}
+					granularity={tokenGranularity}
+				/>
+			</div>
+
+			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳） */}
+			<div className="space-y-2">
+				<div
+					className="flex flex-wrap items-center justify-between gap-2"
+					data-testid="insight-window"
+				>
+					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.insight)}</p>
+					<RaceWindowControl state={windows.insight} now={now} onChange={setWindow("insight")} />
+				</div>
+				<InsightAnalysisCard
+					data={insightQuery.data}
+					subtitle={windowSubtitle(windows.insight)}
+					granularity={insightGranularity}
+				/>
+			</div>
 			<ApiKeyRaceSection />
 			<ProviderRaceSection />
 			<VirtualModelRaceSection />

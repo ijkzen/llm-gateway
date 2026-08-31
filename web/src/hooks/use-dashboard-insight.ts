@@ -50,7 +50,8 @@ export interface InsightData {
 	outputTokensPerSecTrend: FloatTrendPoint[];
 	apiKeyRank: ApiKeyRankItem[];
 	rpmTrend: TrendPoint[];
-	tpmTrend: TrendPoint[];
+	/** 吞吐：每分钟 token 量（Tokens Per Minute）。 */
+	tpmTrend: FloatTrendPoint[];
 	streamRatioTrend: FloatTrendPoint[];
 }
 

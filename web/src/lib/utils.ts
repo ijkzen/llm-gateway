@@ -49,6 +49,30 @@ export function formatTokenCount(value: number): string {
 }
 
 /**
+ * 大数便于阅读缩写（中文）：>= 1 亿 → 亿、>= 1000 万 → 千万、>= 100 万 → 百万、>= 1 万 → 万。
+ * 其余原样千分位。英文按 formatTokenCount 的 K/M 缩写。
+ */
+export function formatReadableNumber(value: number): string {
+	const zh = i18n.language.startsWith("zh");
+	if (!zh) {
+		return formatTokenCount(value);
+	}
+	if (value >= 100_000_000) {
+		return `${trimTrailingZeros((value / 100_000_000).toFixed(2))} 亿`;
+	}
+	if (value >= 10_000_000) {
+		return `${trimTrailingZeros((value / 10_000_000).toFixed(2))} 千万`;
+	}
+	if (value >= 1_000_000) {
+		return `${trimTrailingZeros((value / 1_000_000).toFixed(2))} 百万`;
+	}
+	if (value >= 10_000) {
+		return `${trimTrailingZeros((value / 10_000).toFixed(1))} 万`;
+	}
+	return value.toLocaleString("zh-CN");
+}
+
+/**
  * 比率（0~1）转百分比展示：只做 ×100 单位换算，不改变后端给定的精度
  * （后端各接口已按 5 位小数完备处理，如 0.13333 → "13.333%"）。
  * toFixed(5) 仅消除 IEEE754 乘法噪声（0.29*100 → 28.999…），不截断精度。

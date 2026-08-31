@@ -33,7 +33,6 @@ interface VirtualModelOverviewWindows {
 	token: RaceWindowState;
 	race: RaceWindowState;
 	insight: RaceWindowState;
-	apiKey: RaceWindowState;
 }
 
 /** 从 URL query 解析初始时间段（缺省当天）；首页赛马行点击时携带。 */
@@ -223,7 +222,6 @@ export default function VirtualModelOverviewPage() {
 			token: { ...initial },
 			race: { ...initial },
 			insight: { ...initial },
-			apiKey: { ...initial },
 		};
 	});
 	// 各块固化 now（标题稳定）。
@@ -392,19 +390,7 @@ export default function VirtualModelOverviewPage() {
 			</div>
 
 			{/* API Key 赛马：独立时间段（可靠性分析之下、成员模型赛马之上） */}
-			<div className="space-y-2">
-				<div className="flex flex-wrap items-center justify-between gap-2">
-					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.apiKey)}</p>
-					<RaceWindowControl
-						state={windows.apiKey}
-						now={now}
-						onChange={(patch) =>
-							setWindows((prev) => ({ ...prev, apiKey: { ...prev.apiKey, ...patch } }))
-						}
-					/>
-				</div>
-				<ApiKeyRaceCard filter={Number.isFinite(virtualModelId) ? { virtualModelId } : undefined} />
-			</div>
+			<ApiKeyRaceCard filter={Number.isFinite(virtualModelId) ? { virtualModelId } : undefined} />
 
 			{/* 成员模型赛马：独立时间段 */}
 			<Card>

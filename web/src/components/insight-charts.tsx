@@ -7,8 +7,29 @@ import {
 import type { FloatTrendPoint, PercentilePoint, TrendPoint } from "@/hooks/use-dashboard-insight";
 import i18n from "@/i18n";
 import type { ChartGranularity } from "@/lib/race-period";
-import { formatPercent } from "@/lib/utils";
+import { formatPercent, formatReadableNumber } from "@/lib/utils";
+import type { ReactNode } from "react";
 import { Area, AreaChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
+
+/** tooltip 单行：彩色图例标签 + 冒号 + 等宽数值（标签颜色与图例一致）。 */
+function TooltipLabelRow({
+	label,
+	color,
+	children,
+}: {
+	label: string;
+	color?: string;
+	children: ReactNode;
+}) {
+	return (
+		<span className="flex items-baseline gap-1">
+			<span className="font-medium" style={{ color }}>
+				{label}
+			</span>
+			<span className="font-mono font-medium tabular-nums text-foreground">{children}</span>
+		</span>
+	);
+}
 
 /** 按桶粒度格式化 X 轴标签（与 dashboard-charts 的 formatBucketLabel 同语义）。 */
 function formatBucketLabel(bucketStart: number, granularity: ChartGranularity): string {
@@ -89,10 +110,10 @@ export function PercentileLineChart({
 				<ChartTooltip
 					content={
 						<ChartTooltipContent
-							formatter={(value) => (
-								<span className="font-mono font-medium tabular-nums text-foreground">
+							formatter={(value, name, item) => (
+								<TooltipLabelRow label={String(name ?? "").toUpperCase()} color={item?.color}>
 									{Number(value).toFixed(0)} ms
-								</span>
+								</TooltipLabelRow>
 							)}
 						/>
 					}
@@ -158,12 +179,21 @@ export function FailureTrendChart({
 				<ChartTooltip
 					content={
 						<ChartTooltipContent
-							formatter={(value, name) => (
-								<span className="font-mono font-medium tabular-nums text-foreground">
+							formatter={(value, name, item) => (
+								<TooltipLabelRow
+									label={
+										name === "failureRate"
+											? i18n.t("dashboard.failureRate")
+											: name === "success"
+												? i18n.t("dashboard.success")
+												: i18n.t("dashboard.failed")
+									}
+									color={item?.color}
+								>
 									{name === "failureRate"
 										? formatPercent(Number(value))
 										: Number(value).toLocaleString()}
-								</span>
+								</TooltipLabelRow>
 							)}
 						/>
 					}
@@ -258,14 +288,23 @@ export function TokenStructureChart({
 				<ChartTooltip
 					content={
 						<ChartTooltipContent
-							formatter={(value, name) => (
-								<span className="font-mono font-medium tabular-nums text-foreground">
+							formatter={(value, name, item) => (
+								<TooltipLabelRow
+									label={
+										name === "input"
+											? i18n.t("dashboard.tokenInput")
+											: name === "output"
+												? i18n.t("dashboard.tokenOutput")
+												: i18n.t("dashboard.tokenCacheHitRate")
+									}
+									color={item?.color}
+								>
 									{name === "cacheHitRate"
 										? formatPercent(Number(value))
 										: formatValue
 											? formatValue(Number(value))
 											: Number(value).toLocaleString()}
-								</span>
+								</TooltipLabelRow>
 							)}
 						/>
 					}
@@ -311,7 +350,8 @@ export function ThroughputChart({
 	formatValue,
 }: {
 	rpmTrend: TrendPoint[];
-	tpmTrend: TrendPoint[];
+	/** 每分钟 token 量（Tokens Per Minute）。 */
+	tpmTrend: FloatTrendPoint[];
 	streamRatioTrend: FloatTrendPoint[];
 	granularity?: ChartGranularity;
 	formatValue?: (value: number) => string;
@@ -360,14 +400,23 @@ export function ThroughputChart({
 				<ChartTooltip
 					content={
 						<ChartTooltipContent
-							formatter={(value, name) => (
-								<span className="font-mono font-medium tabular-nums text-foreground">
+							formatter={(value, name, item) => (
+								<TooltipLabelRow
+									label={
+										name === "rpm"
+											? "RPM"
+											: name === "tpm"
+												? "TPM"
+												: i18n.t("dashboard.streamRatio")
+									}
+									color={item?.color}
+								>
 									{name === "streamRatio"
 										? formatPercent(Number(value))
 										: formatValue
 											? formatValue(Number(value))
 											: Number(value).toLocaleString()}
-								</span>
+								</TooltipLabelRow>
 							)}
 						/>
 					}
@@ -435,7 +484,7 @@ export function OutputPerSecLineChart({
 						<ChartTooltipContent
 							formatter={(value) => (
 								<span className="font-mono font-medium tabular-nums text-foreground">
-									{Number(value).toFixed(1)} token/s
+									{formatReadableNumber(Number(value))} token/s
 								</span>
 							)}
 						/>
