@@ -1,3 +1,4 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { create } from "zustand";
@@ -50,9 +51,14 @@ export function useInitLocale() {
 /**
  * 切换语言：更新本地 store（立即生效），并同步到后端设置表
  * （已登录时；失败不阻塞本地切换）。
+ *
+ * PUT 成功后全量失效 TanStack Query 缓存：后端会把未自定义的定时任务
+ * 标题/描述同步为目标语言，各页面需要重新拉取才能渲染新语言的标题/描述
+ * （如定时任务页的任务列表）。
  */
 export function useChangeLocale() {
 	const setLocale = useLocale((state) => state.setLocale);
+	const queryClient = useQueryClient();
 	const { i18n } = useTranslation();
 
 	return async (next: Locale) => {
@@ -62,6 +68,7 @@ export function useChangeLocale() {
 			await api.put(`settings/${SETTING_KEY_LANGUAGE}`, {
 				json: { value: next },
 			});
+			await queryClient.invalidateQueries();
 		} catch {
 			// 未登录（401）或网络失败时静默：本地语言已切换，登录后会同步。
 		}

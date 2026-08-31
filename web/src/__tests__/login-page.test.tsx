@@ -1,4 +1,5 @@
 import LoginPage from "@/pages/login";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,14 +22,19 @@ vi.mock("@/hooks/use-toast", () => ({
 }));
 
 function renderPage(state?: { from?: string }) {
+	const queryClient = new QueryClient({
+		defaultOptions: { queries: { retry: false } },
+	});
 	return render(
-		<MemoryRouter initialEntries={[{ pathname: "/login", state }]}>
-			<Routes>
-				<Route path="/login" element={<LoginPage />} />
-				<Route path="/" element={<div>首页</div>} />
-				<Route path="/providers" element={<div>供应商页</div>} />
-			</Routes>
-		</MemoryRouter>,
+		<QueryClientProvider client={queryClient}>
+			<MemoryRouter initialEntries={[{ pathname: "/login", state }]}>
+				<Routes>
+					<Route path="/login" element={<LoginPage />} />
+					<Route path="/" element={<div>首页</div>} />
+					<Route path="/providers" element={<div>供应商页</div>} />
+				</Routes>
+			</MemoryRouter>
+		</QueryClientProvider>,
 	);
 }
 
