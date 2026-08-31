@@ -37,9 +37,10 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
-      - name: Install frontend dependencies
+      # rust-embed 在编译期嵌入 web/dist，必须先构建前端
+      - name: Build web (frontend)
         working-directory: web
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile && pnpm build
 
       # 版本一致性校验：tag 名（去 v 前缀）必须等于 Cargo.toml 与 package.json 的 version
       - name: Check release version
