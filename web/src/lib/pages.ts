@@ -12,70 +12,72 @@ import {
 
 export interface PageConfig {
 	path: string;
-	title: string;
-	description: string;
+	/** 标题 i18n key（nav.pages.<page>.title），用于侧边栏与页面标题。 */
+	titleKey: string;
+	/** 描述 i18n key（nav.pages.<page>.description）。 */
+	descriptionKey: string;
 	icon: LucideIcon;
 }
 
-/** 侧边栏分组：组标题 + 组内页面（顺序即展示顺序）。 */
+/** 侧边栏分组：组标题 i18n key + 组内页面（顺序即展示顺序）。 */
 export interface PageGroup {
-	label: string;
+	labelKey: string;
 	pages: readonly PageConfig[];
 }
 
 export const OVERVIEW_PAGE: PageConfig = {
 	path: "/",
-	title: "数据面板",
-	description: "请求指标概览与过去 24 小时调用/token 图表",
+	titleKey: "nav.pages.overview.title",
+	descriptionKey: "nav.pages.overview.description",
 	icon: LayoutDashboard,
 };
 
 export const CRON_JOBS_PAGE: PageConfig = {
 	path: "/cron-jobs",
-	title: "定时任务",
-	description: "管理系统定时任务，支持启用/禁用、立即执行与编辑",
+	titleKey: "nav.pages.cronJobs.title",
+	descriptionKey: "nav.pages.cronJobs.description",
 	icon: Clock,
 };
 
 export const SETTINGS_PAGE: PageConfig = {
 	path: "/settings",
-	title: "系统设置",
-	description: "管理应用配置项",
+	titleKey: "nav.pages.settings.title",
+	descriptionKey: "nav.pages.settings.description",
 	icon: Settings,
 };
 
 export const PROVIDERS_PAGE: PageConfig = {
 	path: "/providers",
-	title: "供应商",
-	description: "管理供应商接入实例，支持创建、编辑与删除",
+	titleKey: "nav.pages.providers.title",
+	descriptionKey: "nav.pages.providers.description",
 	icon: Server,
 };
 
 export const PROVIDER_MODELS_PAGE: PageConfig = {
 	path: "/provider-models",
-	title: "供应商模型",
-	description: "管理各供应商名下的模型清单与能力，支持刷新智能填充",
+	titleKey: "nav.pages.providerModels.title",
+	descriptionKey: "nav.pages.providerModels.description",
 	icon: Boxes,
 };
 
 export const VIRTUAL_MODELS_PAGE: PageConfig = {
 	path: "/virtual-models",
-	title: "虚拟模型",
-	description: "将多个供应商模型聚合为对外统一的虚拟模型",
+	titleKey: "nav.pages.virtualModels.title",
+	descriptionKey: "nav.pages.virtualModels.description",
 	icon: Layers,
 };
 
 export const API_KEYS_PAGE: PageConfig = {
 	path: "/api-keys",
-	title: "API Key",
-	description: "管理调用方访问网关的 API Key，支持创建、禁用与删除",
+	titleKey: "nav.pages.apiKeys.title",
+	descriptionKey: "nav.pages.apiKeys.description",
 	icon: KeyRound,
 };
 
 export const REQUEST_LOGS_PAGE: PageConfig = {
 	path: "/request-logs",
-	title: "请求日志",
-	description: "查看网关转发的请求日志，支持时间段/虚拟模型/API Key 过滤",
+	titleKey: "nav.pages.requestLogs.title",
+	descriptionKey: "nav.pages.requestLogs.description",
 	icon: ScrollText,
 };
 
@@ -92,11 +94,11 @@ export const PAGES: readonly PageConfig[] = [
 
 /** 侧边栏导航分组：概览 / 接入配置 / 观测 / 管理。 */
 export const NAV_GROUPS: readonly PageGroup[] = [
-	{ label: "概览", pages: [OVERVIEW_PAGE] },
+	{ labelKey: "nav.groups.overview", pages: [OVERVIEW_PAGE] },
 	{
-		label: "接入配置",
+		labelKey: "nav.groups.access",
 		pages: [PROVIDERS_PAGE, PROVIDER_MODELS_PAGE, VIRTUAL_MODELS_PAGE, API_KEYS_PAGE],
 	},
-	{ label: "观测", pages: [REQUEST_LOGS_PAGE] },
-	{ label: "管理", pages: [CRON_JOBS_PAGE, SETTINGS_PAGE] },
+	{ labelKey: "nav.groups.observability", pages: [REQUEST_LOGS_PAGE] },
+	{ labelKey: "nav.groups.admin", pages: [CRON_JOBS_PAGE, SETTINGS_PAGE] },
 ];

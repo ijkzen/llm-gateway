@@ -15,6 +15,7 @@ use std::collections::HashSet;
 use crate::crypto;
 use crate::entity::provider;
 use crate::entity::provider_model::{self, ActiveModel, Entity};
+use crate::i18n::Lang;
 use crate::provider_model::{catalog, refresh};
 use crate::response::{self, Response};
 use crate::state::AppState;
@@ -113,15 +114,30 @@ pub fn global_routes() -> Router<AppState> {
 }
 
 /// 校验创建/更新字段，返回第一个错误消息（None 表示通过）。
-fn validate_fields(req: &UpsertProviderModelRequest) -> Option<String> {
+fn validate_fields(req: &UpsertProviderModelRequest, lang: Lang) -> Option<String> {
     if req.provider_model_id.trim().is_empty() {
-        return Some("模型 ID 不能为空".to_string());
+        return Some(
+            lang.tr("模型 ID 不能为空", "model ID cannot be empty")
+                .to_string(),
+        );
     }
     if req.context_length <= 0 {
-        return Some("上下文长度必须为正整数".to_string());
+        return Some(
+            lang.tr(
+                "上下文长度必须为正整数",
+                "context length must be a positive integer",
+            )
+            .to_string(),
+        );
     }
     if req.max_output_tokens <= 0 {
-        return Some("最大输出必须为正整数".to_string());
+        return Some(
+            lang.tr(
+                "最大输出必须为正整数",
+                "max output tokens must be a positive integer",
+            )
+            .to_string(),
+        );
     }
     None
 }
@@ -227,12 +243,13 @@ async fn create_provider_model(
     Path(provider_id): Path<i32>,
     Json(req): Json<UpsertProviderModelRequest>,
 ) -> impl IntoResponse {
-    if let Some(msg) = validate_fields(&req) {
+    let lang = state.settings.lang().await;
+    if let Some(msg) = validate_fields(&req, lang) {
         return response::bad_request(msg);
     }
     match ensure_provider_exists(&state.db, provider_id).await {
         Ok(true) => {}
-        Ok(false) => return response::not_found(format!("Provider {provider_id} 不存在")),
+        Ok(false) => return not_found_provider(lang, provider_id),
         Err(e) => return response::db_error(e.to_string()),
     }
 
@@ -256,7 +273,7 @@ async fn create_provider_model(
             let response = ProviderModelResponse::from_model(model);
             (StatusCode::CREATED, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => response::bad_request("该供应商下已存在同名模型 ID"),
+        Err(e) if is_unique_violation(&e) => response::bad_request(duplicate_model_message(lang)),
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -266,17 +283,18 @@ async fn batch_create_provider_models(
     Path(provider_id): Path<i32>,
     Json(req): Json<BatchCreateRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     if req.models.is_empty() {
-        return response::bad_request("至少选择一个模型");
+        return response::bad_request(lang.tr("至少选择一个模型", "select at least one model"));
     }
     for item in &req.models {
-        if let Some(msg) = validate_fields(item) {
+        if let Some(msg) = validate_fields(item, lang) {
             return response::bad_request(msg);
         }
     }
     match ensure_provider_exists(&state.db, provider_id).await {
         Ok(true) => {}
-        Ok(false) => return response::not_found(format!("Provider {provider_id} 不存在")),
+        Ok(false) => return not_found_provider(lang, provider_id),
         Err(e) => return response::db_error(e.to_string()),
     }
 
@@ -336,7 +354,7 @@ async fn batch_create_provider_models(
             Err(e) => {
                 let _ = txn.rollback().await;
                 if is_unique_violation(&e) {
-                    return response::bad_request("该供应商下已存在同名模型 ID");
+                    return response::bad_request(duplicate_model_message(lang));
                 }
                 return response::db_error(e.to_string());
             }
@@ -353,7 +371,8 @@ async fn update_provider_model(
     Path((provider_id, model_id)): Path<(i32, i32)>,
     Json(req): Json<UpsertProviderModelRequest>,
 ) -> impl IntoResponse {
-    if let Some(msg) = validate_fields(&req) {
+    let lang = state.settings.lang().await;
+    if let Some(msg) = validate_fields(&req, lang) {
         return response::bad_request(msg);
     }
     let model = match Entity::find()
@@ -363,9 +382,7 @@ async fn update_provider_model(
         .await
     {
         Ok(Some(model)) => model,
-        Ok(None) => {
-            return response::not_found(format!("供应商模型 {model_id} 不存在"));
-        }
+        Ok(None) => return not_found_model(lang, model_id),
         Err(e) => return response::db_error(e.to_string()),
     };
 
@@ -384,7 +401,7 @@ async fn update_provider_model(
             let response = ProviderModelResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => response::bad_request("该供应商下已存在同名模型 ID"),
+        Err(e) if is_unique_violation(&e) => response::bad_request(duplicate_model_message(lang)),
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -393,6 +410,7 @@ async fn delete_provider_model(
     State(state): State<AppState>,
     Path((provider_id, model_id)): Path<(i32, i32)>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     match Entity::delete_many()
         .filter(provider_model::Column::ProviderId.eq(provider_id))
         .filter(provider_model::Column::ModelId.eq(model_id))
@@ -400,7 +418,7 @@ async fn delete_provider_model(
         .await
     {
         Ok(result) if result.rows_affected > 0 => (StatusCode::OK, Json(Response::success(()))),
-        Ok(_) => response::not_found(format!("供应商模型 {model_id} 不存在")),
+        Ok(_) => not_found_model(lang, model_id),
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -409,21 +427,28 @@ async fn refresh_provider_models(
     State(state): State<AppState>,
     Path(provider_id): Path<i32>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let provider_model_data = match provider::Entity::find_by_id(provider_id)
         .one(&state.db)
         .await
     {
         Ok(Some(model)) => model,
-        Ok(None) => return response::not_found(format!("Provider {provider_id} 不存在")),
+        Ok(None) => return not_found_provider(lang, provider_id),
         Err(e) => return response::db_error(e.to_string()),
     };
     let api_key = match crypto::decrypt(&provider_model_data.api_key) {
         Ok(key) if !key.is_empty() => key,
         Ok(_) => {
-            return response::bad_request("该供应商未配置 API Key，无法刷新");
+            return response::bad_request(lang.tr(
+                "该供应商未配置 API Key，无法刷新",
+                "this provider has no API key configured; cannot refresh",
+            ));
         }
         Err(_) => {
-            return response::bad_request("API Key 解密失败，请重新保存供应商密钥后再刷新");
+            return response::bad_request(lang.tr(
+                "API Key 解密失败，请重新保存供应商密钥后再刷新",
+                "failed to decrypt the API key; re-save the provider key and try again",
+            ));
         }
     };
 
@@ -519,4 +544,28 @@ fn tail_key(model_id: &str) -> String {
 /// SQLite 唯一约束冲突（provider_model 的复合唯一索引）。
 fn is_unique_violation(err: &DbErr) -> bool {
     err.to_string().contains("UNIQUE constraint failed")
+}
+
+fn not_found_provider<T>(lang: Lang, provider_id: i32) -> crate::response::ErrorResponse<T> {
+    if lang == Lang::En {
+        response::not_found(format!("provider {provider_id} does not exist"))
+    } else {
+        response::not_found(format!("Provider {provider_id} 不存在"))
+    }
+}
+
+fn not_found_model<T>(lang: Lang, model_id: i32) -> crate::response::ErrorResponse<T> {
+    if lang == Lang::En {
+        response::not_found(format!("provider model {model_id} does not exist"))
+    } else {
+        response::not_found(format!("供应商模型 {model_id} 不存在"))
+    }
+}
+
+fn duplicate_model_message(lang: Lang) -> String {
+    lang.tr(
+        "该供应商下已存在同名模型 ID",
+        "a model with the same ID already exists under this provider",
+    )
+    .to_string()
 }

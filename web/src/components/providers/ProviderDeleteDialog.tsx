@@ -2,6 +2,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import type { Provider } from "@/hooks/use-providers";
 import { useDeleteProvider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
+import { useTranslation } from "react-i18next";
 
 interface ProviderDeleteDialogProps {
 	provider: Provider | null;
@@ -10,6 +11,7 @@ interface ProviderDeleteDialogProps {
 }
 
 export function ProviderDeleteDialog({ provider, open, onOpenChange }: ProviderDeleteDialogProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const deleteProvider = useDeleteProvider();
 
@@ -18,10 +20,10 @@ export function ProviderDeleteDialog({ provider, open, onOpenChange }: ProviderD
 		deleteProvider.mutate(provider.id, {
 			onSuccess: () => {
 				onOpenChange(false);
-				toastSuccess("删除成功");
+				toastSuccess(t("common.deleteSuccess"));
 			},
 			onError: (error) => {
-				toastError("删除失败", error);
+				toastError(t("common.deleteFailed"), error);
 			},
 		});
 	};
@@ -30,14 +32,15 @@ export function ProviderDeleteDialog({ provider, open, onOpenChange }: ProviderD
 		<ConfirmDialog
 			open={open}
 			onOpenChange={onOpenChange}
-			title="删除 Provider"
+			title={t("providers.deleteProviderTitle")}
 			desc={
 				<>
-					确定要删除 Provider <span className="font-semibold">{provider?.name}</span> 吗？
-					此操作无法撤销。
+					{t("providers.deleteProviderDesc")}{" "}
+					<span className="font-semibold">{provider?.name}</span>{" "}
+					{t("providers.deleteProviderDescSuffix")}
 				</>
 			}
-			confirmText="删除"
+			confirmText={t("common.delete")}
 			destructive
 			isLoading={deleteProvider.isPending}
 			handleConfirm={handleConfirm}

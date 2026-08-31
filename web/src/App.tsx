@@ -2,6 +2,7 @@ import AppLayout from "@/components/layout";
 import { RequireAuth } from "@/components/require-auth";
 import { ScrollToTop } from "@/components/scroll-to-top";
 import { Toaster } from "@/components/ui/sonner";
+import { useInitLocale } from "@/hooks/use-locale";
 import { useInitTheme } from "@/hooks/use-theme";
 import { lazy } from "react";
 import { Route, Routes } from "react-router-dom";
@@ -22,6 +23,7 @@ const NotFoundPage = lazy(() => import("./pages/not-found"));
 
 function App() {
 	useInitTheme();
+	useInitLocale();
 
 	return (
 		<>

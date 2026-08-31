@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::auth::hash_token;
 use crate::crypto;
 use crate::entity::api_key::{self, ActiveModel, Entity};
+use crate::i18n::Lang;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -101,9 +102,10 @@ async fn create_api_key(
     State(state): State<AppState>,
     Json(req): Json<CreateApiKeyRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let name = req.name.trim();
     if name.is_empty() {
-        return response::bad_request("名称不能为空");
+        return response::bad_request(lang.tr("名称不能为空", "name cannot be empty"));
     }
 
     let plain = generate_api_key();
@@ -124,7 +126,11 @@ async fn create_api_key(
             (StatusCode::CREATED, Json(Response::success(response)))
         }
         Err(e) if is_unique_violation(&e) => {
-            response::bad_request("同名 API Key 已存在，名称需要唯一")
+            let msg = lang.tr(
+                "同名 API Key 已存在，名称需要唯一",
+                "an API key with the same name already exists; names must be unique",
+            );
+            response::bad_request(msg)
         }
         Err(e) => response::db_error(e.to_string()),
     }
@@ -147,10 +153,19 @@ async fn get_api_key_detail(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     match load_detail(&state.db, id).await {
-        Ok(Some(detail)) => (StatusCode::OK, Json(Response::success(detail))),
-        Ok(None) => response::not_found(format!("API Key {id} 不存在")),
-        Err(e) => response::db_error(e.to_string()),
+        Ok(Some(detail)) => (StatusCode::OK, Json(Response::success(detail))).into_response(),
+        Ok(None) => not_found_api_key(lang, id).into_response(),
+        Err(e) => response::db_error::<()>(e.to_string()).into_response(),
+    }
+}
+
+fn not_found_api_key(lang: Lang, id: i32) -> crate::response::ErrorResponse<()> {
+    if lang == Lang::En {
+        response::not_found(format!("API key {id} does not exist"))
+    } else {
+        response::not_found(format!("API Key {id} 不存在"))
     }
 }
 
@@ -159,10 +174,11 @@ async fn update_api_key(
     Path(id): Path<i32>,
     Json(req): Json<UpdateApiKeyRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let model = match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(model)) => model,
-        Ok(None) => return response::not_found(format!("API Key {id} 不存在")),
-        Err(e) => return response::db_error(e.to_string()),
+        Ok(None) => return not_found_api_key(lang, id).into_response(),
+        Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
     };
 
     let mut active: ActiveModel = model.into();
@@ -172,16 +188,17 @@ async fn update_api_key(
     match active.update(&state.db).await {
         Ok(model) => {
             let response = ApiKeyResponse::from_model(model);
-            (StatusCode::OK, Json(Response::success(response)))
+            (StatusCode::OK, Json(Response::success(response))).into_response()
         }
-        Err(e) => response::db_error(e.to_string()),
+        Err(e) => response::db_error::<()>(e.to_string()).into_response(),
     }
 }
 
 async fn delete_api_key(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     match Entity::delete_by_id(id).exec(&state.db).await {
         Ok(result) if result.rows_affected > 0 => (StatusCode::OK, Json(Response::success(()))),
-        Ok(_) => response::not_found(format!("API Key {id} 不存在")),
+        Ok(_) => not_found_api_key(lang, id),
         Err(e) => response::db_error(e.to_string()),
     }
 }

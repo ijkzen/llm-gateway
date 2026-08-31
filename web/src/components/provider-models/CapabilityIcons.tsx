@@ -2,17 +2,18 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import type { ProviderModel } from "@/hooks/use-provider-models";
 import { cn } from "@/lib/utils";
 import { Brain, Image, type LucideIcon, Video, Wrench } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 /** 模型能力定义：key 对应 ProviderModel 上的布尔字段。 */
 export const CAPABILITIES: {
 	key: keyof Pick<ProviderModel, "reasoning" | "toolUse" | "imageUnderstand" | "videoUnderstand">;
-	label: string;
+	labelKey: string;
 	icon: LucideIcon;
 }[] = [
-	{ key: "reasoning", label: "推理", icon: Brain },
-	{ key: "toolUse", label: "工具调用", icon: Wrench },
-	{ key: "imageUnderstand", label: "图像理解", icon: Image },
-	{ key: "videoUnderstand", label: "视频理解", icon: Video },
+	{ key: "reasoning", labelKey: "providerModels.reasoning", icon: Brain },
+	{ key: "toolUse", labelKey: "providerModels.toolUse", icon: Wrench },
+	{ key: "imageUnderstand", labelKey: "providerModels.imageUnderstand", icon: Image },
+	{ key: "videoUnderstand", labelKey: "providerModels.videoUnderstand", icon: Video },
 ];
 
 /** 以图标形式展示模型已具备的能力（仅展示为 true 的项，tooltip 说明含义）。 */
@@ -23,11 +24,13 @@ export function CapabilityIcons({
 	model: ProviderModel;
 	className?: string;
 }) {
+	const { t } = useTranslation();
 	return (
 		<TooltipProvider delayDuration={200}>
 			<div className={cn("flex items-center gap-1.5", className)}>
-				{CAPABILITIES.map(({ key, label, icon: Icon }) =>
-					model[key] ? (
+				{CAPABILITIES.map(({ key, labelKey, icon: Icon }) => {
+					const label = t(labelKey);
+					return model[key] ? (
 						<Tooltip key={key}>
 							<TooltipTrigger asChild>
 								<span
@@ -39,8 +42,8 @@ export function CapabilityIcons({
 							</TooltipTrigger>
 							<TooltipContent>{label}</TooltipContent>
 						</Tooltip>
-					) : null,
-				)}
+					) : null;
+				})}
 			</div>
 		</TooltipProvider>
 	);

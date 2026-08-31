@@ -13,6 +13,7 @@ import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race
 import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { Coins, DatabaseZap, Gauge, ListChecks, Timer, TrendingUp } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router-dom";
 
 /** 三级页三个区块的独立时间段状态。 */
@@ -40,6 +41,7 @@ function initialWindowFromUrl(searchParams: URLSearchParams): RaceWindowState {
 
 /** 模型详情三级页：单模型指标卡片（置顶）+ 调用分析折线 + Token 折线，三块独立时间段。 */
 export default function ModelOverviewPage() {
+	const { t } = useTranslation();
 	const { providerId: providerIdParam, modelId: modelIdParam } = useParams();
 	const providerId = Number.parseInt(providerIdParam ?? "", 10);
 	const modelId = decodeURIComponent(modelIdParam ?? "");
@@ -94,10 +96,10 @@ export default function ModelOverviewPage() {
 
 	const windowSubtitle = (state: RaceWindowState) =>
 		state.period === "custom"
-			? "自定义时间范围"
+			? t("overview.customWindow")
 			: formatPeriodLabel(state.period, state.offset, now);
 
-	const title = `${metrics.data?.providerName || "供应商"}・${modelId} · 模型数据`;
+	const title = `${metrics.data?.providerName || t("dashboardPage.providerFallback")}・${modelId} · ${t("dashboardPage.modelTitleSuffix")}`;
 
 	return (
 		<div className="space-y-6">
@@ -110,7 +112,7 @@ export default function ModelOverviewPage() {
 			<Card>
 				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 					<div className="space-y-1">
-						<CardTitle>模型指标</CardTitle>
+						<CardTitle>{t("dashboard.modelMetric")}</CardTitle>
 						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.metrics)}</p>
 					</div>
 					<RaceWindowControl
@@ -130,45 +132,45 @@ export default function ModelOverviewPage() {
 						</div>
 					) : metrics.isError || !metrics.data ? (
 						<div className="flex h-[160px] items-center justify-center text-xs text-muted-foreground">
-							数据加载失败
+							{t("overview.dataLoadFailed")}
 						</div>
 					) : (
 						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 							<StatsCard
 								icon={Coins}
-								label="总计 Token"
+								label={t("race.totalTokens")}
 								value={formatTokenCount(metrics.data.totalTokens)}
-								subLabel="输入 + 输出"
+								subLabel={t("overview.inputPlusOutput")}
 							/>
 							<StatsCard
 								icon={ListChecks}
-								label="请求数"
+								label={t("race.requests")}
 								value={metrics.data.requestCount.toLocaleString()}
-								subLabel="成功请求"
+								subLabel={t("overview.successRequests")}
 							/>
 							<StatsCard
 								icon={Timer}
-								label="TTFT"
+								label={t("race.ttft")}
 								value={`${metrics.data.ttft.toFixed(1)} ms`}
-								subLabel="流式首 token"
+								subLabel={t("overview.streamFirstToken")}
 							/>
 							<StatsCard
 								icon={Gauge}
-								label="TPS"
+								label={t("race.tps")}
 								value={metrics.data.tps.toFixed(2)}
-								subLabel="加权均值"
+								subLabel={t("overview.weightedAverage")}
 							/>
 							<StatsCard
 								icon={Timer}
-								label="平均耗时"
+								label={t("race.avgLatency")}
 								value={`${metrics.data.requestTime.toFixed(1)} ms`}
-								subLabel="成功请求"
+								subLabel={t("overview.successRequests")}
 							/>
 							<StatsCard
 								icon={DatabaseZap}
-								label="缓存命中率"
+								label={t("race.cacheHitRate")}
 								value={formatPercent(metrics.data.cacheHitRate)}
-								subLabel="缓存 / 输入 token"
+								subLabel={t("overview.cacheOverInputToken")}
 							/>
 						</div>
 					)}
@@ -179,7 +181,7 @@ export default function ModelOverviewPage() {
 			<Card>
 				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 					<div className="space-y-1">
-						<CardTitle>调用分析</CardTitle>
+						<CardTitle>{t("dashboard.analysis")}</CardTitle>
 						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.call)}</p>
 					</div>
 					<RaceWindowControl
@@ -195,12 +197,12 @@ export default function ModelOverviewPage() {
 						<Skeleton className="h-[260px] w-full" />
 					) : callCharts.isError || !callCharts.data ? (
 						<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-							数据加载失败
+							{t("overview.dataLoadFailed")}
 						</div>
 					) : (
 						<TrendLineChart
 							data={callCharts.data.callTrend}
-							label="调用次数"
+							label={t("overview.calls")}
 							granularity={callGranularity}
 						/>
 					)}
@@ -211,7 +213,7 @@ export default function ModelOverviewPage() {
 			<Card>
 				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 					<div className="space-y-1">
-						<CardTitle>Token 分析</CardTitle>
+						<CardTitle>{t("dashboard.tokenAnalysis")}</CardTitle>
 						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.token)}</p>
 					</div>
 					<RaceWindowControl
@@ -227,12 +229,12 @@ export default function ModelOverviewPage() {
 						<Skeleton className="h-[260px] w-full" />
 					) : tokenCharts.isError || !tokenCharts.data ? (
 						<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-							数据加载失败
+							{t("overview.dataLoadFailed")}
 						</div>
 					) : (
 						<TrendLineChart
 							data={tokenCharts.data.tokenTrend}
-							label="Token 数"
+							label={t("overview.tokens")}
 							formatValue={formatTokenCount}
 							granularity={tokenGranularity}
 						/>

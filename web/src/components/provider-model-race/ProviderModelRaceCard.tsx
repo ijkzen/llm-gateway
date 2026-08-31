@@ -14,6 +14,7 @@ import { formatPeriodLabel } from "@/lib/race-period";
 import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 function initialWindowState(): RaceWindowState {
@@ -26,26 +27,41 @@ function initialWindowState(): RaceWindowState {
 	};
 }
 
-/** 6 列指标定义：key / 标题 / 格式化 / 默认方向（true=降序，耗时类默认升序）。 */
+/** 6 列指标定义：key / 标题键 / 格式化 / 默认方向（true=降序，耗时类默认升序）。 */
 const COLUMNS: ReadonlyArray<{
 	key: RaceSortKey;
-	label: string;
+	labelKey: string;
 	format: (v: number) => string;
 	defaultDesc: boolean;
 }> = [
-	{ key: "totalTokens", label: "总计 Token", format: formatTokenCount, defaultDesc: true },
-	{ key: "requestCount", label: "请求数", format: (v) => v.toLocaleString(), defaultDesc: true },
-	{ key: "ttft", label: "TTFT", format: (v) => `${v.toFixed(1)} ms`, defaultDesc: false },
 	{
-		key: "requestTime",
-		label: "平均耗时",
+		key: "totalTokens",
+		labelKey: "race.metricLabel.totalTokens",
+		format: formatTokenCount,
+		defaultDesc: true,
+	},
+	{
+		key: "requestCount",
+		labelKey: "race.metricLabel.requestCount",
+		format: (v) => v.toLocaleString(),
+		defaultDesc: true,
+	},
+	{
+		key: "ttft",
+		labelKey: "race.metricLabel.ttft",
 		format: (v) => `${v.toFixed(1)} ms`,
 		defaultDesc: false,
 	},
-	{ key: "tps", label: "TPS", format: (v) => v.toFixed(2), defaultDesc: true },
+	{
+		key: "requestTime",
+		labelKey: "race.metricLabel.requestTime",
+		format: (v) => `${v.toFixed(1)} ms`,
+		defaultDesc: false,
+	},
+	{ key: "tps", labelKey: "race.metricLabel.tps", format: (v) => v.toFixed(2), defaultDesc: true },
 	{
 		key: "cacheHitRate",
-		label: "缓存命中率",
+		labelKey: "race.metricLabel.cacheHitRate",
 		format: formatPercent,
 		defaultDesc: true,
 	},
@@ -65,6 +81,7 @@ function modelLabel(item: Pick<ProviderModelRankItem, "providerName" | "modelId"
  */
 export function ProviderModelRaceCard() {
 	const navigate = useNavigate();
+	const { t } = useTranslation();
 	// 挂载时刻固化 now：保证「当前周期」的窗口终点稳定，不因渲染抖动重复请求。
 	const [now] = useState(() => Date.now());
 	const [windowState, setWindowState] = useState<RaceWindowState>(initialWindowState);
@@ -113,10 +130,12 @@ export function ProviderModelRaceCard() {
 					<Boxes className="h-4 w-4" />
 				</span>
 				<div className="min-w-0">
-					<h3 className="text-sm font-semibold text-foreground">供应商模型赛马</h3>
+					<h3 className="text-sm font-semibold text-foreground">
+						{t("dashboard.providerModelRace")}
+					</h3>
 					<p className="truncate text-xs text-muted-foreground">
 						{windowState.period === "custom"
-							? "自定义时间范围"
+							? t("overview.customWindow")
 							: formatPeriodLabel(windowState.period, windowState.offset, now)}
 					</p>
 				</div>
@@ -132,24 +151,24 @@ export function ProviderModelRaceCard() {
 
 			{!inView ? (
 				<div className="flex h-[220px] items-center justify-center text-xs text-muted-foreground">
-					滚动到此处后加载
+					{t("race.loadingAfterScroll")}
 				</div>
 			) : query.isLoading ? (
 				<div className="h-[220px] animate-pulse rounded-lg bg-slate-200/60 dark:bg-white/5" />
 			) : query.isError ? (
 				<div className="flex h-[220px] flex-col items-center justify-center gap-2 text-xs text-muted-foreground">
-					<span>数据加载失败</span>
+					<span>{t("race.loadFailed")}</span>
 					<button
 						type="button"
 						className="rounded-full bg-foreground/5 px-3 py-1 text-xs font-medium hover:bg-foreground/10"
 						onClick={() => query.refetch()}
 					>
-						重试
+						{t("common.retry")}
 					</button>
 				</div>
 			) : !query.data || query.data.items.length === 0 ? (
 				<div className="flex h-[220px] items-center justify-center text-xs text-muted-foreground">
-					该时间段暂无数据
+					{t("race.noData")}
 				</div>
 			) : (
 				<RaceTable
@@ -175,6 +194,7 @@ function RaceTable({
 	onSort: (key: RaceSortKey) => void;
 	onRowClick: (item: ProviderModelRankItem) => void;
 }) {
+	const { t } = useTranslation();
 	return (
 		<div className="overflow-x-auto">
 			<table className="w-full min-w-[720px] border-collapse text-sm">
@@ -184,21 +204,22 @@ function RaceTable({
 							#
 						</th>
 						<th className="px-2 py-2 text-left text-xs font-medium text-muted-foreground">
-							供应商・模型
+							{t("dashboard.providerModel")}
 						</th>
 						{COLUMNS.map((column) => {
 							const active = sort.sortBy === column.key;
+							const label = t(column.labelKey);
 							return (
 								<th key={column.key} className="px-2 py-2 text-right">
 									<button
 										type="button"
 										onClick={() => onSort(column.key)}
-										aria-label={column.label}
+										aria-label={label}
 										className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium transition-colors hover:bg-foreground/5 ${
 											active ? "text-foreground" : "text-muted-foreground"
 										}`}
 									>
-										{column.label}
+										{label}
 										{active &&
 											(sort.sortOrder === "asc" ? (
 												<ArrowUp data-testid={`sort-${column.key}`} className="h-3 w-3" />
@@ -223,7 +244,7 @@ function RaceTable({
 							}}
 							tabIndex={0}
 							className="cursor-pointer border-b border-foreground/5 last:border-0 hover:bg-foreground/5"
-							title="点击查看该模型详情"
+							title={t("race.openModelDetail")}
 						>
 							<td className="px-2 py-2 text-left font-mono text-xs text-muted-foreground">
 								{index + 1}

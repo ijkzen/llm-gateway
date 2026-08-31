@@ -11,8 +11,10 @@ import { useApiKeys } from "@/hooks/use-api-keys";
 import { API_KEYS_PAGE } from "@/lib/pages";
 import { Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export default function ApiKeysPage() {
+	const { t } = useTranslation();
 	const [creating, setCreating] = useState(false);
 	const [deletingKey, setDeletingKey] = useState<ApiKey | null>(null);
 
@@ -30,25 +32,22 @@ export default function ApiKeysPage() {
 	if (isError) {
 		return (
 			<div className="space-y-6">
-				<PageHeader icon={API_KEYS_PAGE.icon} title={API_KEYS_PAGE.title} />
-				<ErrorState
-					description="无法获取 API Key 数据，请检查网络或稍后重试。"
-					onRetry={() => refetch()}
-				/>
+				<PageHeader icon={API_KEYS_PAGE.icon} title={t(API_KEYS_PAGE.titleKey)} />
+				<ErrorState description={t("apiKeys.errorDescription")} onRetry={() => refetch()} />
 			</div>
 		);
 	}
 
 	return (
 		<div className="space-y-6">
-			<PageHeader icon={API_KEYS_PAGE.icon} title={API_KEYS_PAGE.title}>
+			<PageHeader icon={API_KEYS_PAGE.icon} title={t(API_KEYS_PAGE.titleKey)}>
 				<Button variant="outline" size="sm" onClick={() => refetch()}>
 					<RefreshCw className="mr-2 size-4" />
-					刷新
+					{t("common.refresh")}
 				</Button>
 				<Button size="sm" onClick={() => setCreating(true)}>
 					<Plus className="mr-2 size-4" />
-					创建 API Key
+					{t("apiKeys.create")}
 				</Button>
 			</PageHeader>
 

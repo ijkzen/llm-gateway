@@ -36,6 +36,7 @@ import {
 } from "@tanstack/react-table";
 import { MoreHorizontal, Power, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface ApiKeysTableProps {
 	apiKeys: ApiKey[] | undefined;
@@ -45,6 +46,7 @@ interface ApiKeysTableProps {
 const PLAIN_HEADER_CLASS = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
 
 export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const toggleApiKey = useToggleApiKey();
 	const [sorting, setSorting] = useState<SortingState>([]);
@@ -54,8 +56,8 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 		toggleApiKey.mutate(
 			{ id: apiKey.id, enable: !apiKey.enable },
 			{
-				onSuccess: () => toastSuccess("操作成功"),
-				onError: (error) => toastError("操作失败", error),
+				onSuccess: () => toastSuccess(t("common.success")),
+				onError: (error) => toastError(t("common.error"), error),
 			},
 		);
 	};
@@ -65,23 +67,27 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 	const columns: ColumnDef<ApiKey>[] = [
 		{
 			accessorKey: "name",
-			meta: { title: "名称" },
+			meta: { title: t("apiKeys.name") },
 			header: ({ column }) => (
-				<DataTableColumnHeader column={column} title="名称" className={PLAIN_HEADER_CLASS} />
+				<DataTableColumnHeader
+					column={column}
+					title={t("apiKeys.name")}
+					className={PLAIN_HEADER_CLASS}
+				/>
 			),
 			cell: ({ row }) => <span className="font-medium">{row.getValue("name")}</span>,
 		},
 		{
 			accessorKey: "keyMasked",
-			meta: { title: "Key" },
+			meta: { title: t("apiKeys.keyColumn") },
 			enableSorting: false,
-			header: () => <div className={PLAIN_HEADER_CLASS}>Key</div>,
+			header: () => <div className={PLAIN_HEADER_CLASS}>{t("apiKeys.keyColumn")}</div>,
 			cell: ({ row }) => <ApiKeyCell apiKey={row.original} />,
 		},
 		{
 			accessorKey: "enable",
-			meta: { title: "状态" },
-			header: () => <div className={PLAIN_HEADER_CLASS}>状态</div>,
+			meta: { title: t("apiKeys.enable") },
+			header: () => <div className={PLAIN_HEADER_CLASS}>{t("apiKeys.enable")}</div>,
 			cell: ({ row }) => {
 				const apiKey = row.original;
 				return (
@@ -89,7 +95,7 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 						<Switch
 							checked={apiKey.enable}
 							disabled={toggleApiKey.isPending}
-							aria-label={`切换 API Key ${apiKey.name} 状态`}
+							aria-label={`${t("apiKeys.toggleStatus")} ${apiKey.name} ${t("apiKeys.toggleStatusSuffix")}`}
 							onCheckedChange={() => toggleEnable(apiKey)}
 						/>
 						<StatusBadge status={apiKey.enable ? "enabled" : "disabled"} />
@@ -99,16 +105,22 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 		},
 		{
 			accessorKey: "createdAt",
-			meta: { title: "创建时间" },
+			meta: { title: t("apiKeys.createdAt") },
 			header: ({ column }) => (
-				<DataTableColumnHeader column={column} title="创建时间" className={PLAIN_HEADER_CLASS} />
+				<DataTableColumnHeader
+					column={column}
+					title={t("apiKeys.createdAt")}
+					className={PLAIN_HEADER_CLASS}
+				/>
 			),
 			cell: ({ row }) => <RelativeTime date={row.getValue("createdAt")} />,
 		},
 		{
 			id: "actions",
 			enableHiding: false,
-			header: () => <div className={`text-right ${PLAIN_HEADER_CLASS}`}>操作</div>,
+			header: () => (
+				<div className={`text-right ${PLAIN_HEADER_CLASS}`}>{t("apiKeys.operate")}</div>
+			),
 			cell: ({ row }) => {
 				const apiKey = row.original;
 				return (
@@ -119,7 +131,7 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 									variant="ghost"
 									size="icon"
 									className="size-8"
-									aria-label={`操作 ${apiKey.name}`}
+									aria-label={`${t("apiKeys.operate")} ${apiKey.name}`}
 								>
 									<MoreHorizontal className="size-4" />
 								</Button>
@@ -127,12 +139,12 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 							<DropdownMenuContent align="end">
 								<DropdownMenuItem onClick={() => toggleEnable(apiKey)}>
 									<Power className="size-4" />
-									{apiKey.enable ? "禁用" : "启用"}
+									{apiKey.enable ? t("common.disable") : t("common.enable")}
 								</DropdownMenuItem>
 								<DropdownMenuSeparator />
 								<DropdownMenuItem variant="destructive" onClick={() => onDelete(apiKey)}>
 									<Trash2 className="size-4" />
-									删除
+									{t("apiKeys.delete")}
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
@@ -165,8 +177,8 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 		<div className="space-y-4">
 			{rows.length === 0 ? (
 				<EmptyState
-					title="暂无 API Key"
-					description="创建一个 API Key 供调用方访问网关"
+					title={t("apiKeys.noKeys")}
+					description={t("apiKeys.noKeysHint")}
 					className="border-0 bg-transparent shadow-none"
 				/>
 			) : (

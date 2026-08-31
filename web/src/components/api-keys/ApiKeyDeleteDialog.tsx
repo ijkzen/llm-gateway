@@ -2,6 +2,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import type { ApiKey } from "@/hooks/use-api-keys";
 import { useDeleteApiKey } from "@/hooks/use-api-keys";
 import { useToastActions } from "@/hooks/use-toast";
+import { useTranslation } from "react-i18next";
 
 interface ApiKeyDeleteDialogProps {
 	apiKey: ApiKey | null;
@@ -10,6 +11,7 @@ interface ApiKeyDeleteDialogProps {
 }
 
 export function ApiKeyDeleteDialog({ apiKey, open, onOpenChange }: ApiKeyDeleteDialogProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const deleteApiKey = useDeleteApiKey();
 
@@ -18,10 +20,10 @@ export function ApiKeyDeleteDialog({ apiKey, open, onOpenChange }: ApiKeyDeleteD
 		deleteApiKey.mutate(apiKey.id, {
 			onSuccess: () => {
 				onOpenChange(false);
-				toastSuccess("删除成功");
+				toastSuccess(t("common.deleteSuccess"));
 			},
 			onError: (error) => {
-				toastError("删除失败", error);
+				toastError(t("common.deleteFailed"), error);
 			},
 		});
 	};
@@ -30,14 +32,14 @@ export function ApiKeyDeleteDialog({ apiKey, open, onOpenChange }: ApiKeyDeleteD
 		<ConfirmDialog
 			open={open}
 			onOpenChange={onOpenChange}
-			title="删除 API Key"
+			title={t("apiKeys.deleteTitle")}
 			desc={
 				<>
-					确定要删除 API Key <span className="font-semibold">{apiKey?.name}</span> 吗？此操作无法
-					撤销，使用该 Key 的调用方将立即失效。
+					{t("apiKeys.deleteDesc")} <span className="font-semibold">{apiKey?.name}</span>{" "}
+					{t("apiKeys.deleteDescSuffix")}
 				</>
 			}
-			confirmText="删除"
+			confirmText={t("common.delete")}
 			destructive
 			isLoading={deleteApiKey.isPending}
 			handleConfirm={handleConfirm}

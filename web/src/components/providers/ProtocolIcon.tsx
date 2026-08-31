@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -5,16 +6,28 @@ import { cn } from "@/lib/utils";
  * 0=OpenAI Compatible、1=OpenAI Response、2=Anthropic Message、3=Gemini。
  */
 export const PROTOCOL_TYPES = [
-	{ value: 0, label: "OpenAI Compatible" },
-	{ value: 1, label: "OpenAI Response" },
-	{ value: 2, label: "Anthropic Message" },
-	{ value: 3, label: "Gemini" },
+	{ value: 0, labelKey: "providers.protocol.openaiCompat" },
+	{ value: 1, labelKey: "providers.protocol.responses" },
+	{ value: 2, labelKey: "providers.protocol.anthropic" },
+	{ value: 3, labelKey: "providers.protocol.gemini" },
 ] as const;
 
 export const BILLING_MODES = [
-	{ value: 0, label: "按量付费" },
-	{ value: 1, label: "订阅制" },
+	{ value: 0, labelKey: "providers.payAsYouGo" },
+	{ value: 1, labelKey: "providers.subscription" },
 ] as const;
+
+/** 协议展示名（未知协议回退「未知协议」）。 */
+export function protocolLabel(value: number): string {
+	return i18n.t(
+		PROTOCOL_TYPES.find((p) => p.value === value)?.labelKey ?? "providers.unknownProtocol",
+	);
+}
+
+/** 付费类型展示名（未知回退「未知」）。 */
+export function billingModeLabel(value: number): string {
+	return i18n.t(BILLING_MODES.find((b) => b.value === value)?.labelKey ?? "common.unknown");
+}
 
 /** simple-icons 品牌图标 path（24x24 viewBox）。 */
 const BRAND_PATHS: Record<number, string> = {
@@ -43,7 +56,7 @@ export function ProtocolIcon({ protocolType, className }: ProtocolIconProps) {
 					"flex size-6 shrink-0 items-center justify-center rounded-full border-2 border-current text-xs font-semibold",
 					className,
 				)}
-				aria-label="未知协议"
+				aria-label={i18n.t("providers.unknownProtocol")}
 			>
 				?
 			</span>

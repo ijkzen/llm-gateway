@@ -27,21 +27,30 @@ import {
 import { useToastActions } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Pencil, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-const formSchema = z.object({
-	providerModelId: z.string().min(1, "模型 ID 不能为空"),
-	contextLength: z.coerce.number().int("必须为整数").positive("必须为正整数"),
-	maxOutputTokens: z.coerce.number().int("必须为整数").positive("必须为正整数"),
-	reasoning: z.boolean(),
-	toolUse: z.boolean(),
-	imageUnderstand: z.boolean(),
-	videoUnderstand: z.boolean(),
-});
+function makeFormSchema(t: (key: string) => string) {
+	return z.object({
+		providerModelId: z.string().min(1, t("providerModels.modelIdRequired")),
+		contextLength: z.coerce
+			.number()
+			.int(t("providerModels.mustBeInt"))
+			.positive(t("providerModels.mustBePositive")),
+		maxOutputTokens: z.coerce
+			.number()
+			.int(t("providerModels.mustBeInt"))
+			.positive(t("providerModels.mustBePositive")),
+		reasoning: z.boolean(),
+		toolUse: z.boolean(),
+		imageUnderstand: z.boolean(),
+		videoUnderstand: z.boolean(),
+	});
+}
 
-type FormValues = z.infer<typeof formSchema>;
+type FormValues = z.infer<ReturnType<typeof makeFormSchema>>;
 
 interface ProviderModelDetailDialogProps {
 	open: boolean;
@@ -59,11 +68,13 @@ export function ProviderModelDetailDialog({
 	providerName,
 	model,
 }: ProviderModelDetailDialogProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const updateModel = useUpdateProviderModel(providerId);
 	const deleteModel = useDeleteProviderModel(providerId);
 	const [editing, setEditing] = useState(false);
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
+	const formSchema = useMemo(() => makeFormSchema(t), [t]);
 
 	const form = useForm<FormValues>({
 		resolver: zodResolver(formSchema),
@@ -101,9 +112,9 @@ export function ProviderModelDetailDialog({
 			{
 				onSuccess: () => {
 					setEditing(false);
-					toastSuccess("更新成功");
+					toastSuccess(t("common.updateSuccess"));
 				},
-				onError: (error) => toastError("更新失败", error),
+				onError: (error) => toastError(t("common.updateFailed"), error),
 			},
 		);
 	};
@@ -113,9 +124,9 @@ export function ProviderModelDetailDialog({
 		deleteModel.mutate(model.modelId, {
 			onSuccess: () => {
 				onOpenChange(false);
-				toastSuccess("删除成功");
+				toastSuccess(t("common.deleteSuccess"));
 			},
-			onError: (error) => toastError("删除失败", error),
+			onError: (error) => toastError(t("common.deleteFailed"), error),
 		});
 	};
 
@@ -135,7 +146,10 @@ export function ProviderModelDetailDialog({
 						<DialogTitle className="truncate" title={model.providerModelId}>
 							{model.providerModelId}
 						</DialogTitle>
-						<DialogDescription>所属供应商：{providerName}</DialogDescription>
+						<DialogDescription>
+							{t("providerModels.belongsToProvider")}
+							{providerName}
+						</DialogDescription>
 					</DialogHeader>
 
 					{editing ? (
@@ -150,9 +164,9 @@ export function ProviderModelDetailDialog({
 									name="providerModelId"
 									render={({ field }) => (
 										<FormItem>
-											<FormLabel required>模型 ID</FormLabel>
+											<FormLabel required>{t("providerModels.modelId")}</FormLabel>
 											<FormControl>
-												<Input placeholder="如 gpt-4o" {...field} />
+												<Input placeholder={t("providerModels.modelIdPlaceholder")} {...field} />
 											</FormControl>
 											<FormMessage />
 										</FormItem>
@@ -164,7 +178,7 @@ export function ProviderModelDetailDialog({
 										name="contextLength"
 										render={({ field }) => (
 											<FormItem>
-												<FormLabel required>上下文长度</FormLabel>
+												<FormLabel required>{t("providerModels.contextLength")}</FormLabel>
 												<FormControl>
 													<Input type="number" min={1} {...field} />
 												</FormControl>
@@ -177,7 +191,7 @@ export function ProviderModelDetailDialog({
 										name="maxOutputTokens"
 										render={({ field }) => (
 											<FormItem>
-												<FormLabel required>最大输出</FormLabel>
+												<FormLabel required>{t("providerModels.maxOutput")}</FormLabel>
 												<FormControl>
 													<Input type="number" min={1} {...field} />
 												</FormControl>
@@ -187,14 +201,14 @@ export function ProviderModelDetailDialog({
 									/>
 								</div>
 								<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-									{CAPABILITIES.map(({ key, label }) => (
+									{CAPABILITIES.map(({ key, labelKey }) => (
 										<FormField
 											key={key}
 											control={form.control}
 											name={key}
 											render={({ field }) => (
 												<FormItem className="flex items-center justify-between rounded-lg border p-3">
-													<FormLabel>{label}</FormLabel>
+													<FormLabel>{t(labelKey)}</FormLabel>
 													<FormControl>
 														<Switch checked={field.value} onCheckedChange={field.onChange} />
 													</FormControl>
@@ -208,27 +222,31 @@ export function ProviderModelDetailDialog({
 					) : (
 						<dl className="space-y-3">
 							<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
-								<dt className="text-sm text-muted-foreground">模型 ID</dt>
+								<dt className="text-sm text-muted-foreground">{t("providerModels.modelId")}</dt>
 								<dd className="min-w-0 truncate font-mono text-sm">{model.providerModelId}</dd>
 							</div>
 							<div className="grid grid-cols-2 gap-3">
 								<div className="rounded-lg border px-4 py-2.5">
-									<dt className="text-xs text-muted-foreground">上下文长度</dt>
+									<dt className="text-xs text-muted-foreground">
+										{t("providerModels.contextLength")}
+									</dt>
 									<dd className="mt-0.5 text-sm font-medium">
 										{model.contextLength.toLocaleString()}
 									</dd>
 								</div>
 								<div className="rounded-lg border px-4 py-2.5">
-									<dt className="text-xs text-muted-foreground">最大输出</dt>
+									<dt className="text-xs text-muted-foreground">{t("providerModels.maxOutput")}</dt>
 									<dd className="mt-0.5 text-sm font-medium">
 										{model.maxOutputTokens.toLocaleString()}
 									</dd>
 								</div>
 							</div>
 							<div className="rounded-lg border px-4 py-3">
-								<dt className="text-xs text-muted-foreground">模型能力</dt>
+								<dt className="text-xs text-muted-foreground">
+									{t("providerModels.modelCapabilities")}
+								</dt>
 								<dd className="mt-2 grid grid-cols-2 gap-2">
-									{CAPABILITIES.map(({ key, label, icon: Icon }) => (
+									{CAPABILITIES.map(({ key, labelKey, icon: Icon }) => (
 										<span
 											key={key}
 											className={
@@ -238,8 +256,10 @@ export function ProviderModelDetailDialog({
 											}
 										>
 											<Icon className="size-3.5" />
-											{label}
-											{model[key] ? "已支持" : "不支持"}
+											{t(labelKey)}
+											{model[key]
+												? t("providerModels.supported")
+												: t("providerModels.notSupported")}
 										</span>
 									))}
 								</dd>
@@ -258,7 +278,7 @@ export function ProviderModelDetailDialog({
 									onClick={() => setConfirmingDelete(true)}
 								>
 									<Trash2 className="mr-1.5 size-4" />
-									删除
+									{t("providerModels.deleteModel")}
 								</Button>
 								<Button
 									type="submit"
@@ -266,13 +286,13 @@ export function ProviderModelDetailDialog({
 									form="provider-model-detail-form"
 									disabled={updateModel.isPending}
 								>
-									更新
+									{t("providerModels.update")}
 								</Button>
 							</>
 						) : (
 							<Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
 								<Pencil className="mr-1.5 size-4" />
-								编辑
+								{t("providerModels.editModel")}
 							</Button>
 						)}
 					</DialogFooter>
@@ -282,14 +302,15 @@ export function ProviderModelDetailDialog({
 			<ConfirmDialog
 				open={confirmingDelete}
 				onOpenChange={setConfirmingDelete}
-				title="删除供应商模型"
+				title={t("providerModels.deleteTitle")}
 				desc={
 					<>
-						确定要删除模型 <span className="font-semibold">{model.providerModelId}</span> 吗？
-						此操作无法撤销。
+						{t("providerModels.deleteDesc")}{" "}
+						<span className="font-semibold">{model.providerModelId}</span>{" "}
+						{t("providerModels.deleteDescSuffix")}
 					</>
 				}
-				confirmText="删除"
+				confirmText={t("common.delete")}
 				destructive
 				isLoading={deleteModel.isPending}
 				handleConfirm={handleDelete}

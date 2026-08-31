@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 
 interface StatusBadgeProps {
 	status: "enabled" | "disabled" | "success" | "error" | "warning";
@@ -15,14 +16,15 @@ const variants: Record<StatusBadgeProps["status"], string> = {
 	warning: "bg-amber-50 text-amber-600 hover:bg-amber-50 dark:bg-amber-500/15 dark:text-amber-400",
 };
 
-const defaultLabels: Record<StatusBadgeProps["status"], string> = {
-	enabled: "启用",
-	disabled: "禁用",
-	success: "成功",
-	error: "失败",
-	warning: "警告",
+const defaultLabelKeys: Record<StatusBadgeProps["status"], string> = {
+	enabled: "providers.enable",
+	disabled: "common.disabled",
+	success: "cronJobs.status.success",
+	error: "cronJobs.status.failed",
+	warning: "common.unknown",
 };
 
 export function StatusBadge({ status, label }: StatusBadgeProps) {
-	return <Badge className={cn(variants[status])}>{label ?? defaultLabels[status]}</Badge>;
+	const { t } = useTranslation();
+	return <Badge className={cn(variants[status])}>{label ?? t(defaultLabelKeys[status])}</Badge>;
 }

@@ -20,8 +20,10 @@ import { SETTING_TYPES } from "@/lib/constants";
 import { SETTINGS_PAGE } from "@/lib/pages";
 import { KeyRound } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export default function SettingsPage() {
+	const { t } = useTranslation();
 	const [editingSetting, setEditingSetting] = useState<Setting | null>(null);
 	const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
@@ -55,32 +57,33 @@ export default function SettingsPage() {
 	if (isError) {
 		return (
 			<div className="space-y-6">
-				<PageHeader icon={SETTINGS_PAGE.icon} title={SETTINGS_PAGE.title} />
-				<ErrorState
-					description="无法获取系统设置数据，请检查网络或稍后重试。"
-					onRetry={() => refetch()}
-				/>
+				<PageHeader icon={SETTINGS_PAGE.icon} title={t(SETTINGS_PAGE.titleKey)} />
+				<ErrorState description={t("settings.errorDescription")} onRetry={() => refetch()} />
 			</div>
 		);
 	}
 
 	return (
 		<div className="space-y-6">
-			<PageHeader icon={SETTINGS_PAGE.icon} title={SETTINGS_PAGE.title}>
+			<PageHeader icon={SETTINGS_PAGE.icon} title={t(SETTINGS_PAGE.titleKey)}>
 				<Button variant="outline" onClick={() => setChangePasswordOpen(true)}>
 					<KeyRound className="size-4" />
-					修改密码
+					{t("settings.changePassword")}
 				</Button>
 			</PageHeader>
 
 			<DataTableToolbar>
-				<SearchInput value={searchQuery} onChange={setSearchQuery} placeholder="搜索键或值..." />
+				<SearchInput
+					value={searchQuery}
+					onChange={setSearchQuery}
+					placeholder={t("settings.searchPlaceholder")}
+				/>
 				<Select value={typeFilter} onValueChange={setTypeFilter}>
-					<SelectTrigger className="w-[160px]" aria-label="按类型筛选">
-						<SelectValue placeholder="全部类型" />
+					<SelectTrigger className="w-[160px]" aria-label={t("settings.filterByType")}>
+						<SelectValue placeholder={t("settings.allTypes")} />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="all">全部类型</SelectItem>
+						<SelectItem value="all">{t("settings.allTypes")}</SelectItem>
 						{SETTING_TYPES.map((type) => (
 							<SelectItem key={type} value={type}>
 								{type}

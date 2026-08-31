@@ -14,6 +14,7 @@ import type { VirtualModel, VirtualModelItem } from "@/hooks/use-virtual-models"
 import { fallbackLabel, loadBalancingLabel } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface VirtualModelSectionProps {
 	virtualModel: VirtualModel;
@@ -23,6 +24,7 @@ interface VirtualModelSectionProps {
 
 /** 成员卡片（纯展示）：模型 ID + 供应商名 + 能力图标；停用/随供应商禁用带标记。 */
 function MemberCard({ item }: { item: VirtualModelItem }) {
+	const { t } = useTranslation();
 	const providerDisabled = !item.providerEnable;
 	return (
 		<div
@@ -43,9 +45,13 @@ function MemberCard({ item }: { item: VirtualModelItem }) {
 			<p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
 				<span className="truncate">{item.providerName}</span>
 				{providerDisabled && (
-					<span className="shrink-0 text-amber-600 dark:text-amber-400">· 随供应商禁用</span>
+					<span className="shrink-0 text-amber-600 dark:text-amber-400">
+						{t("virtualModels.disabledWithProvider")}
+					</span>
 				)}
-				{item.enable === false && <span className="shrink-0">· 已停用</span>}
+				{item.enable === false && (
+					<span className="shrink-0">{t("virtualModels.disabledMark")}</span>
+				)}
 			</p>
 		</div>
 	);
@@ -53,6 +59,7 @@ function MemberCard({ item }: { item: VirtualModelItem }) {
 
 /** 单个虚拟模型区块：顶行左名称右菜单（编辑/删除），分割线下方平铺成员卡片。 */
 export function VirtualModelSection({ virtualModel, onEdit, onDelete }: VirtualModelSectionProps) {
+	const { t } = useTranslation();
 	return (
 		<section>
 			<div className="flex items-center justify-between gap-4 py-3">
@@ -62,7 +69,7 @@ export function VirtualModelSection({ virtualModel, onEdit, onDelete }: VirtualM
 					</h2>
 					{!virtualModel.enable && (
 						<Badge variant="outline" className="shrink-0 text-muted-foreground">
-							已禁用
+							{t("common.disabled")}
 						</Badge>
 					)}
 					<Badge variant="outline" className="shrink-0">
@@ -78,7 +85,7 @@ export function VirtualModelSection({ virtualModel, onEdit, onDelete }: VirtualM
 							variant="outline"
 							size="icon"
 							className="size-9 shrink-0"
-							aria-label={`更多操作：${virtualModel.displayId}`}
+							aria-label={`${t("common.moreActions")}：${virtualModel.displayId}`}
 						>
 							<MoreHorizontal className="size-4" />
 						</Button>
@@ -86,12 +93,12 @@ export function VirtualModelSection({ virtualModel, onEdit, onDelete }: VirtualM
 					<DropdownMenuContent align="end">
 						<DropdownMenuItem onClick={() => onEdit(virtualModel)}>
 							<Pencil className="size-4" />
-							编辑
+							{t("common.edit")}
 						</DropdownMenuItem>
 						<DropdownMenuSeparator />
 						<DropdownMenuItem variant="destructive" onClick={() => onDelete(virtualModel)}>
 							<Trash2 className="size-4" />
-							删除
+							{t("common.delete")}
 						</DropdownMenuItem>
 					</DropdownMenuContent>
 				</DropdownMenu>
@@ -100,7 +107,7 @@ export function VirtualModelSection({ virtualModel, onEdit, onDelete }: VirtualM
 			{virtualModel.items.length === 0 ? (
 				<Card className="mt-4">
 					<CardContent className="p-6 text-center text-sm text-muted-foreground">
-						暂无成员模型，点击右上角菜单「编辑」添加
+						{t("virtualModels.noMemberHint")}
 					</CardContent>
 				</Card>
 			) : (

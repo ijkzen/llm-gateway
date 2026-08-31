@@ -20,14 +20,17 @@ async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
         .await;
 
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    repo.insert(&JobDefinition {
-        name: "test_job".to_string(),
-        title: "Test".to_string(),
-        description: "".to_string(),
-        expression: "@hourly".to_string(),
-        enabled: true,
-        group: "default".to_string(),
-    })
+    repo.insert(
+        &JobDefinition {
+            name: "test_job".to_string(),
+            title: "Test".to_string(),
+            description: "".to_string(),
+            expression: "@hourly".to_string(),
+            enabled: true,
+            group: "default".to_string(),
+        },
+        None,
+    )
     .await
     .unwrap();
 
@@ -211,14 +214,17 @@ async fn test_update_job_rejects_unloaded_job_without_touching_db() {
     // Insert a job whose handler is not registered; it is skipped at load
     // time and therefore unknown to the scheduler.
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    repo.insert(&JobDefinition {
-        name: "unloaded_job".to_string(),
-        title: "Unloaded".to_string(),
-        description: "".to_string(),
-        expression: "@hourly".to_string(),
-        enabled: true,
-        group: "default".to_string(),
-    })
+    repo.insert(
+        &JobDefinition {
+            name: "unloaded_job".to_string(),
+            title: "Unloaded".to_string(),
+            description: "".to_string(),
+            expression: "@hourly".to_string(),
+            enabled: true,
+            group: "default".to_string(),
+        },
+        None,
+    )
     .await
     .unwrap();
 

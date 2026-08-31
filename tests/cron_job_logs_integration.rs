@@ -32,14 +32,17 @@ async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
         .await;
 
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    repo.insert(&JobDefinition {
-        name: "log_job".to_string(),
-        title: "Log Test".to_string(),
-        description: "".to_string(),
-        expression: "@hourly".to_string(),
-        enabled: true,
-        group: "default".to_string(),
-    })
+    repo.insert(
+        &JobDefinition {
+            name: "log_job".to_string(),
+            title: "Log Test".to_string(),
+            description: "".to_string(),
+            expression: "@hourly".to_string(),
+            enabled: true,
+            group: "default".to_string(),
+        },
+        None,
+    )
     .await
     .unwrap();
 

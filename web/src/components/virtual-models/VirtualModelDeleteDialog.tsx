@@ -1,6 +1,7 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useToastActions } from "@/hooks/use-toast";
 import { type VirtualModel, useDeleteVirtualModel } from "@/hooks/use-virtual-models";
+import { useTranslation } from "react-i18next";
 
 interface VirtualModelDeleteDialogProps {
 	open: boolean;
@@ -14,6 +15,7 @@ export function VirtualModelDeleteDialog({
 	onOpenChange,
 	virtualModel,
 }: VirtualModelDeleteDialogProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const deleteModel = useDeleteVirtualModel();
 
@@ -22,9 +24,9 @@ export function VirtualModelDeleteDialog({
 		deleteModel.mutate(virtualModel.virtualModelId, {
 			onSuccess: () => {
 				onOpenChange(false);
-				toastSuccess("删除成功");
+				toastSuccess(t("common.deleteSuccess"));
 			},
-			onError: (error) => toastError("删除失败", error),
+			onError: (error) => toastError(t("common.deleteFailed"), error),
 		});
 	};
 
@@ -34,14 +36,15 @@ export function VirtualModelDeleteDialog({
 		<ConfirmDialog
 			open={open}
 			onOpenChange={onOpenChange}
-			title="删除虚拟模型"
+			title={t("virtualModels.deleteTitle")}
 			desc={
 				<>
-					确定要删除虚拟模型 <span className="font-semibold">{virtualModel.displayId}</span>{" "}
-					吗？其成员模型将被释放，此操作无法撤销。
+					{t("virtualModels.deleteDesc")}{" "}
+					<span className="font-semibold">{virtualModel.displayId}</span>{" "}
+					{t("virtualModels.deleteDescSuffix")}
 				</>
 			}
-			confirmText="删除"
+			confirmText={t("common.delete")}
 			destructive
 			isLoading={deleteModel.isPending}
 			handleConfirm={handleConfirm}

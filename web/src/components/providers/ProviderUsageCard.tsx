@@ -6,11 +6,12 @@ import type { UsageEstimate } from "@/hooks/use-usage-estimate";
 import { cn, formatTokenCount } from "@/lib/utils";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
-const WINDOW_LABELS: Record<UsageWindow["window"], string> = {
-	five_hour: "5 小时",
-	weekly: "本周",
-	monthly: "本月",
+const WINDOW_LABEL_KEYS: Record<UsageWindow["window"], string> = {
+	five_hour: "providers.windowFiveHour",
+	weekly: "providers.windowWeekly",
+	monthly: "providers.windowMonthly",
 };
 
 /** 预估的月 Token 总量：周窗口 ×4 折算为月，月窗口直接用。 */
@@ -40,14 +41,17 @@ function barColor(remainingPercent: number): string {
 	return "bg-red-500";
 }
 
-function formatReset(resetsAt?: string): string | null {
+function formatReset(
+	resetsAt: string | undefined,
+	t: (key: string, opts?: Record<string, unknown>) => string,
+): string | null {
 	if (!resetsAt) return null;
 	const ts = new Date(resetsAt).getTime();
 	if (Number.isNaN(ts) || ts <= 0) return null;
 	const d = new Date(ts);
 	return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, "0")}:${String(
 		d.getMinutes(),
-	).padStart(2, "0")} 重置`;
+	).padStart(2, "0")}${t("providers.resetsAtSuffix")}`;
 }
 
 function formatAmount(amount: number): string {
@@ -55,16 +59,17 @@ function formatAmount(amount: number): string {
 }
 
 function WindowRow({ window }: { window: UsageWindow }) {
+	const { t } = useTranslation();
 	// 后端已在接口出口按 remaining_percent_value() 推导并取整（round2），
 	// 前端直接使用，不再自行推导/取整。
 	const remaining = window.remainingPercent;
-	const reset = formatReset(window.resetsAt);
+	const reset = formatReset(window.resetsAt, t);
 	return (
 		<div className="space-y-1.5">
 			<div className="flex items-baseline justify-between gap-2 text-sm">
-				<span className="text-muted-foreground">{WINDOW_LABELS[window.window]}</span>
+				<span className="text-muted-foreground">{t(WINDOW_LABEL_KEYS[window.window])}</span>
 				<span className="font-medium tabular-nums">
-					{remaining !== undefined ? `剩余 ${remaining}%` : "—"}
+					{remaining !== undefined ? t("providers.remainingPercent", { percent: remaining }) : "—"}
 				</span>
 			</div>
 			{remaining !== undefined && (
@@ -78,7 +83,11 @@ function WindowRow({ window }: { window: UsageWindow }) {
 			<div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
 				<span>
 					{window.used !== undefined && window.limit !== undefined
-						? `已用 ${formatAmount(window.used)} / ${formatAmount(window.limit)}${window.unit ? ` ${window.unit}` : ""}`
+						? t("providers.usedTotal", {
+								used: formatAmount(window.used),
+								limit: formatAmount(window.limit),
+								unit: window.unit ? ` ${window.unit}` : "",
+							})
 						: ""}
 				</span>
 				<span>{reset ?? ""}</span>
@@ -95,6 +104,7 @@ export function ProviderUsageCard({
 	/** 订阅周期 Token 预估（可预估时在右下角展示月 Token 总量）。 */
 	estimate?: UsageEstimate | undefined;
 }) {
+	const { t } = useTranslation();
 	const [refreshToken, setRefreshToken] = useState(0);
 	const { data, isLoading, isFetching, error } = useProviderUsage(providerId, refreshToken);
 
@@ -108,7 +118,7 @@ export function ProviderUsageCard({
 			<div className="mb-3 flex items-center justify-between gap-2">
 				<div className="flex items-center gap-2">
 					<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-						用量信息
+						{t("providers.usageCardTitle")}
 					</p>
 					{data?.plan && <Badge variant="secondary">{data.plan}</Badge>}
 				</div>
@@ -117,7 +127,7 @@ export function ProviderUsageCard({
 					variant="ghost"
 					size="icon"
 					className="size-7"
-					aria-label="刷新用量"
+					aria-label={t("providers.refreshUsage")}
 					disabled={isFetching}
 					onClick={refresh}
 				>
@@ -138,7 +148,7 @@ export function ProviderUsageCard({
 						<span className="line-clamp-2">{error.message}</span>
 					</p>
 					<Button type="button" variant="outline" size="sm" onClick={refresh}>
-						重试
+						{t("common.retry")}
 					</Button>
 				</div>
 			) : data?.kind === "balance" ? (
@@ -164,19 +174,21 @@ export function ProviderUsageCard({
 					))}
 				</div>
 			) : (
-				<p className="text-sm text-muted-foreground">暂无用量数据</p>
+				<p className="text-sm text-muted-foreground">{t("providers.noUsageData")}</p>
 			)}
 
 			{/* 底部：右下角展示预估月 Token 总量（无法预估时留空）。 */}
 			<div className="mt-3 flex items-end justify-between gap-2">
 				{data && (
 					<p className="text-xs text-muted-foreground">
-						更新于 {new Date(data.fetchedAt).toLocaleTimeString("zh-CN")}
+						{t("providers.updatedAtTime", {
+							time: new Date(data.fetchedAt).toLocaleTimeString("zh-CN"),
+						})}
 					</p>
 				)}
 				{monthlyTokens !== null && (
 					<p className="text-right text-xs text-muted-foreground">
-						预估月 Token：
+						{t("providers.estimateMonthlyTokens")}
 						<span className="font-mono font-medium tabular-nums">
 							{formatTokenCount(monthlyTokens)}
 						</span>

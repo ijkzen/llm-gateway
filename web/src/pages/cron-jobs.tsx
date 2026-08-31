@@ -12,8 +12,10 @@ import { type CronJob, useCronJobs } from "@/hooks/use-cron-jobs";
 import { CRON_JOBS_PAGE } from "@/lib/pages";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export default function CronJobsPage() {
+	const { t } = useTranslation();
 	const [selectedName, setSelectedName] = useState<string | null>(null);
 	// 默认选中第一个定时任务（数据加载后尚未手动选择时）。
 	const [hasUserSelected, setHasUserSelected] = useState(false);
@@ -47,21 +49,18 @@ export default function CronJobsPage() {
 	if (isError) {
 		return (
 			<div className="space-y-6">
-				<PageHeader icon={CRON_JOBS_PAGE.icon} title={CRON_JOBS_PAGE.title} />
-				<ErrorState
-					description="无法获取定时任务数据，请检查网络或稍后重试。"
-					onRetry={() => refetch()}
-				/>
+				<PageHeader icon={CRON_JOBS_PAGE.icon} title={t(CRON_JOBS_PAGE.titleKey)} />
+				<ErrorState description={t("cronJobs.errorDescription")} onRetry={() => refetch()} />
 			</div>
 		);
 	}
 
 	return (
 		<div className="flex h-full min-h-0 flex-col space-y-6">
-			<PageHeader icon={CRON_JOBS_PAGE.icon} title={CRON_JOBS_PAGE.title}>
+			<PageHeader icon={CRON_JOBS_PAGE.icon} title={t(CRON_JOBS_PAGE.titleKey)}>
 				<Button variant="outline" size="sm" onClick={() => refetch()}>
 					<RefreshCw className="mr-2 size-4" />
-					刷新
+					{t("common.refresh")}
 				</Button>
 			</PageHeader>
 

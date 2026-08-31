@@ -19,15 +19,18 @@ import { Input } from "@/components/ui/input";
 import { useCreateApiKey } from "@/hooks/use-api-keys";
 import { useToastActions } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-const formSchema = z.object({
-	name: z.string().min(1, "名称不能为空"),
-});
+function makeSchema(t: (key: string) => string) {
+	return z.object({
+		name: z.string().min(1, t("apiKeys.nameRequired")),
+	});
+}
 
-type FormValues = z.infer<typeof formSchema>;
+type FormValues = z.infer<ReturnType<typeof makeSchema>>;
 
 interface ApiKeyCreateDialogProps {
 	open: boolean;
@@ -36,8 +39,10 @@ interface ApiKeyCreateDialogProps {
 
 /** 创建 API Key：仅需填写名称，密钥由服务端自动生成。 */
 export function ApiKeyCreateDialog({ open, onOpenChange }: ApiKeyCreateDialogProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const createApiKey = useCreateApiKey();
+	const formSchema = useMemo(() => makeSchema(t), [t]);
 
 	const form = useForm<FormValues>({
 		resolver: zodResolver(formSchema),
@@ -56,9 +61,9 @@ export function ApiKeyCreateDialog({ open, onOpenChange }: ApiKeyCreateDialogPro
 			{
 				onSuccess: () => {
 					onOpenChange(false);
-					toastSuccess("创建成功");
+					toastSuccess(t("common.createSuccess"));
 				},
-				onError: (error) => toastError("创建失败", error),
+				onError: (error) => toastError(t("common.createFailed"), error),
 			},
 		);
 	};
@@ -67,10 +72,8 @@ export function ApiKeyCreateDialog({ open, onOpenChange }: ApiKeyCreateDialogPro
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="sm:max-w-[480px]">
 				<DialogHeader className="space-y-3">
-					<DialogTitle>创建 API Key</DialogTitle>
-					<DialogDescription>
-						填写名称后系统将自动生成密钥，可随时在列表中点击小眼睛查看明文。
-					</DialogDescription>
+					<DialogTitle>{t("apiKeys.createDialogTitle")}</DialogTitle>
+					<DialogDescription>{t("apiKeys.createDialogDesc")}</DialogDescription>
 				</DialogHeader>
 				<Form {...form}>
 					<form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
@@ -79,9 +82,13 @@ export function ApiKeyCreateDialog({ open, onOpenChange }: ApiKeyCreateDialogPro
 							name="name"
 							render={({ field }) => (
 								<FormItem>
-									<FormLabel required>名称</FormLabel>
+									<FormLabel required>{t("apiKeys.name")}</FormLabel>
 									<FormControl>
-										<Input placeholder="如 my-laptop" autoComplete="off" {...field} />
+										<Input
+											placeholder={t("apiKeys.placeholderName")}
+											autoComplete="off"
+											{...field}
+										/>
 									</FormControl>
 									<FormMessage />
 								</FormItem>
@@ -89,10 +96,10 @@ export function ApiKeyCreateDialog({ open, onOpenChange }: ApiKeyCreateDialogPro
 						/>
 						<DialogFooter className="gap-2 pt-2">
 							<Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-								取消
+								{t("common.cancel")}
 							</Button>
 							<Button type="submit" disabled={createApiKey.isPending}>
-								创建
+								{t("common.create")}
 							</Button>
 						</DialogFooter>
 					</form>

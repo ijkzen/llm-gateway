@@ -1,3 +1,4 @@
+import i18n from "@/i18n";
 import ky, { type AfterResponseHook, type BeforeErrorHook, type HTTPError } from "ky";
 
 export interface ApiResponse<T> {
@@ -80,10 +81,10 @@ export const api = ky.create({
 
 export async function unwrap<T>(res: ApiResponse<T>): Promise<T> {
 	if (res.code !== "0") {
-		throw new ApiError(res.msg || "请求失败", res.code);
+		throw new ApiError(res.msg || i18n.t("common.error"), res.code);
 	}
 	if (res.data === undefined) {
-		throw new ApiError("响应中缺少 data 字段", "MISSING_DATA");
+		throw new ApiError(i18n.t("error.missingData"), "MISSING_DATA");
 	}
 	return res.data;
 }

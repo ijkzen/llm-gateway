@@ -1,5 +1,6 @@
 import { CAPABILITIES } from "@/components/provider-models/CapabilityIcons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useTranslation } from "react-i18next";
 
 interface ItemCapabilityIconsProps {
 	/** 具备 reasoning/toolUse/imageUnderstand/videoUnderstand 布尔字段的条目。 */
@@ -14,11 +15,13 @@ interface ItemCapabilityIconsProps {
 
 /** 成员能力图标：仅展示为 true 的项（tooltip 说明含义）。 */
 export function ItemCapabilityIcons({ item, className }: ItemCapabilityIconsProps) {
+	const { t } = useTranslation();
 	return (
 		<TooltipProvider delayDuration={200}>
 			<div className={`flex items-center gap-1 ${className ?? ""}`}>
-				{CAPABILITIES.map(({ key, label, icon: Icon }) =>
-					item[key] ? (
+				{CAPABILITIES.map(({ key, labelKey, icon: Icon }) => {
+					const label = t(labelKey);
+					return item[key] ? (
 						<Tooltip key={key}>
 							<TooltipTrigger asChild>
 								<span
@@ -30,8 +33,8 @@ export function ItemCapabilityIcons({ item, className }: ItemCapabilityIconsProp
 							</TooltipTrigger>
 							<TooltipContent>{label}</TooltipContent>
 						</Tooltip>
-					) : null,
-				)}
+					) : null;
+				})}
 			</div>
 		</TooltipProvider>
 	);

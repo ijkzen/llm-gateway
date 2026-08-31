@@ -7,8 +7,9 @@ use chrono::Utc;
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio_cron_scheduler::{Job, JobScheduler};
 
+use crate::app_settings::AppSettings;
 use crate::cron::parser::{
-    ScheduleType, compute_frequency_secs, compute_next_run, parse_expression,
+    ScheduleType, compute_frequency_secs_tz, compute_next_run_tz, parse_expression,
 };
 use crate::cron::repository::{CronJobRepository, JobDefinition};
 use crate::cron::worker::JobInvocation;
@@ -47,10 +48,19 @@ pub struct SchedulerRuntime {
     handlers: Arc<RwLock<HashMap<String, JobHandler>>>,
     worker_tx: mpsc::Sender<JobInvocation>,
     modification_lock: Arc<tokio::sync::Mutex<()>>,
+    /// 语言/时区设置缓存：cron 语义时区（`None` = 服务器本地）来自这里。
+    settings: AppSettings,
 }
 
 impl SchedulerRuntime {
     pub async fn new(worker_tx: mpsc::Sender<JobInvocation>) -> Result<Self, SchedulerError> {
+        Self::new_with_settings(worker_tx, AppSettings::default()).await
+    }
+
+    pub async fn new_with_settings(
+        worker_tx: mpsc::Sender<JobInvocation>,
+        settings: AppSettings,
+    ) -> Result<Self, SchedulerError> {
         let scheduler = JobScheduler::new().await?;
         Ok(Self {
             scheduler: Arc::new(Mutex::new(scheduler)),
@@ -58,6 +68,7 @@ impl SchedulerRuntime {
             handlers: Arc::new(RwLock::new(HashMap::new())),
             worker_tx,
             modification_lock: Arc::new(Mutex::new(())),
+            settings,
         })
     }
 
@@ -90,6 +101,7 @@ impl SchedulerRuntime {
     pub async fn load_from_db<R: CronJobRepository>(&self, repo: &R) -> Result<(), SchedulerError> {
         let configs = repo.list_active().await?;
         let now = Utc::now();
+        let tz = self.settings.timezone().await;
 
         let mut skipped: Vec<String> = Vec::new();
         for config in configs {
@@ -114,7 +126,7 @@ impl SchedulerRuntime {
                 continue;
             }
 
-            skip_missed_run(repo, &config, now).await;
+            skip_missed_run(repo, &config, now, tz).await;
         }
 
         if !skipped.is_empty() {
@@ -135,7 +147,8 @@ impl SchedulerRuntime {
         handler: JobHandler,
     ) -> Result<(), SchedulerError> {
         self.add_job_internal(job, handler).await?;
-        if let Err(e) = repo.insert(job).await {
+        let tz = self.settings.timezone().await;
+        if let Err(e) = repo.insert(job, tz).await {
             tracing::error!("Failed to insert job '{}' into DB: {}", job.name, e);
             if let Err(rollback_err) = self.remove_job_from_scheduler(&job.name).await {
                 tracing::error!(
@@ -175,6 +188,89 @@ impl SchedulerRuntime {
     pub async fn has_job(&self, name: &str) -> bool {
         let jobs = self.jobs.read().await;
         jobs.contains_key(name)
+    }
+
+    /// Rebuilds every job in the scheduler after the cron timezone setting
+    /// changed. Cron jobs are recreated with the new timezone and their
+    /// `next_run_at` recomputed from now; `@every` jobs keep their interval
+    /// (restarting from now, matching the restart semantics). Disabled jobs
+    /// stay listed and manually runnable.
+    pub async fn reload_all_jobs<R: CronJobRepository>(
+        &self,
+        repo: &R,
+    ) -> Result<(), SchedulerError> {
+        let names: Vec<String> = {
+            let jobs = self.jobs.read().await;
+            jobs.keys().cloned().collect()
+        };
+
+        let mut first_error: Option<SchedulerError> = None;
+        for name in names {
+            let entry = {
+                let jobs = self.jobs.read().await;
+                jobs.get(&name).cloned()
+            };
+            let Some(entry) = entry else {
+                continue;
+            };
+
+            // Recreate the scheduler job with the new timezone. The definition
+            // is unchanged; only the timezone interpretation differs.
+            if let Err(e) = self.remove_job_from_scheduler(&name).await {
+                tracing::error!(
+                    "Failed to remove job '{}' during timezone reload: {}",
+                    name,
+                    e
+                );
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+                continue;
+            }
+            if let Err(e) = self
+                .add_job_internal(&JobDefinition::from(&entry), entry.handler.clone())
+                .await
+            {
+                tracing::error!(
+                    "Failed to reload job '{}' after timezone change: {}",
+                    name,
+                    e
+                );
+                if first_error.is_none() {
+                    first_error = Some(e);
+                }
+                continue;
+            }
+
+            // Recompute the displayed next run for cron jobs. @every jobs were
+            // already reset by add_job_internal (interval restarts from now).
+            let Ok(ScheduleType::Cron(_)) = parse_expression(&entry.expression) else {
+                continue;
+            };
+            let Ok(model) = repo.find_by_name(&name).await else {
+                continue;
+            };
+            let Some(model) = model else {
+                continue;
+            };
+            let now = Utc::now();
+            let tz = self.settings.timezone().await;
+            let next = compute_next_run_tz(&entry.expression, tz).unwrap_or(model.next_run_at);
+            if next > now
+                && let Err(e) = repo.update_run_times(&name, model.last_run_at, next).await
+            {
+                tracing::error!(
+                    "Failed to update next_run_at for '{}' after timezone change: {}",
+                    name,
+                    e
+                );
+            }
+        }
+
+        match first_error {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     pub async fn set_enabled<R: CronJobRepository>(
@@ -344,6 +440,7 @@ impl SchedulerRuntime {
 
     pub async fn list_jobs(&self) -> Vec<JobInfo> {
         let jobs = self.jobs.read().await;
+        let tz = self.settings.timezone().await;
         jobs.values()
             .map(|e| JobInfo {
                 name: e.name.clone(),
@@ -355,7 +452,7 @@ impl SchedulerRuntime {
                 next_run_at: None,
                 updated_at: None,
                 group: e.group.clone(),
-                frequency_secs: compute_frequency_secs(&e.expression),
+                frequency_secs: compute_frequency_secs_tz(&e.expression, tz),
             })
             .collect()
     }
@@ -412,12 +509,18 @@ impl SchedulerRuntime {
 
         let scheduler_job = match schedule {
             ScheduleType::Cron(cron_expr) => {
-                // Interpret cron expressions in the server's local timezone so
-                // they match compute_next_run and the frontend's local-time
-                // display. Note: tokio-cron-scheduler snapshots the UTC offset
-                // at creation time, so in regions with DST a job keeps the
+                // Interpret cron expressions in the configured timezone
+                // (falling back to the server's local timezone when unset)
+                // so they match compute_next_run and the displayed next run.
+                // Note: tokio-cron-scheduler snapshots the UTC offset at
+                // creation time, so in regions with DST a job keeps the
                 // offset from its creation until it is recreated.
-                Job::new_async_tz(cron_expr, chrono::Local, wrapped)?
+                let tz = self.settings.timezone().await;
+                if let Some(tz) = tz {
+                    Job::new_async_tz(cron_expr, tz, wrapped)?
+                } else {
+                    Job::new_async_tz(cron_expr, chrono::Local, wrapped)?
+                }
             }
             ScheduleType::Every(duration) => Job::new_repeated_async(duration, wrapped)?,
         };
@@ -522,6 +625,7 @@ async fn skip_missed_run<R: CronJobRepository>(
     repo: &R,
     config: &cron_job::Model,
     now: chrono::DateTime<Utc>,
+    tz: Option<chrono_tz::Tz>,
 ) {
     if !config.enabled || config.next_run_at >= now || config.last_run_at > config.next_run_at {
         return;
@@ -531,7 +635,7 @@ async fn skip_missed_run<R: CronJobRepository>(
     let Ok(ScheduleType::Cron(_)) = parse_expression(&config.expression) else {
         return;
     };
-    let next = compute_next_run(&config.expression).unwrap_or(config.next_run_at);
+    let next = compute_next_run_tz(&config.expression, tz).unwrap_or(config.next_run_at);
     tracing::info!(
         "Job '{}' missed its scheduled run (next_run_at={}), skipping to next run at {}",
         config.name,

@@ -8,6 +8,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 
+use llm_gateway::app_settings::AppSettings;
 use llm_gateway::auth::hash_token;
 use llm_gateway::cron::log_capture::JobLogEvent;
 use llm_gateway::cron::scheduler::SchedulerRuntime;
@@ -51,6 +52,16 @@ pub fn build_app(
     scheduler: SchedulerRuntime,
     log_tx: tokio::sync::broadcast::Sender<JobLogEvent>,
 ) -> axum::Router {
+    build_app_with_settings(db, scheduler, log_tx, AppSettings::default())
+}
+
+/// 与 [`build_app`] 相同，但使用自定义语言/时区设置缓存。
+pub fn build_app_with_settings(
+    db: DatabaseConnection,
+    scheduler: SchedulerRuntime,
+    log_tx: tokio::sync::broadcast::Sender<JobLogEvent>,
+    settings: AppSettings,
+) -> axum::Router {
     let state = AppState {
         db,
         scheduler,
@@ -60,6 +71,7 @@ pub fn build_app(
         upstream_pool: llm_gateway::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(
             600,
         )),
+        settings,
     };
     routes::create_app(&state)
 }
@@ -129,6 +141,17 @@ pub async fn build_authed_app(
     scheduler: SchedulerRuntime,
     log_tx: tokio::sync::broadcast::Sender<JobLogEvent>,
 ) -> axum::Router {
+    build_authed_app_with_settings(db, scheduler, log_tx, AppSettings::default()).await
+}
+
+/// 与 [`build_authed_app`] 相同，但使用自定义语言/时区设置缓存。
+pub async fn build_authed_app_with_settings(
+    db: DatabaseConnection,
+    scheduler: SchedulerRuntime,
+    log_tx: tokio::sync::broadcast::Sender<JobLogEvent>,
+    settings: AppSettings,
+) -> axum::Router {
     seed_default_auth(&db).await;
-    build_app(db, scheduler, log_tx).layer(axum::middleware::from_fn(inject_test_auth))
+    build_app_with_settings(db, scheduler, log_tx, settings)
+        .layer(axum::middleware::from_fn(inject_test_auth))
 }

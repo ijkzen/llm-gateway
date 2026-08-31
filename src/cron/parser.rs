@@ -1,6 +1,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
+use chrono::{Offset, TimeZone};
 use croner::Cron;
 
 use super::SchedulerError;
@@ -99,26 +100,52 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
 }
 
 pub fn compute_next_run(expression: &str) -> Result<chrono::DateTime<chrono::Utc>, SchedulerError> {
-    compute_next_run_from_scheduled_at(expression, chrono::Utc::now())
+    compute_next_run_tz(expression, None)
+}
+
+/// 按指定时区（`None` = 服务器本地时区）计算下次运行时间。
+pub fn compute_next_run_tz(
+    expression: &str,
+    tz: Option<chrono_tz::Tz>,
+) -> Result<chrono::DateTime<chrono::Utc>, SchedulerError> {
+    compute_next_run_from_scheduled_at_tz(expression, chrono::Utc::now(), tz)
 }
 
 pub fn compute_next_run_from_scheduled_at(
     expression: &str,
     scheduled_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<chrono::DateTime<chrono::Utc>, SchedulerError> {
+    compute_next_run_from_scheduled_at_tz(expression, scheduled_at, None)
+}
+
+pub fn compute_next_run_from_scheduled_at_tz(
+    expression: &str,
+    scheduled_at: chrono::DateTime<chrono::Utc>,
+    tz: Option<chrono_tz::Tz>,
+) -> Result<chrono::DateTime<chrono::Utc>, SchedulerError> {
     let schedule = parse_expression(expression).map_err(SchedulerError::ParseError)?;
     match schedule {
         ScheduleType::Cron(cron_expr) => {
             let cron = Cron::from_str(&cron_expr)
                 .map_err(|e| SchedulerError::ParseError(e.to_string()))?;
-            // Cron expressions are interpreted in the server's local timezone:
-            // "0 0 8 * * *" means 08:00 local time, matching user expectation
-            // and the local-time display in the frontend.
-            let local = scheduled_at.with_timezone(&chrono::Local);
-            let next = cron
-                .find_next_occurrence(&local, false)
-                .map_err(|e| SchedulerError::ComputeNextRun(e.to_string()))?;
-            Ok(next.with_timezone(&chrono::Utc))
+            // Cron expressions are interpreted in the configured timezone
+            // (falling back to the server's local timezone when unset):
+            // "0 0 8 * * *" means 08:00 in that timezone, matching the
+            // timezone setting stored in the settings table.
+            let next: chrono::DateTime<chrono::Utc> = if let Some(tz) = tz {
+                let local = scheduled_at.with_timezone(&tz);
+                let next = cron
+                    .find_next_occurrence(&local, false)
+                    .map_err(|e| SchedulerError::ComputeNextRun(e.to_string()))?;
+                next.with_timezone(&chrono::Utc)
+            } else {
+                let local = scheduled_at.with_timezone(&chrono::Local);
+                let next = cron
+                    .find_next_occurrence(&local, false)
+                    .map_err(|e| SchedulerError::ComputeNextRun(e.to_string()))?;
+                next.with_timezone(&chrono::Utc)
+            };
+            Ok(next)
         }
         ScheduleType::Every(duration) => {
             let secs = i64::try_from(duration.as_secs()).map_err(|_| {
@@ -138,9 +165,14 @@ pub fn compute_next_run_from_scheduled_at(
 }
 
 pub fn compute_frequency_secs(expression: &str) -> i64 {
+    compute_frequency_secs_tz(expression, None)
+}
+
+/// 按指定时区（`None` = 服务器本地时区）估算执行频率。
+pub fn compute_frequency_secs_tz(expression: &str, tz: Option<chrono_tz::Tz>) -> i64 {
     match parse_expression(expression) {
         Ok(ScheduleType::Every(duration)) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
-        Ok(ScheduleType::Cron(cron_expr)) => estimate_cron_period(&cron_expr),
+        Ok(ScheduleType::Cron(cron_expr)) => estimate_cron_period(&cron_expr, tz),
         Err(_) => i64::MAX,
     }
 }
@@ -151,12 +183,26 @@ pub fn compute_frequency_secs(expression: &str) -> i64 {
 /// approximation for irregular ones (e.g. monthly intervals vary between 28
 /// and 31 days). Returns i64::MAX when fewer than two future occurrences can
 /// be computed.
-fn estimate_cron_period(cron_expr: &str) -> i64 {
+fn estimate_cron_period(cron_expr: &str, tz: Option<chrono_tz::Tz>) -> i64 {
     let Ok(cron) = Cron::from_str(cron_expr) else {
         return i64::MAX;
     };
 
-    let mut cursor = chrono::Utc::now().with_timezone(&chrono::Local);
+    // Estimate in a fixed offset (snapshotted now, like the scheduler does):
+    // the period estimate is approximate by design and DST shifts of one hour
+    // do not matter across the 3 sampled occurrences.
+    let offset_secs = if let Some(tz) = tz {
+        let now = chrono::Utc::now();
+        tz.offset_from_utc_datetime(&now.naive_utc())
+            .fix()
+            .local_minus_utc()
+    } else {
+        chrono::Local::now().offset().fix().local_minus_utc()
+    };
+    let fixed = chrono::FixedOffset::east_opt(offset_secs).unwrap_or_else(|| {
+        chrono::FixedOffset::east_opt(0).expect("UTC offset must be representable")
+    });
+    let mut cursor = chrono::Utc::now().with_timezone(&fixed);
     let mut occurrences = Vec::with_capacity(3);
     for _ in 0..3 {
         match cron.find_next_occurrence(&cursor, false) {
@@ -237,6 +283,39 @@ mod tests {
         assert_eq!(local.hour(), 8);
         assert_eq!(local.minute(), 0);
         assert!(next > base);
+    }
+
+    #[test]
+    fn test_compute_next_run_cron_uses_configured_timezone() {
+        use chrono::Timelike;
+
+        // With a configured timezone, "0 0 8 * * *" must mean 08:00 in that
+        // timezone: for Asia/Shanghai (UTC+8, no DST) the base instant is
+        // exactly 08:00 Shanghai time, so the next occurrence is the next day
+        // at 08:00 Shanghai = 00:00 UTC.
+        let base = chrono::DateTime::parse_from_rfc3339("2026-01-15T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let next = compute_next_run_from_scheduled_at_tz(
+            "0 0 8 * * *",
+            base,
+            Some(chrono_tz::Asia::Shanghai),
+        )
+        .unwrap();
+        let shanghai = next.with_timezone(&chrono_tz::Asia::Shanghai);
+        assert_eq!(shanghai.hour(), 8);
+        assert_eq!(shanghai.minute(), 0);
+        assert_eq!(next, base + chrono::TimeDelta::hours(24));
+
+        // A base instant before 08:00 Shanghai resolves to the same day.
+        let earlier = base - chrono::TimeDelta::minutes(1);
+        let next = compute_next_run_from_scheduled_at_tz(
+            "0 0 8 * * *",
+            earlier,
+            Some(chrono_tz::Asia::Shanghai),
+        )
+        .unwrap();
+        assert_eq!(next, base);
     }
 
     #[test]

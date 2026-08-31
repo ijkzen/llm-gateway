@@ -38,22 +38,25 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronDown, ChevronRight, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-const formSchema = z.object({
-	name: z.string().min(1, "名称不能为空"),
-	baseUrl: z.string().min(1, "Base URL 不能为空"),
-	// apiKey 创建时必填（编辑时留空表示不修改，在 onSubmit 里按模式校验）。
-	apiKey: z.string(),
-	enable: z.boolean(),
-	// 枚举范围在 onSubmit 里校验，避免 zod refine 把类型收窄成字面量联合。
-	protocolType: z.number(),
-	billingMode: z.number(),
-	usageEnabled: z.boolean(),
-	customHeader: z.string().refine((v) => isJsonObject(v), "自定义请求头必须是 JSON 对象"),
-});
+function makeFormSchema(t: (key: string) => string) {
+	return z.object({
+		name: z.string().min(1, t("providers.nameRequired")),
+		baseUrl: z.string().min(1, t("providers.baseUrlRequired")),
+		// apiKey 创建时必填（编辑时留空表示不修改，在 onSubmit 里按模式校验）。
+		apiKey: z.string(),
+		enable: z.boolean(),
+		// 枚举范围在 onSubmit 里校验，避免 zod refine 把类型收窄成字面量联合。
+		protocolType: z.number(),
+		billingMode: z.number(),
+		usageEnabled: z.boolean(),
+		customHeader: z.string().refine((v) => isJsonObject(v), t("providers.invalidCustomHeader")),
+	});
+}
 
-type FormValues = z.infer<typeof formSchema>;
+type FormValues = z.infer<ReturnType<typeof makeFormSchema>>;
 
 /** 解析模板 extra：仅当其为合法 JSON 对象时返回键值映射，否则空。 */
 function parseExtra(extra: string | undefined): Record<string, unknown> {
@@ -106,9 +109,11 @@ interface ProviderEditDialogProps {
 
 export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEditDialogProps) {
 	const isEdit = provider !== null;
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const createProvider = useCreateProvider();
 	const updateProvider = useUpdateProvider();
+	const formSchema = useMemo(() => makeFormSchema(t), [t]);
 
 	const [advancedOpen, setAdvancedOpen] = useState(false);
 	const [extraValues, setExtraValues] = useState<Record<string, string>>({});
@@ -185,28 +190,31 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 		setAppliedTemplate(template);
 	};
 
-	const submitLabel = isEdit ? "保存" : "创建";
+	const submitLabel = isEdit ? t("common.save") : t("common.create");
 
 	const onSubmit = (values: FormValues) => {
 		// 编辑模式：API Key 留空 = 不修改；创建模式：必须填写。
 		if (!isEdit && !values.apiKey.trim()) {
-			toastError("提交失败", new Error("API Key 不能为空"));
+			toastError(t("providers.submitFailed"), new Error(t("providers.apiKeyRequired")));
 			return;
 		}
 		// 协议类型/付费类型枚举范围（与后端校验一致）。
 		if (values.protocolType < 0 || values.protocolType > 3) {
-			toastError("提交失败", new Error("协议类型不合法"));
+			toastError(t("providers.submitFailed"), new Error(t("providers.invalidProtocol")));
 			return;
 		}
 		if (values.billingMode !== 0 && values.billingMode !== 1) {
-			toastError("提交失败", new Error("付费类型不合法"));
+			toastError(t("providers.submitFailed"), new Error(t("providers.invalidBilling")));
 			return;
 		}
 		// 用量开关开启时，模板推荐字段必须全部填写。
 		if (values.usageEnabled) {
 			const missing = missingRequiredExtra(extraValues, templateExtra);
 			if (missing.length > 0) {
-				toastError("提交失败", new Error(`用量查询已开启，请填写以下字段：${missing.join("、")}`));
+				toastError(
+					t("providers.submitFailed"),
+					new Error(`${t("providers.usageMissingFields")}${missing.join("、")}`),
+				);
 				return;
 			}
 		}
@@ -229,10 +237,10 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 
 		const onSuccess = () => {
 			onOpenChange(false);
-			toastSuccess(isEdit ? "更新成功" : "创建成功");
+			toastSuccess(isEdit ? t("common.updateSuccess") : t("common.createSuccess"));
 		};
 		const onError = (error: Error) => {
-			toastError(isEdit ? "更新失败" : "创建失败", error);
+			toastError(isEdit ? t("common.updateFailed") : t("common.createFailed"), error);
 		};
 
 		if (isEdit) {
@@ -246,11 +254,11 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[560px]">
 				<DialogHeader className="space-y-3">
-					<DialogTitle>{isEdit ? "编辑 Provider" : "创建 Provider"}</DialogTitle>
+					<DialogTitle>
+						{isEdit ? t("providers.editTitle") : t("providers.createTitle")}
+					</DialogTitle>
 					<DialogDescription>
-						{isEdit
-							? "修改模型提供商接入配置；API Key 留空表示保持不变"
-							: "填写 Base URL 后会自动匹配已知提供商的接入模板"}
+						{isEdit ? t("providers.editDesc") : t("providers.createDesc")}
 					</DialogDescription>
 				</DialogHeader>
 				<Form {...form}>
@@ -276,7 +284,9 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 												>
 													<Sparkles className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
 													<span className="truncate">
-														应用 <span className="font-medium">{template.name}</span> 模板
+														{t("providers.applyTemplate")}{" "}
+														<span className="font-medium">{template.name}</span>{" "}
+														{t("providers.templateSuffix")}
 													</span>
 												</button>
 											))}
@@ -291,9 +301,9 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 							name="name"
 							render={({ field }) => (
 								<FormItem>
-									<FormLabel required>名称</FormLabel>
+									<FormLabel required>{t("providers.name")}</FormLabel>
 									<FormControl>
-										<Input placeholder="如 DeepSeek" {...field} />
+										<Input placeholder={t("providers.namePlaceholder")} {...field} />
 									</FormControl>
 									<FormMessage />
 								</FormItem>
@@ -304,11 +314,11 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 							name="apiKey"
 							render={({ field }) => (
 								<FormItem>
-									<FormLabel required>API Key</FormLabel>
+									<FormLabel required>{t("providers.apiKey")}</FormLabel>
 									<FormControl>
 										<Input
 											type="password"
-											placeholder={isEdit ? "留空表示不修改" : "sk-..."}
+											placeholder={isEdit ? t("providers.leaveEmptyHint") : "sk-..."}
 											autoComplete="off"
 											{...field}
 										/>
@@ -323,20 +333,20 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 								name="protocolType"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>协议类型</FormLabel>
+										<FormLabel>{t("providers.protocolType")}</FormLabel>
 										<Select
 											value={String(field.value)}
 											onValueChange={(v) => field.onChange(Number(v))}
 										>
 											<FormControl>
 												<SelectTrigger>
-													<SelectValue placeholder="选择协议" />
+													<SelectValue placeholder={t("providers.selectProtocol")} />
 												</SelectTrigger>
 											</FormControl>
 											<SelectContent>
 												{PROTOCOL_TYPES.map((p) => (
 													<SelectItem key={p.value} value={String(p.value)}>
-														{p.label}
+														{t(p.labelKey)}
 													</SelectItem>
 												))}
 											</SelectContent>
@@ -350,20 +360,20 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 								name="billingMode"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>付费类型</FormLabel>
+										<FormLabel>{t("providers.billingMode")}</FormLabel>
 										<Select
 											value={String(field.value)}
 											onValueChange={(v) => field.onChange(Number(v))}
 										>
 											<FormControl>
 												<SelectTrigger>
-													<SelectValue placeholder="选择付费类型" />
+													<SelectValue placeholder={t("providers.selectBilling")} />
 												</SelectTrigger>
 											</FormControl>
 											<SelectContent>
 												{BILLING_MODES.map((b) => (
 													<SelectItem key={b.value} value={String(b.value)}>
-														{b.label}
+														{t(b.labelKey)}
 													</SelectItem>
 												))}
 											</SelectContent>
@@ -378,7 +388,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 							name="enable"
 							render={({ field }) => (
 								<FormItem className="flex items-center justify-between rounded-lg border p-3">
-									<FormLabel>启用</FormLabel>
+									<FormLabel>{t("providers.enable")}</FormLabel>
 									<FormControl>
 										<Switch checked={field.value} onCheckedChange={field.onChange} />
 									</FormControl>
@@ -393,7 +403,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 								onClick={() => setAdvancedOpen((v) => !v)}
 								className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium transition-colors hover:bg-muted/50"
 							>
-								<span>高级设置</span>
+								<span>{t("providers.advanced")}</span>
 								{advancedOpen ? (
 									<ChevronDown className="size-4 text-muted-foreground" />
 								) : (
@@ -404,7 +414,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 								<div className="space-y-4 border-t px-4 py-4">
 									{/* 自定义请求头置于高级设置最上方 */}
 									<div className="space-y-1.5">
-										<Label htmlFor="custom-header">自定义请求头（JSON）</Label>
+										<Label htmlFor="custom-header">{t("providers.customHeaderJson")}</Label>
 										<FormField
 											control={form.control}
 											name="customHeader"
@@ -431,7 +441,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 											name="usageEnabled"
 											render={({ field }) => (
 												<FormItem className="flex items-center justify-between rounded-lg border p-3">
-													<FormLabel>用量展示</FormLabel>
+													<FormLabel>{t("providers.usageDisplay")}</FormLabel>
 													<FormControl>
 														<Switch checked={field.value} onCheckedChange={field.onChange} />
 													</FormControl>
@@ -450,7 +460,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 													onChange={(e) =>
 														setExtraValues((prev) => ({ ...prev, [key]: e.target.value }))
 													}
-													placeholder={`模板字段 ${key}`}
+													placeholder={`${t("providers.templateField")} ${key}`}
 												/>
 											</div>
 										))}
@@ -460,7 +470,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 
 						<DialogFooter className="gap-2 pt-2">
 							<Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-								取消
+								{t("common.cancel")}
 							</Button>
 							<Button type="submit" disabled={createProvider.isPending || updateProvider.isPending}>
 								{submitLabel}

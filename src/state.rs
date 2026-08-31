@@ -1,6 +1,7 @@
 use sea_orm::DatabaseConnection;
 use tokio::sync::broadcast;
 
+use crate::app_settings::AppSettings;
 use crate::cron::log_capture::JobLogEvent;
 use crate::cron::scheduler::SchedulerRuntime;
 use crate::proxy::LbState;
@@ -19,4 +20,6 @@ pub struct AppState {
     pub usage_cache: UsageCache,
     /// /v1 上游连接池（按 host 隔离，空闲 10 分钟释放）。
     pub upstream_pool: UpstreamPool,
+    /// 语言/时区设置缓存（设置页更新后热刷新）。
+    pub settings: AppSettings,
 }

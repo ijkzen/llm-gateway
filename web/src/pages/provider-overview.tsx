@@ -22,6 +22,7 @@ import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race
 import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 /** 二级页四个图表区块的独立时间段状态。 */
@@ -49,28 +50,26 @@ function initialWindowFromUrl(searchParams: URLSearchParams): RaceWindowState {
 }
 
 /** 6 列指标定义（内部模型赛马表格）。 */
+const METRIC_KEYS: Record<RaceSortKey, string> = {
+	totalTokens: "race.metricLabel.totalTokens",
+	requestCount: "race.metricLabel.requestCount",
+	ttft: "race.metricLabel.ttft",
+	requestTime: "race.metricLabel.requestTime",
+	tps: "race.metricLabel.tps",
+	cacheHitRate: "race.metricLabel.cacheHitRate",
+};
+
 const COLUMNS: ReadonlyArray<{
 	key: RaceSortKey;
-	label: string;
 	format: (v: number) => string;
 	defaultDesc: boolean;
 }> = [
-	{ key: "totalTokens", label: "总计 Token", format: formatTokenCount, defaultDesc: true },
-	{ key: "requestCount", label: "请求数", format: (v) => v.toLocaleString(), defaultDesc: true },
-	{ key: "ttft", label: "TTFT", format: (v) => `${v.toFixed(1)} ms`, defaultDesc: false },
-	{
-		key: "requestTime",
-		label: "平均耗时",
-		format: (v) => `${v.toFixed(1)} ms`,
-		defaultDesc: false,
-	},
-	{ key: "tps", label: "TPS", format: (v) => v.toFixed(2), defaultDesc: true },
-	{
-		key: "cacheHitRate",
-		label: "缓存命中率",
-		format: formatPercent,
-		defaultDesc: true,
-	},
+	{ key: "totalTokens", format: formatTokenCount, defaultDesc: true },
+	{ key: "requestCount", format: (v) => v.toLocaleString(), defaultDesc: true },
+	{ key: "ttft", format: (v) => `${v.toFixed(1)} ms`, defaultDesc: false },
+	{ key: "requestTime", format: (v) => `${v.toFixed(1)} ms`, defaultDesc: false },
+	{ key: "tps", format: (v) => v.toFixed(2), defaultDesc: true },
+	{ key: "cacheHitRate", format: formatPercent, defaultDesc: true },
 ];
 
 /** 供应商内部模型赛马表格（按供应商过滤 + 6 指标 + 排序）。 */
@@ -84,6 +83,7 @@ function InternalModelRaceTable({
 	now: number;
 }) {
 	const navigate = useNavigate();
+	const { t } = useTranslation();
 	const [sort, setSort] = useState<RaceSort>({ sortBy: "totalTokens", sortOrder: "desc" });
 	const window = raceWindowBounds(windowState, now);
 	const query = useProviderModelRace(window, sort, true, providerId);
@@ -121,20 +121,23 @@ function InternalModelRaceTable({
 						<th className="w-10 px-2 py-2 text-left text-xs font-medium text-muted-foreground">
 							#
 						</th>
-						<th className="px-2 py-2 text-left text-xs font-medium text-muted-foreground">模型</th>
+						<th className="px-2 py-2 text-left text-xs font-medium text-muted-foreground">
+							{t("dashboard.modelColumn")}
+						</th>
 						{COLUMNS.map((column) => {
 							const active = sort.sortBy === column.key;
+							const label = t(METRIC_KEYS[column.key]);
 							return (
 								<th key={column.key} className="px-2 py-2 text-right">
 									<button
 										type="button"
 										onClick={() => handleSort(column.key)}
-										aria-label={column.label}
+										aria-label={label}
 										className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium transition-colors hover:bg-foreground/5 ${
 											active ? "text-foreground" : "text-muted-foreground"
 										}`}
 									>
-										{column.label}
+										{label}
 										{active &&
 											(sort.sortOrder === "asc" ? (
 												<ArrowUp data-testid={`sort-${column.key}`} className="h-3 w-3" />
@@ -159,7 +162,7 @@ function InternalModelRaceTable({
 							}}
 							tabIndex={0}
 							className="cursor-pointer border-b border-foreground/5 last:border-0 hover:bg-foreground/5"
-							title="点击查看该模型详情"
+							title={t("race.openModelDetail")}
 						>
 							<td className="px-2 py-2 text-left font-mono text-xs text-muted-foreground">
 								{index + 1}
@@ -183,6 +186,7 @@ function InternalModelRaceTable({
 
 /** 供应商二级数据面板：调用分析 + token 分析 + 内部模型赛马，三块独立时间段。 */
 export default function ProviderOverviewPage() {
+	const { t } = useTranslation();
 	const { providerId: providerIdParam } = useParams();
 	const providerId = Number.parseInt(providerIdParam ?? "", 10);
 	const [searchParams] = useSearchParams();
@@ -201,7 +205,8 @@ export default function ProviderOverviewPage() {
 	const [now] = useState(() => Date.now());
 
 	const providerDetail = useProviderDetail(Number.isFinite(providerId) ? providerId : null);
-	const providerName = providerDetail.data?.name ?? `供应商 #${providerId}`;
+	const providerName =
+		providerDetail.data?.name ?? t("dashboardPage.providerLabel", { id: providerId });
 
 	const metricsWindow = raceWindowBounds(windows.metrics, now);
 	const callWindow = raceWindowBounds(windows.call, now);
@@ -247,14 +252,16 @@ export default function ProviderOverviewPage() {
 
 	const windowSubtitle = (state: RaceWindowState) =>
 		state.period === "custom"
-			? "自定义时间范围"
+			? t("overview.customWindow")
 			: formatPeriodLabel(state.period, state.offset, now);
 
 	return (
 		<div className="space-y-6">
 			<div className="flex items-center gap-2">
 				<Boxes className="size-5 text-muted-foreground" />
-				<h1 className="text-2xl font-bold tracking-tight">{providerName} · 数据面板</h1>
+				<h1 className="text-2xl font-bold tracking-tight">
+					{providerName} · {t("dashboardPage.titleSuffix")}
+				</h1>
 			</div>
 
 			{/* 顶部：6 指标概览（独立时间段）+ 订阅制用量卡（含 Token 预估） */}
@@ -292,7 +299,7 @@ export default function ProviderOverviewPage() {
 					<Skeleton className="h-[260px] w-full" />
 				) : callCharts.isError || !callCharts.data ? (
 					<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-						数据加载失败
+						{t("overview.dataLoadFailed")}
 					</div>
 				) : (
 					<CallAnalysisCard
@@ -319,7 +326,7 @@ export default function ProviderOverviewPage() {
 					<Skeleton className="h-[260px] w-full" />
 				) : tokenCharts.isError || !tokenCharts.data ? (
 					<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-						数据加载失败
+						{t("overview.dataLoadFailed")}
 					</div>
 				) : (
 					<TokenAnalysisCard
@@ -334,7 +341,7 @@ export default function ProviderOverviewPage() {
 			<Card>
 				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 					<div className="space-y-1">
-						<CardTitle>内部模型赛马</CardTitle>
+						<CardTitle>{t("dashboard.internalModelRace")}</CardTitle>
 						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.race)}</p>
 					</div>
 					<RaceWindowControl

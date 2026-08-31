@@ -11,8 +11,10 @@ import { type Provider, useProviders } from "@/hooks/use-providers";
 import { PROVIDERS_PAGE } from "@/lib/pages";
 import { Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export default function ProvidersPage() {
+	const { t } = useTranslation();
 	const [selectedId, setSelectedId] = useState<number | null>(null);
 	const [creating, setCreating] = useState(false);
 	const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
@@ -46,25 +48,22 @@ export default function ProvidersPage() {
 	if (isError) {
 		return (
 			<div className="space-y-6">
-				<PageHeader icon={PROVIDERS_PAGE.icon} title={PROVIDERS_PAGE.title} />
-				<ErrorState
-					description="无法获取模型提供商数据，请检查网络或稍后重试。"
-					onRetry={() => refetch()}
-				/>
+				<PageHeader icon={PROVIDERS_PAGE.icon} title={t(PROVIDERS_PAGE.titleKey)} />
+				<ErrorState description={t("providers.errorDescription")} onRetry={() => refetch()} />
 			</div>
 		);
 	}
 
 	return (
 		<div className="flex h-full min-h-0 flex-col space-y-6">
-			<PageHeader icon={PROVIDERS_PAGE.icon} title={PROVIDERS_PAGE.title}>
+			<PageHeader icon={PROVIDERS_PAGE.icon} title={t(PROVIDERS_PAGE.titleKey)}>
 				<Button variant="outline" size="sm" onClick={() => refetch()}>
 					<RefreshCw className="mr-2 size-4" />
-					刷新
+					{t("common.refresh")}
 				</Button>
 				<Button size="sm" onClick={() => setCreating(true)}>
 					<Plus className="mr-2 size-4" />
-					创建 Provider
+					{t("providers.create")}
 				</Button>
 			</PageHeader>
 

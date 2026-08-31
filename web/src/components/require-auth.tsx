@@ -1,11 +1,13 @@
 import { useMe } from "@/hooks/use-auth";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Navigate, useLocation } from "react-router-dom";
 
 /**
  * 路由守卫：未持有有效会话时跳转到 /login，并记录来源路径供登录后回跳。
  */
 export function RequireAuth({ children }: { children: ReactNode }) {
+	const { t } = useTranslation();
 	const location = useLocation();
 	const { data, isLoading, isError } = useMe();
 
@@ -16,7 +18,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
 				aria-busy="true"
 				aria-live="polite"
 			>
-				正在验证登录状态...
+				{t("login.verifying")}
 			</div>
 		);
 	}

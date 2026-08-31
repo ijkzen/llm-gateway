@@ -17,6 +17,7 @@ use crate::entity::provider;
 use crate::entity::provider_model;
 use crate::entity::virtual_model::{self, ActiveModel, Entity};
 use crate::entity::virtual_model_item;
+use crate::i18n::Lang;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -102,12 +103,22 @@ struct UpdateVirtualModelRequest {
 }
 
 /// 校验负载均衡与降级策略取值，返回第一个错误消息（None 表示通过）。
-fn validate_strategies(load_balancing_strategy: i32, fallback_strategy: i32) -> Option<String> {
+fn validate_strategies(
+    load_balancing_strategy: i32,
+    fallback_strategy: i32,
+    lang: Lang,
+) -> Option<String> {
     if !(0..=3).contains(&load_balancing_strategy) {
-        return Some("负载均衡策略不合法".to_string());
+        return Some(
+            lang.tr("负载均衡策略不合法", "invalid load balancing strategy")
+                .to_string(),
+        );
     }
     if !(0..=1).contains(&fallback_strategy) {
-        return Some("降级策略不合法".to_string());
+        return Some(
+            lang.tr("降级策略不合法", "invalid fallback strategy")
+                .to_string(),
+        );
     }
     None
 }
@@ -128,6 +139,7 @@ async fn validate_item_model_ids<C: ConnectionTrait>(
     db: &C,
     model_ids: &[i32],
     exclude_vm_id: Option<i32>,
+    lang: Lang,
 ) -> Result<Option<String>, DbErr> {
     let found = provider_model::Entity::find()
         .filter(provider_model::Column::ModelId.is_in(model_ids.to_vec()))
@@ -136,7 +148,12 @@ async fn validate_item_model_ids<C: ConnectionTrait>(
     if found.len() < model_ids.len() {
         let found_ids: HashSet<i32> = found.iter().map(|pm| pm.model_id).collect();
         if let Some(missing) = model_ids.iter().find(|id| !found_ids.contains(id)) {
-            return Ok(Some(format!("模型 {missing} 不存在")));
+            let msg = if lang == Lang::En {
+                format!("model {missing} does not exist")
+            } else {
+                format!("模型 {missing} 不存在")
+            };
+            return Ok(Some(msg));
         }
     }
 
@@ -147,10 +164,15 @@ async fn validate_item_model_ids<C: ConnectionTrait>(
     }
     let conflicts = query.all(db).await?;
     if let Some(conflict) = conflicts.first() {
-        return Ok(Some(format!(
-            "模型 {} 已被其他虚拟模型使用",
-            conflict.model_id
-        )));
+        let msg = if lang == Lang::En {
+            format!(
+                "model {} is already used by another virtual model",
+                conflict.model_id
+            )
+        } else {
+            format!("模型 {} 已被其他虚拟模型使用", conflict.model_id)
+        };
+        return Ok(Some(msg));
     }
     Ok(None)
 }
@@ -340,13 +362,22 @@ async fn get_virtual_model(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(model)) => match load_virtual_model_response(&state.db, model).await {
-            Ok(resp) => (StatusCode::OK, Json(Response::success(resp))),
-            Err(e) => response::db_error(e.to_string()),
+            Ok(resp) => (StatusCode::OK, Json(Response::success(resp))).into_response(),
+            Err(e) => response::db_error::<()>(e.to_string()).into_response(),
         },
-        Ok(None) => response::not_found(format!("虚拟模型 {id} 不存在")),
-        Err(e) => response::db_error(e.to_string()),
+        Ok(None) => not_found_virtual_model(lang, id).into_response(),
+        Err(e) => response::db_error::<()>(e.to_string()).into_response(),
+    }
+}
+
+fn not_found_virtual_model(lang: Lang, id: i32) -> crate::response::ErrorResponse<()> {
+    if lang == Lang::En {
+        response::not_found(format!("virtual model {id} does not exist"))
+    } else {
+        response::not_found(format!("虚拟模型 {id} 不存在"))
     }
 }
 
@@ -354,19 +385,23 @@ async fn create_virtual_model(
     State(state): State<AppState>,
     Json(req): Json<CreateVirtualModelRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let display_id = req.display_id.trim();
     if display_id.is_empty() {
-        return response::bad_request("模型 ID 不能为空");
+        return response::bad_request(lang.tr("模型 ID 不能为空", "model ID cannot be empty"));
     }
-    if let Some(msg) = validate_strategies(req.load_balancing_strategy, req.fallback_strategy) {
+    if let Some(msg) = validate_strategies(req.load_balancing_strategy, req.fallback_strategy, lang)
+    {
         return response::bad_request(msg);
     }
     if req.items.is_empty() {
-        return response::bad_request("至少选择一个成员模型");
+        return response::bad_request(
+            lang.tr("至少选择一个成员模型", "select at least one member model"),
+        );
     }
     let items = dedupe_items(&req.items);
     let model_ids: Vec<i32> = items.iter().map(|item| item.model_id).collect();
-    match validate_item_model_ids(&state.db, &model_ids, None).await {
+    match validate_item_model_ids(&state.db, &model_ids, None, lang).await {
         Ok(Some(msg)) => return response::bad_request(msg),
         Ok(None) => {}
         Err(e) => return response::db_error(e.to_string()),
@@ -389,13 +424,13 @@ async fn create_virtual_model(
     let model = match active.insert(&txn).await {
         Ok(model) => model,
         Err(e) if is_unique_violation(&e) => {
-            return response::bad_request(unique_conflict_message(&e));
+            return response::bad_request(unique_conflict_message(&e, lang));
         }
         Err(e) => return response::db_error(e.to_string()),
     };
     if let Err(e) = insert_items(&txn, model.virtual_model_id, &items, now).await {
         if is_unique_violation(&e) {
-            return response::bad_request(unique_conflict_message(&e));
+            return response::bad_request(unique_conflict_message(&e, lang));
         }
         return response::db_error(e.to_string());
     }
@@ -414,10 +449,11 @@ async fn update_virtual_model(
     Path(id): Path<i32>,
     Json(req): Json<UpdateVirtualModelRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let existing = match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(model)) => model,
-        Ok(None) => return response::not_found(format!("虚拟模型 {id} 不存在")),
-        Err(e) => return response::db_error(e.to_string()),
+        Ok(None) => return not_found_virtual_model(lang, id).into_response(),
+        Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
     };
 
     let display_id = req
@@ -425,32 +461,38 @@ async fn update_virtual_model(
         .unwrap_or_else(|| existing.display_id.clone());
     let display_id = display_id.trim();
     if display_id.is_empty() {
-        return response::bad_request("模型 ID 不能为空");
+        return response::bad_request::<()>(
+            lang.tr("模型 ID 不能为空", "model ID cannot be empty"),
+        )
+        .into_response();
     }
     let load_balancing_strategy = req
         .load_balancing_strategy
         .unwrap_or(existing.load_balancing_strategy);
     let fallback_strategy = req.fallback_strategy.unwrap_or(existing.fallback_strategy);
-    if let Some(msg) = validate_strategies(load_balancing_strategy, fallback_strategy) {
-        return response::bad_request(msg);
+    if let Some(msg) = validate_strategies(load_balancing_strategy, fallback_strategy, lang) {
+        return response::bad_request::<()>(msg).into_response();
     }
 
     let txn = match state.db.begin().await {
         Ok(txn) => txn,
-        Err(e) => return response::db_error(e.to_string()),
+        Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
     };
 
     // 成员 diff 更新：传入 items 时以其为最终成员集合。
     if let Some(req_items) = &req.items {
         if req_items.is_empty() {
-            return response::bad_request("至少选择一个成员模型");
+            return response::bad_request::<()>(
+                lang.tr("至少选择一个成员模型", "select at least one member model"),
+            )
+            .into_response();
         }
         let items = dedupe_items(req_items);
         let model_ids: Vec<i32> = items.iter().map(|item| item.model_id).collect();
-        match validate_item_model_ids(&txn, &model_ids, Some(id)).await {
-            Ok(Some(msg)) => return response::bad_request(msg),
+        match validate_item_model_ids(&txn, &model_ids, Some(id), lang).await {
+            Ok(Some(msg)) => return response::bad_request::<()>(msg).into_response(),
             Ok(None) => {}
-            Err(e) => return response::db_error(e.to_string()),
+            Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
         }
 
         let current = match virtual_model_item::Entity::find()
@@ -459,7 +501,7 @@ async fn update_virtual_model(
             .await
         {
             Ok(current) => current,
-            Err(e) => return response::db_error(e.to_string()),
+            Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
         };
         let current_map: HashMap<i32, virtual_model_item::Model> = current
             .into_iter()
@@ -478,7 +520,7 @@ async fn update_virtual_model(
                 .exec(&txn)
                 .await
         {
-            return response::db_error(e.to_string());
+            return response::db_error::<()>(e.to_string()).into_response();
         }
 
         let now = chrono::Utc::now();
@@ -490,16 +532,17 @@ async fn update_virtual_model(
                     active.enable = Set(item.enable);
                     active.updated_at = Set(now);
                     if let Err(e) = active.update(&txn).await {
-                        return response::db_error(e.to_string());
+                        return response::db_error::<()>(e.to_string()).into_response();
                     }
                 }
                 Some(_) => {}
                 None => {
                     if let Err(e) = insert_items(&txn, id, std::slice::from_ref(item), now).await {
                         if is_unique_violation(&e) {
-                            return response::bad_request(unique_conflict_message(&e));
+                            return response::bad_request::<()>(unique_conflict_message(&e, lang))
+                                .into_response();
                         }
-                        return response::db_error(e.to_string());
+                        return response::db_error::<()>(e.to_string()).into_response();
                     }
                 }
             }
@@ -516,15 +559,17 @@ async fn update_virtual_model(
     match active.update(&txn).await {
         Ok(model) => {
             if let Err(e) = txn.commit().await {
-                return response::db_error(e.to_string());
+                return response::db_error::<()>(e.to_string()).into_response();
             }
             match load_virtual_model_response(&state.db, model).await {
-                Ok(resp) => (StatusCode::OK, Json(Response::success(resp))),
-                Err(e) => response::db_error(e.to_string()),
+                Ok(resp) => (StatusCode::OK, Json(Response::success(resp))).into_response(),
+                Err(e) => response::db_error::<()>(e.to_string()).into_response(),
             }
         }
-        Err(e) if is_unique_violation(&e) => response::bad_request(unique_conflict_message(&e)),
-        Err(e) => response::db_error(e.to_string()),
+        Err(e) if is_unique_violation(&e) => {
+            response::bad_request::<()>(unique_conflict_message(&e, lang)).into_response()
+        }
+        Err(e) => response::db_error::<()>(e.to_string()).into_response(),
     }
 }
 
@@ -532,6 +577,7 @@ async fn delete_virtual_model(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     // 级联硬删：同一事务内先删全部成员条目（释放成员模型），再删虚拟模型本身。
     let txn = match state.db.begin().await {
         Ok(txn) => txn,
@@ -549,7 +595,7 @@ async fn delete_virtual_model(
             Ok(()) => (StatusCode::OK, Json(Response::success(()))),
             Err(e) => response::db_error(e.to_string()),
         },
-        Ok(_) => response::not_found(format!("虚拟模型 {id} 不存在")),
+        Ok(_) => not_found_virtual_model(lang, id),
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -559,14 +605,19 @@ fn is_unique_violation(err: &DbErr) -> bool {
     err.to_string().contains("UNIQUE constraint failed")
 }
 
-/// 区分 display_id 与成员 model_id 的唯一冲突，返回对应的中文提示。
-fn unique_conflict_message(err: &DbErr) -> String {
+/// 区分 display_id 与成员 model_id 的唯一冲突，返回对应的提示。
+fn unique_conflict_message(err: &DbErr, lang: Lang) -> String {
     let text = err.to_string();
     if text.contains("virtual_model_item.model_id")
         || text.contains("uq_virtual_model_items_model_id")
     {
-        "部分模型已被其他虚拟模型使用".to_string()
+        lang.tr(
+            "部分模型已被其他虚拟模型使用",
+            "some models are already used by other virtual models",
+        )
+        .to_string()
     } else {
-        "虚拟模型 ID 已存在".to_string()
+        lang.tr("虚拟模型 ID 已存在", "virtual model ID already exists")
+            .to_string()
     }
 }

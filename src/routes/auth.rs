@@ -16,6 +16,7 @@ use crate::auth::{
     verify_password,
 };
 use crate::entity::user::{self, ActiveModel, Entity};
+use crate::i18n::Lang;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -57,12 +58,21 @@ struct ChangePasswordRequest {
 }
 
 /// 用户名/密码基础校验，返回错误消息。
-fn validate_credentials(username: &str, password: &str) -> Option<&'static str> {
+fn validate_credentials(username: &str, password: &str, lang: Lang) -> Option<String> {
     if username.is_empty() || username.len() > 64 {
-        return Some("用户名需为 1-64 个字符");
+        return Some(
+            lang.tr("用户名需为 1-64 个字符", "username must be 1-64 characters")
+                .to_string(),
+        );
     }
     if password.len() < 6 || password.len() > 128 {
-        return Some("密码长度需为 6-128 个字符");
+        return Some(
+            lang.tr(
+                "密码长度需为 6-128 个字符",
+                "password must be 6-128 characters",
+            )
+            .to_string(),
+        );
     }
     None
 }
@@ -83,14 +93,19 @@ async fn status(State(state): State<AppState>) -> AxumResponse {
 
 /// POST /api/auth/init：仅当用户表为空时创建首个用户，并直接建立会话。
 async fn init(State(state): State<AppState>, Json(req): Json<CredentialsRequest>) -> AxumResponse {
+    let lang = state.settings.lang().await;
     let username = req.username.trim();
-    if let Some(msg) = validate_credentials(username, &req.password) {
+    if let Some(msg) = validate_credentials(username, &req.password, lang) {
         return response::bad_request::<()>(msg).into_response();
     }
 
     match Entity::find().count(&state.db).await {
         Ok(count) if count > 0 => {
-            return response::bad_request::<()>("系统已初始化，请直接登录").into_response();
+            let msg = lang.tr(
+                "系统已初始化，请直接登录",
+                "system is already initialized, please log in",
+            );
+            return response::bad_request::<()>(msg).into_response();
         }
         Ok(_) => {}
         Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
@@ -115,15 +130,17 @@ async fn init(State(state): State<AppState>, Json(req): Json<CredentialsRequest>
             Ok((token, expires_at)) => login_response(&model.username, &token, expires_at),
             Err(e) => response::internal_error::<()>(e.to_string()).into_response(),
         },
-        Err(e) if is_unique_violation(&e) => {
-            response::bad_request::<()>("同名用户已存在").into_response()
-        }
+        Err(e) if is_unique_violation(&e) => response::bad_request::<()>(
+            lang.tr("同名用户已存在", "a user with the same name already exists"),
+        )
+        .into_response(),
         Err(e) => response::db_error::<()>(e.to_string()).into_response(),
     }
 }
 
 /// POST /api/auth/login：校验用户名密码，建立会话。
 async fn login(State(state): State<AppState>, Json(req): Json<CredentialsRequest>) -> AxumResponse {
+    let lang = state.settings.lang().await;
     delete_expired_sessions(&state.db).await;
 
     let username = req.username.trim();
@@ -149,7 +166,8 @@ async fn login(State(state): State<AppState>, Json(req): Json<CredentialsRequest
     };
 
     let Some(model) = model.filter(|_| verified) else {
-        return response::unauthorized::<()>("用户名或密码错误").into_response();
+        let msg = lang.tr("用户名或密码错误", "invalid username or password");
+        return response::unauthorized::<()>(msg).into_response();
     };
 
     match create_session(&state.db, model.id).await {
@@ -206,20 +224,23 @@ async fn change_password(
     headers: axum::http::HeaderMap,
     Json(req): Json<ChangePasswordRequest>,
 ) -> AxumResponse {
+    let lang = state.settings.lang().await;
+    let session_msg = lang.tr("未登录或登录已过期", "not logged in or session expired");
     let Some(token) = auth::extract_cookie(&headers, SESSION_COOKIE) else {
-        return response::unauthorized::<()>("未登录或登录已过期").into_response();
+        return response::unauthorized::<()>(session_msg).into_response();
     };
     let Some(user) = (match session_user(&state.db, &token).await {
         Ok(user) => user,
         Err(e) => return response::internal_error::<()>(e.to_string()).into_response(),
     }) else {
-        return response::unauthorized::<()>("未登录或登录已过期").into_response();
+        return response::unauthorized::<()>(session_msg).into_response();
     };
 
     if !verify_password(&req.old_password, &user.password_hash) {
-        return response::bad_request::<()>("旧密码不正确").into_response();
+        return response::bad_request::<()>(lang.tr("旧密码不正确", "old password is incorrect"))
+            .into_response();
     }
-    if let Some(msg) = validate_credentials(&user.username, &req.new_password) {
+    if let Some(msg) = validate_credentials(&user.username, &req.new_password, lang) {
         return response::bad_request::<()>(msg).into_response();
     }
 

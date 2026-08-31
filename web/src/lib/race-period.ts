@@ -6,6 +6,8 @@
  * - 历史周期（offset<0）/未来周期（offset>0）：[周期起点, 下一周期起点) 半开区间。
  */
 
+import i18n from "@/i18n";
+
 export type RacePeriod = "day" | "week" | "month" | "year";
 
 /** 图表桶粒度（透传给 /api/stats/charts 的 granularity 参数）。 */
@@ -99,44 +101,37 @@ export function periodBounds(period: RacePeriod, offset: number, now: number): P
 	return { startTime: targetStart.getTime(), endTime: nextStart.getTime() };
 }
 
-/** 中文月名。 */
-const MONTH_NAMES = [
-	"1月",
-	"2月",
-	"3月",
-	"4月",
-	"5月",
-	"6月",
-	"7月",
-	"8月",
-	"9月",
-	"10月",
-	"11月",
-	"12月",
-];
-
 /**
- * 周期窗口的展示标题。
+ * 周期窗口的展示标题。中文：`2026年8月（当前）`；英文：`Aug 2026 (current)`。
  * @param now 当前时刻（毫秒时间戳），用于「当前周期」标记。
  */
 export function formatPeriodLabel(period: RacePeriod, offset: number, now: number): string {
 	const bounds = periodBounds(period, offset, now);
 	const start = new Date(bounds.startTime);
 	const isCurrent = bounds.endTime === now;
-	const currentSuffix = isCurrent ? "（当前）" : "";
+	const zh = i18n.language.startsWith("zh");
+	const currentSuffix = isCurrent ? (zh ? "（当前）" : " (current)") : "";
 
 	switch (period) {
 		case "day":
-			return `${start.getFullYear()}年${start.getMonth() + 1}月${start.getDate()}日${currentSuffix}`;
+			return zh
+				? `${start.getFullYear()}年${start.getMonth() + 1}月${start.getDate()}日${currentSuffix}`
+				: `${start.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}${currentSuffix}`;
 		case "week": {
 			// 周数按 ISO 8601：周一为一周起点。
 			const weekNumber = isoWeekNumber(start);
-			return `${start.getFullYear()}年第${weekNumber}周${currentSuffix}`;
+			return zh
+				? `${start.getFullYear()}年第${weekNumber}周${currentSuffix}`
+				: `Week ${weekNumber}, ${start.getFullYear()}${currentSuffix}`;
 		}
 		case "month":
-			return `${start.getFullYear()}年${MONTH_NAMES[start.getMonth()]}${currentSuffix}`;
+			return zh
+				? `${start.getFullYear()}年${start.getMonth() + 1}月${currentSuffix}`
+				: `${start.toLocaleDateString("en-US", { year: "numeric", month: "short" })}${currentSuffix}`;
 		case "year":
-			return `${start.getFullYear()}年${currentSuffix}`;
+			return zh
+				? `${start.getFullYear()}年${currentSuffix}`
+				: `${start.getFullYear()}${currentSuffix}`;
 	}
 }
 

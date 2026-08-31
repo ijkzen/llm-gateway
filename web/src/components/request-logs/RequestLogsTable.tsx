@@ -39,6 +39,7 @@ import {
 } from "@tanstack/react-table";
 import { RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 const PLAIN_HEADER_CLASS = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
 
@@ -114,6 +115,7 @@ function fmtMs(v: number | null | undefined): string {
 }
 
 export function RequestLogsTable() {
+	const { t } = useTranslation();
 	// 默认按时间降序（最新在前），列头显示排序指示，亦显式通知后端。
 	const [sorting, setSorting] = useState<SortingState>([{ id: "startTime", desc: true }]);
 	// 列显隐与每页条数从 localStorage 恢复；无数据时默认全部列 + 20 条。
@@ -190,9 +192,13 @@ export function RequestLogsTable() {
 		() => [
 			{
 				accessorKey: "virtualModelDisplayId",
-				meta: { title: "虚拟模型" },
+				meta: { title: t("requestLogs.virtualModel") },
 				header: ({ column }) => (
-					<DataTableColumnHeader column={column} title="虚拟模型" className={PLAIN_HEADER_CLASS} />
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.virtualModel")}
+						className={PLAIN_HEADER_CLASS}
+					/>
 				),
 				cell: ({ row }) => (
 					<span className="font-medium">
@@ -202,65 +208,97 @@ export function RequestLogsTable() {
 			},
 			{
 				accessorKey: "apiKeyName",
-				meta: { title: "API Key" },
+				meta: { title: t("requestLogs.apiKey") },
 				header: ({ column }) => (
-					<DataTableColumnHeader column={column} title="API Key" className={PLAIN_HEADER_CLASS} />
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.apiKey")}
+						className={PLAIN_HEADER_CLASS}
+					/>
 				),
 				cell: ({ row }) => <span className="font-mono">{row.getValue("apiKeyName")}</span>,
 			},
 			{
 				accessorKey: "modelId",
-				meta: { title: "上游模型" },
+				meta: { title: t("requestLogs.upstreamModel") },
 				header: ({ column }) => (
-					<DataTableColumnHeader column={column} title="上游模型" className={PLAIN_HEADER_CLASS} />
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.upstreamModel")}
+						className={PLAIN_HEADER_CLASS}
+					/>
 				),
 				cell: ({ row }) => <span className="font-mono">{row.getValue("modelId")}</span>,
 			},
 			{
 				accessorKey: "success",
-				meta: { title: "结果" },
+				meta: { title: t("requestLogs.status") },
 				header: ({ column }) => (
-					<DataTableColumnHeader column={column} title="结果" className={PLAIN_HEADER_CLASS} />
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.status")}
+						className={PLAIN_HEADER_CLASS}
+					/>
 				),
 				cell: ({ row }) => {
 					const ok = row.original.success;
-					return <Badge variant={ok ? "default" : "destructive"}>{ok ? "成功" : "失败"}</Badge>;
+					return (
+						<Badge variant={ok ? "default" : "destructive"}>
+							{ok ? t("requestLogs.success") : t("requestLogs.failed")}
+						</Badge>
+					);
 				},
 			},
 			{
 				accessorKey: "inputTokens",
-				meta: { title: "输入 Token" },
+				meta: { title: t("requestLogs.inputTokens") },
 				header: ({ column }) => (
-					<DataTableColumnHeader column={column} title="输入" className={PLAIN_HEADER_CLASS} />
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.input")}
+						className={PLAIN_HEADER_CLASS}
+					/>
 				),
 				cell: ({ row }) => fmtTokens(row.original.inputTokens),
 			},
 			{
 				accessorKey: "outputTokens",
-				meta: { title: "输出 Token" },
+				meta: { title: t("requestLogs.outputTokens") },
 				header: ({ column }) => (
-					<DataTableColumnHeader column={column} title="输出" className={PLAIN_HEADER_CLASS} />
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.output")}
+						className={PLAIN_HEADER_CLASS}
+					/>
 				),
 				cell: ({ row }) => fmtTokens(row.original.outputTokens),
 			},
 			{
 				accessorKey: "requestTime",
-				meta: { title: "总耗时" },
+				meta: { title: t("requestLogs.totalTime") },
 				header: ({ column }) => (
-					<DataTableColumnHeader column={column} title="耗时" className={PLAIN_HEADER_CLASS} />
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.latency")}
+						className={PLAIN_HEADER_CLASS}
+					/>
 				),
 				cell: ({ row }) => fmtMs(row.original.requestTime),
 			},
 			{
 				accessorKey: "startTime",
-				meta: { title: "时间" },
+				meta: { title: t("requestLogs.time") },
 				header: ({ column }) => (
-					<DataTableColumnHeader column={column} title="时间" className={PLAIN_HEADER_CLASS} />
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.time")}
+						className={PLAIN_HEADER_CLASS}
+					/>
 				),
 				cell: ({ row }) => fmtTime(row.original.startTime),
 			},
 		],
-		[],
+		[t],
 	);
 
 	const table = useReactTable({
@@ -284,7 +322,7 @@ export function RequestLogsTable() {
 			<div className="rounded-2xl border border-white/70 bg-white/65 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
 				<div className="flex flex-wrap items-end gap-3">
 					<div className="space-y-1">
-						<p className="text-xs text-muted-foreground">虚拟模型</p>
+						<p className="text-xs text-muted-foreground">{t("requestLogs.virtualModel")}</p>
 						<Select
 							value={vmId !== undefined ? String(vmId) : "all"}
 							onValueChange={(v) => {
@@ -292,11 +330,11 @@ export function RequestLogsTable() {
 								setPage(1);
 							}}
 						>
-							<SelectTrigger className="w-[160px]" aria-label="按虚拟模型过滤">
+							<SelectTrigger className="w-[160px]" aria-label={t("requestLogs.filterByVm")}>
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="all">全部</SelectItem>
+								<SelectItem value="all">{t("common.all")}</SelectItem>
 								{virtualModels?.map((vm) => (
 									<SelectItem key={vm.virtualModelId} value={String(vm.virtualModelId)}>
 										{vm.displayId}
@@ -306,7 +344,7 @@ export function RequestLogsTable() {
 						</Select>
 					</div>
 					<div className="space-y-1">
-						<p className="text-xs text-muted-foreground">供应商</p>
+						<p className="text-xs text-muted-foreground">{t("requestLogs.provider")}</p>
 						<Select
 							value={providerId !== undefined ? String(providerId) : "all"}
 							onValueChange={(v) => {
@@ -316,11 +354,11 @@ export function RequestLogsTable() {
 								setPage(1);
 							}}
 						>
-							<SelectTrigger className="w-[160px]" aria-label="按供应商过滤">
+							<SelectTrigger className="w-[160px]" aria-label={t("requestLogs.filterByProvider")}>
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="all">全部</SelectItem>
+								<SelectItem value="all">{t("common.all")}</SelectItem>
 								{providers?.map((p) => (
 									<SelectItem key={p.id} value={String(p.id)}>
 										{p.name}
@@ -330,7 +368,7 @@ export function RequestLogsTable() {
 						</Select>
 					</div>
 					<div className="space-y-1">
-						<p className="text-xs text-muted-foreground">供应商模型</p>
+						<p className="text-xs text-muted-foreground">{t("requestLogs.upstreamModel")}</p>
 						<Select
 							value={modelId ?? "all"}
 							onValueChange={(v) => {
@@ -338,11 +376,11 @@ export function RequestLogsTable() {
 								setPage(1);
 							}}
 						>
-							<SelectTrigger className="w-[180px]" aria-label="按供应商模型过滤">
+							<SelectTrigger className="w-[180px]" aria-label={t("requestLogs.filterByModel")}>
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="all">全部</SelectItem>
+								<SelectItem value="all">{t("common.all")}</SelectItem>
 								{providerModelOptions.map((model) => (
 									<SelectItem key={model.modelId} value={model.providerModelId}>
 										{model.providerModelId}
@@ -352,7 +390,7 @@ export function RequestLogsTable() {
 						</Select>
 					</div>
 					<div className="space-y-1">
-						<p className="text-xs text-muted-foreground">结果</p>
+						<p className="text-xs text-muted-foreground">{t("requestLogs.status")}</p>
 						<Select
 							value={success === undefined ? "all" : success ? "true" : "false"}
 							onValueChange={(v) => {
@@ -360,18 +398,18 @@ export function RequestLogsTable() {
 								setPage(1);
 							}}
 						>
-							<SelectTrigger className="w-[100px]" aria-label="按结果状态过滤">
+							<SelectTrigger className="w-[100px]" aria-label={t("requestLogs.filterByStatus")}>
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="all">全部</SelectItem>
-								<SelectItem value="true">成功</SelectItem>
-								<SelectItem value="false">失败</SelectItem>
+								<SelectItem value="all">{t("common.all")}</SelectItem>
+								<SelectItem value="true">{t("requestLogs.success")}</SelectItem>
+								<SelectItem value="false">{t("requestLogs.failed")}</SelectItem>
 							</SelectContent>
 						</Select>
 					</div>
 					<div className="space-y-1">
-						<p className="text-xs text-muted-foreground">API Key</p>
+						<p className="text-xs text-muted-foreground">{t("requestLogs.apiKey")}</p>
 						<Select
 							value={apiKey ?? "all"}
 							onValueChange={(v) => {
@@ -379,11 +417,11 @@ export function RequestLogsTable() {
 								setPage(1);
 							}}
 						>
-							<SelectTrigger className="w-[160px]" aria-label="按 API Key 过滤">
+							<SelectTrigger className="w-[160px]" aria-label={t("requestLogs.filterByApiKey")}>
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
-								<SelectItem value="all">全部</SelectItem>
+								<SelectItem value="all">{t("common.all")}</SelectItem>
 								{apiKeys?.map((key) => (
 									<SelectItem key={key.id} value={key.name}>
 										{key.name}
@@ -394,11 +432,11 @@ export function RequestLogsTable() {
 					</div>
 					<Button type="button" variant="outline" size="sm" onClick={resetAll} className="ml-auto">
 						<RotateCcw className="mr-1.5 size-4" />
-						重置
+						{t("requestLogs.reset")}
 					</Button>
 				</div>
 				<div className="mt-3 flex flex-wrap items-center gap-3 border-t border-foreground/5 pt-3">
-					<span className="text-xs text-muted-foreground">时间</span>
+					<span className="text-xs text-muted-foreground">{t("requestLogs.time")}</span>
 					<RaceWindowControl
 						state={timeWindow}
 						now={now}
@@ -412,9 +450,9 @@ export function RequestLogsTable() {
 
 			{isError ? (
 				<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-destructive">
-					加载失败
+					{t("common.loadFailed")}
 					<Button variant="outline" size="sm" className="ml-3" onClick={() => refetch()}>
-						重试
+						{t("common.retry")}
 					</Button>
 				</div>
 			) : (
@@ -440,7 +478,7 @@ export function RequestLogsTable() {
 										colSpan={columns.length}
 										className="py-10 text-center text-muted-foreground"
 									>
-										加载中...
+										{t("common.loading")}
 									</TableCell>
 								</TableRow>
 							) : data && data.items.length > 0 ? (
@@ -461,8 +499,8 @@ export function RequestLogsTable() {
 								<TableRow>
 									<TableCell colSpan={columns.length} className="py-0">
 										<EmptyState
-											title="暂无请求日志"
-											description="调整过滤条件或等待新的转发请求"
+											title={t("requestLogs.noLogs")}
+											description={t("requestLogs.noLogsHint")}
 											className="border-0 bg-transparent shadow-none"
 										/>
 									</TableCell>
@@ -476,7 +514,11 @@ export function RequestLogsTable() {
 			{/* 服务端分页 */}
 			<div className="flex flex-wrap items-center justify-between gap-4">
 				<p className="text-sm text-muted-foreground">
-					共 {data?.total ?? 0} 条 · 第 {page} / {totalPages} 页
+					{t("requestLogs.totalSummary", {
+						total: data?.total ?? 0,
+						page,
+						totalPages,
+					})}
 				</p>
 				<div className="flex items-center gap-2">
 					<Select
@@ -486,13 +528,13 @@ export function RequestLogsTable() {
 							setPage(1);
 						}}
 					>
-						<SelectTrigger className="h-8 w-[110px]" aria-label="每页条数">
+						<SelectTrigger className="h-8 w-[110px]" aria-label={t("requestLogs.pageSize")}>
 							<SelectValue />
 						</SelectTrigger>
 						<SelectContent>
 							{PAGE_SIZE_OPTIONS.map((size) => (
 								<SelectItem key={size} value={String(size)}>
-									{size} / 页
+									{size} {t("requestLogs.pageSizeSuffix")}
 								</SelectItem>
 							))}
 						</SelectContent>
@@ -503,7 +545,7 @@ export function RequestLogsTable() {
 						disabled={page <= 1}
 						onClick={() => setPage((p) => Math.max(1, p - 1))}
 					>
-						上一页
+						{t("requestLogs.previousPage")}
 					</Button>
 					<Button
 						variant="outline"
@@ -511,7 +553,7 @@ export function RequestLogsTable() {
 						disabled={page >= totalPages}
 						onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
 					>
-						下一页
+						{t("requestLogs.nextPage")}
 					</Button>
 				</div>
 			</div>

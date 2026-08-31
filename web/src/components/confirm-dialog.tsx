@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 
 interface ConfirmDialogProps {
 	open: boolean;
@@ -28,10 +29,10 @@ interface ConfirmDialogProps {
 export function ConfirmDialog({
 	open,
 	onOpenChange,
-	title = "确认删除",
-	desc = "此操作无法撤销。",
-	cancelBtnText = "取消",
-	confirmText = "确认",
+	title,
+	desc,
+	cancelBtnText,
+	confirmText,
 	destructive = false,
 	disabled = false,
 	isLoading = false,
@@ -39,25 +40,30 @@ export function ConfirmDialog({
 	children,
 	handleConfirm,
 }: ConfirmDialogProps) {
+	const { t } = useTranslation();
+	const resolvedTitle = title ?? t("cronJobs.deleteTitle");
+	const resolvedDesc = desc ?? t("common.cannotUndo");
+	const resolvedCancelBtnText = cancelBtnText ?? t("common.cancel");
+	const resolvedConfirmText = confirmText ?? t("common.confirm");
 	return (
 		<AlertDialog open={open} onOpenChange={onOpenChange}>
 			<AlertDialogContent className={cn(className)}>
 				<AlertDialogHeader className="space-y-3 text-left">
-					<AlertDialogTitle>{title}</AlertDialogTitle>
-					<AlertDialogDescription asChild={typeof desc !== "string"}>
-						{typeof desc === "string" ? desc : <div>{desc}</div>}
+					<AlertDialogTitle>{resolvedTitle}</AlertDialogTitle>
+					<AlertDialogDescription asChild={typeof resolvedDesc !== "string"}>
+						{typeof resolvedDesc === "string" ? resolvedDesc : <div>{resolvedDesc}</div>}
 					</AlertDialogDescription>
 				</AlertDialogHeader>
 				{children}
 				<AlertDialogFooter className="gap-2">
-					<AlertDialogCancel disabled={isLoading}>{cancelBtnText}</AlertDialogCancel>
+					<AlertDialogCancel disabled={isLoading}>{resolvedCancelBtnText}</AlertDialogCancel>
 					<Button
 						type="button"
 						variant={destructive ? "destructive" : "default"}
 						disabled={disabled || isLoading}
 						onClick={handleConfirm}
 					>
-						{confirmText}
+						{resolvedConfirmText}
 					</Button>
 				</AlertDialogFooter>
 			</AlertDialogContent>

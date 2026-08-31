@@ -14,9 +14,13 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 use thiserror::Error;
 
+use crate::app_settings::AppSettings;
+
 #[derive(Clone)]
 pub struct JobContext {
     pub db: DatabaseConnection,
+    /// 语言/时区设置缓存：handler 可用其按设置语言输出日志、按设置时区计算时间。
+    pub settings: AppSettings,
 }
 
 pub type JobError = Box<dyn std::error::Error + Send + Sync>;

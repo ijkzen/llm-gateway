@@ -3,6 +3,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::Lang;
+
 /// 归一化后的用量数据：订阅制走 `windows`，按量付费走 `balances`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,6 +169,17 @@ impl UsageData {
         }
         data
     }
+
+    /// 按管理后台语言本地化用户可见字段（当前只有 balance label）的副本。
+    pub fn with_localized_labels(&self, lang: Lang) -> Self {
+        let mut data = self.clone();
+        data.balances = data
+            .balances
+            .iter()
+            .map(|item| item.with_localized_label(lang))
+            .collect();
+        data
+    }
 }
 
 /// 生成 5h/周/月 三个不可用窗口，fetcher 按需替换其中元素。
@@ -192,6 +205,69 @@ pub struct BalanceItem {
     pub amount: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
+}
+
+/// fetcher 侧中文 label → 英文 label 的映射（未知 label 原样返回）。
+/// 数据库缓存里存的是中文 label；响应层按当前语言翻译。
+fn translate_balance_label(label: &str, lang: Lang) -> &str {
+    if lang == Lang::Zh {
+        return label;
+    }
+    match label {
+        "余额" => "Balance",
+        "可用余额" => "Available Balance",
+        "充值余额" => "Topped-up Balance",
+        "赠送余额" => "Granted Balance",
+        "现金余额" => "Cash Balance",
+        "代金券余额" => "Voucher Balance",
+        "信控额度" => "Credit Limit",
+        "冻结金额" => "Frozen Amount",
+        "欠费金额" => "Arrears",
+        "剩余额度" => "Remaining Credits",
+        "已使用" => "Used",
+        "总充值" => "Total Top-up",
+        "透支额度" => "Overdraft Limit",
+        "剩余透支额度" => "Remaining Overdraft",
+        "累计充值" => "Total Top-up",
+        _ => label,
+    }
+}
+
+impl BalanceItem {
+    /// 按管理后台语言生成用户可见的 label 副本。fetcher 侧可能已拼上
+    /// `（币种）`/` (currency)` 后缀（如「余额（CNY）」），这里剥离后缀
+    /// 翻译 base 后按当前语言重拼；无后缀的纯 label 直接翻译。
+    pub fn with_localized_label(&self, lang: Lang) -> Self {
+        let (base, suffix) = split_label_suffix(&self.label);
+        let base = translate_balance_label(base, lang);
+        let label = match suffix {
+            Some(currency) => match lang {
+                Lang::Zh => format!("{base}（{currency}）"),
+                Lang::En => format!("{base} ({currency})"),
+            },
+            None => base.to_string(),
+        };
+        Self {
+            label,
+            amount: self.amount,
+            currency: self.currency.clone(),
+        }
+    }
+}
+
+/// 拆出 label 尾部已拼的币种后缀（`（xxx）` 或 ` (xxx)`）。
+fn split_label_suffix(label: &str) -> (&str, Option<&str>) {
+    if let Some(rest) = label.strip_suffix('）')
+        && let Some(open) = rest.rfind('（')
+    {
+        return (&rest[..open], Some(&rest[open + '（'.len_utf8()..]));
+    }
+    if let Some(rest) = label.strip_suffix(')')
+        && let Some(open) = rest.rfind(" (")
+    {
+        return (&rest[..open], Some(&rest[open + 2..]));
+    }
+    (label, None)
 }
 
 /// fetcher 的返回：quota（订阅窗口）或 balance（余额条目）。

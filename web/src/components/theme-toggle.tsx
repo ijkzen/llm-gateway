@@ -9,14 +9,16 @@ import { type Theme, useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
 import { Check, Monitor, Moon, Sun } from "lucide-react";
 import { useRef } from "react";
+import { useTranslation } from "react-i18next";
 
-const THEME_OPTIONS: { value: Theme; label: string; icon: typeof Sun }[] = [
-	{ value: "light", label: "亮色", icon: Sun },
-	{ value: "dark", label: "暗色", icon: Moon },
-	{ value: "system", label: "跟随系统", icon: Monitor },
+const THEME_OPTIONS: { value: Theme; labelKey: string; icon: typeof Sun }[] = [
+	{ value: "light", labelKey: "theme.light", icon: Sun },
+	{ value: "dark", labelKey: "theme.dark", icon: Moon },
+	{ value: "system", labelKey: "theme.system", icon: Monitor },
 ];
 
 export function ThemeToggle() {
+	const { t } = useTranslation();
 	const buttonRef = useRef<HTMLButtonElement>(null);
 	const theme = useTheme((state) => state.theme);
 	const setTheme = useTheme((state) => state.setTheme);
@@ -24,7 +26,7 @@ export function ThemeToggle() {
 	return (
 		<DropdownMenu modal={false}>
 			<DropdownMenuTrigger asChild>
-				<Button ref={buttonRef} variant="ghost" size="icon" aria-label="切换主题">
+				<Button ref={buttonRef} variant="ghost" size="icon" aria-label={t("theme.switchTheme")}>
 					{theme === "dark" ? (
 						<Moon className="size-4" />
 					) : theme === "system" ? (
@@ -35,10 +37,10 @@ export function ThemeToggle() {
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end">
-				{THEME_OPTIONS.map(({ value, label, icon: Icon }) => (
+				{THEME_OPTIONS.map(({ value, labelKey, icon: Icon }) => (
 					<DropdownMenuItem key={value} onClick={() => setTheme(value, buttonRef)}>
 						<Icon className="size-4" />
-						{label}
+						{t(labelKey)}
 						<Check className={cn("ml-auto size-3.5", theme !== value && "invisible")} />
 					</DropdownMenuItem>
 				))}

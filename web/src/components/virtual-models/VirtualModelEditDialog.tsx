@@ -39,18 +39,21 @@ import { FALLBACK_STRATEGIES, LOAD_BALANCING_STRATEGIES } from "@/lib/constants"
 import { cn, formatContextLength } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-const formSchema = z.object({
-	displayId: z.string().trim().min(1, "模型 ID 不能为空"),
-	enable: z.boolean(),
-	loadBalancingStrategy: z.number(),
-	fallbackStrategy: z.number(),
-});
+function makeFormSchema(t: (key: string) => string) {
+	return z.object({
+		displayId: z.string().trim().min(1, t("virtualModels.displayIdRequired")),
+		enable: z.boolean(),
+		loadBalancingStrategy: z.number(),
+		fallbackStrategy: z.number(),
+	});
+}
 
-type FormValues = z.infer<typeof formSchema>;
+type FormValues = z.infer<ReturnType<typeof makeFormSchema>>;
 
 /** 暂存的成员条目：加入弹窗时的启停状态随行保存。 */
 interface DraftItem {
@@ -81,9 +84,11 @@ export function VirtualModelEditDialog({
 	providerModels,
 	mappedModelIds,
 }: VirtualModelEditDialogProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const createModel = useCreateVirtualModel();
 	const updateModel = useUpdateVirtualModel();
+	const formSchema = useMemo(() => makeFormSchema(t), [t]);
 	const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
 	const [openAddGroups, setOpenAddGroups] = useState<Set<number>>(new Set());
 
@@ -156,9 +161,10 @@ export function VirtualModelEditDialog({
 		const options = {
 			onSuccess: () => {
 				onOpenChange(false);
-				toastSuccess(virtualModel ? "保存成功" : "创建成功");
+				toastSuccess(virtualModel ? t("common.updateSuccess") : t("common.createSuccess"));
 			},
-			onError: (error: Error) => toastError(virtualModel ? "保存失败" : "创建失败", error),
+			onError: (error: Error) =>
+				toastError(virtualModel ? t("common.updateFailed") : t("common.createFailed"), error),
 		};
 		if (virtualModel) {
 			updateModel.mutate({ id: virtualModel.virtualModelId, ...body }, options);
@@ -196,10 +202,10 @@ export function VirtualModelEditDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[680px]">
 				<DialogHeader className="space-y-3">
-					<DialogTitle>{virtualModel ? "编辑虚拟模型" : "添加虚拟模型"}</DialogTitle>
-					<DialogDescription>
-						按供应商管理映射的模型：可添加、删除与启停成员；修改先暂存，点「保存」一次性生效。
-					</DialogDescription>
+					<DialogTitle>
+						{virtualModel ? t("virtualModels.editTitle") : t("virtualModels.createTitle")}
+					</DialogTitle>
+					<DialogDescription>{t("virtualModels.editDesc")}</DialogDescription>
 				</DialogHeader>
 
 				<Form {...form}>
@@ -213,9 +219,9 @@ export function VirtualModelEditDialog({
 							name="displayId"
 							render={({ field }) => (
 								<FormItem>
-									<FormLabel required>模型 ID</FormLabel>
+									<FormLabel required>{t("common.modelId")}</FormLabel>
 									<FormControl>
-										<Input placeholder="如 gpt-4o" {...field} />
+										<Input placeholder={t("providerModels.modelIdPlaceholder")} {...field} />
 									</FormControl>
 									<FormMessage />
 								</FormItem>
@@ -227,20 +233,20 @@ export function VirtualModelEditDialog({
 								name="loadBalancingStrategy"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>负载均衡策略</FormLabel>
+										<FormLabel>{t("virtualModels.loadBalancing")}</FormLabel>
 										<Select
 											onValueChange={(v) => field.onChange(Number(v))}
 											value={String(field.value)}
 										>
 											<FormControl>
 												<SelectTrigger>
-													<SelectValue placeholder="选择策略" />
+													<SelectValue placeholder={t("virtualModels.selectStrategy")} />
 												</SelectTrigger>
 											</FormControl>
 											<SelectContent>
 												{LOAD_BALANCING_STRATEGIES.map((s) => (
 													<SelectItem key={s.value} value={String(s.value)}>
-														{s.label}
+														{t(s.labelKey)}
 													</SelectItem>
 												))}
 											</SelectContent>
@@ -254,20 +260,20 @@ export function VirtualModelEditDialog({
 								name="fallbackStrategy"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>降级策略</FormLabel>
+										<FormLabel>{t("virtualModels.fallback")}</FormLabel>
 										<Select
 											onValueChange={(v) => field.onChange(Number(v))}
 											value={String(field.value)}
 										>
 											<FormControl>
 												<SelectTrigger>
-													<SelectValue placeholder="选择策略" />
+													<SelectValue placeholder={t("virtualModels.selectStrategy")} />
 												</SelectTrigger>
 											</FormControl>
 											<SelectContent>
 												{FALLBACK_STRATEGIES.map((s) => (
 													<SelectItem key={s.value} value={String(s.value)}>
-														{s.label}
+														{t(s.labelKey)}
 													</SelectItem>
 												))}
 											</SelectContent>
@@ -283,9 +289,9 @@ export function VirtualModelEditDialog({
 							render={({ field }) => (
 								<FormItem className="flex items-center justify-between rounded-lg border p-3">
 									<div className="space-y-0.5">
-										<FormLabel>启用</FormLabel>
+										<FormLabel>{t("virtualModels.enable")}</FormLabel>
 										<p className="text-xs text-muted-foreground">
-											禁用后该虚拟模型不会出现在 /v1/models 中
+											{t("virtualModels.disableHint")}
 										</p>
 									</div>
 									<FormControl>
@@ -298,10 +304,10 @@ export function VirtualModelEditDialog({
 						<Separator />
 
 						<div className="space-y-4">
-							<h3 className="text-sm font-semibold">成员模型</h3>
+							<h3 className="text-sm font-semibold">{t("virtualModels.members")}</h3>
 							{draftGroups.length === 0 ? (
 								<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-									暂无可管理的成员。已被其他虚拟模型占用的模型不会出现在候选中。
+									{t("virtualModels.noMembers")}
 								</div>
 							) : (
 								draftGroups.map((group) => {
@@ -314,7 +320,7 @@ export function VirtualModelEditDialog({
 													<h4 className="text-sm font-medium">{group.provider.name}</h4>
 													{!group.provider.enable && (
 														<span className="shrink-0 text-xs text-amber-600 dark:text-amber-400">
-															供应商已禁用
+															{t("virtualModels.providerDisabled")}
 														</span>
 													)}
 												</div>
@@ -325,7 +331,9 @@ export function VirtualModelEditDialog({
 													className="size-8"
 													onClick={() => toggleAddGroup(group.provider.id)}
 													disabled={!addOpen && candidates.length === 0}
-													aria-label={`在 ${group.provider.name} 中添加模型`}
+													aria-label={t("virtualModels.addInProvider", {
+														provider: group.provider.name,
+													})}
 												>
 													{addOpen ? (
 														<ChevronUp className="size-4" />
@@ -360,11 +368,13 @@ export function VirtualModelEditDialog({
 																		</span>
 																		{providerDisabled && (
 																			<span className="shrink-0 text-amber-600 dark:text-amber-400">
-																				· 随供应商禁用
+																				{t("virtualModels.disabledWithProvider")}
 																			</span>
 																		)}
 																		{draft.enable === false && (
-																			<span className="shrink-0">· 已停用</span>
+																			<span className="shrink-0">
+																				{t("virtualModels.disabledMark")}
+																			</span>
 																		)}
 																	</p>
 																</div>
@@ -372,7 +382,7 @@ export function VirtualModelEditDialog({
 																<Switch
 																	checked={draft.enable}
 																	disabled={updateModel.isPending || createModel.isPending}
-																	aria-label={`启停 ${model.providerModelId}`}
+																	aria-label={`${t("virtualModels.toggleMember")} ${model.providerModelId}`}
 																	onCheckedChange={() => toggleDraftEnable(draft.modelId)}
 																/>
 																<Button
@@ -380,7 +390,7 @@ export function VirtualModelEditDialog({
 																	variant="ghost"
 																	size="icon"
 																	className="size-8 shrink-0 text-destructive hover:text-destructive"
-																	aria-label={`移除 ${model.providerModelId}`}
+																	aria-label={`${t("virtualModels.removeMember")} ${model.providerModelId}`}
 																	onClick={() => removeDraftItem(draft.modelId)}
 																>
 																	<Trash2 className="size-4" />
@@ -395,7 +405,7 @@ export function VirtualModelEditDialog({
 												<div className="space-y-2 rounded-lg border border-dashed p-3">
 													{candidates.length === 0 ? (
 														<p className="py-2 text-center text-xs text-muted-foreground">
-															没有可添加的模型（已被占用或已全部加入）
+															{t("virtualModels.noCandidates")}
 														</p>
 													) : (
 														candidates.map((model) => (
@@ -408,7 +418,7 @@ export function VirtualModelEditDialog({
 																	variant="outline"
 																	size="icon"
 																	className="size-7 shrink-0"
-																	aria-label={`添加 ${model.providerModelId}`}
+																	aria-label={`${t("virtualModels.addCandidate")} ${model.providerModelId}`}
 																	onClick={() => addDraftItem(model.modelId)}
 																>
 																	<Plus className="size-4" />
@@ -438,11 +448,11 @@ export function VirtualModelEditDialog({
 				<DialogFooter className="gap-2 pt-2">
 					<span className="mr-auto text-xs text-muted-foreground">
 						{draftItems.length === 0
-							? "至少保留一个成员模型"
-							: `已选 ${draftItems.length} 个成员模型`}
+							? t("virtualModels.keepAtLeastOne")
+							: t("virtualModels.selectedMembers", { count: draftItems.length })}
 					</span>
 					<Button type="button" variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-						取消
+						{t("common.cancel")}
 					</Button>
 					<Button
 						type="submit"
@@ -450,7 +460,7 @@ export function VirtualModelEditDialog({
 						form="virtual-model-form"
 						disabled={draftItems.length === 0 || createModel.isPending || updateModel.isPending}
 					>
-						{virtualModel ? "保存" : "创建"}
+						{virtualModel ? t("common.save") : t("common.create")}
 					</Button>
 				</DialogFooter>
 			</DialogContent>

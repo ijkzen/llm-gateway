@@ -20,6 +20,7 @@ import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
 import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 /** 首页调用/Token 分析共享的时间段（默认当天）。 */
 function defaultChartsWindow(): RaceWindowState {
@@ -36,6 +37,7 @@ function defaultChartsWindow(): RaceWindowState {
 }
 
 export default function OverviewPage() {
+	const { t } = useTranslation();
 	const summaryQuery = useDashboardSummary();
 	// 调用/Token 分析共享同一个时间段（默认「今天」）。
 	const [chartsWindow, setChartsWindow] = useState<RaceWindowState>(defaultChartsWindow);
@@ -77,9 +79,9 @@ export default function OverviewPage() {
 	if (isError || !summaryQuery.data || !chartsQuery.data) {
 		return (
 			<div className="space-y-6">
-				<PageHeader title={OVERVIEW_PAGE.title} icon={ChartLine} />
+				<PageHeader title={t(OVERVIEW_PAGE.titleKey)} icon={ChartLine} />
 				<ErrorState
-					description="无法获取数据面板数据，请检查网络或稍后重试。"
+					description={t("overview.errorDescription")}
 					onRetry={() => {
 						summaryQuery.refetch();
 						chartsQuery.refetch();
@@ -92,37 +94,37 @@ export default function OverviewPage() {
 	const summary = summaryQuery.data;
 	const windowSubtitle =
 		chartsWindow.period === "custom"
-			? "自定义时间范围"
+			? t("overview.customWindow")
 			: formatPeriodLabel(chartsWindow.period, chartsWindow.offset, now);
 
 	return (
 		<div className="space-y-6">
-			<PageHeader title={OVERVIEW_PAGE.title} icon={ChartLine} />
+			<PageHeader title={t(OVERVIEW_PAGE.titleKey)} icon={ChartLine} />
 
 			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
 				<StatsCard
 					icon={ListChecks}
-					label="累计请求数"
+					label={t("overview.totalRequests")}
 					value={summary.totalRequests.toLocaleString()}
-					subLabel="全部历史"
+					subLabel={t("overview.allHistory")}
 				/>
 				<StatsCard
 					icon={CircleCheck}
-					label="请求成功率"
+					label={t("overview.successRate")}
 					value={formatPercent(summary.successRate)}
-					subLabel="全部历史"
+					subLabel={t("overview.allHistory")}
 				/>
 				<StatsCard
 					icon={Coins}
-					label="总计 Token"
+					label={t("overview.totalTokens")}
 					value={formatTokenCount(summary.totalTokens)}
-					subLabel="输入 + 输出"
+					subLabel={t("overview.inputPlusOutput")}
 				/>
 				<StatsCard
 					icon={DatabaseZap}
-					label="缓存命中率"
+					label={t("overview.cacheHitRate")}
 					value={formatPercent(summary.cacheHitRate)}
-					subLabel="缓存 token / 输入 token"
+					subLabel={t("overview.cacheTokenOverInput")}
 				/>
 			</div>
 

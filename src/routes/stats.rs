@@ -9,6 +9,7 @@ use chrono::Datelike;
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde::{Deserialize, Serialize};
 
+use crate::app_settings::AppSettings;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -33,7 +34,10 @@ impl Granularity {
             Some("day") => Ok(Some(Self::Day)),
             Some("month") => Ok(Some(Self::Month)),
             Some("year") => Ok(Some(Self::Year)),
-            Some(_) => Err("不支持的 granularity，可选 hour/day/month/year"),
+            Some(_) => Err(AppSettings::lang_sync().tr(
+                "不支持的 granularity，可选 hour/day/month/year",
+                "unsupported granularity; choose hour/day/month/year",
+            )),
         }
     }
 }
@@ -205,7 +209,9 @@ async fn summary(State(state): State<AppState>) -> impl IntoResponse {
     {
         Ok(Some(row)) => row,
         Ok(None) => {
-            return response::db_error("统计查询无结果".to_string());
+            return response::db_error(
+                AppSettings::lang_sync().tr("统计查询无结果", "stats query returned no rows"),
+            );
         }
         Err(e) => return response::db_error(e.to_string()),
     };
@@ -568,13 +574,22 @@ const RANK_METRIC_SQL: &str = r#"
 fn parse_rank_query<T>(
     query: &RankQuery,
 ) -> Result<(RankSortKey, &'static str, i64, i64), response::ErrorResponse<T>> {
-    let sort_key = parse_sort_key(query.sort_by.as_deref())
-        .ok_or_else(|| response::bad_request("sortBy 参数非法"))?;
+    let sort_key = parse_sort_key(query.sort_by.as_deref()).ok_or_else(|| {
+        response::bad_request(
+            AppSettings::lang_sync().tr("sortBy 参数非法", "invalid sortBy parameter"),
+        )
+    })?;
     let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
-        return Err(response::bad_request("缺少 startTime / endTime 参数"));
+        return Err(response::bad_request(AppSettings::lang_sync().tr(
+            "缺少 startTime / endTime 参数",
+            "missing startTime / endTime parameters",
+        )));
     };
     if end <= start {
-        return Err(response::bad_request("endTime 必须大于 startTime"));
+        return Err(response::bad_request(AppSettings::lang_sync().tr(
+            "endTime 必须大于 startTime",
+            "endTime must be greater than startTime",
+        )));
     }
     let order_dir = sort_direction(query.sort_order.as_deref(), sort_key);
     Ok((sort_key, order_dir, start, end))
@@ -948,7 +963,10 @@ async fn virtual_model_member_rank(
         Err(e) => return Err(e),
     };
     let Some(virtual_model_id) = query.virtual_model_id else {
-        return Err(response::bad_request("缺少 virtualModelId 参数"));
+        return Err(response::bad_request(AppSettings::lang_sync().tr(
+            "缺少 virtualModelId 参数",
+            "missing virtualModelId parameter",
+        )));
     };
     let db = &state.db;
 
@@ -1101,13 +1119,22 @@ async fn model_metrics(
     Query(query): Query<ModelMetricsQuery>,
 ) -> impl IntoResponse {
     let (Some(provider_id), Some(model_id)) = (query.provider_id, query.model_id) else {
-        return response::bad_request("缺少 providerId / modelId 参数");
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "缺少 providerId / modelId 参数",
+            "missing providerId / modelId parameters",
+        ));
     };
     let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
-        return response::bad_request("缺少 startTime / endTime 参数");
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "缺少 startTime / endTime 参数",
+            "missing startTime / endTime parameters",
+        ));
     };
     if end <= start {
-        return response::bad_request("endTime 必须大于 startTime");
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "endTime 必须大于 startTime",
+            "endTime must be greater than startTime",
+        ));
     }
     let db = &state.db;
 
@@ -1133,7 +1160,12 @@ async fn model_metrics(
         .await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return response::db_error("模型指标查询无结果".to_string()),
+        Ok(None) => {
+            return response::db_error(
+                AppSettings::lang_sync()
+                    .tr("模型指标查询无结果", "model metrics query returned no rows"),
+            );
+        }
         Err(e) => return response::db_error(e.to_string()),
     };
 
@@ -1192,13 +1224,21 @@ async fn provider_metrics(
     Query(query): Query<ProviderMetricsQuery>,
 ) -> impl IntoResponse {
     let Some(provider_id) = query.provider_id else {
-        return response::bad_request("缺少 providerId 参数");
+        return response::bad_request(
+            AppSettings::lang_sync().tr("缺少 providerId 参数", "missing providerId parameter"),
+        );
     };
     let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
-        return response::bad_request("缺少 startTime / endTime 参数");
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "缺少 startTime / endTime 参数",
+            "missing startTime / endTime parameters",
+        ));
     };
     if end <= start {
-        return response::bad_request("endTime 必须大于 startTime");
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "endTime 必须大于 startTime",
+            "endTime must be greater than startTime",
+        ));
     }
     let db = &state.db;
 
@@ -1218,7 +1258,12 @@ async fn provider_metrics(
         .await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return response::db_error("供应商指标查询无结果".to_string()),
+        Ok(None) => {
+            return response::db_error(AppSettings::lang_sync().tr(
+                "供应商指标查询无结果",
+                "provider metrics query returned no rows",
+            ));
+        }
         Err(e) => return response::db_error(e.to_string()),
     };
 
@@ -1276,13 +1321,22 @@ async fn virtual_model_metrics(
     Query(query): Query<VirtualModelMetricsQuery>,
 ) -> impl IntoResponse {
     let Some(virtual_model_id) = query.virtual_model_id else {
-        return response::bad_request("缺少 virtualModelId 参数");
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "缺少 virtualModelId 参数",
+            "missing virtualModelId parameter",
+        ));
     };
     let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
-        return response::bad_request("缺少 startTime / endTime 参数");
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "缺少 startTime / endTime 参数",
+            "missing startTime / endTime parameters",
+        ));
     };
     if end <= start {
-        return response::bad_request("endTime 必须大于 startTime");
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "endTime 必须大于 startTime",
+            "endTime must be greater than startTime",
+        ));
     }
     let db = &state.db;
 
@@ -1302,7 +1356,12 @@ async fn virtual_model_metrics(
         .await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return response::db_error("虚拟模型指标查询无结果".to_string()),
+        Ok(None) => {
+            return response::db_error(AppSettings::lang_sync().tr(
+                "虚拟模型指标查询无结果",
+                "virtual model metrics query returned no rows",
+            ));
+        }
         Err(e) => return response::db_error(e.to_string()),
     };
 

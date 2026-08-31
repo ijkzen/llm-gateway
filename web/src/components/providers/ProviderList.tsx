@@ -22,6 +22,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useQueryClient } from "@tanstack/react-query";
 import { GripVertical } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface ProviderListProps {
 	providers: Provider[] | undefined;
@@ -36,6 +37,7 @@ interface SortableProviderRowProps {
 }
 
 function SortableProviderRow({ provider, selected, onSelect }: SortableProviderRowProps) {
+	const { t } = useTranslation();
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
 		id: provider.id,
 	});
@@ -49,7 +51,7 @@ function SortableProviderRow({ provider, selected, onSelect }: SortableProviderR
 			<button
 				type="button"
 				onClick={onSelect}
-				title={`${provider.name}（${provider.enable ? "已启用" : "已停用"}）`}
+				title={`${provider.name}（${provider.enable ? t("common.enabled") : t("common.disabled")}）`}
 				className={cn(
 					"flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition-colors",
 					selected
@@ -77,7 +79,7 @@ function SortableProviderRow({ provider, selected, onSelect }: SortableProviderR
 						"size-2 shrink-0 rounded-full",
 						provider.enable ? "bg-emerald-500" : "bg-red-500",
 					)}
-					aria-label={provider.enable ? "已启用" : "已停用"}
+					aria-label={provider.enable ? t("common.enabled") : t("common.disabled")}
 				/>
 			</button>
 		</li>
@@ -85,6 +87,7 @@ function SortableProviderRow({ provider, selected, onSelect }: SortableProviderR
 }
 
 export function ProviderList({ providers, selectedId, onSelect }: ProviderListProps) {
+	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const { toastSuccess, toastError } = useToastActions();
 	const { mutate: reorder } = useReorderProviders();
@@ -97,7 +100,7 @@ export function ProviderList({ providers, selectedId, onSelect }: ProviderListPr
 		return (
 			<Card>
 				<CardContent className="p-8 text-center text-muted-foreground">
-					暂无 Provider，点击右上角创建
+					{t("providers.noProvidersHint")}
 				</CardContent>
 			</Card>
 		);
@@ -120,8 +123,8 @@ export function ProviderList({ providers, selectedId, onSelect }: ProviderListPr
 		queryClient.setQueryData(providerKeys.all, next);
 
 		reorder(nextIds, {
-			onSuccess: () => toastSuccess("供应商顺序已更新"),
-			onError: (error) => toastError("保存供应商顺序失败", error),
+			onSuccess: () => toastSuccess(t("providers.reorderSuccess")),
+			onError: (error) => toastError(t("providers.reorderFailedText"), error),
 		});
 	}
 

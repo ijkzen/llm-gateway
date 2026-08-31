@@ -18,14 +18,17 @@ import {
 } from "@/lib/race-period";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
-const PERIOD_OPTIONS = [
-	{ value: "day", label: "天" },
-	{ value: "week", label: "周" },
-	{ value: "month", label: "月" },
-	{ value: "year", label: "年" },
-	{ value: "custom", label: "自定义" },
-] as const satisfies readonly { value: RacePeriod | "custom"; label: string }[];
+const PERIOD_OPTION_VALUES = ["day", "week", "month", "year", "custom"] as const;
+
+const PERIOD_OPTION_KEYS: Record<(typeof PERIOD_OPTION_VALUES)[number], string> = {
+	day: "race.day",
+	week: "race.week",
+	month: "race.month",
+	year: "race.year",
+	custom: "race.custom",
+};
 
 export interface RaceWindowState {
 	period: RacePeriod | "custom";
@@ -61,10 +64,15 @@ export function RaceWindowControl({
 	onChange,
 	showLabel = true,
 }: RaceWindowControlProps) {
+	const { t } = useTranslation();
 	const { period, offset, customStart, customEnd } = state;
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [draftStart, setDraftStart] = useState(customStart);
 	const [draftEnd, setDraftEnd] = useState(customEnd);
+	const periodOptions = PERIOD_OPTION_VALUES.map((value) => ({
+		value,
+		label: t(PERIOD_OPTION_KEYS[value]),
+	}));
 
 	const changePeriod = (next: RacePeriod | "custom") => {
 		onChange({ period: next });
@@ -105,18 +113,22 @@ export function RaceWindowControl({
 
 	return (
 		<div className="flex flex-wrap items-center gap-2">
-			<SegmentedControl options={PERIOD_OPTIONS} value={period} onChange={changePeriod} />
+			<SegmentedControl options={periodOptions} value={period} onChange={changePeriod} />
 			{period === "custom" ? (
 				showLabel && (
 					<button
 						type="button"
 						onClick={openDialog}
-						aria-label="自定义时间范围"
+						aria-label={t("race.customRangeLabel")}
 						data-testid="custom-range-label"
 						className="space-y-0.5 rounded-lg px-2 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
 					>
-						<div className="font-mono tabular-nums">开始 {formatDateTimeLabel(displayStart)}</div>
-						<div className="font-mono tabular-nums">结束 {formatDateTimeLabel(displayEnd)}</div>
+						<div className="font-mono tabular-nums">
+							{t("race.startLabel")} {formatDateTimeLabel(displayStart)}
+						</div>
+						<div className="font-mono tabular-nums">
+							{t("race.endLabel")} {formatDateTimeLabel(displayEnd)}
+						</div>
 					</button>
 				)
 			) : (
@@ -125,7 +137,7 @@ export function RaceWindowControl({
 						variant="ghost"
 						size="icon"
 						className="h-6 w-6"
-						aria-label="上一周期"
+						aria-label={t("race.previous")}
 						onClick={() => onChange({ offset: offset - 1 })}
 					>
 						<ChevronLeft className="h-4 w-4" />
@@ -139,7 +151,7 @@ export function RaceWindowControl({
 						variant="ghost"
 						size="icon"
 						className="h-6 w-6"
-						aria-label="下一周期"
+						aria-label={t("race.next")}
 						onClick={() => onChange({ offset: offset + 1 })}
 					>
 						<ChevronRight className="h-4 w-4" />
@@ -150,11 +162,11 @@ export function RaceWindowControl({
 			<Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
 				<DialogContent className="sm:max-w-sm">
 					<DialogHeader>
-						<DialogTitle>自定义时间范围</DialogTitle>
+						<DialogTitle>{t("race.customRange")}</DialogTitle>
 					</DialogHeader>
 					<div className="space-y-4 py-2">
 						<div className="space-y-1.5">
-							<p className="text-xs text-muted-foreground">开始时间</p>
+							<p className="text-xs text-muted-foreground">{t("race.startTime")}</p>
 							<Input
 								type="datetime-local"
 								step={1}
@@ -165,7 +177,7 @@ export function RaceWindowControl({
 							/>
 						</div>
 						<div className="space-y-1.5">
-							<p className="text-xs text-muted-foreground">结束时间</p>
+							<p className="text-xs text-muted-foreground">{t("race.endTime")}</p>
 							<Input
 								type="datetime-local"
 								step={1}
@@ -176,15 +188,15 @@ export function RaceWindowControl({
 							/>
 						</div>
 						{draftEnd <= draftStart && (
-							<p className="text-xs text-destructive">结束时间必须晚于开始时间</p>
+							<p className="text-xs text-destructive">{t("race.timeInvalid")}</p>
 						)}
 					</div>
 					<DialogFooter>
 						<Button variant="outline" size="sm" onClick={() => setDialogOpen(false)}>
-							取消
+							{t("common.cancel")}
 						</Button>
 						<Button size="sm" onClick={confirmCustom}>
-							确认
+							{t("common.confirm")}
 						</Button>
 					</DialogFooter>
 				</DialogContent>

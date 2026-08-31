@@ -1,6 +1,8 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
+import i18n from "@/i18n";
+
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
 }
@@ -22,8 +24,21 @@ export function middleEllipsis(text: string, maxLength: number): string {
 	return `${chars.slice(0, head).join("")}${ellipsis}${chars.slice(-tail).join("")}`;
 }
 
-/** token 数量按中文计数习惯缩写：>= 1 亿用「亿」（两位小数），>= 1 万用「万」（一位小数）。 */
+/**
+ * token 数量缩写：中文按「亿/万」计数习惯（>= 1 亿两位小数、>= 1 万一位小数），
+ * 英文按 K/M 缩写（1_000 进制，业界惯例）。语言取当前 i18n 语言。
+ */
 export function formatTokenCount(value: number): string {
+	const zh = i18n.language.startsWith("zh");
+	if (!zh) {
+		if (value >= 1_000_000) {
+			return `${trimTrailingZeros((value / 1_000_000).toFixed(2))}M`;
+		}
+		if (value >= 1_000) {
+			return `${trimTrailingZeros((value / 1_000).toFixed(1))}K`;
+		}
+		return value.toLocaleString("en-US");
+	}
 	if (value >= 100_000_000) {
 		return `${trimTrailingZeros((value / 100_000_000).toFixed(2))} 亿`;
 	}

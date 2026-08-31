@@ -15,6 +15,7 @@ use crate::cron::log_repository::{
     CronJobLogRepository, LogRecord, MAX_RUNS_KEPT, RunRecord, SeaOrmCronJobLogRepository,
 };
 use crate::cron::repository::{CronJobRepository, JobDefinition, SeaOrmCronJobRepository};
+use crate::i18n::Lang;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -95,16 +96,17 @@ async fn update_job(
     Path(name): Path<String>,
     Json(req): Json<UpdateJobRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     if let Some(ref title) = req.title
         && title.is_empty()
     {
-        return response::bad_request("标题不能为空");
+        return response::bad_request(lang.tr("标题不能为空", "title cannot be empty"));
     }
 
     if let Some(ref expression) = req.expression
         && expression.is_empty()
     {
-        return response::bad_request("表达式不能为空");
+        return response::bad_request(lang.tr("表达式不能为空", "expression cannot be empty"));
     }
 
     let _guard = state.scheduler.modification_lock().await;
@@ -114,7 +116,12 @@ async fn update_job(
     let model = match repo.find_by_name(&name).await {
         Ok(Some(model)) => model,
         Ok(None) => {
-            return response::not_found(format!("任务 '{name}' 不存在"));
+            let msg = if lang == Lang::En {
+                format!("job '{name}' does not exist")
+            } else {
+                format!("任务 '{name}' 不存在")
+            };
+            return response::not_found(msg);
         }
         Err(e) => {
             return response::db_error(e.to_string());
@@ -125,17 +132,26 @@ async fn update_job(
     // handler registered). Reject before touching the DB so a failed update
     // never leaves the database and the scheduler out of sync.
     if !state.scheduler.has_job(&name).await {
-        return response::bad_request(format!(
-            "任务 '{name}' 未加载到调度器中（未注册对应的 Handler）"
-        ));
+        let msg = if lang == Lang::En {
+            format!("job '{name}' is not loaded in the scheduler (no handler registered)")
+        } else {
+            format!("任务 '{name}' 未加载到调度器中（未注册对应的 Handler）")
+        };
+        return response::bad_request(msg);
     }
 
     let new_expression = req.expression.unwrap_or(model.expression);
 
-    let next_run_at = match crate::cron::parser::compute_next_run(&new_expression) {
+    let tz = state.settings.timezone().await;
+    let next_run_at = match crate::cron::parser::compute_next_run_tz(&new_expression, tz) {
         Ok(next) => next,
         Err(e) => {
-            return response::bad_request(format!("表达式无效：{e}"));
+            let msg = if lang == Lang::En {
+                format!("invalid expression: {e}")
+            } else {
+                format!("表达式无效：{e}")
+            };
+            return response::bad_request(msg);
         }
     };
 
@@ -154,7 +170,12 @@ async fn update_job(
     {
         Ok(Some(_)) => {}
         Ok(None) => {
-            return response::not_found(format!("任务 '{name}' 不存在"));
+            let msg = if lang == Lang::En {
+                format!("job '{name}' does not exist")
+            } else {
+                format!("任务 '{name}' 不存在")
+            };
+            return response::not_found(msg);
         }
         Err(e) => {
             return response::db_error(e.to_string());
@@ -180,6 +201,7 @@ async fn run_job(State(state): State<AppState>, Path(name): Path<String>) -> imp
 }
 
 async fn delete_job(State(state): State<AppState>, Path(name): Path<String>) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let _guard = state.scheduler.modification_lock().await;
     let repo = SeaOrmCronJobRepository::new(state.db.clone());
 
@@ -188,7 +210,14 @@ async fn delete_job(State(state): State<AppState>, Path(name): Path<String>) -> 
             Ok(_) => (StatusCode::OK, Json(Response::success(()))),
             Err(e) => response::scheduler_error(scheduler_error_status(&e), e.to_string()),
         },
-        Ok(None) => response::not_found(format!("任务 '{name}' 不存在")),
+        Ok(None) => {
+            let msg = if lang == Lang::En {
+                format!("job '{name}' does not exist")
+            } else {
+                format!("任务 '{name}' 不存在")
+            };
+            response::not_found(msg)
+        }
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -263,7 +292,13 @@ async fn list_run_logs(
         Err(e) => return response::db_error(e.to_string()),
     };
     if !runs.iter().any(|run| run.run_id == run_id) {
-        return response::not_found(format!("任务 '{name}' 不存在执行记录 '{run_id}'"));
+        let lang = state.settings.lang().await;
+        let msg = if lang == Lang::En {
+            format!("job '{name}' has no run record '{run_id}'")
+        } else {
+            format!("任务 '{name}' 不存在执行记录 '{run_id}'")
+        };
+        return response::not_found(msg);
     }
 
     match log_repo.list_logs(&run_id).await {

@@ -12,6 +12,7 @@ import { type Provider, useProviders } from "@/hooks/use-providers";
 import { PROVIDER_MODELS_PAGE } from "@/lib/pages";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 interface SelectedModel {
@@ -20,6 +21,7 @@ interface SelectedModel {
 }
 
 export default function ProviderModelsPage() {
+	const { t } = useTranslation();
 	const [addingProvider, setAddingProvider] = useState<Provider | null>(null);
 	const [selectedModel, setSelectedModel] = useState<SelectedModel | null>(null);
 
@@ -52,9 +54,9 @@ export default function ProviderModelsPage() {
 	if (providersError || modelsError) {
 		return (
 			<div className="space-y-6">
-				<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={PROVIDER_MODELS_PAGE.title} />
+				<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={t(PROVIDER_MODELS_PAGE.titleKey)} />
 				<ErrorState
-					description="无法获取供应商模型数据，请检查网络或稍后重试。"
+					description={t("providerModels.errorDescription")}
 					onRetry={() => {
 						refetchProviders();
 						refetchModels();
@@ -67,14 +69,12 @@ export default function ProviderModelsPage() {
 	if (!providers || providers.length === 0) {
 		return (
 			<div className="flex h-full min-h-0 flex-col space-y-6">
-				<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={PROVIDER_MODELS_PAGE.title} />
+				<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={t(PROVIDER_MODELS_PAGE.titleKey)} />
 				<Card>
 					<CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-						<p className="text-sm text-muted-foreground">
-							还没有供应商，先创建一个供应商，再回来登记它的模型。
-						</p>
+						<p className="text-sm text-muted-foreground">{t("providerModels.emptyHint")}</p>
 						<Button asChild variant="outline" size="sm">
-							<Link to="/providers">去创建供应商</Link>
+							<Link to="/providers">{t("providerModels.goCreateProvider")}</Link>
 						</Button>
 					</CardContent>
 				</Card>
@@ -84,7 +84,7 @@ export default function ProviderModelsPage() {
 
 	return (
 		<div className="flex h-full min-h-0 flex-col space-y-6 overflow-auto">
-			<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={PROVIDER_MODELS_PAGE.title}>
+			<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={t(PROVIDER_MODELS_PAGE.titleKey)}>
 				<Button
 					variant="outline"
 					size="sm"
@@ -94,7 +94,7 @@ export default function ProviderModelsPage() {
 					}}
 				>
 					<RefreshCw className="mr-2 size-4" />
-					刷新
+					{t("common.refresh")}
 				</Button>
 			</PageHeader>
 

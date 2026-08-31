@@ -16,6 +16,7 @@ import { useRunCronJob, useUpdateCronJob } from "@/hooks/use-cron-jobs";
 import { useToastActions } from "@/hooks/use-toast";
 import { DEFAULT_GROUP } from "@/lib/constants";
 import { MoreHorizontal, Pencil, Play, ScrollText, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface CronJobDetailProps {
 	job: CronJob | undefined;
@@ -32,12 +33,18 @@ function formatDate(dateStr: string) {
 }
 
 export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDetailProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const updateCronJob = useUpdateCronJob();
 	const runCronJob = useRunCronJob();
 
 	if (!job) {
-		return <EmptyState title="未选择任务" description="在左侧选择一个定时任务查看详情" />;
+		return (
+			<EmptyState
+				title={t("cronJobs.noJobSelected")}
+				description={t("cronJobs.noJobSelectedHint")}
+			/>
+		);
 	}
 
 	return (
@@ -52,13 +59,13 @@ export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDeta
 						<Switch
 							checked={job.enabled}
 							disabled={updateCronJob.isPending}
-							aria-label={`切换任务 ${job.name} 状态`}
+							aria-label={`${t("cronJobs.toggleStatus")} ${job.name} ${t("cronJobs.toggleStatusSuffix")}`}
 							onCheckedChange={() =>
 								updateCronJob.mutate(
 									{ name: job.name, enabled: !job.enabled },
 									{
-										onSuccess: () => toastSuccess("操作成功"),
-										onError: (error) => toastError("操作失败", error),
+										onSuccess: () => toastSuccess(t("common.success")),
+										onError: (error) => toastError(t("common.error"), error),
 									},
 								)
 							}
@@ -71,7 +78,7 @@ export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDeta
 				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 					<div>
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							表达式
+							{t("cronJobs.expression")}
 						</p>
 						<Badge variant="outline" className="mt-1 font-mono text-xs">
 							{job.expression}
@@ -79,19 +86,19 @@ export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDeta
 					</div>
 					<div>
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							分组
+							{t("cronJobs.group")}
 						</p>
 						<p className="mt-1 text-sm">{job.group || DEFAULT_GROUP}</p>
 					</div>
 					<div>
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							上次执行
+							{t("cronJobs.lastRunAt")}
 						</p>
 						<p className="mt-1 text-sm">{formatDate(job.last_run_at)}</p>
 					</div>
 					<div>
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							下次执行
+							{t("cronJobs.nextRunAt")}
 						</p>
 						<p className="mt-1 text-sm">{formatDate(job.next_run_at)}</p>
 					</div>
@@ -100,7 +107,7 @@ export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDeta
 				{job.description && (
 					<div>
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							描述
+							{t("cronJobs.description")}
 						</p>
 						<p className="mt-1 text-sm text-muted-foreground">{job.description}</p>
 					</div>
@@ -112,36 +119,41 @@ export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDeta
 						size="sm"
 						onClick={() =>
 							runCronJob.mutate(job.name, {
-								onSuccess: () => toastSuccess("任务已触发执行"),
-								onError: (error) => toastError("执行失败", error),
+								onSuccess: () => toastSuccess(t("cronJobs.runTriggered")),
+								onError: (error) => toastError(t("cronJobs.runFailed"), error),
 							})
 						}
 					>
 						<Play className="mr-2 size-4" />
-						立即执行
+						{t("cronJobs.runNow")}
 					</Button>
 					<DropdownMenu modal={false}>
 						<DropdownMenuTrigger asChild>
-							<Button variant="outline" size="icon" className="size-9" aria-label="更多操作">
+							<Button
+								variant="outline"
+								size="icon"
+								className="size-9"
+								aria-label={t("common.moreActions")}
+							>
 								<MoreHorizontal className="size-4" />
 							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end">
 							<DropdownMenuItem onClick={() => onEdit(job)}>
 								<Pencil className="size-4" />
-								编辑
+								{t("cronJobs.edit")}
 							</DropdownMenuItem>
 							<DropdownMenuSeparator />
 							<DropdownMenuItem variant="destructive" onClick={() => onDelete(job.name)}>
 								<Trash2 className="size-4" />
-								删除
+								{t("cronJobs.delete")}
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>
 					{/* 日志入口固定在操作区右下角 */}
 					<Button variant="outline" size="sm" className="ml-auto" onClick={() => onViewLogs(job)}>
 						<ScrollText className="mr-2 size-4" />
-						查看日志
+						{t("common.viewLogs")}
 					</Button>
 				</div>
 			</CardContent>

@@ -1,9 +1,11 @@
+pub mod app_settings;
 pub mod auth;
 pub mod config;
 pub mod cron;
 pub mod crypto;
 pub mod db;
 pub mod entity;
+pub mod i18n;
 pub mod logs_cleanup;
 pub mod middleware;
 pub mod provider_model;
@@ -110,6 +112,11 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
 
     let repo = SeaOrmCronJobRepository::new(db.clone());
 
+    // 语言/时区设置缓存：从 setting 表加载（缺失时幂等补种子行），
+    // 供 API 消息本地化与定时任务 cron 语义时区使用。
+    let settings = crate::app_settings::AppSettings::load_from_db(&db).await?;
+    crate::app_settings::AppSettings::set_process_global(settings.clone());
+
     // 进程重启会中断执行中的任务，把残留的 running 执行标记为 failed。
     let log_repo = SeaOrmCronJobLogRepository::new(db.clone());
     match log_repo.mark_interrupted_runs_failed().await {
@@ -117,15 +124,17 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         _ => {}
     }
 
-    let worker = JobWorker::new(
+    let worker = JobWorker::new_with_settings(
         db.clone(),
         config.cron_job_max_concurrent,
         config.cron_job_queue_size,
         log_tx.clone(),
+        settings.clone(),
     );
     let worker_handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(worker_handle.tx.clone()).await?;
+    let scheduler =
+        SchedulerRuntime::new_with_settings(worker_handle.tx.clone(), settings.clone()).await?;
 
     // Register example handler; business handlers are added here.
     scheduler
@@ -189,6 +198,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         lb_state: crate::proxy::LbState::default(),
         usage_cache: crate::usage::UsageCache::default(),
         upstream_pool: crate::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
+        settings,
     };
 
     Ok(AppContext {

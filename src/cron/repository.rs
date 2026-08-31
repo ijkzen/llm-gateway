@@ -4,7 +4,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
 };
 
-use crate::cron::parser::compute_next_run;
+use crate::cron::parser::compute_next_run_tz;
 use crate::entity::cron_job;
 
 #[derive(Clone, Debug)]
@@ -35,7 +35,13 @@ pub trait CronJobRepository: Send + Sync + Clone {
     async fn list_active(&self) -> Result<Vec<cron_job::Model>, DbErr>;
     async fn list_by_names(&self, names: &[String]) -> Result<Vec<cron_job::Model>, DbErr>;
     async fn find_by_name(&self, name: &str) -> Result<Option<cron_job::Model>, DbErr>;
-    async fn insert(&self, job: &JobDefinition) -> Result<cron_job::Model, DbErr>;
+    /// 插入任务行。`tz` 为 cron 语义时区（`None` = 服务器本地），用于计算
+    /// 首次 `next_run_at`。
+    async fn insert(
+        &self,
+        job: &JobDefinition,
+        tz: Option<chrono_tz::Tz>,
+    ) -> Result<cron_job::Model, DbErr>;
     async fn update_run_times(
         &self,
         name: &str,
@@ -104,7 +110,11 @@ impl CronJobRepository for SeaOrmCronJobRepository {
             .await
     }
 
-    async fn insert(&self, job: &JobDefinition) -> Result<cron_job::Model, DbErr> {
+    async fn insert(
+        &self,
+        job: &JobDefinition,
+        tz: Option<chrono_tz::Tz>,
+    ) -> Result<cron_job::Model, DbErr> {
         let now = Utc::now();
         let epoch: DateTime<Utc> = DateTime::UNIX_EPOCH;
         let active = cron_job::ActiveModel {
@@ -115,7 +125,7 @@ impl CronJobRepository for SeaOrmCronJobRepository {
             enabled: Set(job.enabled),
             group: Set(job.group.clone()),
             last_run_at: Set(epoch),
-            next_run_at: Set(compute_next_run(&job.expression).unwrap_or(now)),
+            next_run_at: Set(compute_next_run_tz(&job.expression, tz).unwrap_or(now)),
             created_at: Set(now),
             updated_at: Set(now),
             is_deleted: Set(false),
@@ -236,7 +246,7 @@ mod tests {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db);
         let job = sample_job("test_insert");
-        repo.insert(&job).await.unwrap();
+        repo.insert(&job, None).await.unwrap();
         let found = repo.find_by_name("test_insert").await.unwrap();
         assert!(found.is_some());
         assert_eq!(found.unwrap().expression, "@hourly");
@@ -246,8 +256,8 @@ mod tests {
     async fn test_list_active_excludes_deleted() {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db);
-        repo.insert(&sample_job("active_job")).await.unwrap();
-        repo.insert(&sample_job("deleted_job")).await.unwrap();
+        repo.insert(&sample_job("active_job"), None).await.unwrap();
+        repo.insert(&sample_job("deleted_job"), None).await.unwrap();
         repo.soft_delete("deleted_job").await.unwrap();
         let active = repo.list_active().await.unwrap();
         assert_eq!(active.len(), 1);
@@ -258,7 +268,7 @@ mod tests {
     async fn test_set_enabled() {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db);
-        repo.insert(&sample_job("toggle_job")).await.unwrap();
+        repo.insert(&sample_job("toggle_job"), None).await.unwrap();
         let changed = repo.set_enabled("toggle_job", false).await.unwrap();
         assert!(changed);
         let found = repo.find_by_name("toggle_job").await.unwrap().unwrap();
@@ -270,7 +280,7 @@ mod tests {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db);
         let job = sample_job("run_times_job");
-        let _model = repo.insert(&job).await.unwrap();
+        let _model = repo.insert(&job, None).await.unwrap();
         let now = chrono::Utc::now();
         let updated = repo
             .update_run_times("run_times_job", now, now)
@@ -285,7 +295,9 @@ mod tests {
     async fn test_soft_delete() {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db);
-        repo.insert(&sample_job("soft_delete_job")).await.unwrap();
+        repo.insert(&sample_job("soft_delete_job"), None)
+            .await
+            .unwrap();
         let deleted = repo.soft_delete("soft_delete_job").await.unwrap();
         assert!(deleted);
         assert!(
@@ -307,7 +319,9 @@ mod tests {
     async fn test_find_by_name_filters_deleted() {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db);
-        repo.insert(&sample_job("find_deleted_job")).await.unwrap();
+        repo.insert(&sample_job("find_deleted_job"), None)
+            .await
+            .unwrap();
         repo.soft_delete("find_deleted_job").await.unwrap();
         assert!(
             repo.find_by_name("find_deleted_job")
@@ -356,7 +370,9 @@ mod tests {
     async fn test_update_job_full() {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db);
-        repo.insert(&sample_job("full_update_job")).await.unwrap();
+        repo.insert(&sample_job("full_update_job"), None)
+            .await
+            .unwrap();
         let now = chrono::Utc::now();
         let updated = repo
             .update_job_full(

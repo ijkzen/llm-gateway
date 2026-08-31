@@ -6,6 +6,7 @@ import {
 } from "@/components/ui/chart";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ModelValue, TrendPoint } from "@/hooks/use-dashboard-stats";
+import i18n from "@/i18n";
 import type { ChartGranularity } from "@/lib/race-period";
 import { cn, middleEllipsis, topWithOther } from "@/lib/utils";
 import { useState } from "react";
@@ -32,6 +33,11 @@ export const CHART_COLORS = [
 
 export const OTHER_LABEL = "其他";
 
+/** 当前语言的「其他」标签（Top N + 其他聚合项）。 */
+export function otherLabel(): string {
+	return i18n.t("dashboard.other");
+}
+
 export function chartColorAt(index: number): string {
 	return CHART_COLORS[index % CHART_COLORS.length] ?? "hsl(var(--chart-1))";
 }
@@ -52,10 +58,11 @@ function toChartItems(items: ModelValue[]): ChartItem[] {
 
 /** Top 10 + 其他（降序）。 */
 export function toRankedModels(items: ModelValue[]): ChartItem[] {
+	const other = otherLabel();
 	return topWithOther(toChartItems(items), {
 		providerName: "",
 		modelId: OTHER_LABEL,
-		label: OTHER_LABEL,
+		label: other,
 		value: 0,
 	});
 }
@@ -63,15 +70,20 @@ export function toRankedModels(items: ModelValue[]): ChartItem[] {
 /** 按桶粒度格式化 X 轴标签：小时 → HH:00，天 → M月d日，月 → yyyy年M月，年 → yyyy年。 */
 export function formatBucketLabel(bucketStart: number, granularity: ChartGranularity): string {
 	const date = new Date(bucketStart);
+	const zh = i18n.language.startsWith("zh");
 	switch (granularity) {
 		case "hour":
 			return `${date.getHours().toString().padStart(2, "0")}:00`;
 		case "day":
-			return `${date.getMonth() + 1}月${date.getDate()}日`;
+			return zh
+				? `${date.getMonth() + 1}月${date.getDate()}日`
+				: date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 		case "month":
-			return `${date.getFullYear()}年${date.getMonth() + 1}月`;
+			return zh
+				? `${date.getFullYear()}年${date.getMonth() + 1}月`
+				: date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
 		case "year":
-			return `${date.getFullYear()}年`;
+			return zh ? `${date.getFullYear()}年` : `${date.getFullYear()}`;
 	}
 }
 

@@ -5,7 +5,6 @@ use crate::entity::provider_template;
 use crate::provider_template::find_by_domain_all;
 use crate::response::{self, Response};
 use crate::state::AppState;
-
 pub fn routes() -> Router<AppState> {
     Router::new().route("/match", post(match_template))
 }
@@ -39,14 +38,15 @@ impl From<provider_template::Model> for TemplateResponse {
 }
 
 /// 按 Base URL 匹配 provider 模板，返回全部命中（同一 host 可能有多个模板）；
-/// 未命中返回 404 与中文提示。
+/// 未命中返回 404。
 async fn match_template(
     State(state): State<AppState>,
     Json(req): Json<MatchTemplateRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let base_url = req.base_url.trim();
     if base_url.is_empty() {
-        return response::bad_request("Base URL 不能为空");
+        return response::bad_request(lang.tr("Base URL 不能为空", "Base URL cannot be empty"));
     }
     match find_by_domain_all(&state.db, base_url).await {
         Ok(templates) if !templates.is_empty() => {
@@ -54,7 +54,7 @@ async fn match_template(
                 templates.into_iter().map(TemplateResponse::from).collect();
             (axum::http::StatusCode::OK, Json(Response::success(list)))
         }
-        Ok(_) => response::not_found("未找到匹配的模板"),
+        Ok(_) => response::not_found(lang.tr("未找到匹配的模板", "no matching template found")),
         Err(e) => response::db_error(e.to_string()),
     }
 }

@@ -26,6 +26,7 @@ import { type ApiResponse, api, unwrap } from "@/lib/api";
 import { useQueryClient } from "@tanstack/react-query";
 import { Copy, Eye, EyeOff, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface ProviderDetailProps {
 	provider: Provider | undefined;
@@ -34,15 +35,15 @@ interface ProviderDetailProps {
 }
 
 const PROTOCOL_LABELS: Record<number, string> = {
-	0: "OpenAI Compatible",
-	1: "OpenAI Response",
-	2: "Anthropic",
-	3: "Gemini",
+	0: "providers.protocol.openaiCompat",
+	1: "providers.protocol.responses",
+	2: "providers.protocol.anthropic",
+	3: "providers.protocol.gemini",
 };
 
 const BILLING_LABELS: Record<number, string> = {
-	0: "按量付费",
-	1: "订阅制",
+	0: "providers.payAsYouGo",
+	1: "providers.subscription",
 };
 
 function formatDate(dateStr: string) {
@@ -63,6 +64,7 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 }
 
 export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const updateProvider = useUpdateProvider();
 	const queryClient = useQueryClient();
@@ -81,15 +83,20 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 		showKey && activeId !== null && detail?.id === activeId && !detailLoading;
 
 	if (!provider) {
-		return <EmptyState title="未选择 Provider" description="在左侧选择一个 Provider 查看详情" />;
+		return (
+			<EmptyState
+				title={t("providers.noProviderSelected")}
+				description={t("providers.noProviderSelectedHint")}
+			/>
+		);
 	}
 
 	const toggleEnable = () => {
 		updateProvider.mutate(
 			{ id: provider.id, enable: !provider.enable },
 			{
-				onSuccess: () => toastSuccess("操作成功"),
-				onError: (error) => toastError("操作失败", error),
+				onSuccess: () => toastSuccess(t("common.success")),
+				onError: (error) => toastError(t("common.error"), error),
 			},
 		);
 	};
@@ -113,9 +120,9 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 							})
 						).apiKey;
 			await navigator.clipboard.writeText(plain);
-			toastSuccess("已复制到剪贴板");
+			toastSuccess(t("common.copiedToClipboard"));
 		} catch (error) {
-			toastError("复制失败", error as Error);
+			toastError(t("common.copyFailed"), error as Error);
 		}
 	};
 
@@ -133,7 +140,7 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 						<Switch
 							checked={provider.enable}
 							disabled={updateProvider.isPending}
-							aria-label={`切换 Provider ${provider.name} 状态`}
+							aria-label={`${t("providers.toggleProviderStatus")} ${provider.name} ${t("cronJobs.toggleStatusSuffix")}`}
 							onCheckedChange={toggleEnable}
 						/>
 					</div>
@@ -141,7 +148,7 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 			</CardHeader>
 			<CardContent className="flex-1 space-y-6 py-6">
 				<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-					<DetailRow label="API Key">
+					<DetailRow label={t("providers.apiKey")}>
 						{detailLoading ? (
 							<Skeleton className="h-5 w-40" />
 						) : (
@@ -155,7 +162,7 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 									variant="ghost"
 									size="icon"
 									className="size-7 shrink-0"
-									aria-label={effectiveShowKey ? "隐藏 API Key" : "显示 API Key"}
+									aria-label={effectiveShowKey ? t("apiKeys.hideKey") : t("apiKeys.showKey")}
 									onClick={() => setShowKey((v) => !v)}
 								>
 									{effectiveShowKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
@@ -165,7 +172,7 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 									variant="ghost"
 									size="icon"
 									className="size-7 shrink-0"
-									aria-label="复制 API Key"
+									aria-label={t("apiKeys.copyKey")}
 									onClick={handleCopyKey}
 								>
 									<Copy className="size-4" />
@@ -173,13 +180,19 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 							</span>
 						)}
 					</DetailRow>
-					<DetailRow label="协议类型">{PROTOCOL_LABELS[provider.protocolType] ?? "未知"}</DetailRow>
-					<DetailRow label="付费模式">{BILLING_LABELS[provider.billingMode] ?? "未知"}</DetailRow>
-					<DetailRow label="状态">
-						<Badge variant="outline">{provider.status === 0 ? "可用" : "不可用"}</Badge>
+					<DetailRow label={t("providers.protocolType")}>
+						{t(PROTOCOL_LABELS[provider.protocolType] ?? "common.unknown")}
 					</DetailRow>
-					<DetailRow label="创建时间">{formatDate(provider.createdAt)}</DetailRow>
-					<DetailRow label="更新时间">{formatDate(provider.updatedAt)}</DetailRow>
+					<DetailRow label={t("providers.billingModeDetail")}>
+						{t(BILLING_LABELS[provider.billingMode] ?? "common.unknown")}
+					</DetailRow>
+					<DetailRow label={t("providers.status")}>
+						<Badge variant="outline">
+							{provider.status === 0 ? t("providers.available") : t("providers.unavailable")}
+						</Badge>
+					</DetailRow>
+					<DetailRow label={t("providers.createdAt")}>{formatDate(provider.createdAt)}</DetailRow>
+					<DetailRow label={t("providers.updatedAt")}>{formatDate(provider.updatedAt)}</DetailRow>
 				</div>
 
 				{usageEnabled(provider.extra) && <ProviderUsageCard providerId={provider.id} />}
@@ -187,7 +200,7 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 				{provider.extra && provider.extra !== "{}" && (
 					<div>
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							额外配置
+							{t("providers.extraConfig")}
 						</p>
 						<div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
 							{Object.entries(JSON.parse(provider.extra) as Record<string, unknown>).map(
@@ -205,7 +218,7 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 				{provider.customHeader && provider.customHeader !== "{}" && (
 					<div>
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							自定义请求头
+							{t("providers.customHeader")}
 						</p>
 						<pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-3 font-mono text-xs">
 							{JSON.stringify(JSON.parse(provider.customHeader), null, 2)}
@@ -216,19 +229,24 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 				<div className="flex items-center gap-2 pt-4">
 					<DropdownMenu modal={false}>
 						<DropdownMenuTrigger asChild>
-							<Button variant="outline" size="icon" className="size-9" aria-label="更多操作">
+							<Button
+								variant="outline"
+								size="icon"
+								className="size-9"
+								aria-label={t("common.moreActions")}
+							>
 								<MoreHorizontal className="size-4" />
 							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="start">
 							<DropdownMenuItem onClick={() => onEdit(provider)}>
 								<Pencil className="size-4" />
-								编辑
+								{t("providers.edit")}
 							</DropdownMenuItem>
 							<DropdownMenuSeparator />
 							<DropdownMenuItem variant="destructive" onClick={() => onDelete(provider)}>
 								<Trash2 className="size-4" />
-								删除
+								{t("providers.delete")}
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>

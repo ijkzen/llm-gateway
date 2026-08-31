@@ -35,7 +35,7 @@ async fn test_scheduler_loads_from_db() {
         )
         .await;
 
-    repo.insert(&sample_job("scheduler_load_test"))
+    repo.insert(&sample_job("scheduler_load_test"), None)
         .await
         .unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
@@ -69,7 +69,9 @@ async fn test_load_from_db_skips_missed_cron_jobs() {
         )
         .await;
 
-    repo.insert(&sample_job("missed_cron_test")).await.unwrap();
+    repo.insert(&sample_job("missed_cron_test"), None)
+        .await
+        .unwrap();
     let past = chrono::Utc::now() - chrono::TimeDelta::minutes(5);
     repo.update_run_times("missed_cron_test", chrono::DateTime::UNIX_EPOCH, past)
         .await
@@ -112,7 +114,7 @@ async fn test_run_job_now_returns_worker_channel_closed_when_receiver_dropped() 
         .await;
 
     let repo = SeaOrmCronJobRepository::new(db);
-    repo.insert(&sample_job("dropped_receiver_test"))
+    repo.insert(&sample_job("dropped_receiver_test"), None)
         .await
         .unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
@@ -139,7 +141,9 @@ async fn test_soft_delete_removes_from_scheduler_and_db() {
         )
         .await;
 
-    repo.insert(&sample_job("soft_delete_test")).await.unwrap();
+    repo.insert(&sample_job("soft_delete_test"), None)
+        .await
+        .unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
 
     scheduler
@@ -223,11 +227,15 @@ impl_failing_repo! {
         fn restore(name: &str, enabled: bool) -> Result<bool, DbErr>;
     }
     overrides {
-        async fn insert(&self, job: &JobDefinition) -> Result<cron_job::Model, DbErr> {
+        async fn insert(
+            &self,
+            job: &JobDefinition,
+            tz: Option<chrono_tz::Tz>,
+        ) -> Result<cron_job::Model, DbErr> {
             if self.fail_insert.load(Ordering::SeqCst) {
                 return Err(DbErr::Custom("mock insert failure".to_string()));
             }
-            self.inner.insert(job).await
+            self.inner.insert(job, tz).await
         }
 
         async fn set_enabled(&self, name: &str, enabled: bool) -> Result<bool, DbErr> {
@@ -294,7 +302,7 @@ async fn test_set_enabled_rollbacks_scheduler_on_db_failure() {
         .await;
 
     repo.inner
-        .insert(&sample_job("enabled_rollback"))
+        .insert(&sample_job("enabled_rollback"), None)
         .await
         .unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
@@ -327,7 +335,7 @@ async fn test_soft_delete_rollbacks_scheduler_on_db_failure() {
         .await;
 
     repo.inner
-        .insert(&sample_job("delete_rollback"))
+        .insert(&sample_job("delete_rollback"), None)
         .await
         .unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
@@ -364,7 +372,9 @@ async fn test_modification_lock_serializes_concurrent_mutations() {
         )
         .await;
 
-    repo.insert(&sample_job("concurrent_job")).await.unwrap();
+    repo.insert(&sample_job("concurrent_job"), None)
+        .await
+        .unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
 
     let scheduler_a = scheduler.clone();
@@ -426,7 +436,7 @@ async fn test_update_job_in_memory_updates_metadata() {
         )
         .await;
 
-    repo.insert(&sample_job("metadata_update_test"))
+    repo.insert(&sample_job("metadata_update_test"), None)
         .await
         .unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
@@ -468,7 +478,7 @@ async fn test_update_job_in_memory_updates_enabled() {
         )
         .await;
 
-    repo.insert(&sample_job("enabled_update_test"))
+    repo.insert(&sample_job("enabled_update_test"), None)
         .await
         .unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
@@ -504,7 +514,7 @@ async fn test_update_job_in_memory_recreates_on_expression_change() {
         )
         .await;
 
-    repo.insert(&sample_job("expression_update_test"))
+    repo.insert(&sample_job("expression_update_test"), None)
         .await
         .unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
@@ -570,7 +580,7 @@ async fn test_disabled_job_does_not_fire_until_enabled() {
     let mut job = sample_job("disabled_no_fire");
     job.expression = "@every 1s".to_string();
     job.enabled = false;
-    repo.insert(&job).await.unwrap();
+    repo.insert(&job, None).await.unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
     scheduler.start().await.unwrap();
 
@@ -634,7 +644,7 @@ async fn test_disabled_job_stays_listed_and_runnable_manually() {
 
     let mut job = sample_job("disabled_manual_run");
     job.enabled = false;
-    repo.insert(&job).await.unwrap();
+    repo.insert(&job, None).await.unwrap();
     scheduler.load_from_db(&repo).await.unwrap();
 
     let jobs = scheduler.list_jobs().await;

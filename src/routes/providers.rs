@@ -17,6 +17,7 @@ use crate::crypto;
 use crate::entity::provider::{self, ActiveModel, Entity};
 use crate::entity::provider_model;
 use crate::entity::virtual_model_item;
+use crate::i18n::Lang;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -117,39 +118,57 @@ struct UpdateProviderRequest {
 }
 
 /// 校验协议类型与付费模式是否在合法枚举范围内。
-fn validate_protocol_billing(protocol_type: i32, billing_mode: i32) -> Option<String> {
+fn validate_protocol_billing(protocol_type: i32, billing_mode: i32, lang: Lang) -> Option<String> {
     if !(0..=3).contains(&protocol_type) {
-        return Some("协议类型不合法".to_string());
+        return Some(
+            lang.tr("协议类型不合法", "invalid protocol type")
+                .to_string(),
+        );
     }
     if !(0..=1).contains(&billing_mode) {
-        return Some("付费类型不合法".to_string());
+        return Some(
+            lang.tr("付费类型不合法", "invalid billing mode")
+                .to_string(),
+        );
     }
     None
 }
 
 /// 校验创建/更新的公共字段，返回第一个错误消息（None 表示通过）。
+#[allow(clippy::too_many_arguments)]
 fn validate_fields(
     name: &str,
     base_url: &str,
     custom_header: &str,
     extra: &str,
     api_key: Option<&str>,
+    lang: Lang,
 ) -> Option<String> {
     if name.trim().is_empty() {
-        return Some("名称不能为空".to_string());
+        return Some(lang.tr("名称不能为空", "name cannot be empty").to_string());
     }
     if base_url.trim().is_empty() {
-        return Some("Base URL 不能为空".to_string());
+        return Some(
+            lang.tr("Base URL 不能为空", "Base URL cannot be empty")
+                .to_string(),
+        );
     }
     if let Some(key) = api_key
         && key.trim().is_empty()
     {
-        return Some("API Key 不能为空".to_string());
+        return Some(
+            lang.tr("API Key 不能为空", "API Key cannot be empty")
+                .to_string(),
+        );
     }
-    if let Some(err) = validate_json_field("自定义请求头", custom_header) {
+    if let Some(err) = validate_json_field(
+        lang.tr("自定义请求头", "custom headers"),
+        custom_header,
+        lang,
+    ) {
         return Some(err);
     }
-    if let Some(err) = validate_json_field("额外字段", extra) {
+    if let Some(err) = validate_json_field(lang.tr("额外字段", "extra fields"), extra, lang) {
         return Some(err);
     }
     None
@@ -157,11 +176,26 @@ fn validate_fields(
 
 /// extra 校验：必须是合法 JSON 对象；当 usage 开启时，模板中值为空的
 /// 推荐字段必须全部填写（允许 `usage`/`usage_type` 这类标记字段本身为空）。
-fn validate_extra(extra: &str) -> Option<String> {
+fn validate_extra(extra: &str, lang: Lang) -> Option<String> {
     let parsed = match serde_json::from_str::<Value>(extra) {
         Ok(Value::Object(map)) => map,
-        Ok(_) => return Some("额外字段必须是 JSON 对象".to_string()),
-        Err(e) => return Some(format!("额外字段不是合法的 JSON：{e}")),
+        Ok(_) => {
+            return Some(
+                lang.tr(
+                    "额外字段必须是 JSON 对象",
+                    "extra fields must be a JSON object",
+                )
+                .to_string(),
+            );
+        }
+        Err(e) => {
+            let msg = if lang == Lang::En {
+                format!("extra fields are not valid JSON: {e}")
+            } else {
+                format!("额外字段不是合法的 JSON：{e}")
+            };
+            return Some(msg);
+        }
     };
 
     let usage_enabled = parsed
@@ -185,17 +219,26 @@ fn validate_extra(extra: &str) -> Option<String> {
     if empty_required.is_empty() {
         None
     } else {
-        Some(format!(
-            "用量查询已开启，请填写以下字段：{}",
-            empty_required.join("、")
-        ))
+        let joined = empty_required.join("、");
+        if lang == Lang::En {
+            Some(format!(
+                "usage query is enabled; fill in the following fields: {}",
+                empty_required.join(", ")
+            ))
+        } else {
+            Some(format!("用量查询已开启，请填写以下字段：{joined}"))
+        }
     }
 }
 
 /// 校验字段值是否为合法 JSON（允许 `{}` 空对象）。
-fn validate_json_field(label: &str, value: &str) -> Option<String> {
+fn validate_json_field(label: &str, value: &str, lang: Lang) -> Option<String> {
     if serde_json::from_str::<Value>(value).is_err() {
-        Some(format!("{label}不是合法的 JSON"))
+        Some(if lang == Lang::En {
+            format!("{label} is not valid JSON")
+        } else {
+            format!("{label}不是合法的 JSON")
+        })
     } else {
         None
     }
@@ -245,6 +288,7 @@ async fn create_provider(
     State(state): State<AppState>,
     Json(req): Json<CreateProviderRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let api_key = req.api_key.trim();
     if let Some(msg) = validate_fields(
         &req.name,
@@ -252,13 +296,14 @@ async fn create_provider(
         &req.custom_header,
         &req.extra,
         Some(api_key),
+        lang,
     ) {
         return response::bad_request(msg);
     }
-    if let Some(msg) = validate_extra(&req.extra) {
+    if let Some(msg) = validate_extra(&req.extra, lang) {
         return response::bad_request(msg);
     }
-    if let Some(msg) = validate_protocol_billing(req.protocol_type, req.billing_mode) {
+    if let Some(msg) = validate_protocol_billing(req.protocol_type, req.billing_mode, lang) {
         return response::bad_request(msg);
     }
 
@@ -284,7 +329,11 @@ async fn create_provider(
             (StatusCode::CREATED, Json(Response::success(response)))
         }
         Err(e) if is_unique_violation(&e) => {
-            response::bad_request("同名 Provider 已存在，名称需要唯一")
+            let msg = lang.tr(
+                "同名 Provider 已存在，名称需要唯一",
+                "a provider with the same name already exists; names must be unique",
+            );
+            response::bad_request(msg)
         }
         Err(e) => response::db_error(e.to_string()),
     }
@@ -295,9 +344,17 @@ async fn update_provider(
     Path(id): Path<i32>,
     Json(req): Json<UpdateProviderRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let model = match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(model)) => model,
-        Ok(None) => return response::not_found(format!("Provider {id} 不存在")),
+        Ok(None) => {
+            let msg = if lang == Lang::En {
+                format!("provider {id} does not exist")
+            } else {
+                format!("Provider {id} 不存在")
+            };
+            return response::not_found(msg);
+        }
         Err(e) => return response::db_error(e.to_string()),
     };
 
@@ -314,15 +371,15 @@ async fn update_provider(
         .map(|k| k.trim().to_string());
     let _api_key = new_api_key.clone().unwrap_or_else(|| model.api_key.clone());
 
-    if let Some(msg) = validate_fields(&name, &base_url, &custom_header, &extra, None) {
+    if let Some(msg) = validate_fields(&name, &base_url, &custom_header, &extra, None, lang) {
         return response::bad_request(msg);
     }
-    if let Some(msg) = validate_extra(&extra) {
+    if let Some(msg) = validate_extra(&extra, lang) {
         return response::bad_request(msg);
     }
     let protocol_type = req.protocol_type.unwrap_or(model.protocol_type);
     let billing_mode = req.billing_mode.unwrap_or(model.billing_mode);
-    if let Some(msg) = validate_protocol_billing(protocol_type, billing_mode) {
+    if let Some(msg) = validate_protocol_billing(protocol_type, billing_mode, lang) {
         return response::bad_request(msg);
     }
 
@@ -371,13 +428,21 @@ async fn reorder_providers(
     State(state): State<AppState>,
     Json(req): Json<ReorderProvidersRequest>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     if req.ids.is_empty() {
-        return response::bad_request("排序列表不能为空");
+        return response::bad_request(
+            lang.tr("排序列表不能为空", "the reorder list cannot be empty"),
+        );
     }
     let mut seen = HashSet::new();
     for id in &req.ids {
         if !seen.insert(*id) {
-            return response::bad_request(format!("排序列表中 Provider {id} 重复"));
+            let msg = if lang == Lang::En {
+                format!("provider {id} appears more than once in the reorder list")
+            } else {
+                format!("排序列表中 Provider {id} 重复")
+            };
+            return response::bad_request(msg);
         }
     }
 
@@ -397,7 +462,12 @@ async fn reorder_providers(
     };
     let found_ids: HashSet<i32> = found.into_iter().map(|m| m.id).collect();
     if let Some(missing) = req.ids.iter().find(|id| !found_ids.contains(id)) {
-        return response::not_found(format!("Provider {missing} 不存在"));
+        let msg = if lang == Lang::En {
+            format!("provider {missing} does not exist")
+        } else {
+            format!("Provider {missing} 不存在")
+        };
+        return response::not_found(msg);
     }
 
     for (index, id) in req.ids.iter().enumerate() {
@@ -418,6 +488,7 @@ async fn reorder_providers(
 }
 
 async fn delete_provider(State(state): State<AppState>, Path(id): Path<i32>) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     // 级联硬删：同一事务内先删引用该供应商模型的虚拟模型成员（释放成员），
     // 再删该供应商名下全部模型，最后删供应商本身，避免 virtual_model_item 悬空。
     let txn = match state.db.begin().await {
@@ -458,7 +529,14 @@ async fn delete_provider(State(state): State<AppState>, Path(id): Path<i32>) -> 
             }
             Err(e) => response::db_error(e.to_string()),
         },
-        Ok(_) => response::not_found(format!("Provider {id} 不存在")),
+        Ok(_) => {
+            let msg = if lang == Lang::En {
+                format!("provider {id} does not exist")
+            } else {
+                format!("Provider {id} 不存在")
+            };
+            response::not_found(msg)
+        }
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -467,9 +545,17 @@ async fn get_provider_detail(
     State(state): State<AppState>,
     Path(id): Path<i32>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     match load_detail(&state.db, id).await {
         Ok(Some(detail)) => (StatusCode::OK, Json(Response::success(detail))),
-        Ok(None) => response::not_found(format!("Provider {id} 不存在")),
+        Ok(None) => {
+            let msg = if lang == Lang::En {
+                format!("provider {id} does not exist")
+            } else {
+                format!("Provider {id} 不存在")
+            };
+            response::not_found(msg)
+        }
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -488,9 +574,17 @@ async fn get_provider_usage(
     Path(id): Path<i32>,
     Query(query): Query<ProviderUsageQuery>,
 ) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
     let model = match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(m)) => m,
-        Ok(None) => return response::not_found(format!("Provider {id} 不存在")),
+        Ok(None) => {
+            let msg = if lang == Lang::En {
+                format!("provider {id} does not exist")
+            } else {
+                format!("Provider {id} 不存在")
+            };
+            return response::not_found(msg);
+        }
         Err(e) => return response::db_error(e.to_string()),
     };
     let extra = match serde_json::from_str::<Value>(&model.extra) {
@@ -499,7 +593,9 @@ async fn get_provider_usage(
     };
     let usage_enabled = extra.get("usage").and_then(Value::as_bool).unwrap_or(false);
     if !usage_enabled {
-        return response::bad_request(crate::usage::error::UsageError::NotEnabled.to_string());
+        return response::bad_request(
+            crate::usage::error::UsageError::NotEnabled.user_message(lang),
+        );
     }
 
     let force_refresh = query
@@ -511,16 +607,20 @@ async fn get_provider_usage(
     {
         return (
             StatusCode::OK,
-            Json(Response::success(data.with_normalized_remaining())),
+            Json(Response::success(
+                data.with_normalized_remaining().with_localized_labels(lang),
+            )),
         );
     }
     match crate::usage::persist::fetch_and_store(&state.db, id).await {
         Ok(data) => (
             StatusCode::OK,
-            Json(Response::success(data.with_normalized_remaining())),
+            Json(Response::success(
+                data.with_normalized_remaining().with_localized_labels(lang),
+            )),
         ),
-        Err(e) if e.is_client_error() => response::bad_request(e.to_string()),
-        Err(e) => response::bad_gateway(e.to_string()),
+        Err(e) if e.is_client_error() => response::bad_request(e.user_message(lang)),
+        Err(e) => response::bad_gateway(e.user_message(lang)),
     }
 }
 
@@ -569,14 +669,25 @@ async fn get_provider_usage_estimate(
 ) -> impl IntoResponse {
     use crate::usage::types::WindowKind;
 
+    let lang = state.settings.lang().await;
     let model = match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(m)) => m,
-        Ok(None) => return response::not_found(format!("Provider {id} 不存在")),
+        Ok(None) => {
+            let msg = if lang == Lang::En {
+                format!("provider {id} does not exist")
+            } else {
+                format!("Provider {id} 不存在")
+            };
+            return response::not_found(msg);
+        }
         Err(e) => return response::db_error(e.to_string()),
     };
     // 仅订阅制可预估。
     if model.billing_mode != 1 {
-        return response::bad_request("仅订阅制供应商支持用量预估".to_string());
+        return response::bad_request(lang.tr(
+            "仅订阅制供应商支持用量预估",
+            "usage estimation is only supported for subscription providers",
+        ));
     }
     let extra = match serde_json::from_str::<Value>(&model.extra) {
         Ok(Value::Object(map)) => map,
@@ -584,7 +695,9 @@ async fn get_provider_usage_estimate(
     };
     let usage_enabled = extra.get("usage").and_then(Value::as_bool).unwrap_or(false);
     if !usage_enabled {
-        return response::bad_request(crate::usage::error::UsageError::NotEnabled.to_string());
+        return response::bad_request(
+            crate::usage::error::UsageError::NotEnabled.user_message(lang),
+        );
     }
 
     // 用量数据：数据库缓存新鲜直出，过期/缺失才真实抓取。
@@ -592,8 +705,8 @@ async fn get_provider_usage_estimate(
         Ok(Some(data)) => data,
         _ => match crate::usage::persist::fetch_and_store(&state.db, id).await {
             Ok(data) => data,
-            Err(e) if e.is_client_error() => return response::bad_request(e.to_string()),
-            Err(e) => return response::bad_gateway(e.to_string()),
+            Err(e) if e.is_client_error() => return response::bad_request(e.user_message(lang)),
+            Err(e) => return response::bad_gateway(e.user_message(lang)),
         },
     };
 
@@ -662,7 +775,13 @@ async fn get_provider_usage_estimate(
         .await
     {
         Ok(Some(row)) => row,
-        Ok(None) => return response::db_error("用量预估查询无结果".to_string()),
+        Ok(None) => {
+            let msg = lang.tr(
+                "用量预估查询无结果",
+                "usage estimation query returned no rows",
+            );
+            return response::db_error(msg);
+        }
         Err(e) => return response::db_error(e.to_string()),
     };
     let used_tokens: i64 = row.try_get("", "used_tokens").unwrap_or(0);

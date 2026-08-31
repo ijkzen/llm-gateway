@@ -13,6 +13,7 @@ import type { CronJob } from "@/hooks/use-cron-jobs";
 import { cn } from "@/lib/utils";
 import { ArrowDown, ChevronDown, ChevronRight, ScrollText } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface CronJobLogsDialogProps {
 	job: CronJob | null;
@@ -51,14 +52,17 @@ function LogLine({ log }: { log: CronJobLog }) {
 	);
 }
 
-function runStatusBadge(run: CronJobRun) {
+function runStatusBadge(
+	run: CronJobRun,
+	t: (key: string, opts?: Record<string, unknown>) => string,
+) {
 	if (run.status === "running") {
-		return <StatusBadge status="warning" label="执行中" />;
+		return <StatusBadge status="warning" label={t("cronJobs.status.running")} />;
 	}
 	if (run.status === "failed") {
-		return <StatusBadge status="error" label="失败" />;
+		return <StatusBadge status="error" label={t("cronJobs.status.failed")} />;
 	}
-	return <StatusBadge status="success" label="成功" />;
+	return <StatusBadge status="success" label={t("cronJobs.status.success")} />;
 }
 
 function RunItem({
@@ -72,6 +76,7 @@ function RunItem({
 	expanded: boolean;
 	onToggle: () => void;
 }) {
+	const { t } = useTranslation();
 	const { data: logs, isLoading } = useCronJobRunLogs(name, expanded ? run.run_id : null);
 
 	return (
@@ -86,22 +91,27 @@ function RunItem({
 				) : (
 					<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
 				)}
-				{runStatusBadge(run)}
+				{runStatusBadge(run, t)}
 				<span className="text-xs text-muted-foreground">
 					{formatDateTime(run.started_at)} ~ {run.ended_at ? formatDateTime(run.ended_at) : "—"}
 				</span>
 				<span className="ml-auto shrink-0 text-xs text-muted-foreground">
-					{run.log_count} 条日志{run.truncated && "（已截断）"}
+					{run.log_count} {t("cronJobs.logCountUnit")}
+					{run.truncated && t("cronJobs.truncatedMark")}
 				</span>
 			</button>
 			{expanded && (
 				<div className="border-t border-slate-200/70 bg-slate-50/60 py-1 dark:border-white/10 dark:bg-black/20">
 					{isLoading ? (
-						<p className="px-3 py-1 font-mono text-xs text-muted-foreground">加载中…</p>
+						<p className="px-3 py-1 font-mono text-xs text-muted-foreground">
+							{t("common.loading")}
+						</p>
 					) : logs && logs.length > 0 ? (
 						logs.map((log) => <LogLine key={log.seq} log={log} />)
 					) : (
-						<p className="px-3 py-1 font-mono text-xs text-muted-foreground">该次执行未输出日志</p>
+						<p className="px-3 py-1 font-mono text-xs text-muted-foreground">
+							{t("cronJobs.noOutput")}
+						</p>
 					)}
 				</div>
 			)}
@@ -110,6 +120,7 @@ function RunItem({
 }
 
 export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialogProps) {
+	const { t } = useTranslation();
 	const name = job?.name ?? "";
 	const stream = useCronJobLogStream(open ? name : "");
 	const { data: runs } = useCronJobRuns(open ? name : "");
@@ -159,7 +170,7 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 				<DialogHeader className="px-6 pb-4 pt-6">
 					<DialogTitle className="flex items-center gap-2">
 						<ScrollText className="size-5" />
-						任务日志 · {job?.name}
+						{t("cronJobs.logs")} · {job?.name}
 					</DialogTitle>
 				</DialogHeader>
 
@@ -168,13 +179,15 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 					<div className="relative flex h-64 shrink-0 flex-col overflow-hidden rounded-xl border border-white/70 bg-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
 						<div className="flex items-center justify-between border-b border-slate-200/70 bg-white/50 px-3 py-2 dark:border-white/10 dark:bg-white/5">
 							<div className="flex items-center gap-2 text-sm font-medium">
-								实时日志
+								{t("cronJobs.realTimeLogs")}
 								{stream.currentRun && !stream.ended && (
-									<span className="text-xs text-muted-foreground">执行中…</span>
+									<span className="text-xs text-muted-foreground">
+										{t("cronJobs.runningEllipsis")}
+									</span>
 								)}
 							</div>
 							{stream.connection === "reconnecting" && (
-								<span className="text-xs text-amber-500">连接断开，正在重连…</span>
+								<span className="text-xs text-amber-500">{t("cronJobs.reconnecting")}</span>
 							)}
 						</div>
 						<div
@@ -184,7 +197,7 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 						>
 							{!stream.currentRun ? (
 								<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-									当前没有正在执行的任务
+									{t("cronJobs.noActiveRun")}
 								</div>
 							) : (
 								<>
@@ -193,9 +206,12 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 									))}
 									{stream.ended && (
 										<div className="mt-1 border-t px-3 py-2 text-xs text-muted-foreground">
-											执行{stream.ended.status === "success" ? "成功" : "失败"} · 结束于{" "}
-											{formatDateTime(stream.ended.ended_at)}
-											{stream.ended.truncated && " · 日志已达上限被截断"}
+											{t("cronJobs.runEnded")}
+											{stream.ended.status === "success"
+												? t("cronJobs.status.success")
+												: t("cronJobs.status.failed")}{" "}
+											· {t("cronJobs.endedAtLabel")} {formatDateTime(stream.ended.ended_at)}
+											{stream.ended.truncated && t("cronJobs.truncatedAtLimit")}
 										</div>
 									)}
 								</>
@@ -209,7 +225,7 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 								onClick={scrollToLatest}
 							>
 								<ArrowDown className="mr-1 size-3.5" />
-								回到最新
+								{t("cronJobs.backToLatest")}
 							</Button>
 						)}
 					</div>
@@ -217,12 +233,12 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 					{/* 历史执行区 */}
 					<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/70 bg-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
 						<div className="border-b border-slate-200/70 bg-white/50 px-3 py-2 text-sm font-medium dark:border-white/10 dark:bg-white/5">
-							历史执行（最近 30 次）
+							{t("cronJobs.historyRuns")}
 						</div>
 						<div className="min-h-0 flex-1 overflow-y-auto">
 							{!runs || runs.length === 0 ? (
 								<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-									该定时任务未输出日志
+									{t("cronJobs.noRunLogs")}
 								</div>
 							) : (
 								<ul className="divide-y divide-slate-200/70 dark:divide-white/10">

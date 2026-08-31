@@ -4,58 +4,59 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { Coins, DatabaseZap, Gauge, ListChecks, Timer } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
-/** 6 指标卡共用的指标项定义（key / 标题 / 格式化 / 图标）。 */
+/** 6 指标卡共用的指标项定义（key / 标题键 / 格式化 / 图标 / 副标签键）。 */
 interface MetricsItem {
 	key: "totalTokens" | "requestCount" | "ttft" | "requestTime" | "tps" | "cacheHitRate";
-	label: string;
+	labelKey: string;
 	icon: typeof Coins;
 	format: (v: number) => string;
-	subLabel: string;
+	subLabelKey: string;
 }
 
 export const METRICS_ITEMS: readonly MetricsItem[] = [
 	{
 		key: "totalTokens",
-		label: "总计 Token",
+		labelKey: "race.metricLabel.totalTokens",
 		icon: Coins,
 		format: formatTokenCount,
-		subLabel: "输入 + 输出",
+		subLabelKey: "overview.inputPlusOutput",
 	},
 	{
 		key: "requestCount",
-		label: "请求数",
+		labelKey: "race.metricLabel.requestCount",
 		icon: ListChecks,
 		format: (v) => v.toLocaleString(),
-		subLabel: "成功请求",
+		subLabelKey: "overview.successRequests",
 	},
 	{
 		key: "ttft",
-		label: "TTFT",
+		labelKey: "race.metricLabel.ttft",
 		icon: Timer,
 		format: (v) => `${v.toFixed(1)} ms`,
-		subLabel: "流式首 token",
+		subLabelKey: "overview.streamFirstToken",
 	},
 	{
 		key: "requestTime",
-		label: "平均耗时",
+		labelKey: "race.metricLabel.requestTime",
 		icon: Timer,
 		format: (v) => `${v.toFixed(1)} ms`,
-		subLabel: "成功请求",
+		subLabelKey: "overview.successRequests",
 	},
 	{
 		key: "tps",
-		label: "TPS",
+		labelKey: "race.metricLabel.tps",
 		icon: Gauge,
 		format: (v) => v.toFixed(2),
-		subLabel: "加权均值",
+		subLabelKey: "overview.weightedAverage",
 	},
 	{
 		key: "cacheHitRate",
-		label: "缓存命中率",
+		labelKey: "race.metricLabel.cacheHitRate",
 		icon: DatabaseZap,
 		format: formatPercent,
-		subLabel: "缓存 / 输入 token",
+		subLabelKey: "overview.cacheOverInputToken",
 	},
 ];
 
@@ -91,14 +92,15 @@ export function MetricsSummaryCard({
 	now,
 	onWindowChange,
 	subtitle,
-	title = "指标概览",
+	title,
 	extra,
 }: MetricsSummaryCardProps) {
+	const { t } = useTranslation();
 	return (
 		<Card>
 			<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
 				<div className="space-y-1">
-					<CardTitle>{title}</CardTitle>
+					<CardTitle>{title ?? t("dashboard.metricOverview")}</CardTitle>
 					<p className="text-xs text-muted-foreground">{subtitle}</p>
 				</div>
 				<RaceWindowControl state={windowState} now={now} onChange={onWindowChange} />
@@ -116,15 +118,15 @@ export function MetricsSummaryCard({
 							<StatsCard
 								key={item.key}
 								icon={item.icon}
-								label={item.label}
+								label={t(item.labelKey)}
 								value={item.format(data[item.key])}
-								subLabel={item.subLabel}
+								subLabel={t(item.subLabelKey)}
 							/>
 						))}
 					</div>
 				) : (
 					<div className="flex h-[160px] items-center justify-center text-xs text-muted-foreground">
-						数据加载失败
+						{t("overview.dataLoadFailed")}
 					</div>
 				)}
 				{extra}

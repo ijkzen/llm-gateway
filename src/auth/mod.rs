@@ -21,6 +21,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::entity::{api_key, session, user};
+use crate::i18n::Lang;
 use crate::response::Response;
 use crate::state::AppState;
 
@@ -169,13 +170,21 @@ pub fn clear_session_cookie() -> String {
 
 // ---------- /v1 Bearer 鉴权 ----------
 
+/// 当前进程语言（中间件等无 State 场景用；默认 zh-CN）。
+async fn current_lang() -> Lang {
+    match crate::app_settings::AppSettings::process_global() {
+        Some(settings) => settings.lang().await,
+        None => Lang::default(),
+    }
+}
+
 /// 校验 Bearer API Key。命中启用的 key 返回其信息，否则返回 401 信封错误。
 pub async fn authorize_api_key(
     db: &DatabaseConnection,
     headers: &HeaderMap,
 ) -> Result<AuthedApiKey, Response<()>> {
     let Some(token) = extract_bearer(headers) else {
-        return Err(unauthorized_api_key());
+        return Err(unauthorized_api_key().await);
     };
     let key_hash = hash_token(&token);
     match api_key::Entity::find()
@@ -188,11 +197,16 @@ pub async fn authorize_api_key(
             id: model.id,
             name: model.name,
         }),
-        Ok(None) => Err(unauthorized_api_key()),
-        Err(e) => Err(Response::<()>::error(
-            crate::response::INTERNAL_ERROR,
-            format!("API Key 校验失败：{e}"),
-        )),
+        Ok(None) => Err(unauthorized_api_key().await),
+        Err(e) => {
+            let lang = current_lang().await;
+            let msg = if lang == Lang::En {
+                format!("API key validation failed: {e}")
+            } else {
+                format!("API Key 校验失败：{e}")
+            };
+            Err(Response::<()>::error(crate::response::INTERNAL_ERROR, msg))
+        }
     }
 }
 
@@ -212,8 +226,10 @@ fn extract_bearer(headers: &HeaderMap) -> Option<String> {
     }
 }
 
-fn unauthorized_api_key() -> Response<()> {
-    Response::error("INVALID_API_KEY", "无效的 API Key")
+async fn unauthorized_api_key() -> Response<()> {
+    let lang = current_lang().await;
+    let msg = lang.tr("无效的 API Key", "invalid API Key");
+    Response::error("INVALID_API_KEY", msg)
 }
 
 // ---------- 中间件 ----------
@@ -260,7 +276,7 @@ pub async fn auth_middleware(
     }
 
     let Some(token) = extract_cookie(req.headers(), SESSION_COOKIE) else {
-        return unauthorized_session();
+        return unauthorized_session().await;
     };
     match session_user(&state.db, &token).await {
         Ok(Some(user)) => {
@@ -270,25 +286,29 @@ pub async fn auth_middleware(
             });
             next.run(req).await
         }
-        Ok(None) => unauthorized_session(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(Response::<()>::error(
-                crate::response::INTERNAL_ERROR,
-                format!("会话校验失败：{e}"),
-            )),
-        )
-            .into_response(),
+        Ok(None) => unauthorized_session().await,
+        Err(e) => {
+            let lang = current_lang().await;
+            let msg = if lang == Lang::En {
+                format!("session validation failed: {e}")
+            } else {
+                format!("会话校验失败：{e}")
+            };
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(Response::<()>::error(crate::response::INTERNAL_ERROR, msg)),
+            )
+                .into_response()
+        }
     }
 }
 
-fn unauthorized_session() -> AxumResponse {
+async fn unauthorized_session() -> AxumResponse {
+    let lang = current_lang().await;
+    let msg = lang.tr("未登录或登录已过期", "not logged in or session expired");
     (
         StatusCode::UNAUTHORIZED,
-        Json(Response::<()>::error(
-            crate::response::UNAUTHORIZED,
-            "未登录或登录已过期",
-        )),
+        Json(Response::<()>::error(crate::response::UNAUTHORIZED, msg)),
     )
         .into_response()
 }

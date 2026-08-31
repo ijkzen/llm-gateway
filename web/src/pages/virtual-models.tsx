@@ -13,8 +13,10 @@ import { type VirtualModel, useVirtualModels } from "@/hooks/use-virtual-models"
 import { VIRTUAL_MODELS_PAGE } from "@/lib/pages";
 import { Plus, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export default function VirtualModelsPage() {
+	const { t } = useTranslation();
 	const [creating, setCreating] = useState(false);
 	const [editing, setEditing] = useState<VirtualModel | null>(null);
 	const [deleting, setDeleting] = useState<VirtualModel | null>(null);
@@ -59,9 +61,9 @@ export default function VirtualModelsPage() {
 	if (isError || providersError || modelsError) {
 		return (
 			<div className="space-y-6">
-				<PageHeader icon={VIRTUAL_MODELS_PAGE.icon} title={VIRTUAL_MODELS_PAGE.title} />
+				<PageHeader icon={VIRTUAL_MODELS_PAGE.icon} title={t(VIRTUAL_MODELS_PAGE.titleKey)} />
 				<ErrorState
-					description="无法获取虚拟模型数据，请检查网络或稍后重试。"
+					description={t("virtualModels.errorDescription")}
 					onRetry={() => {
 						refetch();
 						refetchProviders();
@@ -76,10 +78,10 @@ export default function VirtualModelsPage() {
 
 	return (
 		<div className="flex h-full min-h-0 flex-col space-y-6 overflow-auto">
-			<PageHeader icon={VIRTUAL_MODELS_PAGE.icon} title={VIRTUAL_MODELS_PAGE.title}>
+			<PageHeader icon={VIRTUAL_MODELS_PAGE.icon} title={t(VIRTUAL_MODELS_PAGE.titleKey)}>
 				<Button variant="outline" size="sm" onClick={() => refetch()}>
 					<RefreshCw className="mr-2 size-4" />
-					刷新
+					{t("common.refresh")}
 				</Button>
 				<Button
 					size="sm"
@@ -88,14 +90,14 @@ export default function VirtualModelsPage() {
 					}}
 				>
 					<Plus className="mr-2 size-4" />
-					添加虚拟模型
+					{t("virtualModels.add")}
 				</Button>
 			</PageHeader>
 
 			{models.length === 0 ? (
 				<Card>
 					<CardContent className="p-6 text-center text-sm text-muted-foreground">
-						暂无虚拟模型，点击右上角「添加虚拟模型」创建
+						{t("virtualModels.emptyHint")}
 					</CardContent>
 				</Card>
 			) : (

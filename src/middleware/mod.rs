@@ -12,6 +12,8 @@ where
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .layer(CatchPanicLayer::custom(|_| {
-            crate::response::internal_error::<String>("服务器内部错误").into_response()
+            let msg = crate::app_settings::AppSettings::lang_sync()
+                .tr("服务器内部错误", "internal server error");
+            crate::response::internal_error::<String>(msg).into_response()
         }))
 }

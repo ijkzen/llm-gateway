@@ -1,6 +1,7 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useDeleteCronJob } from "@/hooks/use-cron-jobs";
 import { useToastActions } from "@/hooks/use-toast";
+import { useTranslation } from "react-i18next";
 
 interface CronJobDeleteDialogProps {
 	jobName: string | null;
@@ -9,6 +10,7 @@ interface CronJobDeleteDialogProps {
 }
 
 export function CronJobDeleteDialog({ jobName, open, onOpenChange }: CronJobDeleteDialogProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const deleteCronJob = useDeleteCronJob();
 
@@ -17,11 +19,11 @@ export function CronJobDeleteDialog({ jobName, open, onOpenChange }: CronJobDele
 		deleteCronJob.mutate(jobName, {
 			onSuccess: () => {
 				onOpenChange(false);
-				toastSuccess("删除成功");
+				toastSuccess(t("common.deleteSuccess"));
 			},
 			onError: (error) => {
 				onOpenChange(false);
-				toastError("删除失败", error);
+				toastError(t("common.deleteFailed"), error);
 			},
 		});
 	};
@@ -30,13 +32,14 @@ export function CronJobDeleteDialog({ jobName, open, onOpenChange }: CronJobDele
 		<ConfirmDialog
 			open={open}
 			onOpenChange={onOpenChange}
-			title="确认删除"
+			title={t("cronJobs.deleteTitle")}
 			desc={
 				<>
-					确定要删除任务 <span className="font-medium">{jobName}</span> 吗？此操作无法撤销。
+					{t("cronJobs.deleteDesc")} <span className="font-medium">{jobName}</span>{" "}
+					{t("cronJobs.deleteDescSuffix")}
 				</>
 			}
-			confirmText="删除"
+			confirmText={t("common.delete")}
 			destructive
 			isLoading={deleteCronJob.isPending}
 			handleConfirm={handleConfirm}

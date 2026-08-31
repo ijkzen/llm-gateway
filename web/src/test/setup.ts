@@ -30,13 +30,21 @@ class LocalStorageMock {
 	}
 }
 
-if (typeof window !== "undefined" && typeof window.localStorage === "undefined") {
+// 强制覆盖：Node 26 的 window.localStorage accessor 在未传
+// --localstorage-file 时返回 undefined，直接 defineProperty 替换。
+if (typeof window !== "undefined") {
 	Object.defineProperty(window, "localStorage", {
 		value: new LocalStorageMock(),
 		configurable: true,
 		writable: true,
 	});
 }
+
+// 测试环境固定使用中文：现有断言均按 zh-CN 文案编写。
+// jsdom 的 navigator.language 为 en-US，先写入语言偏好再动态加载 i18n
+//（静态 import 会被提升到顶部先执行，读到 en-US 兜底）。
+window.localStorage.setItem("llm-gateway-locale", JSON.stringify({ state: { locale: "zh-CN" } }));
+await import("@/i18n");
 
 // jsdom 未实现 ResizeObserver，Radix 弹窗类组件（Dialog/Checkbox 等）渲染时需要。
 class ResizeObserverMock {

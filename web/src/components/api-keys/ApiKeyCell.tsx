@@ -5,6 +5,7 @@ import { useToastActions } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { Copy, Eye, EyeOff, KeyRound } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface ApiKeyCellProps {
 	apiKey: ApiKey;
@@ -12,6 +13,7 @@ interface ApiKeyCellProps {
 
 /** 表格中的 Key 单元格：默认展示掩码，小眼睛按需拉取明文，支持一键复制。 */
 export function ApiKeyCell({ apiKey }: ApiKeyCellProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const queryClient = useQueryClient();
 	const [showKey, setShowKey] = useState(false);
@@ -33,9 +35,9 @@ export function ApiKeyCell({ apiKey }: ApiKeyCellProps) {
 							})
 						).key;
 			await navigator.clipboard.writeText(plain);
-			toastSuccess("已复制到剪贴板");
+			toastSuccess(t("common.copiedToClipboard"));
 		} catch (error) {
-			toastError("复制失败", error as Error);
+			toastError(t("common.copyFailed"), error as Error);
 		}
 	};
 
@@ -54,7 +56,7 @@ export function ApiKeyCell({ apiKey }: ApiKeyCellProps) {
 				variant="ghost"
 				size="icon"
 				className="size-7 shrink-0"
-				aria-label={effectiveShowKey ? "隐藏 API Key" : "显示 API Key"}
+				aria-label={effectiveShowKey ? t("apiKeys.hideKey") : t("apiKeys.showKey")}
 				onClick={() => setShowKey((v) => !v)}
 			>
 				{effectiveShowKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
@@ -64,7 +66,7 @@ export function ApiKeyCell({ apiKey }: ApiKeyCellProps) {
 				variant="ghost"
 				size="icon"
 				className="size-7 shrink-0"
-				aria-label="复制 API Key"
+				aria-label={t("apiKeys.copyKey")}
 				onClick={handleCopy}
 			>
 				<Copy className="size-4" />

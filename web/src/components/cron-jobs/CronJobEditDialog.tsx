@@ -18,18 +18,21 @@ import { Input } from "@/components/ui/input";
 import { type CronJob, useUpdateCronJob } from "@/hooks/use-cron-jobs";
 import { useToastActions } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-const cronJobFormSchema = z.object({
-	title: z.string().min(1, "标题不能为空"),
-	description: z.string(),
-	expression: z.string().min(1, "Cron 表达式不能为空"),
-	group: z.string(),
-});
+function makeSchema(t: (key: string) => string) {
+	return z.object({
+		title: z.string().min(1, t("cronJobs.emptyTitle")),
+		description: z.string(),
+		expression: z.string().min(1, t("cronJobs.emptyCronExpression")),
+		group: z.string(),
+	});
+}
 
-type CronJobFormValues = z.infer<typeof cronJobFormSchema>;
+type CronJobFormValues = z.infer<ReturnType<typeof makeSchema>>;
 
 interface CronJobEditDialogProps {
 	job: CronJob | null;
@@ -38,8 +41,10 @@ interface CronJobEditDialogProps {
 }
 
 export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialogProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const updateCronJob = useUpdateCronJob();
+	const cronJobFormSchema = useMemo(() => makeSchema(t), [t]);
 
 	const form = useForm<CronJobFormValues>({
 		resolver: zodResolver(cronJobFormSchema),
@@ -75,10 +80,10 @@ export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialog
 			{
 				onSuccess: () => {
 					onOpenChange(false);
-					toastSuccess("更新成功");
+					toastSuccess(t("common.updateSuccess"));
 				},
 				onError: (error) => {
-					toastError("更新失败", error);
+					toastError(t("common.updateFailed"), error);
 				},
 			},
 		);
@@ -88,7 +93,7 @@ export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialog
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="sm:max-w-[500px]">
 				<DialogHeader className="space-y-3">
-					<DialogTitle>编辑任务</DialogTitle>
+					<DialogTitle>{t("cronJobs.editTitle")}</DialogTitle>
 				</DialogHeader>
 				<Form {...form}>
 					<form onSubmit={form.handleSubmit(onSubmit)}>
@@ -98,7 +103,7 @@ export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialog
 								name="title"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>标题</FormLabel>
+										<FormLabel>{t("cronJobs.titleLabel")}</FormLabel>
 										<FormControl>
 											<Input {...field} />
 										</FormControl>
@@ -111,7 +116,7 @@ export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialog
 								name="group"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>分组</FormLabel>
+										<FormLabel>{t("cronJobs.group")}</FormLabel>
 										<FormControl>
 											<Input {...field} />
 										</FormControl>
@@ -124,7 +129,7 @@ export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialog
 								name="description"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>描述</FormLabel>
+										<FormLabel>{t("cronJobs.description")}</FormLabel>
 										<FormControl>
 											<Input {...field} />
 										</FormControl>
@@ -137,7 +142,7 @@ export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialog
 								name="expression"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>Cron 表达式</FormLabel>
+										<FormLabel>{t("cronJobs.cronExpression")}</FormLabel>
 										<FormControl>
 											<Input {...field} />
 										</FormControl>
@@ -148,10 +153,10 @@ export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialog
 						</div>
 						<DialogFooter className="gap-2">
 							<Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-								取消
+								{t("common.cancel")}
 							</Button>
 							<Button type="submit" disabled={updateCronJob.isPending}>
-								保存
+								{t("common.save")}
 							</Button>
 						</DialogFooter>
 					</form>

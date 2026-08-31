@@ -34,22 +34,38 @@ import { useToastActions } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { RefreshCw, Sparkles } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 const CAPABILITY_KEYS = ["reasoning", "toolUse", "imageUnderstand", "videoUnderstand"] as const;
 
-const manualFormSchema = z.object({
-	providerModelId: z.string().min(1, "模型 ID 不能为空"),
-	contextLength: z.coerce.number().int("必须为整数").positive("必须为正整数"),
-	maxOutputTokens: z.coerce.number().int("必须为整数").positive("必须为正整数"),
-	reasoning: z.boolean(),
-	toolUse: z.boolean(),
-	imageUnderstand: z.boolean(),
-	videoUnderstand: z.boolean(),
-});
+const CAPABILITY_LABEL_KEYS: Record<(typeof CAPABILITY_KEYS)[number], string> = {
+	reasoning: "providerModels.reasoning",
+	toolUse: "providerModels.toolUse",
+	imageUnderstand: "providerModels.imageUnderstand",
+	videoUnderstand: "providerModels.videoUnderstand",
+};
 
-type ManualFormValues = z.infer<typeof manualFormSchema>;
+function makeManualFormSchema(t: (key: string) => string) {
+	return z.object({
+		providerModelId: z.string().min(1, t("providerModels.modelIdRequired")),
+		contextLength: z.coerce
+			.number()
+			.int(t("providerModels.mustBeInt"))
+			.positive(t("providerModels.mustBePositive")),
+		maxOutputTokens: z.coerce
+			.number()
+			.int(t("providerModels.mustBeInt"))
+			.positive(t("providerModels.mustBePositive")),
+		reasoning: z.boolean(),
+		toolUse: z.boolean(),
+		imageUnderstand: z.boolean(),
+		videoUnderstand: z.boolean(),
+	});
+}
+
+type ManualFormValues = z.infer<ReturnType<typeof makeManualFormSchema>>;
 
 interface NumberEdits {
 	contextLength: string;
@@ -65,21 +81,26 @@ function parsePositiveInt(value: string): number | null {
 }
 
 function MatchStateLabel({ state }: { state: MatchState }) {
+	const { t } = useTranslation();
 	if (state === "smart") {
 		return (
 			<span className="shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-				已智能填充
+				{t("providerModels.smartFilled")}
 			</span>
 		);
 	}
 	if (state === "partial") {
 		return (
 			<span className="shrink-0 text-xs font-medium text-amber-600 dark:text-amber-400">
-				信息不完整
+				{t("providerModels.partialInfo")}
 			</span>
 		);
 	}
-	return <span className="shrink-0 text-xs font-medium text-muted-foreground">需手动填写</span>;
+	return (
+		<span className="shrink-0 text-xs font-medium text-muted-foreground">
+			{t("providerModels.needManual")}
+		</span>
+	);
 }
 
 interface AddProviderModelsDialogProps {
@@ -94,11 +115,13 @@ export function AddProviderModelsDialog({
 	onOpenChange,
 	provider,
 }: AddProviderModelsDialogProps) {
+	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const providerId = provider?.id ?? 0;
 	const refresh = useRefreshProviderModels(providerId);
 	const batchCreate = useBatchCreateProviderModels(providerId);
 	const createModel = useCreateProviderModel(providerId);
+	const manualFormSchema = useMemo(() => makeManualFormSchema(t), [t]);
 
 	const [candidates, setCandidates] = useState<RefreshCandidate[] | null>(null);
 	const [numberEdits, setNumberEdits] = useState<Record<string, NumberEdits>>({});
@@ -189,7 +212,7 @@ export function AddProviderModelsDialog({
 				// 全部不预选，由用户自行勾选。
 				setSelected(new Set());
 			},
-			onError: (error) => toastError("刷新失败", error),
+			onError: (error) => toastError(t("providerModels.refreshFailed"), error),
 		});
 	};
 
@@ -226,7 +249,7 @@ export function AddProviderModelsDialog({
 				videoUnderstand: candidate.videoUnderstand,
 			}));
 		if (list.some((item) => item.contextLength <= 0 || item.maxOutputTokens <= 0)) {
-			toastError("添加失败", new Error("存在未填写完整的模型，请补齐数字字段"));
+			toastError(t("common.addFailed"), new Error(t("providerModels.batchIncomplete")));
 			return;
 		}
 		batchCreate.mutate(
@@ -234,9 +257,9 @@ export function AddProviderModelsDialog({
 			{
 				onSuccess: (created) => {
 					onOpenChange(false);
-					toastSuccess(`已添加 ${created.length} 个模型`);
+					toastSuccess(t("providerModels.addedCount", { count: created.length }));
 				},
-				onError: (error) => toastError("添加失败", error),
+				onError: (error) => toastError(t("common.addFailed"), error),
 			},
 		);
 	};
@@ -266,7 +289,7 @@ export function AddProviderModelsDialog({
 			{ ...values, providerModelId: values.providerModelId.trim() },
 			{
 				onSuccess: () => {
-					toastSuccess("添加成功");
+					toastSuccess(t("common.addSuccess"));
 					form.reset({
 						providerModelId: "",
 						contextLength: 0,
@@ -280,7 +303,7 @@ export function AddProviderModelsDialog({
 					setModelSearchDebounced("");
 					setAppliedModelId(null);
 				},
-				onError: (error) => toastError("添加失败", error),
+				onError: (error) => toastError(t("common.addFailed"), error),
 			},
 		);
 	};
@@ -293,9 +316,9 @@ export function AddProviderModelsDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[760px]">
 				<DialogHeader className="space-y-3">
-					<DialogTitle>添加供应商模型</DialogTitle>
+					<DialogTitle>{t("providerModels.addTitle")}</DialogTitle>
 					<DialogDescription>
-						从 {provider.name} 拉取远端模型列表并智能填充；供应商未提供 Models 接口时可手动添加。
+						{t("providerModels.addDesc", { provider: provider.name })}
 					</DialogDescription>
 				</DialogHeader>
 
@@ -308,18 +331,18 @@ export function AddProviderModelsDialog({
 						disabled={refresh.isPending}
 					>
 						<RefreshCw className={refresh.isPending ? "mr-2 size-4 animate-spin" : "mr-2 size-4"} />
-						尝试刷新
+						{t("providerModels.tryRefresh")}
 					</Button>
-					<span className="text-xs text-muted-foreground">拉取远端列表，按模型目录自动补全</span>
+					<span className="text-xs text-muted-foreground">{t("providerModels.refreshHint")}</span>
 				</div>
 
 				{candidates === null ? (
 					<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-						尚未刷新，点击「尝试刷新」获取远端模型列表
+						{t("providerModels.notRefreshed")}
 					</div>
 				) : candidates.length === 0 ? (
 					<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-						远端未返回模型，或全部模型已导入；可使用下方手动添加
+						{t("providerModels.refreshEmpty")}
 					</div>
 				) : (
 					<div className="space-y-3">
@@ -356,7 +379,7 @@ export function AddProviderModelsDialog({
 												checked={selected.has(candidate.providerModelId)}
 												disabled={!selectable}
 												onCheckedChange={(checked) => toggleSelect(candidate, checked === true)}
-												aria-label={`选择 ${candidate.providerModelId}`}
+												aria-label={`${t("providerModels.selectModel")} ${candidate.providerModelId}`}
 											/>
 											<span
 												className="min-w-0 flex-1 truncate font-mono text-sm"
@@ -368,13 +391,15 @@ export function AddProviderModelsDialog({
 										</div>
 										<div className="mt-2.5 grid grid-cols-2 gap-2">
 											<div className="space-y-1">
-												<Label className="text-xs text-muted-foreground">上下文长度</Label>
+												<Label className="text-xs text-muted-foreground">
+													{t("providerModels.contextLength")}
+												</Label>
 												<Input
 													type="number"
 													min={1}
 													className="h-8"
 													value={edits.contextLength}
-													placeholder="必填"
+													placeholder={t("providerModels.required")}
 													onChange={(e) =>
 														setNumberEdits((prev) => ({
 															...prev,
@@ -387,13 +412,15 @@ export function AddProviderModelsDialog({
 												/>
 											</div>
 											<div className="space-y-1">
-												<Label className="text-xs text-muted-foreground">最大输出</Label>
+												<Label className="text-xs text-muted-foreground">
+													{t("providerModels.maxOutput")}
+												</Label>
 												<Input
 													type="number"
 													min={1}
 													className="h-8"
 													value={edits.maxOutputTokens}
-													placeholder="必填"
+													placeholder={t("providerModels.required")}
 													onChange={(e) =>
 														setNumberEdits((prev) => ({
 															...prev,
@@ -412,7 +439,10 @@ export function AddProviderModelsDialog({
 						</div>
 						<div className="flex items-center justify-between gap-4">
 							<span className="text-xs text-muted-foreground">
-								已选 {selectedCount} / 共 {candidates.length} 个
+								{t("providerModels.selectedOfTotal", {
+									selected: selectedCount,
+									total: candidates.length,
+								})}
 							</span>
 							<Button
 								type="button"
@@ -420,7 +450,7 @@ export function AddProviderModelsDialog({
 								onClick={handleBatchAdd}
 								disabled={selectedCount === 0 || batchCreate.isPending}
 							>
-								添加
+								{t("providerModels.addSelected")}
 							</Button>
 						</div>
 					</div>
@@ -436,16 +466,16 @@ export function AddProviderModelsDialog({
 						onSubmit={form.handleSubmit(handleManualAdd)}
 						className="space-y-4"
 					>
-						<h3 className="text-sm font-semibold">手动添加</h3>
+						<h3 className="text-sm font-semibold">{t("providerModels.manualAdd")}</h3>
 						<FormField
 							control={form.control}
 							name="providerModelId"
 							render={({ field }) => (
 								<FormItem className="relative">
-									<FormLabel required>模型 ID</FormLabel>
+									<FormLabel required>{t("providerModels.modelId")}</FormLabel>
 									<FormControl>
 										<Input
-											placeholder="如 gpt-4o"
+											placeholder={t("providerModels.modelIdPlaceholder")}
 											{...field}
 											value={modelSearchQuery}
 											onChange={(e) => {
@@ -488,9 +518,14 @@ export function AddProviderModelsDialog({
 								name="contextLength"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel required>上下文长度</FormLabel>
+										<FormLabel required>{t("providerModels.contextLength")}</FormLabel>
 										<FormControl>
-											<Input type="number" min={1} placeholder="如 128000" {...field} />
+											<Input
+												type="number"
+												min={1}
+												placeholder={t("providerModels.contextPlaceholder")}
+												{...field}
+											/>
 										</FormControl>
 										<FormMessage />
 									</FormItem>
@@ -501,9 +536,14 @@ export function AddProviderModelsDialog({
 								name="maxOutputTokens"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel required>最大输出</FormLabel>
+										<FormLabel required>{t("providerModels.maxOutput")}</FormLabel>
 										<FormControl>
-											<Input type="number" min={1} placeholder="如 4096" {...field} />
+											<Input
+												type="number"
+												min={1}
+												placeholder={t("providerModels.maxOutputPlaceholder")}
+												{...field}
+											/>
 										</FormControl>
 										<FormMessage />
 									</FormItem>
@@ -518,16 +558,7 @@ export function AddProviderModelsDialog({
 									name={key}
 									render={({ field }) => (
 										<FormItem className="flex items-center justify-between rounded-lg border p-3">
-											<FormLabel>
-												{
-													{
-														reasoning: "推理",
-														toolUse: "工具调用",
-														imageUnderstand: "图像理解",
-														videoUnderstand: "视频理解",
-													}[key]
-												}
-											</FormLabel>
+											<FormLabel>{t(CAPABILITY_LABEL_KEYS[key])}</FormLabel>
 											<FormControl>
 												<Switch checked={field.value} onCheckedChange={field.onChange} />
 											</FormControl>
@@ -538,7 +569,7 @@ export function AddProviderModelsDialog({
 						</div>
 						<div className="flex justify-end">
 							<Button type="submit" size="sm" disabled={createModel.isPending}>
-								手动添加
+								{t("providerModels.manualAddButton")}
 							</Button>
 						</div>
 					</form>

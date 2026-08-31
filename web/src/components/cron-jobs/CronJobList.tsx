@@ -4,6 +4,7 @@ import type { CronJob } from "@/hooks/use-cron-jobs";
 import { DEFAULT_GROUP } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 interface CronJobListProps {
 	jobs: CronJob[] | undefined;
@@ -12,6 +13,7 @@ interface CronJobListProps {
 }
 
 export function CronJobList({ jobs, selectedName, onSelect }: CronJobListProps) {
+	const { t } = useTranslation();
 	const groupedJobs = useMemo(() => {
 		const map = new Map<string, CronJob[]>();
 		for (const job of jobs ?? []) {
@@ -26,7 +28,9 @@ export function CronJobList({ jobs, selectedName, onSelect }: CronJobListProps) 
 	if (!jobs || jobs.length === 0) {
 		return (
 			<Card>
-				<CardContent className="p-8 text-center text-muted-foreground">暂无定时任务</CardContent>
+				<CardContent className="p-8 text-center text-muted-foreground">
+					{t("cronJobs.noJobs")}
+				</CardContent>
 			</Card>
 		);
 	}

@@ -5,11 +5,12 @@ use sea_orm::DatabaseConnection;
 use tokio::sync::{Semaphore, broadcast, mpsc};
 use tracing::Instrument;
 
+use crate::app_settings::AppSettings;
 use crate::cron::log_capture::JobLogEvent;
 use crate::cron::log_repository::{
     CronJobLogRepository, MAX_RUNS_KEPT, SeaOrmCronJobLogRepository,
 };
-use crate::cron::parser::compute_next_run_from_scheduled_at;
+use crate::cron::parser::compute_next_run_from_scheduled_at_tz;
 use crate::cron::repository::{CronJobRepository, SeaOrmCronJobRepository};
 use crate::cron::{JobContext, JobHandler};
 
@@ -22,6 +23,7 @@ pub struct JobWorker {
     max_concurrent: usize,
     queue_size: usize,
     log_tx: broadcast::Sender<JobLogEvent>,
+    settings: AppSettings,
 }
 
 /// Handle returned by [`JobWorker::start`].
@@ -76,11 +78,29 @@ impl JobWorker {
         queue_size: usize,
         log_tx: broadcast::Sender<JobLogEvent>,
     ) -> Self {
+        Self::new_with_settings(
+            db,
+            max_concurrent,
+            queue_size,
+            log_tx,
+            AppSettings::default(),
+        )
+    }
+
+    /// 与 [`JobWorker::new`] 相同，但指定语言/时区设置缓存。
+    pub fn new_with_settings(
+        db: DatabaseConnection,
+        max_concurrent: usize,
+        queue_size: usize,
+        log_tx: broadcast::Sender<JobLogEvent>,
+        settings: AppSettings,
+    ) -> Self {
         Self {
             db,
             max_concurrent,
             queue_size,
             log_tx,
+            settings,
         }
     }
 
@@ -94,6 +114,7 @@ impl JobWorker {
         let semaphore = Arc::new(Semaphore::new(self.max_concurrent));
         let db = self.db.clone();
         let log_tx = self.log_tx.clone();
+        let settings = self.settings.clone();
 
         let join_handle = tokio::spawn({
             let semaphore = semaphore.clone();
@@ -108,15 +129,20 @@ impl JobWorker {
                     };
                     let db = db.clone();
                     let log_tx = log_tx.clone();
+                    let settings = settings.clone();
 
                     tokio::spawn(async move {
                         let name = invocation.name.clone();
-                        let ctx = JobContext { db: db.clone() };
+                        let ctx = JobContext {
+                            db: db.clone(),
+                            settings: settings.clone(),
+                        };
                         let handler = invocation.handler.clone();
 
                         execute_with_logging(
                             db.clone(),
                             log_tx,
+                            settings,
                             name,
                             invocation.expression.clone(),
                             invocation.scheduled_at,
@@ -141,9 +167,11 @@ impl JobWorker {
 }
 
 /// 执行一次任务：记录 run 生命周期、捕获 handler 日志落库、结束时清理旧执行。
+#[allow(clippy::too_many_arguments)]
 async fn execute_with_logging(
     db: DatabaseConnection,
     log_tx: broadcast::Sender<JobLogEvent>,
+    settings: AppSettings,
     name: String,
     expression: String,
     scheduled_at: chrono::DateTime<chrono::Utc>,
@@ -270,13 +298,14 @@ async fn execute_with_logging(
 
     let repo = SeaOrmCronJobRepository::new(db);
     let now = Utc::now();
-    let next = compute_next_run_from_scheduled_at(&expression, scheduled_at).unwrap_or(now);
+    let tz = settings.timezone().await;
+    let next = compute_next_run_from_scheduled_at_tz(&expression, scheduled_at, tz).unwrap_or(now);
     // If the job overran its interval (or waited in the
     // queue), the time computed from scheduled_at is
     // already in the past; recompute from now so the
     // displayed next run always lies in the future.
     let next = if next <= now {
-        compute_next_run_from_scheduled_at(&expression, now).unwrap_or(next)
+        compute_next_run_from_scheduled_at_tz(&expression, now, tz).unwrap_or(next)
     } else {
         next
     };
@@ -356,7 +385,7 @@ mod tests {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db.clone());
         let job = sample_job("worker_test");
-        repo.insert(&job).await.unwrap();
+        repo.insert(&job, None).await.unwrap();
 
         let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
         let handle = worker.start();
@@ -394,7 +423,7 @@ mod tests {
         let repo = SeaOrmCronJobRepository::new(db.clone());
         let mut job = sample_job("every_test");
         job.expression = "@every 5m".to_string();
-        repo.insert(&job).await.unwrap();
+        repo.insert(&job, None).await.unwrap();
 
         let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
         let handle = worker.start();
@@ -427,7 +456,7 @@ mod tests {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db.clone());
         let job = sample_job("failing_handler_test");
-        repo.insert(&job).await.unwrap();
+        repo.insert(&job, None).await.unwrap();
 
         let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
         let handle = worker.start();
@@ -460,7 +489,7 @@ mod tests {
         let db = setup_db().await;
         let repo = SeaOrmCronJobRepository::new(db.clone());
         let job = sample_job("panicking_handler_test");
-        repo.insert(&job).await.unwrap();
+        repo.insert(&job, None).await.unwrap();
 
         let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
         let handle = worker.start();
@@ -494,7 +523,7 @@ mod tests {
         let repo = SeaOrmCronJobRepository::new(db.clone());
         let mut job = sample_job("overrun_test");
         job.expression = "@every 1s".to_string();
-        repo.insert(&job).await.unwrap();
+        repo.insert(&job, None).await.unwrap();
 
         let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
         let handle = worker.start();
