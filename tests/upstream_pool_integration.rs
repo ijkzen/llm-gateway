@@ -132,3 +132,134 @@ async fn discards_closed_connection() {
         "Connection: close 的连接不应复用，需新建"
     );
 }
+
+// ─── 网络代理（HTTP CONNECT）端到端测试 ───────────────────────────────────────
+// mock 一个「代理服务器」：收到 `CONNECT host:port` 后，主动连目标 mock 上游，
+// 双向桥接字节流，返回 `HTTP/1.1 200 Connection established`。验证
+// `call(proxy=Some(addr))` 经 CONNECT 隧道转发成功，且连接池按代理地址隔离。
+
+/// CONNECT 代理服务器：解析 CONNECT 行 → 连目标 → 桥接 → 回 200。
+/// 返回 (代理地址, CONNECT 请求计数)。
+async fn spawn_connect_proxy() -> (String, Arc<AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let connect_count = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&connect_count);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind proxy");
+    let addr = listener.local_addr().expect("local addr");
+    tokio::spawn(async move {
+        loop {
+            let (mut client, _) = match listener.accept().await {
+                Ok(accepted) => accepted,
+                Err(_) => break,
+            };
+            count.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                // 读 CONNECT 请求头（到 \r\n\r\n）。
+                let mut buf = [0u8; 4096];
+                let mut len = 0usize;
+                loop {
+                    let Ok(n) = client.read(&mut buf[len..]).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    len += n;
+                    if buf[..len].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let head = String::from_utf8_lossy(&buf[..len]);
+                // 解析 CONNECT 目标（host:port）。
+                let Some(first_line) = head.lines().next() else {
+                    return;
+                };
+                let Some(rest) = first_line.strip_prefix("CONNECT ") else {
+                    return;
+                };
+                let Some(target) = rest.split_whitespace().next() else {
+                    return;
+                };
+                // 连目标 mock 上游。
+                let Ok(mut target_stream) = tokio::net::TcpStream::connect(target).await else {
+                    return;
+                };
+                // 回 200。
+                let _ = client
+                    .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                    .await;
+                // 双向桥接。
+                let (mut cr, mut cw) = client.split();
+                let (mut tr, mut tw) = target_stream.split();
+                let c2t = tokio::io::copy(&mut cr, &mut tw);
+                let t2c = tokio::io::copy(&mut tr, &mut cw);
+                let _ = tokio::join!(c2t, t2c);
+            });
+        }
+    });
+    (format!("http://{addr}"), connect_count)
+}
+
+/// 经 HTTP CONNECT 代理转发：上游 http:// 目标（隧道内无 TLS）。
+#[tokio::test]
+async fn forwards_via_connect_proxy() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let upstream = spawn_mock(Arc::clone(&connections), false).await;
+    let (proxy, connect_count) = spawn_connect_proxy().await;
+    let pool = UpstreamPool::new(Duration::from_secs(600));
+
+    let request = UpstreamCall {
+        url: upstream.clone(),
+        headers: vec![],
+        body: Bytes::from_static(b"{}"),
+        stream: false,
+    };
+    let reply = call(request, &pool, Some(proxy.as_str()))
+        .await
+        .expect("proxy call ok");
+    assert_eq!(reply.status, StatusCode::OK);
+    let body = read_body(reply.body).await.expect("read body");
+    assert_eq!(String::from_utf8_lossy(&body), "{\"ok\":true}");
+    assert_eq!(
+        connect_count.load(Ordering::SeqCst),
+        1,
+        "应经代理 CONNECT 一次"
+    );
+}
+
+/// 连接池按代理地址隔离：直连与代理不混池。
+#[tokio::test]
+async fn proxy_and_direct_pools_are_isolated() {
+    let connections = Arc::new(AtomicUsize::new(0));
+    let upstream = spawn_mock(Arc::clone(&connections), false).await;
+    let (proxy, _) = spawn_connect_proxy().await;
+    let pool = UpstreamPool::new(Duration::from_secs(600));
+
+    // 直连一次 + 代理一次（不同 key），各自建连。
+    let direct_req = UpstreamCall {
+        url: upstream.clone(),
+        headers: vec![],
+        body: Bytes::from_static(b"{}"),
+        stream: false,
+    };
+    let reply = call(direct_req, &pool, None).await.expect("direct ok");
+    assert_eq!(reply.status, StatusCode::OK);
+    read_body(reply.body).await.expect("read body");
+
+    let proxy_req = UpstreamCall {
+        url: upstream.clone(),
+        headers: vec![],
+        body: Bytes::from_static(b"{}"),
+        stream: false,
+    };
+    let reply = call(proxy_req, &pool, Some(proxy.as_str()))
+        .await
+        .expect("proxy ok");
+    assert_eq!(reply.status, StatusCode::OK);
+    read_body(reply.body).await.expect("read body");
+
+    // 上游收到 2 个连接（直连 1 + 代理隧道 1），不混池。
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+}

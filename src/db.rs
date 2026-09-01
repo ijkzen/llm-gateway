@@ -325,29 +325,22 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     // Migration 13: provider 网络代理字段（proxy_enabled + proxy_addr）。
     // 供应商可单独开启 HTTP 代理转发；新库已由第一遍 create_table_from_entity
     // 建表并带这两列，此处兜底历史库。
-    // 注意：两列**分别**检测——历史库可能只有其中一列（早期版本只加了
-    // proxy_enabled），不能因一列存在就跳过另一列。
-    let proxy_enabled_exists = column_exists(db, "provider", "proxy_enabled").await?;
-    if proxy_enabled_exists {
-        changed |= ensure_migration(db, 13, &["SELECT 1"]).await?;
-    } else {
-        changed |= ensure_migration(
-            db,
-            13,
-            &["ALTER TABLE provider ADD COLUMN proxy_enabled boolean NOT NULL DEFAULT '0'"],
-        )
-        .await?;
+    // 注意：所有缺失列的 ALTER 必须合并进**单次** ensure_migration 调用——
+    // 该函数按版本号去重（同版本第二次调用直接跳过），若分开调用，
+    // 第一个调用写入 version 13 后，第二个会被版本守卫吞掉导致列漏加。
+    let mut migration_13_statements: Vec<&str> = Vec::new();
+    if !column_exists(db, "provider", "proxy_enabled").await? {
+        migration_13_statements
+            .push("ALTER TABLE provider ADD COLUMN proxy_enabled boolean NOT NULL DEFAULT '0'");
     }
-    let proxy_addr_exists = column_exists(db, "provider", "proxy_addr").await?;
-    if proxy_addr_exists {
+    if !column_exists(db, "provider", "proxy_addr").await? {
+        migration_13_statements
+            .push("ALTER TABLE provider ADD COLUMN proxy_addr varchar NOT NULL DEFAULT ''");
+    }
+    if migration_13_statements.is_empty() {
         changed |= ensure_migration(db, 13, &["SELECT 1"]).await?;
     } else {
-        changed |= ensure_migration(
-            db,
-            13,
-            &["ALTER TABLE provider ADD COLUMN proxy_addr varchar NOT NULL DEFAULT ''"],
-        )
-        .await?;
+        changed |= ensure_migration(db, 13, &migration_13_statements).await?;
     }
 
     tracing::info!("Database tables migrated");
@@ -417,6 +410,7 @@ async fn ensure_migration(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sea_orm::ConnectionTrait;
 
     #[test]
     fn test_sqlite_url_path_relative() {
@@ -455,5 +449,63 @@ mod tests {
         // parent must be created at the absolute location.
         ensure_sqlite_dir(&url).await.unwrap();
         assert!(db_path.parent().unwrap().exists());
+    }
+
+    /// 历史库迁移：provider 表只有 proxy_enabled（缺 proxy_addr），且
+    /// schema_migrations 已记录 version 13——migrate() 必须仍补齐 proxy_addr。
+    /// 回归：Migration 13 曾分两次 ensure_migration(13, ...) 调用，第二次被
+    /// 版本守卫跳过导致 proxy_addr 漏加（合并为单次调用后修复）。
+    #[tokio::test]
+    async fn migration_13_backfills_missing_proxy_addr_on_legacy_db() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        // 先完整 migrate 建出全表 + 全部版本记录。
+        migrate(&db).await.unwrap();
+        // 模拟历史库：删掉 proxy_addr 列 + 移除 version 13 记录（该版本曾执行过）。
+        db.execute_unprepared("ALTER TABLE provider DROP COLUMN proxy_addr")
+            .await
+            .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 13")
+            .await
+            .unwrap();
+
+        // migrate() 必须补齐 proxy_addr。
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+
+        // 断言两列都在。
+        assert!(
+            column_exists(&db, "provider", "proxy_enabled")
+                .await
+                .unwrap()
+        );
+        assert!(column_exists(&db, "provider", "proxy_addr").await.unwrap());
+    }
+
+    /// 历史库迁移：provider 表两列都缺（旧版无任何代理字段）——migrate() 必须补齐两列。
+    #[tokio::test]
+    async fn migration_13_backfills_both_columns_on_very_old_db() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        migrate(&db).await.unwrap();
+        // 模拟更老的库：两列都删掉 + 移除 version 13 记录。
+        db.execute_unprepared("ALTER TABLE provider DROP COLUMN proxy_addr")
+            .await
+            .unwrap();
+        db.execute_unprepared("ALTER TABLE provider DROP COLUMN proxy_enabled")
+            .await
+            .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 13")
+            .await
+            .unwrap();
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed);
+        assert!(
+            column_exists(&db, "provider", "proxy_enabled")
+                .await
+                .unwrap()
+        );
+        assert!(column_exists(&db, "provider", "proxy_addr").await.unwrap());
     }
 }

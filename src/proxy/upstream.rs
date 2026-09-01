@@ -248,6 +248,12 @@ async fn connect_via_proxy(
     let proxy_url = proxy_addr.trim().strip_prefix("http://").ok_or_else(|| {
         UpstreamError::Connect(format!("代理地址需以 http:// 开头（{proxy_addr}）"))
     })?;
+    // 防御：带认证（user:pass@）的地址直接拒绝（无认证代理限制）。
+    if proxy_url.contains('@') {
+        return Err(UpstreamError::Connect(format!(
+            "暂不支持带认证的代理地址（{proxy_addr}）"
+        )));
+    }
     let (proxy_host, proxy_port) = match proxy_url.rsplit_once(':') {
         Some((h, p)) => {
             let p: u16 = p
