@@ -14,12 +14,13 @@ function makeSetting(key: string, overrides: Partial<Setting> = {}): Setting {
 	};
 }
 
-function renderTable(settings: Setting[] | undefined, onEdit = vi.fn()) {
+function renderTable(settings: Setting[] | undefined, onEdit = vi.fn(), onDelete = vi.fn()) {
 	return {
 		onEdit,
+		onDelete,
 		...render(
 			<TooltipProvider>
-				<SettingsTable settings={settings} onEdit={onEdit} />
+				<SettingsTable settings={settings} onEdit={onEdit} onDelete={onDelete} />
 			</TooltipProvider>,
 		),
 	};
@@ -97,5 +98,15 @@ describe("SettingsTable", () => {
 		fireEvent.click(screen.getByRole("menuitem", { name: "编辑" }));
 
 		expect(onEdit).toHaveBeenCalledWith(setting);
+	});
+
+	it("calls onDelete from the row action menu", () => {
+		const setting = makeSetting("a");
+		const { onDelete } = renderTable([setting]);
+
+		fireEvent.keyDown(screen.getByRole("button", { name: "操作 a" }), { key: "ArrowDown" });
+		fireEvent.click(screen.getByRole("menuitem", { name: "删除" }));
+
+		expect(onDelete).toHaveBeenCalledWith(setting);
 	});
 });

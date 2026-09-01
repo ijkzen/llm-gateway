@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { SearchInput } from "@/components/search-input";
 import { ChangePasswordDialog } from "@/components/settings/ChangePasswordDialog";
+import { SettingDeleteDialog } from "@/components/settings/SettingDeleteDialog";
 import { SettingEditDialog } from "@/components/settings/SettingEditDialog";
 import { SettingsTable } from "@/components/settings/SettingsTable";
 import { TableSkeleton } from "@/components/table-skeleton";
@@ -25,6 +26,7 @@ import { useTranslation } from "react-i18next";
 export default function SettingsPage() {
 	const { t } = useTranslation();
 	const [editingSetting, setEditingSetting] = useState<Setting | null>(null);
+	const [deletingSetting, setDeletingSetting] = useState<Setting | null>(null);
 	const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [typeFilter, setTypeFilter] = useState("all");
@@ -93,12 +95,22 @@ export default function SettingsPage() {
 				</Select>
 			</DataTableToolbar>
 
-			<SettingsTable settings={filteredSettings} onEdit={setEditingSetting} />
+			<SettingsTable
+				settings={filteredSettings}
+				onEdit={setEditingSetting}
+				onDelete={setDeletingSetting}
+			/>
 
 			<SettingEditDialog
 				setting={editingSetting}
 				open={!!editingSetting}
 				onOpenChange={(open) => !open && setEditingSetting(null)}
+			/>
+
+			<SettingDeleteDialog
+				setting={deletingSetting}
+				open={!!deletingSetting}
+				onOpenChange={(open) => !open && setDeletingSetting(null)}
 			/>
 
 			<ChangePasswordDialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen} />

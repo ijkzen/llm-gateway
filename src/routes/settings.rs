@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, put},
+    routing::{delete, get, put},
 };
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
@@ -18,6 +18,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_settings))
         .route("/{key}", put(update_setting))
+        .route("/{key}", delete(delete_setting))
 }
 
 #[derive(Serialize)]
@@ -180,6 +181,40 @@ async fn update_setting(
             }
         }
         Ok(None) => {
+            let msg = if lang == Lang::En {
+                format!("setting '{key}' does not exist")
+            } else {
+                format!("设置 '{key}' 不存在")
+            };
+            response::not_found(msg)
+        }
+        Err(e) => response::db_error(e.to_string()),
+    }
+}
+
+/// DELETE /api/settings/{key}：删除自定义设置项。
+///
+/// `language` / `timezone` 是进程内设置缓存（AppSettings）的核心键，删除后
+/// 重启会被种子行幂等重建，且删除期间缓存与库不一致（如时区变化不触发 cron
+/// 重建），故禁止删除这两个系统内置键，返回 400。
+async fn delete_setting(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
+    if key == KEY_LANGUAGE || key == KEY_TIMEZONE {
+        return response::bad_request(lang.tr(
+            "language 与 timezone 为系统内置设置，不可删除",
+            "language and timezone are built-in settings and cannot be deleted",
+        ));
+    }
+
+    match setting::Entity::delete_by_id(&key).exec(&state.db).await {
+        Ok(result) if result.rows_affected > 0 => {
+            tracing::info!(key, "删除设置",);
+            (StatusCode::OK, Json(Response::success(())))
+        }
+        Ok(_) => {
             let msg = if lang == Lang::En {
                 format!("setting '{key}' does not exist")
             } else {

@@ -35,3 +35,14 @@ export function useUpdateSetting() {
 		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsKeys.all }),
 	});
 }
+
+export function useDeleteSetting() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (key: string) => {
+			const res = await api.delete(`settings/${key}`).json<ApiResponse<unknown>>();
+			return unwrap(res);
+		},
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsKeys.all }),
+	});
+}

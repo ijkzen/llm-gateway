@@ -230,3 +230,99 @@ async fn test_update_setting_string_accepts_anything() {
     let response = put_setting(app, "site_name", "任意字符串 123").await;
     assert_eq!(response.status(), 200);
 }
+
+async fn delete_setting(app: axum::Router, key: &str) -> axum::response::Response {
+    let request: Request<Body> = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/settings/{key}"))
+        .body(Body::empty())
+        .unwrap();
+    app.oneshot(request).await.unwrap()
+}
+
+#[tokio::test]
+async fn test_delete_setting_removes_row_and_persists() {
+    let (app, db) = setup_app_with_setting().await;
+    insert_setting(&db, "max_retries", "3", 2).await;
+
+    let response = delete_setting(app, "max_retries").await;
+    assert_eq!(response.status(), 200);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body_str.contains("\"code\":\"0\""));
+
+    let model = setting::Entity::find_by_id("max_retries")
+        .one(&db)
+        .await
+        .unwrap();
+    assert!(model.is_none(), "删除后设置行应不存在");
+}
+
+#[tokio::test]
+async fn test_delete_setting_returns_404_for_missing_key() {
+    let (app, _db) = setup_app_with_setting().await;
+
+    let response = delete_setting(app, "missing_key").await;
+    assert_eq!(response.status(), 404);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body_str.contains("NOT_FOUND"));
+}
+
+#[tokio::test]
+async fn test_delete_setting_protects_builtin_language_and_timezone() {
+    let (app, db) = setup_app_with_setting().await;
+    // 真实启动路径（AppSettings::load_from_db）会种入这两行；测试库需手动种入。
+    insert_setting(&db, "language", "zh-CN", 0).await;
+    insert_setting(&db, "timezone", "Asia/Shanghai", 0).await;
+
+    let response = delete_setting(app.clone(), "language").await;
+    assert_eq!(response.status(), 400);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body_str.contains("INVALID_INPUT"), "{body_str}");
+
+    let response = delete_setting(app, "timezone").await;
+    assert_eq!(response.status(), 400);
+
+    // 受保护行必须仍在库中。
+    assert!(
+        setting::Entity::find_by_id("language")
+            .one(&db)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        setting::Entity::find_by_id("timezone")
+            .one(&db)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn test_delete_setting_returns_500_on_db_error() {
+    let (app, db) = setup_app_with_setting().await;
+
+    // Drop the setting table to force a DB error.
+    db.execute_unprepared("DROP TABLE setting").await.unwrap();
+
+    let response = delete_setting(app, "site_name").await;
+    assert_eq!(response.status(), 500);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body_str.contains("DB_ERROR"));
+}

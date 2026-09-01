@@ -33,12 +33,13 @@ import {
 	getSortedRowModel,
 	useReactTable,
 } from "@tanstack/react-table";
-import { MoreHorizontal, Pencil } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 interface SettingsTableProps {
 	settings: Setting[] | undefined;
 	onEdit: (setting: Setting) => void;
+	onDelete: (setting: Setting) => void;
 }
 
 const TYPE_BADGE_VARIANTS: Record<SettingType, string> = {
@@ -59,7 +60,7 @@ function getTypeBadgeVariant(type: SettingType) {
 
 const PLAIN_HEADER_CLASS = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
 
-export function SettingsTable({ settings, onEdit }: SettingsTableProps) {
+export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps) {
 	const [sorting, setSorting] = useState<SortingState>([]);
 	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
 	const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 10 });
@@ -136,6 +137,13 @@ export function SettingsTable({ settings, onEdit }: SettingsTableProps) {
 										<Pencil className="size-4" />
 										编辑
 									</DropdownMenuItem>
+									<DropdownMenuItem
+										className="text-destructive focus:text-destructive"
+										onClick={() => onDelete(setting)}
+									>
+										<Trash2 className="size-4" />
+										删除
+									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>
 						</div>
@@ -143,7 +151,7 @@ export function SettingsTable({ settings, onEdit }: SettingsTableProps) {
 				},
 			},
 		],
-		[onEdit],
+		[onEdit, onDelete],
 	);
 
 	const table = useReactTable({
