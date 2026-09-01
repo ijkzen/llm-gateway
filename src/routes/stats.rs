@@ -377,20 +377,8 @@ async fn summary(State(state): State<AppState>) -> impl IntoResponse {
     let input_tokens: i64 = row.try_get("", "input_tokens").unwrap_or(0);
     let cache_tokens: i64 = row.try_get("", "cache_tokens").unwrap_or(0);
 
-    let success_rate = if total_requests > 0 {
-        // 保留 5 位小数，与缓存命中率的口径一致。
-        let rate = success_count as f64 / total_requests as f64;
-        (rate * 100_000.0).round() / 100_000.0
-    } else {
-        0.0
-    };
-    let cache_hit_rate = if input_tokens > 0 {
-        // 保留 5 位小数，与 request 表的 input_cache_rate 口径一致。
-        let rate = cache_tokens as f64 / input_tokens as f64;
-        (rate * 100_000.0).round() / 100_000.0
-    } else {
-        0.0
-    };
+    let success_rate = weighted_ratio(success_count as f64, total_requests as f64);
+    let cache_hit_rate = weighted_ratio(cache_tokens as f64, input_tokens as f64);
 
     (
         StatusCode::OK,
@@ -958,7 +946,15 @@ async fn insight(
     };
     let failure_rate_trend = ratio_by_start(&calls_by_start, &fails_by_start);
     let stream_ratio_final = ratio_by_start(&calls_by_start, &streams_by_start);
-    let cache_rate_final = ratio_by_start(&inputs_by_start, &caches_by_start);
+    // 缓存命中率趋势单独保留 5 位小数，与 summary / SQL 侧 cache_hit_rate_sql
+    // 口径一致（failure_rate / stream_ratio 保持原精度）。
+    let cache_rate_final = ratio_by_start(&inputs_by_start, &caches_by_start)
+        .into_iter()
+        .map(|point| FloatTrendPoint {
+            bucket_start: point.bucket_start,
+            value: round_5(point.value),
+        })
+        .collect::<Vec<_>>();
 
     // RPM/TPM：仅小时桶有意义。RPM=每小时请求数（÷窗口小时数）；TPM=每小时 token 总量 ÷60 得每分钟。
     let (rpm_trend, tpm_trend) = if matches!(window.granularity, Granularity::Hour) {
@@ -1128,24 +1124,62 @@ fn sort_rank_rows<T>(rows: &mut [T], is_asc: bool, value_of: impl Fn(&T) -> f64)
     });
 }
 
+/// 加权 TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
+/// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
+fn tps_sql(alias: &str) -> String {
+    format!(
+        "CASE \
+           WHEN SUM(CASE WHEN {alias}.tps > 0 AND {alias}.output_tokens > 0 THEN {alias}.output_tokens / {alias}.tps ELSE 0 END) > 0 \
+           THEN COALESCE(SUM({alias}.output_tokens), 0) / SUM(CASE WHEN {alias}.tps > 0 AND {alias}.output_tokens > 0 THEN {alias}.output_tokens / {alias}.tps ELSE 0 END) \
+           ELSE 0 \
+         END AS tps"
+    )
+}
+
+/// 加权缓存命中率：缓存命中 token / 输入 token，统一保留 5 位小数。
+/// 排行榜 SQL 与虚拟模型成员子查询共用，避免两处口径漂移。
+fn cache_hit_rate_sql(alias: &str) -> String {
+    format!(
+        "CASE \
+           WHEN SUM({alias}.input_tokens) > 0 \
+           THEN ROUND(1.0 * SUM({alias}.input_cache_tokens) / SUM({alias}.input_tokens), 5) \
+           ELSE 0 \
+         END AS cache_hit_rate"
+    )
+}
+
 /// 赛马聚合的 6 个指标列（value_expr 与字段读取共用，供应商/虚拟模型维度
-/// 仅 SELECT 的名称列、JOIN 与 GROUP BY 不同）。
-const RANK_METRIC_SQL: &str = r#"
+/// 仅 SELECT 的名称列、JOIN 与 GROUP BY 不同）；tps / cache_hit_rate 与
+/// 虚拟模型成员子查询共用 tps_sql / cache_hit_rate_sql，避免口径漂移。
+fn rank_metric_sql() -> String {
+    format!(
+        r#"
        COUNT(*) AS request_count,
        COALESCE(SUM(r.total_tokens), 0) AS total_tokens,
        AVG(r.ttft) AS ttft,
        AVG(r.request_time) AS request_time,
-       CASE
-           WHEN SUM(CASE WHEN r.tps > 0 AND r.output_tokens > 0 THEN r.output_tokens / r.tps ELSE 0 END) > 0
-           THEN COALESCE(SUM(r.output_tokens), 0) / SUM(CASE WHEN r.tps > 0 AND r.output_tokens > 0 THEN r.output_tokens / r.tps ELSE 0 END)
-           ELSE 0
-       END AS tps,
-       CASE
-           WHEN SUM(r.input_tokens) > 0
-           THEN ROUND(1.0 * SUM(r.input_cache_tokens) / SUM(r.input_tokens), 5)
-           ELSE 0
-       END AS cache_hit_rate
-"#;
+       {tps},
+       {cache}
+"#,
+        tps = tps_sql("r"),
+        cache = cache_hit_rate_sql("r"),
+    )
+}
+
+/// 保留 5 位小数（0.123456 → 0.12346），与 SQL 侧 ROUND(…, 5) 一致。
+fn round_5(value: f64) -> f64 {
+    (value * 100_000.0).round() / 100_000.0
+}
+
+/// 加权比率：part / total，统一保留 5 位小数；total 为 0 时记 0。
+/// 与 SQL 侧 cache_hit_rate_sql 的口径（ROUND(…, 5)）保持一致，
+/// 供 summary 等 Rust 层聚合复用，避免与 SQL 侧口径漂移。
+fn weighted_ratio(part: f64, total: f64) -> f64 {
+    if total <= 0.0 {
+        return 0.0;
+    }
+    round_5(part / total)
+}
 
 /// 从查询参数解析排序指标与方向；参数缺失/非法返回错误响应。
 /// T 为调用方成功响应的 data 类型（错误响应的 data 为空，仅用于类型对齐）。
@@ -1217,8 +1251,9 @@ async fn provider_rank(
 
     // 单查询聚合全部 6 个指标：仅成功请求 + start_time 半开窗口。
     // 按 r.provider_id 分组（id 才是真实聚合维度，name 仅展示）。
+    let rank_sql = rank_metric_sql();
     let sql = format!(
-        "SELECT r.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name,{RANK_METRIC_SQL} \
+        "SELECT r.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name,{rank_sql} \
          FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
          WHERE r.success = 1 AND r.start_time >= ? AND r.start_time < ? \
          GROUP BY r.provider_id"
@@ -1317,9 +1352,10 @@ async fn virtual_model_rank(
     let db = &state.db;
 
     // 按 id 分组（同一 display_id 的虚拟模型也各自成行），JOIN 出 display_id。
+    let rank_sql = rank_metric_sql();
     let sql = format!(
         "SELECT r.virtual_model_id AS virtual_model_id, \
-                COALESCE(vm.display_id, '') AS virtual_model_display_id,{RANK_METRIC_SQL} \
+                COALESCE(vm.display_id, '') AS virtual_model_display_id,{rank_sql} \
          FROM request r LEFT JOIN virtual_model vm ON vm.virtual_model_id = r.virtual_model_id \
          WHERE r.success = 1 AND r.start_time >= ? AND r.start_time < ? \
          GROUP BY r.virtual_model_id"
@@ -1431,9 +1467,10 @@ async fn provider_model_rank(
         params.push(provider_id.into());
     }
 
+    let rank_sql = rank_metric_sql();
     let sql = format!(
         "SELECT r.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name, \
-                COALESCE(pm.provider_model_id, r.model_id) AS model_id,{RANK_METRIC_SQL} \
+                COALESCE(pm.provider_model_id, r.model_id) AS model_id,{rank_sql} \
          FROM request r \
          LEFT JOIN provider p ON p.id = r.provider_id \
          LEFT JOIN provider_model pm ON pm.provider_id = r.provider_id AND pm.provider_model_id = r.model_id \
@@ -1549,8 +1586,10 @@ async fn virtual_model_member_rank(
     let db = &state.db;
 
     // 聚合子查询：该虚拟模型下实际服务的成员（按 provider_id + model_id 分组）。
-    // 6 指标表达式与 RANK_METRIC_SQL 同口径，但需带上关联键列。
-    let sql = "SELECT pm.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name, \
+    // 6 指标表达式与 rank_metric_sql 同口径（经 tps_sql / cache_hit_rate_sql 复用），
+    // 但需带上关联键列。
+    let sql = format!(
+        "SELECT pm.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name, \
                 pm.provider_model_id AS model_id, \
                 vmi.enable AS member_enable, \
                 COALESCE(agg.request_count, 0) AS request_count, \
@@ -1568,21 +1607,16 @@ async fn virtual_model_member_rank(
                     COALESCE(SUM(r.total_tokens), 0) AS total_tokens, \
                     AVG(r.ttft) AS ttft, \
                     AVG(r.request_time) AS request_time, \
-                    CASE \
-                        WHEN SUM(CASE WHEN r.tps > 0 AND r.output_tokens > 0 THEN r.output_tokens / r.tps ELSE 0 END) > 0 \
-                        THEN COALESCE(SUM(r.output_tokens), 0) / SUM(CASE WHEN r.tps > 0 AND r.output_tokens > 0 THEN r.output_tokens / r.tps ELSE 0 END) \
-                        ELSE 0 \
-                    END AS tps, \
-                    CASE \
-                        WHEN SUM(r.input_tokens) > 0 \
-                        THEN 1.0 * SUM(r.input_cache_tokens) / SUM(r.input_tokens) \
-                        ELSE 0 \
-                    END AS cache_hit_rate \
+                    {tps_sql}, \
+                    {cache_sql} \
              FROM request r \
              WHERE r.success = 1 AND r.virtual_model_id = ? AND r.start_time >= ? AND r.start_time < ? \
              GROUP BY r.provider_id, r.model_id \
          ) agg ON agg.provider_id = pm.provider_id AND agg.provider_model_id = pm.provider_model_id \
-         WHERE vmi.virtual_model_id = ?";
+         WHERE vmi.virtual_model_id = ?",
+        tps_sql = tps_sql("r"),
+        cache_sql = cache_hit_rate_sql("r"),
+    );
 
     let rows = match db
         .query_all_raw(Statement::from_sql_and_values(
@@ -1727,8 +1761,9 @@ async fn api_key_rank(
         params.push(model_id.into());
     }
 
+    let rank_sql = rank_metric_sql();
     let sql = format!(
-        "SELECT r.api_key_name AS api_key_name,{RANK_METRIC_SQL} \
+        "SELECT r.api_key_name AS api_key_name,{rank_sql} \
          FROM request r \
          WHERE {where_sql} \
          GROUP BY r.api_key_name"
@@ -1844,8 +1879,9 @@ async fn model_metrics(
     let db = &state.db;
 
     // 单行聚合 6 指标（无 GROUP BY），JOIN provider 出名称。
+    let rank_sql = rank_metric_sql();
     let sql = format!(
-        "SELECT COALESCE(p.name, '') AS provider_name,{RANK_METRIC_SQL} \
+        "SELECT COALESCE(p.name, '') AS provider_name,{rank_sql} \
          FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
          WHERE r.success = 1 AND r.provider_id = ? AND r.model_id = ? \
            AND r.start_time >= ? AND r.start_time < ?"
@@ -1947,8 +1983,9 @@ async fn provider_metrics(
     }
     let db = &state.db;
 
+    let rank_sql = rank_metric_sql();
     let sql = format!(
-        "SELECT COALESCE(p.name, '') AS provider_name,{RANK_METRIC_SQL} \
+        "SELECT COALESCE(p.name, '') AS provider_name,{rank_sql} \
          FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
          WHERE r.success = 1 AND r.provider_id = ? \
            AND r.start_time >= ? AND r.start_time < ?"
@@ -2045,8 +2082,9 @@ async fn virtual_model_metrics(
     }
     let db = &state.db;
 
+    let rank_sql = rank_metric_sql();
     let sql = format!(
-        "SELECT COALESCE(vm.display_id, '') AS virtual_model_display_id,{RANK_METRIC_SQL} \
+        "SELECT COALESCE(vm.display_id, '') AS virtual_model_display_id,{rank_sql} \
          FROM request r LEFT JOIN virtual_model vm ON vm.virtual_model_id = r.virtual_model_id \
          WHERE r.success = 1 AND r.virtual_model_id = ? \
            AND r.start_time >= ? AND r.start_time < ?"
