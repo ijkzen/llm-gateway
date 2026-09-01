@@ -1,7 +1,7 @@
 {
 	"name": "llm-gateway-web",
 	"private": true,
-	"version": "0.1.6",
+	"version": "0.1.7",
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
@@ -10,9 +10,6 @@
 		"test": "vitest",
 		"lint": "biome check .",
 		"format": "biome format . --write"
-	},
-	"pnpm": {
-		"onlyBuiltDependencies": ["@biomejs/biome", "esbuild"]
 	},
 	"dependencies": {
 		"@dnd-kit/core": "^6.3.1",

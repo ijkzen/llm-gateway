@@ -1,7 +1,7 @@
 # llm-gateway 多阶段构建镜像（全公网依赖，GitHub Actions 可直接构建）
 #
 # 阶段 1：构建前端（Vite + React），产物 web/dist
-FROM node:22-slim AS web-builder
+FROM node:24-slim AS web-builder
 
 WORKDIR /app
 COPY web/package.json web/pnpm-lock.yaml web/.npmrc web/pnpm-workspace.yaml ./
