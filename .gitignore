@@ -9,7 +9,8 @@
 web/tsconfig.tsbuildinfo
 .DS_Store
 /.codegraph
-/.zcode
+/.zcode/plans
+/.zcode/tmp
 /web/logs
 /deploy/llm-gateway
 /.deploy
