@@ -20,7 +20,7 @@ use hyper::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use hyper::http::request::Builder;
 use hyper::{Method, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::net::TcpStream;
 
 use crate::proxy::metrics::now_ms;
@@ -153,12 +153,20 @@ fn elapsed_ms(started: Instant) -> u64 {
 
 /// 建立 TCP（可选 TLS）连接并记录各阶段耗时。DNS 解析不计入。
 /// 返回 (连接, 各阶段耗时, 建连开始 wall-clock 毫秒时间戳)。
+/// `proxy` 为 `Some(代理地址)` 时经 HTTP CONNECT 隧道建连到目标。
 async fn connect_stream(
     scheme: &str,
     host: &str,
     port: u16,
+    proxy: Option<&str>,
 ) -> Result<(TimedStream, ConnectTiming, i64), UpstreamError> {
     let connect_start_at_ms = now_ms();
+
+    // 代理模式：连接代理服务器 → CONNECT host:port 建立隧道 → https 时隧道内 TLS。
+    if let Some(proxy_addr) = proxy {
+        return connect_via_proxy(proxy_addr, scheme, host, port, connect_start_at_ms).await;
+    }
+
     let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
         .await
         .map_err(|e| UpstreamError::Connect(format!("DNS 解析失败（{host}）：{e}")))?
@@ -225,6 +233,157 @@ async fn connect_stream(
     Err(last_err.unwrap_or_else(|| UpstreamError::Connect("连接失败".to_string())))
 }
 
+/// 经 HTTP 代理（CONNECT 隧道）建连到目标 host:port。
+/// - 连代理服务器（代理地址 `http://host:port`，无认证）
+/// - 发送 `CONNECT host:port HTTP/1.1`，读响应头确认 200
+/// - https 目标：在隧道内做目标侧 TLS 握手；http 目标：直接返回隧道流
+async fn connect_via_proxy(
+    proxy_addr: &str,
+    scheme: &str,
+    host: &str,
+    port: u16,
+    connect_start_at_ms: i64,
+) -> Result<(TimedStream, ConnectTiming, i64), UpstreamError> {
+    // 解析代理地址（http://host:port）。
+    let proxy_url = proxy_addr.trim().strip_prefix("http://").ok_or_else(|| {
+        UpstreamError::Connect(format!("代理地址需以 http:// 开头（{proxy_addr}）"))
+    })?;
+    let (proxy_host, proxy_port) = match proxy_url.rsplit_once(':') {
+        Some((h, p)) => {
+            let p: u16 = p
+                .parse()
+                .map_err(|_| UpstreamError::Connect(format!("代理地址端口无效（{proxy_addr}）")))?;
+            (h.to_string(), p)
+        }
+        None => (proxy_url.to_string(), 80),
+    };
+
+    let tcp_started = Instant::now();
+    let proxy_addrs: Vec<std::net::SocketAddr> =
+        tokio::net::lookup_host((proxy_host.as_str(), proxy_port))
+            .await
+            .map_err(|e| UpstreamError::Connect(format!("代理 DNS 解析失败（{proxy_host}）：{e}")))?
+            .collect();
+    let mut last_err = None;
+    let mut stream = None;
+    for addr in proxy_addrs {
+        match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
+            Ok(Ok(s)) => {
+                stream = Some(s);
+                break;
+            }
+            Ok(Err(e)) => last_err = Some(e),
+            Err(_) => {
+                last_err = Some(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "connect timeout",
+                ))
+            }
+        }
+    }
+    let mut stream = stream.ok_or_else(|| {
+        UpstreamError::Connect(format!(
+            "连接代理 {proxy_host}:{proxy_port} 失败：{}",
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "无可用地址".into())
+        ))
+    })?;
+    stream.set_nodelay(true).ok();
+    let tcp_ms = elapsed_ms(tcp_started);
+
+    // 发送 CONNECT 建立隧道。
+    let connect_req = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n");
+    tokio::time::timeout(CONNECT_TIMEOUT, stream.write_all(connect_req.as_bytes()))
+        .await
+        .map_err(|_| UpstreamError::Connect("代理 CONNECT 写入超时".to_string()))?
+        .map_err(|e| UpstreamError::Connect(format!("代理 CONNECT 写入失败：{e}")))?;
+    stream.flush().await.ok();
+
+    // 读 CONNECT 响应头（直到 \r\n\r\n），校验 200。
+    let status = read_proxy_connect_response(&mut stream)
+        .await
+        .map_err(|e| UpstreamError::Connect(format!("代理 CONNECT 响应解析失败：{e}")))?;
+    if status != 200 {
+        return Err(UpstreamError::Connect(format!(
+            "代理 CONNECT 返回 {status}（目标 {host}:{port}）"
+        )));
+    }
+
+    // https 目标：隧道内 TLS 握手；http 目标：直接返回隧道流。
+    if scheme != "https" {
+        return Ok((
+            TimedStream::Plain(stream),
+            ConnectTiming { tcp_ms, tls_ms: 0 },
+            connect_start_at_ms,
+        ));
+    }
+    let tls_started = Instant::now();
+    let server_name = tokio_rustls::rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|e| UpstreamError::Connect(format!("TLS 主机名无效（{host}）：{e}")))?;
+    let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_config().clone()));
+    let tls = match tokio::time::timeout(
+        TLS_HANDSHAKE_TIMEOUT,
+        connector.connect(server_name, stream),
+    )
+    .await
+    {
+        Ok(Ok(tls)) => tls,
+        Ok(Err(e)) => {
+            return Err(UpstreamError::Connect(format!(
+                "代理隧道 TLS 握手失败：{e}"
+            )));
+        }
+        Err(_) => return Err(UpstreamError::Connect("代理隧道 TLS 握手超时".to_string())),
+    };
+    Ok((
+        TimedStream::Tls(Box::pin(tls)),
+        ConnectTiming {
+            tcp_ms,
+            tls_ms: elapsed_ms(tls_started),
+        },
+        connect_start_at_ms,
+    ))
+}
+
+/// 读取代理 CONNECT 响应的状态行（如 `HTTP/1.1 200 Connection established`），
+/// 返回状态码。响应头读到 `\r\n\r\n` 为止（剩余字节留在流中给后续握手）。
+async fn read_proxy_connect_response<S: tokio::io::AsyncRead + Unpin>(
+    stream: &mut S,
+) -> Result<u16, std::io::Error> {
+    let mut buf = [0u8; 4096];
+    let mut len = 0usize;
+    loop {
+        if len >= buf.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "proxy CONNECT response too large",
+            ));
+        }
+        let n = tokio::time::timeout(CONNECT_TIMEOUT, stream.read(&mut buf[len..]))
+            .await
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "read timeout"))??;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "proxy closed connection",
+            ));
+        }
+        len += n;
+        if buf[..len].windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let head = String::from_utf8_lossy(&buf[..len]);
+    let mut parts = head.split_whitespace();
+    let _version = parts.next();
+    let code = parts
+        .next()
+        .and_then(|c| c.parse::<u16>().ok())
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "bad status line"))?;
+    Ok(code)
+}
+
 fn authority(scheme: &str, host: &str, port: u16) -> String {
     let default_port = if scheme == "https" { 443 } else { 80 };
     if port == default_port {
@@ -258,14 +417,22 @@ pub struct UpstreamReply {
 /// 发起上游调用：优先复用池内连接，未命中才独立建连（计时）→ HTTP/1.1 请求 →
 /// 等待响应头。响应体由调用方读取（`read_body` 或逐帧流式），读完自动归还连接。
 /// 复用连接若已陈旧（对端关闭），发送失败后丢弃并新建连接重试一次。
-pub async fn call(call: UpstreamCall, pool: &UpstreamPool) -> Result<UpstreamReply, UpstreamError> {
+pub async fn call(
+    call: UpstreamCall,
+    pool: &UpstreamPool,
+    proxy: Option<&str>,
+) -> Result<UpstreamReply, UpstreamError> {
     let (scheme, host, port, path_query) = parse_url(&call.url)?;
-    let key = format!("{}://{}:{}", scheme, host, port);
+    // 代理模式下连接池按代理地址隔离（不同代理/直连不混池）。
+    let key = match proxy {
+        Some(addr) => format!("{addr}|{}://{}:{}", scheme, host, port),
+        None => format!("{}://{}:{}", scheme, host, port),
+    };
 
     let mut timing = ConnectTiming::default();
     let mut sender = pool.checkout(&key);
     let (mut start_at_ms, mut connect_done_at_ms) = if sender.is_none() {
-        let (stream, measured, connect_start) = connect_stream(&scheme, &host, port).await?;
+        let (stream, measured, connect_start) = connect_stream(&scheme, &host, port, proxy).await?;
         timing = measured;
         let (send, conn) = http1::handshake(TokioIo::new(stream))
             .await
@@ -307,7 +474,7 @@ pub async fn call(call: UpstreamCall, pool: &UpstreamPool) -> Result<UpstreamRep
                 // 复用连接可能已被对端静默关闭：丢弃并新建连接重试一次。
                 attempt += 1;
                 let (stream, measured, connect_start) =
-                    connect_stream(&scheme, &host, port).await?;
+                    connect_stream(&scheme, &host, port, proxy).await?;
                 timing = measured;
                 start_at_ms = connect_start;
                 connect_done_at_ms = now_ms();

@@ -11,6 +11,7 @@ import {
 import {
 	Form,
 	FormControl,
+	FormDescription,
 	FormField,
 	FormItem,
 	FormLabel,
@@ -42,18 +43,39 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 function makeFormSchema(t: (key: string) => string) {
-	return z.object({
-		name: z.string().min(1, t("providers.nameRequired")),
-		baseUrl: z.string().min(1, t("providers.baseUrlRequired")),
-		// apiKey 创建时必填（编辑时留空表示不修改，在 onSubmit 里按模式校验）。
-		apiKey: z.string(),
-		enable: z.boolean(),
-		// 枚举范围在 onSubmit 里校验，避免 zod refine 把类型收窄成字面量联合。
-		protocolType: z.number(),
-		billingMode: z.number(),
-		usageEnabled: z.boolean(),
-		customHeader: z.string().refine((v) => isJsonObject(v), t("providers.invalidCustomHeader")),
-	});
+	return z
+		.object({
+			name: z.string().min(1, t("providers.nameRequired")),
+			baseUrl: z.string().min(1, t("providers.baseUrlRequired")),
+			// apiKey 创建时必填（编辑时留空表示不修改，在 onSubmit 里按模式校验）。
+			apiKey: z.string(),
+			enable: z.boolean(),
+			// 枚举范围在 onSubmit 里校验，避免 zod refine 把类型收窄成字面量联合。
+			protocolType: z.number(),
+			billingMode: z.number(),
+			usageEnabled: z.boolean(),
+			customHeader: z.string().refine((v) => isJsonObject(v), t("providers.invalidCustomHeader")),
+			// 网络代理：开启时地址必填且需 http:// 开头。
+			proxyEnabled: z.boolean(),
+			proxyAddr: z.string(),
+		})
+		.superRefine((values, ctx) => {
+			if (values.proxyEnabled) {
+				if (!values.proxyAddr.trim()) {
+					ctx.addIssue({
+						code: z.ZodIssueCode.custom,
+						path: ["proxyAddr"],
+						message: t("providers.proxyAddrRequired"),
+					});
+				} else if (!values.proxyAddr.trim().startsWith("http://")) {
+					ctx.addIssue({
+						code: z.ZodIssueCode.custom,
+						path: ["proxyAddr"],
+						message: t("providers.proxyAddrInvalid"),
+					});
+				}
+			}
+		});
 }
 
 type FormValues = z.infer<ReturnType<typeof makeFormSchema>>;
@@ -131,6 +153,8 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 			billingMode: 0,
 			usageEnabled: false,
 			customHeader: "{}",
+			proxyEnabled: false,
+			proxyAddr: "",
 		},
 	});
 
@@ -161,6 +185,8 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 			billingMode: provider?.billingMode ?? 0,
 			usageEnabled: usageFlag(provider?.extra),
 			customHeader: provider?.customHeader ?? "{}",
+			proxyEnabled: provider?.proxyEnabled ?? false,
+			proxyAddr: provider?.proxyAddr ?? "",
 		});
 		const keys = editableExtraKeys(isEdit ? provider?.extra : undefined);
 		const defaults: Record<string, string> = {};
@@ -227,6 +253,9 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 			protocolType: values.protocolType,
 			billingMode: values.billingMode,
 			customHeader: values.customHeader.trim() || "{}",
+			// 网络代理：开启时地址必填（表单已校验）；未开启地址清空。
+			proxyEnabled: values.proxyEnabled,
+			proxyAddr: values.proxyEnabled ? values.proxyAddr.trim() : "",
 			// 合并模板 extra 与用户填写值；usage 标记由用量开关驱动。
 			extra: JSON.stringify({
 				...(templateExtra ? parseExtra(templateExtra) : {}),
@@ -395,6 +424,36 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 								</FormItem>
 							)}
 						/>
+
+						{/* 网络代理：仅当启用时显示地址输入。 */}
+						<FormField
+							control={form.control}
+							name="proxyEnabled"
+							render={({ field }) => (
+								<FormItem className="flex items-center justify-between rounded-lg border p-3">
+									<FormLabel>{t("providers.proxyEnabled")}</FormLabel>
+									<FormControl>
+										<Switch checked={field.value} onCheckedChange={field.onChange} />
+									</FormControl>
+								</FormItem>
+							)}
+						/>
+						{form.watch("proxyEnabled") && (
+							<FormField
+								control={form.control}
+								name="proxyAddr"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>{t("providers.proxyAddr")}</FormLabel>
+										<FormControl>
+											<Input {...field} placeholder="http://127.0.0.1:7890" className="font-mono" />
+										</FormControl>
+										<FormDescription>{t("providers.proxyAddrHint")}</FormDescription>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+						)}
 
 						{/* 高级设置：常驻展示，默认折叠。 */}
 						<div className="overflow-hidden rounded-lg border">

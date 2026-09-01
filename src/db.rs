@@ -322,6 +322,24 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     )
     .await?;
 
+    // Migration 13: provider 网络代理字段（proxy_enabled + proxy_addr）。
+    // 供应商可单独开启 HTTP 代理转发；新库已由第一遍 create_table_from_entity
+    // 建表并带这两列，此处兜底历史库。
+    let proxy_enabled_exists = column_exists(db, "provider", "proxy_enabled").await?;
+    if proxy_enabled_exists {
+        changed |= ensure_migration(db, 13, &["SELECT 1"]).await?;
+    } else {
+        changed |= ensure_migration(
+            db,
+            13,
+            &[
+                "ALTER TABLE provider ADD COLUMN proxy_enabled boolean NOT NULL DEFAULT '0'",
+                "ALTER TABLE provider ADD COLUMN proxy_addr varchar NOT NULL DEFAULT ''",
+            ],
+        )
+        .await?;
+    }
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)

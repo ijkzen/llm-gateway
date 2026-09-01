@@ -12,6 +12,8 @@ export interface Provider {
 	billingMode: number;
 	customHeader: string;
 	extra: string;
+	proxyEnabled: boolean;
+	proxyAddr: string;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -42,6 +44,8 @@ export interface ProviderPayload {
 	billingMode: number;
 	customHeader: string;
 	extra: string;
+	proxyEnabled: boolean;
+	proxyAddr: string;
 }
 
 export interface UpdateProviderPayload {
@@ -53,6 +57,8 @@ export interface UpdateProviderPayload {
 	billingMode?: number;
 	customHeader?: string;
 	extra?: string;
+	proxyEnabled?: boolean;
+	proxyAddr?: string;
 }
 
 export const providerKeys = {

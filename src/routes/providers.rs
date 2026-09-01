@@ -56,6 +56,10 @@ struct ProviderResponse {
     billing_mode: i32,
     custom_header: String,
     extra: String,
+    /// 是否经网络代理转发该供应商请求。
+    proxy_enabled: bool,
+    /// HTTP 代理地址（如 `http://127.0.0.1:7890`）。
+    proxy_addr: String,
     created_at: String,
     updated_at: String,
 }
@@ -74,6 +78,8 @@ impl ProviderResponse {
             billing_mode: model.billing_mode,
             custom_header: model.custom_header,
             extra: model.extra,
+            proxy_enabled: model.proxy_enabled,
+            proxy_addr: model.proxy_addr,
             created_at: model.created_at.to_rfc3339(),
             updated_at: model.updated_at.to_rfc3339(),
         }
@@ -98,6 +104,10 @@ struct CreateProviderRequest {
     billing_mode: i32,
     custom_header: String,
     extra: String,
+    #[serde(default)]
+    proxy_enabled: bool,
+    #[serde(default)]
+    proxy_addr: String,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +124,10 @@ struct UpdateProviderRequest {
     extra: Option<String>,
     /// 列表排序权重（越小越靠前），批量重排请使用 PUT /reorder。
     sort_order: Option<i32>,
+    #[serde(default)]
+    proxy_enabled: Option<bool>,
+    #[serde(default)]
+    proxy_addr: Option<String>,
 }
 
 /// 校验协议类型与付费模式是否在合法枚举范围内。
@@ -169,6 +183,44 @@ fn validate_fields(
     }
     if let Some(err) = validate_json_field(lang.tr("额外字段", "extra fields"), extra, lang) {
         return Some(err);
+    }
+    None
+}
+
+/// 校验网络代理配置：开启时必须提供 http:// 代理地址（无认证）。
+fn validate_proxy(proxy_enabled: bool, proxy_addr: &str, lang: Lang) -> Option<String> {
+    let addr = proxy_addr.trim();
+    if !proxy_enabled {
+        // 未开启时不校验地址（允许留空）。
+        return None;
+    }
+    if addr.is_empty() {
+        return Some(
+            lang.tr(
+                "开启网络代理时必须填写代理地址",
+                "proxy address is required when proxy is enabled",
+            )
+            .to_string(),
+        );
+    }
+    if !addr.starts_with("http://") {
+        return Some(
+            lang.tr(
+                "代理地址需以 http:// 开头",
+                "proxy address must start with http://",
+            )
+            .to_string(),
+        );
+    }
+    // 无认证：不允许 user:pass@ 形式。
+    if addr.contains('@') {
+        return Some(
+            lang.tr(
+                "暂不支持带认证的代理地址",
+                "proxy address with authentication is not supported yet",
+            )
+            .to_string(),
+        );
     }
     None
 }
@@ -300,6 +352,9 @@ async fn create_provider(
     if let Some(msg) = validate_protocol_billing(req.protocol_type, req.billing_mode, lang) {
         return response::bad_request(msg);
     }
+    if let Some(msg) = validate_proxy(req.proxy_enabled, &req.proxy_addr, lang) {
+        return response::bad_request(msg);
+    }
 
     let now = chrono::Utc::now();
     let active = ActiveModel {
@@ -312,6 +367,8 @@ async fn create_provider(
         status: Set(0),
         protocol_type: Set(req.protocol_type),
         billing_mode: Set(req.billing_mode),
+        proxy_enabled: Set(req.proxy_enabled),
+        proxy_addr: Set(req.proxy_addr.trim().to_string()),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
@@ -376,6 +433,12 @@ async fn update_provider(
     if let Some(msg) = validate_protocol_billing(protocol_type, billing_mode, lang) {
         return response::bad_request(msg);
     }
+    // 代理字段：未传（None）保持原值；传了则校验（开启时地址必填 + http:// 格式）。
+    let proxy_enabled = req.proxy_enabled.unwrap_or(model.proxy_enabled);
+    let proxy_addr = req.proxy_addr.unwrap_or_else(|| model.proxy_addr.clone());
+    if let Some(msg) = validate_proxy(proxy_enabled, &proxy_addr, lang) {
+        return response::bad_request(msg);
+    }
 
     let mut active: ActiveModel = model.into();
     active.name = Set(name.trim().to_string());
@@ -390,6 +453,8 @@ async fn update_provider(
     active.custom_header = Set(custom_header);
     active.extra = Set(extra);
     active.sort_order = Set(req.sort_order.unwrap_or(active.sort_order.unwrap()));
+    active.proxy_enabled = Set(proxy_enabled);
+    active.proxy_addr = Set(proxy_addr.trim().to_string());
     active.updated_at = Set(chrono::Utc::now());
 
     match crate::provider_repo::update_provider(&state.db, active).await {

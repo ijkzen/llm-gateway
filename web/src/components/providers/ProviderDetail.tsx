@@ -183,6 +183,18 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 							{provider.status === 0 ? t("providers.available") : t("providers.unavailable")}
 						</Badge>
 					</DetailRow>
+					<DetailRow label={t("providers.proxyEnabled")}>
+						{provider.proxyEnabled ? (
+							<span className="inline-flex items-center gap-1.5">
+								<Badge variant="default">{t("providers.proxyOn")}</Badge>
+								<span className="font-mono text-xs text-muted-foreground">
+									{provider.proxyAddr}
+								</span>
+							</span>
+						) : (
+							<Badge variant="secondary">{t("providers.proxyOff")}</Badge>
+						)}
+					</DetailRow>
 					<DetailRow label={t("providers.createdAt")}>{formatDate(provider.createdAt)}</DetailRow>
 					<DetailRow label={t("providers.updatedAt")}>{formatDate(provider.updatedAt)}</DetailRow>
 				</div>

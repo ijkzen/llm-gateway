@@ -45,6 +45,12 @@ pub struct Model {
     /// 列表排序权重,越小越靠前。
     #[sea_orm(default_value = "0")]
     pub sort_order: i32,
+    /// 是否经网络代理（HTTP 代理）转发该供应商请求。
+    #[sea_orm(default_value = "0")]
+    pub proxy_enabled: bool,
+    /// HTTP 代理地址（如 `http://127.0.0.1:7890`，无认证）。
+    #[sea_orm(default_value = "")]
+    pub proxy_addr: String,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

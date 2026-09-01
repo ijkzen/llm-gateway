@@ -61,7 +61,7 @@ async fn call_json(url: &str, pool: &UpstreamPool) -> Bytes {
         body: Bytes::from_static(b"{}"),
         stream: false,
     };
-    let reply = call(request, pool).await.expect("call ok");
+    let reply = call(request, pool, None).await.expect("call ok");
     assert_eq!(reply.status, StatusCode::OK);
     read_body(reply.body).await.expect("read body")
 }

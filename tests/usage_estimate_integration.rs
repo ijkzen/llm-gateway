@@ -48,6 +48,8 @@ async fn seed_provider(db: &DatabaseConnection, id: i32, name: &str, billing_mod
         billing_mode: Set(billing_mode),
         extra: Set(r#"{"usage":true}"#.to_string()),
         sort_order: Set(0),
+        proxy_enabled: Set(false),
+        proxy_addr: Set(String::new()),
         created_at: Set(now),
         updated_at: Set(now),
     }

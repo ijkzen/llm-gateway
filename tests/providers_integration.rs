@@ -479,3 +479,123 @@ async fn test_reorder_providers_rejects_empty_and_duplicate_ids() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body["msg"].as_str().unwrap().contains("重复"));
 }
+
+/// 创建带网络代理的供应商：proxyEnabled + proxyAddr 落库并返回。
+#[tokio::test]
+async fn test_create_provider_with_proxy() {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+
+    let body = serde_json::json!({
+        "name": "proxy-provider",
+        "enable": true,
+        "baseUrl": "https://api.example.com/v1",
+        "apiKey": "sk-1",
+        "protocolType": 0,
+        "billingMode": 0,
+        "customHeader": "{}",
+        "extra": "{}",
+        "proxyEnabled": true,
+        "proxyAddr": "http://127.0.0.1:7890",
+    })
+    .to_string();
+    let (status, body) = send_json(&app, "POST", "/api/providers", &body).await;
+    assert_eq!(status, StatusCode::CREATED, "创建失败: {body}");
+    assert_eq!(body["data"]["proxyEnabled"], true);
+    assert_eq!(body["data"]["proxyAddr"], "http://127.0.0.1:7890");
+
+    // 详情返回 proxy 字段。
+    let id = body["data"]["id"].as_i64().unwrap();
+    let (status, body) = send_json(&app, "GET", &format!("/api/providers/{id}"), "{}").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["proxyEnabled"], true);
+    assert_eq!(body["data"]["proxyAddr"], "http://127.0.0.1:7890");
+}
+
+/// 开启网络代理但地址为空 → 400。
+#[tokio::test]
+async fn test_create_provider_proxy_enabled_requires_addr() {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+
+    let body = serde_json::json!({
+        "name": "proxy-empty",
+        "enable": true,
+        "baseUrl": "https://api.example.com/v1",
+        "apiKey": "sk-1",
+        "protocolType": 0,
+        "billingMode": 0,
+        "customHeader": "{}",
+        "extra": "{}",
+        "proxyEnabled": true,
+        "proxyAddr": "",
+    })
+    .to_string();
+    let (status, body) = send_json(&app, "POST", "/api/providers", &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["msg"].as_str().unwrap().contains("代理地址"),
+        "应提示代理地址必填: {body}"
+    );
+}
+
+/// 代理地址非 http:// 开头 → 400。
+#[tokio::test]
+async fn test_create_provider_proxy_addr_must_be_http() {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+
+    let body = serde_json::json!({
+        "name": "proxy-https",
+        "enable": true,
+        "baseUrl": "https://api.example.com/v1",
+        "apiKey": "sk-1",
+        "protocolType": 0,
+        "billingMode": 0,
+        "customHeader": "{}",
+        "extra": "{}",
+        "proxyEnabled": true,
+        "proxyAddr": "https://127.0.0.1:7890",
+    })
+    .to_string();
+    let (status, body) = send_json(&app, "POST", "/api/providers", &body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["msg"].as_str().unwrap().contains("http://"),
+        "应提示 http:// 前缀: {body}"
+    );
+}
+
+/// 编辑供应商时更新 proxy 字段（未传则保持原值）。
+#[tokio::test]
+async fn test_update_provider_proxy() {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+
+    // 先创建无代理的供应商。
+    let body = serde_json::json!({
+        "name": "proxy-update",
+        "enable": true,
+        "baseUrl": "https://api.example.com/v1",
+        "apiKey": "sk-1",
+        "protocolType": 0,
+        "billingMode": 0,
+        "customHeader": "{}",
+        "extra": "{}",
+    })
+    .to_string();
+    let (status, body) = send_json(&app, "POST", "/api/providers", &body).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = body["data"]["id"].as_i64().unwrap();
+
+    // 编辑：开代理 + 地址。
+    let body = serde_json::json!({
+        "proxyEnabled": true,
+        "proxyAddr": "http://10.0.0.1:8080",
+    })
+    .to_string();
+    let (status, body) = send_json(&app, "PUT", &format!("/api/providers/{id}"), &body).await;
+    assert_eq!(status, StatusCode::OK, "更新失败: {body}");
+    assert_eq!(body["data"]["proxyEnabled"], true);
+    assert_eq!(body["data"]["proxyAddr"], "http://10.0.0.1:8080");
+}

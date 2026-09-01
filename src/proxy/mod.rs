@@ -96,6 +96,10 @@ struct Member {
     base_url: String,
     api_key_encrypted: String,
     custom_header: String,
+    /// 是否经网络代理转发该供应商请求。
+    proxy_enabled: bool,
+    /// HTTP 代理地址（如 `http://127.0.0.1:7890`）。
+    proxy_addr: String,
 }
 
 /// 加载虚拟模型全部可用成员（item 启用 + 供应商启用且状态可用）。
@@ -148,6 +152,8 @@ async fn load_members(
                 base_url: p.base_url.clone(),
                 api_key_encrypted: p.api_key.clone(),
                 custom_header: p.custom_header.clone(),
+                proxy_enabled: p.proxy_enabled,
+                proxy_addr: p.proxy_addr.clone(),
             })
         })
         .collect())
@@ -908,7 +914,13 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                 }
             };
 
-        let reply = match upstream::call(call, &state.upstream_pool).await {
+        // 供应商开启代理且地址有效时经 HTTP 代理转发。
+        let proxy = if member.proxy_enabled && !member.proxy_addr.trim().is_empty() {
+            Some(member.proxy_addr.as_str())
+        } else {
+            None
+        };
+        let reply = match upstream::call(call, &state.upstream_pool, proxy).await {
             Ok(reply) => reply,
             Err(e) => {
                 let message = e.fail_reason();

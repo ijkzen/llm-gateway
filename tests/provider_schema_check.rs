@@ -65,6 +65,16 @@ async fn provider_table_ddl_matches_expected() {
             "'0'".to_string(),
         ),
         (
+            "proxy_addr".to_string(),
+            "varchar".to_string(),
+            "''".to_string(),
+        ),
+        (
+            "proxy_enabled".to_string(),
+            "boolean".to_string(),
+            "'0'".to_string(),
+        ),
+        (
             "sort_order".to_string(),
             "INTEGER".to_string(),
             "'0'".to_string(),
