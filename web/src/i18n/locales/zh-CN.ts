@@ -344,6 +344,12 @@ const zhCN = {
 		deleteTitle: "删除供应商模型",
 		deleteDesc: "确定要删除模型",
 		deleteDescSuffix: "吗？此操作无法撤销。",
+		test: "测试",
+		testing: "测试中...",
+		testSuccess: "模型测试成功",
+		testFailedTitle: "模型测试失败",
+		testFailedDesc: "测试请求未能通过，详见下方失败原因：",
+		close: "关闭",
 	},
 	virtualModels: {
 		title: "虚拟模型",

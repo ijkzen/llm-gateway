@@ -11,6 +11,10 @@ const mocks = vi.hoisted(() => {
 		createMutate: vi.fn(),
 		updateMutate: vi.fn(),
 		deleteMutate: vi.fn(),
+		testMutate: vi.fn(),
+		toastSuccess: vi.fn(),
+		toastError: vi.fn(),
+		testState: { isPending: false },
 	};
 });
 
@@ -25,14 +29,18 @@ vi.mock("@/hooks/use-provider-models", async () => {
 		useCreateProviderModel: () => ({ mutate: mocks.createMutate, isPending: false }),
 		useUpdateProviderModel: () => ({ mutate: mocks.updateMutate, isPending: false }),
 		useDeleteProviderModel: () => ({ mutate: mocks.deleteMutate, isPending: false }),
+		useTestProviderModel: () => ({
+			mutate: mocks.testMutate,
+			isPending: mocks.testState.isPending,
+		}),
 		useCatalogSearch: () => ({ data: [] }),
 	};
 });
 
 vi.mock("@/hooks/use-toast", () => ({
 	useToastActions: () => ({
-		toastSuccess: vi.fn(),
-		toastError: vi.fn(),
+		toastSuccess: mocks.toastSuccess,
+		toastError: mocks.toastError,
 	}),
 }));
 
@@ -79,6 +87,7 @@ function required<T>(value: T | undefined | null): T {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.testState.isPending = false;
 });
 
 describe("AddProviderModelsDialog 候选三态", () => {
@@ -238,6 +247,86 @@ describe("AddProviderModelsDialog 手动添加", () => {
 		fireEvent.click(screen.getByRole("button", { name: "手动添加" }));
 
 		expect(mocks.createMutate).not.toHaveBeenCalled();
+	});
+});
+
+describe("ProviderModelDetailDialog 测试按钮", () => {
+	it("只读态左下角有测试按钮，点击触发测试并传入 modelId", () => {
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel()}
+			/>,
+		);
+
+		const testBtn = screen.getByRole("button", { name: "测试" });
+		expect(testBtn).toBeTruthy();
+		fireEvent.click(testBtn);
+		expect(mocks.testMutate).toHaveBeenCalledTimes(1);
+		const [modelId, options] = required(mocks.testMutate.mock.calls[0]);
+		expect(modelId).toBe(1);
+		required(options).onSuccess();
+	});
+
+	it("测试成功弹出成功 toast", () => {
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel()}
+			/>,
+		);
+
+		mocks.testMutate.mockImplementation((_id, opts) => {
+			required(opts).onSuccess();
+		});
+		fireEvent.click(screen.getByRole("button", { name: "测试" }));
+
+		expect(mocks.toastSuccess).toHaveBeenCalledWith("模型测试成功");
+	});
+
+	it("测试失败弹出失败弹窗并展示错误信息", () => {
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel()}
+			/>,
+		);
+
+		mocks.testMutate.mockImplementation((_id, opts) => {
+			required(opts).onError({ message: "429 rate limited" });
+		});
+		fireEvent.click(screen.getByRole("button", { name: "测试" }));
+
+		expect(screen.getByText("模型测试失败")).toBeTruthy();
+		expect(screen.getByText("429 rate limited")).toBeTruthy();
+	});
+
+	it("测试中按钮禁用并显示测试中", () => {
+		// isPending 为 true 时按钮禁用。
+		mocks.testState.isPending = true;
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel()}
+			/>,
+		);
+
+		const testBtn = screen.getByRole("button", { name: "测试中..." });
+		expect((testBtn as HTMLButtonElement).disabled).toBe(true);
+		fireEvent.click(testBtn);
+		expect(mocks.testMutate).not.toHaveBeenCalled();
 	});
 });
 

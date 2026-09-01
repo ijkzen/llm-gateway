@@ -436,6 +436,13 @@ impl ResponsesStreamConverter {
     }
 
     fn capture_usage(&mut self, usage: &Value) {
+        if let Some(usage) = Self::extract_usage(usage) {
+            self.usage = Some(usage);
+        }
+    }
+
+    /// 从 Responses `usage` 对象提取归一 usage；无 input/output token 时返回 None。
+    pub fn extract_usage(usage: &Value) -> Option<Usage> {
         let input = usage.get("input_tokens").and_then(Value::as_i64);
         let output = usage.get("output_tokens").and_then(Value::as_i64);
         let cache = usage
@@ -443,11 +450,13 @@ impl ResponsesStreamConverter {
             .and_then(Value::as_i64)
             .unwrap_or(0);
         if input.is_some() || output.is_some() {
-            self.usage = Some(Usage {
+            Some(Usage {
                 input_tokens: input,
                 cache_tokens: cache.max(0),
                 output_tokens: output,
-            });
+            })
+        } else {
+            None
         }
     }
 

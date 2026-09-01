@@ -10,6 +10,7 @@ use sea_orm::{
     Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashSet;
 
 use crate::crypto;
@@ -17,6 +18,7 @@ use crate::entity::provider;
 use crate::entity::provider_model::{self, ActiveModel, Entity};
 use crate::i18n::Lang;
 use crate::provider_model::{catalog, refresh};
+use crate::proxy;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -104,6 +106,7 @@ pub fn scoped_routes() -> Router<AppState> {
         .route("/refresh", post(refresh_provider_models))
         .route("/{model_id}", put(update_provider_model))
         .route("/{model_id}", delete(delete_provider_model))
+        .route("/{model_id}/test", post(test_provider_model))
 }
 
 /// 挂载在 `/api/provider-models` 下的全局路由（页面按供应商分组渲染用）。
@@ -567,6 +570,60 @@ async fn refresh_provider_models(
     });
 
     (StatusCode::OK, Json(Response::success(candidates)))
+}
+
+/// POST /api/providers/{provider_id}/models/{model_id}/test
+/// 手动构建一条最小化测试请求发往该模型的上游，验证模型可用性。
+/// 成功/失败均写入 request 表（与正式流量同口径，计入数据面板）。
+async fn test_provider_model(
+    State(state): State<AppState>,
+    Path((provider_id, model_id)): Path<(i32, i32)>,
+) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
+
+    let provider_row = match provider::Entity::find_by_id(provider_id)
+        .one(&state.db)
+        .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => return not_found_provider(lang, provider_id),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    let model = match Entity::find()
+        .filter(provider_model::Column::ProviderId.eq(provider_id))
+        .filter(provider_model::Column::ModelId.eq(model_id))
+        .one(&state.db)
+        .await
+    {
+        Ok(Some(model)) => model,
+        Ok(None) => return not_found_model(lang, model_id),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+
+    let api_key = match crypto::decrypt(&provider_row.api_key) {
+        Ok(key) if !key.is_empty() => key,
+        Ok(_) => {
+            return response::bad_request(lang.tr(
+                "该供应商未配置 API Key，无法测试",
+                "this provider has no API key configured; cannot test",
+            ));
+        }
+        Err(_) => {
+            return response::bad_request(lang.tr(
+                "API Key 解密失败，请重新保存供应商密钥后再测试",
+                "failed to decrypt the API key; re-save the provider key and try again",
+            ));
+        }
+    };
+
+    let _protocol = proxy::Protocol::from_i32(provider_row.protocol_type);
+    match proxy::test_model(&state, &provider_row, &model, &api_key).await {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(Response::success(json!({ "ok": true }))),
+        ),
+        Err(message) => response::scheduler_error(StatusCode::BAD_GATEWAY, message),
+    }
 }
 
 /// 模型 ID 的尾段归一化 key：按 `/` 取最后一段并转小写。

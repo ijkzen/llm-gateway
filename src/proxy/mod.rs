@@ -1563,3 +1563,154 @@ fn record_failure(
     }
     .insert(db);
 }
+
+/// 测试请求写入 request 表时用于标记来源的虚拟模型 ID 与 API Key 名。
+/// 测试流量不属于任何虚拟模型，虚拟模型维度记 0；api_key_name 记 `test` 便于数据面板区分。
+const TEST_VIRTUAL_MODEL_ID: i32 = 0;
+const TEST_API_KEY_NAME: &str = "test";
+
+/// 测试提示词：固定「你好」。部分模型可能拒答或返回空文本，但只要上游
+/// 受理请求（HTTP 2xx）即判定模型有效（连通性验证）。
+const TEST_PROMPT: &str = "你好";
+
+/// 手动构建最小化测试请求发往指定供应商模型的上游，验证模型可用性。
+///
+/// 复用 `build_upstream_call`（四协议转换 + Responses 强制流式）与连接池
+/// （含代理）；成功/失败均写入 request 表（与正式流量同口径，计入数据面板）。
+/// 成功不要求模型产出文本：上游返回 2xx 即视为有效；失败返回人类可读原因。
+pub async fn test_model(
+    state: &AppState,
+    provider_row: &crate::entity::provider::Model,
+    model: &crate::entity::provider_model::Model,
+    api_key: &str,
+) -> Result<(), String> {
+    let member = Member {
+        provider_id: provider_row.id,
+        model_id: model.provider_model_id.clone(),
+        protocol: Protocol::from_i32(provider_row.protocol_type),
+        billing_mode: provider_row.billing_mode,
+        base_url: provider_row.base_url.clone(),
+        api_key_encrypted: provider_row.api_key.clone(),
+        custom_header: provider_row.custom_header.clone(),
+        proxy_enabled: provider_row.proxy_enabled,
+        proxy_addr: provider_row.proxy_addr.clone(),
+    };
+
+    let chat = json!({
+        "model": model.provider_model_id,
+        "stream": false,
+        "max_tokens": model.max_output_tokens,
+        "messages": [{"role": "user", "content": TEST_PROMPT}],
+    });
+    let (call, _json_mode_tool) = build_upstream_call(&member, &chat, false, api_key)?;
+
+    let proxy = if member.proxy_enabled && !member.proxy_addr.trim().is_empty() {
+        Some(member.proxy_addr.as_str())
+    } else {
+        None
+    };
+    let start_time = now_ms();
+    let reply = match upstream::call(call, &state.upstream_pool, proxy).await {
+        Ok(reply) => reply,
+        Err(e) => {
+            let message = e.fail_reason();
+            record_failure(
+                &state.db,
+                &format!("test-{}", Uuid::new_v4()),
+                TEST_VIRTUAL_MODEL_ID,
+                &member,
+                TEST_API_KEY_NAME,
+                start_time,
+                false,
+                false,
+                &message,
+                start_time,
+            );
+            return Err(message);
+        }
+    };
+
+    if reply.status.as_u16() >= 400 {
+        let body = upstream::read_body(reply.body).await.unwrap_or_default();
+        let message = format!(
+            "{} {}",
+            reply.status.as_u16(),
+            extract_error_message(&String::from_utf8_lossy(&body))
+        );
+        record_failure(
+            &state.db,
+            &format!("test-{}", Uuid::new_v4()),
+            TEST_VIRTUAL_MODEL_ID,
+            &member,
+            TEST_API_KEY_NAME,
+            start_time,
+            false,
+            false,
+            &message,
+            reply.start_at_ms,
+        );
+        return Err(message);
+    }
+
+    // 成功：读取响应体并提取 usage 落库。Responses 上游强制流式（SSE），
+    // 需要逐事件解析出 usage；其余协议直接读 JSON。
+    let usage = match member.protocol {
+        Protocol::OpenAiResponses => {
+            let body = upstream::read_body(reply.body).await.unwrap_or_default();
+            let text = String::from_utf8_lossy(&body).to_string();
+            let mut splitter = sse::SseSplitter::default();
+            let mut usage = Usage::default();
+            for event in splitter.feed(&text) {
+                if let Ok(value) = serde_json::from_str::<Value>(&event)
+                    && let Some(usage_value) = value.pointer("/response/usage")
+                    && let Some(parsed) =
+                        responses::ResponsesStreamConverter::extract_usage(usage_value)
+                {
+                    usage = parsed;
+                }
+            }
+            usage
+        }
+        _ => {
+            let body = upstream::read_body(reply.body).await.unwrap_or_default();
+            let text = String::from_utf8_lossy(&body).to_string();
+            let parsed: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({}));
+            match member.protocol {
+                Protocol::OpenAiCompat => parsed
+                    .get("usage")
+                    .filter(|u| u.is_object())
+                    .map(openai::extract_usage)
+                    .unwrap_or_default(),
+                Protocol::Anthropic => parsed
+                    .get("usage")
+                    .map(anthropic::extract_usage)
+                    .unwrap_or_default(),
+                Protocol::Gemini => parsed
+                    .get("usageMetadata")
+                    .map(gemini::extract_usage)
+                    .unwrap_or_default(),
+                Protocol::OpenAiResponses => unreachable!("handled above"),
+            }
+        }
+    };
+    let end_time = now_ms();
+    RequestRecord {
+        request_id: format!("test-{}", Uuid::new_v4()),
+        virtual_model_id: TEST_VIRTUAL_MODEL_ID,
+        provider_id: member.provider_id,
+        model_id: member.model_id.clone(),
+        stream: false,
+        ttft: None,
+        output_tokens_time: Some((end_time - reply.start_at_ms).max(0)),
+        ttft_start_ms: reply.start_at_ms,
+        start_time,
+        end_time,
+        usage,
+        success: true,
+        fail_reason: None,
+        api_key_name: TEST_API_KEY_NAME.to_string(),
+    }
+    .insert(&state.db);
+
+    Ok(())
+}

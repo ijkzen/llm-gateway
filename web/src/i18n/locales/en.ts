@@ -346,6 +346,12 @@ const en: Translation = {
 		deleteTitle: "Delete Provider Model",
 		deleteDesc: "Delete model",
 		deleteDescSuffix: "? This cannot be undone.",
+		test: "Test",
+		testing: "Testing...",
+		testSuccess: "Model test passed",
+		testFailedTitle: "Model test failed",
+		testFailedDesc: "The test request failed. Failure details:",
+		close: "Close",
 	},
 	virtualModels: {
 		title: "Virtual Models",

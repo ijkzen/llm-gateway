@@ -22,11 +22,12 @@ import { Switch } from "@/components/ui/switch";
 import {
 	type ProviderModel,
 	useDeleteProviderModel,
+	useTestProviderModel,
 	useUpdateProviderModel,
 } from "@/hooks/use-provider-models";
 import { useToastActions } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Pencil, Trash2 } from "lucide-react";
+import { FlaskConical, Loader2, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
@@ -72,8 +73,10 @@ export function ProviderModelDetailDialog({
 	const { toastSuccess, toastError } = useToastActions();
 	const updateModel = useUpdateProviderModel(providerId);
 	const deleteModel = useDeleteProviderModel(providerId);
+	const testModel = useTestProviderModel(providerId);
 	const [editing, setEditing] = useState(false);
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
+	const [testError, setTestError] = useState<string | null>(null);
 	const formSchema = useMemo(() => makeFormSchema(t), [t]);
 
 	const form = useForm<FormValues>({
@@ -103,6 +106,7 @@ export function ProviderModelDetailDialog({
 		});
 		setEditing(false);
 		setConfirmingDelete(false);
+		setTestError(null);
 	}, [open, model, form]);
 
 	const onSubmit = (values: FormValues) => {
@@ -127,6 +131,14 @@ export function ProviderModelDetailDialog({
 				toastSuccess(t("common.deleteSuccess"));
 			},
 			onError: (error) => toastError(t("common.deleteFailed"), error),
+		});
+	};
+
+	const handleTest = () => {
+		if (!model || testModel.isPending) return;
+		testModel.mutate(model.modelId, {
+			onSuccess: () => toastSuccess(t("providerModels.testSuccess")),
+			onError: (error) => setTestError(error.message),
 		});
 	};
 
@@ -290,10 +302,26 @@ export function ProviderModelDetailDialog({
 								</Button>
 							</>
 						) : (
-							<Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
-								<Pencil className="mr-1.5 size-4" />
-								{t("providerModels.editModel")}
-							</Button>
+							<>
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									onClick={handleTest}
+									disabled={testModel.isPending}
+								>
+									{testModel.isPending ? (
+										<Loader2 className="mr-1.5 size-4 animate-spin" />
+									) : (
+										<FlaskConical className="mr-1.5 size-4" />
+									)}
+									{t(testModel.isPending ? "providerModels.testing" : "providerModels.test")}
+								</Button>
+								<Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
+									<Pencil className="mr-1.5 size-4" />
+									{t("providerModels.editModel")}
+								</Button>
+							</>
 						)}
 					</DialogFooter>
 				</DialogContent>
@@ -314,6 +342,24 @@ export function ProviderModelDetailDialog({
 				destructive
 				isLoading={deleteModel.isPending}
 				handleConfirm={handleDelete}
+			/>
+
+			<ConfirmDialog
+				open={testError !== null}
+				onOpenChange={(open) => {
+					if (!open) setTestError(null);
+				}}
+				title={t("providerModels.testFailedTitle")}
+				desc={
+					<>
+						<p>{t("providerModels.testFailedDesc")}</p>
+						<p className="mt-2 rounded-lg bg-muted p-3 font-mono text-xs text-destructive break-all">
+							{testError}
+						</p>
+					</>
+				}
+				confirmText={t("providerModels.close")}
+				handleConfirm={() => setTestError(null)}
 			/>
 		</>
 	);
