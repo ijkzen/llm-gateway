@@ -41,6 +41,8 @@ const provider: Provider = {
 	billingMode: 0,
 	customHeader: "{}",
 	extra: "{}",
+	proxyEnabled: false,
+	proxyAddr: "",
 	createdAt: "2026-08-30T12:00:00Z",
 	updatedAt: "2026-08-30T12:00:00Z",
 };

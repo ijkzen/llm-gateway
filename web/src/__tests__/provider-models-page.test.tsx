@@ -62,6 +62,8 @@ function makeProvider(id: number, name: string): Provider {
 		billingMode: 0,
 		customHeader: "{}",
 		extra: "{}",
+		proxyEnabled: false,
+		proxyAddr: "",
 		createdAt: "",
 		updatedAt: "",
 	};
