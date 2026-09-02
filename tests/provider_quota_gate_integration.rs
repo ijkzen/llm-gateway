@@ -152,10 +152,12 @@ fn balance_data(provider_id: i32, amounts: &[f64]) -> UsageData {
         windows: vec![],
         balances: amounts
             .iter()
-            .map(|a| llm_gateway::usage::types::BalanceItem {
+            .enumerate()
+            .map(|(i, a)| llm_gateway::usage::types::BalanceItem {
                 label: "余额".to_string(),
                 amount: *a,
                 currency: None,
+                primary: i == 0,
             })
             .collect(),
     }

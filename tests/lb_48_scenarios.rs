@@ -54,6 +54,7 @@ fn balance_usage(provider_id: i32, amount: Option<f64>) -> UsageData {
             label: "余额".to_string(),
             amount: a,
             currency: None,
+            primary: true,
         }],
         None => vec![],
     };

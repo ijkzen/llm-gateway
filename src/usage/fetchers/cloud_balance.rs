@@ -130,15 +130,16 @@ fn parse_aliyun_bss(body: &str) -> Result<FetchOutput, UsageError> {
         .and_then(Value::as_str)
         .map(str::to_string);
     let mut items = Vec::new();
-    for (key, label) in [
-        ("AvailableAmount", "可用余额"),
-        ("CreditAmount", "信控额度"),
+    for (key, label, primary) in [
+        ("AvailableAmount", "可用余额", true),
+        ("CreditAmount", "信控额度", false),
     ] {
         if let Some(amount) = data.get(key).and_then(num) {
             items.push(BalanceItem {
                 label: label.to_string(),
                 amount,
                 currency: currency.clone(),
+                primary,
             });
         }
     }
@@ -218,17 +219,18 @@ fn parse_volcengine_billing(status: u16, body: &str) -> Result<FetchOutput, Usag
 
     let cny = || Some("CNY".to_string());
     let mut items = Vec::new();
-    for (key, label) in [
-        ("AvailableBalance", "可用余额"),
-        ("CashBalance", "现金余额"),
-        ("FreezeAmount", "冻结金额"),
-        ("ArrearsBalance", "欠费金额"),
+    for (key, label, primary) in [
+        ("AvailableBalance", "可用余额", true),
+        ("CashBalance", "现金余额", false),
+        ("FreezeAmount", "冻结金额", false),
+        ("ArrearsBalance", "欠费金额", false),
     ] {
         if let Some(amount) = result.get(key).and_then(num) {
             items.push(BalanceItem {
                 label: label.to_string(),
                 amount,
                 currency: cny(),
+                primary,
             });
         }
     }

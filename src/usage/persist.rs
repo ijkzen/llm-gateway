@@ -217,10 +217,12 @@ mod tests {
             windows: vec![],
             balances: amounts
                 .iter()
-                .map(|a| BalanceItem {
+                .enumerate()
+                .map(|(i, a)| BalanceItem {
                     label: "余额".to_string(),
                     amount: *a,
                     currency: None,
+                    primary: i == 0,
                 })
                 .collect(),
         }

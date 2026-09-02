@@ -254,6 +254,7 @@ async fn test_usage_balance_label_localization() {
         label: "余额（CNY）".to_string(),
         amount: 1.23,
         currency: Some("CNY".to_string()),
+        primary: true,
     };
     // 默认 zh 输出与旧版一致。
     assert_eq!(item.with_localized_label(Lang::Zh).label, "余额（CNY）");
@@ -264,6 +265,7 @@ async fn test_usage_balance_label_localization() {
         label: "剩余额度".to_string(),
         amount: 10.0,
         currency: None,
+        primary: true,
     };
     assert_eq!(
         item.with_localized_label(Lang::En).label,

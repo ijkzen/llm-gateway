@@ -182,18 +182,28 @@ impl UsageData {
         saw_available.then_some(true)
     }
 
-    /// 按量付费「当前是否可用」判定：查得到余额且全部余额条目合计 > 0 → true；
-    /// 查得到余额且合计 = 0 → false（余额耗尽，不参与负载均衡）；
+    /// LB 比较用的主余额金额：取 fetcher 标记的 primary 条目；旧缓存数据无
+    /// 标记时回退取第一条（各 fetcher 的条目顺序本就以主字段打头）。
+    pub fn primary_balance(&self) -> Option<f64> {
+        if self.kind != UsageKind::Balance {
+            return None;
+        }
+        self.balances
+            .iter()
+            .find(|b| b.primary)
+            .or_else(|| self.balances.first())
+            .map(|b| b.amount)
+    }
+
+    /// 按量付费「当前是否可用」判定：查得到余额且主余额字段 > 0 → true；
+    /// 主余额字段 = 0 → false（余额耗尽，不参与负载均衡）；
     /// 非 balance 形态 / 完全查不到余额（无法判定）→ None，视为可用，避免上游抖动误伤。
     pub fn balance_usable(&self) -> Option<bool> {
         if self.kind != UsageKind::Balance {
             return None;
         }
-        if self.balances.is_empty() {
-            return None;
-        }
-        let total: f64 = self.balances.iter().map(|b| b.amount).sum();
-        Some(total > 0.0)
+        let amount = self.primary_balance()?;
+        Some(amount > 0.0)
     }
 
     /// 返回 remaining_percent 已按 remaining_percent_value() 推导并取整的副本：
@@ -243,6 +253,9 @@ pub struct BalanceItem {
     pub amount: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub currency: Option<String>,
+    /// 是否为该供应商参与 LB 比较的主余额字段（fetcher 侧标记，每家至多一条）。
+    #[serde(default)]
+    pub primary: bool,
 }
 
 /// fetcher 侧中文 label → 英文 label 的映射（未知 label 原样返回）。
@@ -289,6 +302,7 @@ impl BalanceItem {
             label,
             amount: self.amount,
             currency: self.currency.clone(),
+            primary: self.primary,
         }
     }
 }
@@ -463,17 +477,19 @@ mod tests {
             windows: vec![],
             balances: amounts
                 .iter()
-                .map(|a| BalanceItem {
+                .enumerate()
+                .map(|(i, a)| BalanceItem {
                     label: "余额".to_string(),
                     amount: *a,
                     currency: None,
+                    primary: i == 0,
                 })
                 .collect(),
         };
-        // 查得到余额且合计 > 0 → 可用。
+        // 查得到余额且主余额字段 > 0 → 可用。
         assert_eq!(balance(&[100.0]).balance_usable(), Some(true));
         assert_eq!(balance(&[50.0, 0.5]).balance_usable(), Some(true));
-        // 查得到余额且合计 = 0 → 不可用（余额耗尽）。
+        // 查得到余额且主余额字段 = 0 → 不可用（余额耗尽）。
         assert_eq!(balance(&[0.0]).balance_usable(), Some(false));
         assert_eq!(balance(&[0.0, 0.0]).balance_usable(), Some(false));
         // 完全查不到余额（空 balances）→ 无法判定，视为可用。

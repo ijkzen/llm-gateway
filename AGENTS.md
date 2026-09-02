@@ -18,7 +18,7 @@
   - 数据面板：`/api/stats/summary`（全量历史累计：请求数/成功率/总 token/加权缓存命中率）+ `/api/stats/charts`（过去 24 小时：按小时分桶趋势 + 按上游 `model_id` 分布）；前端 overview 页（侧边栏「数据面板」）用 Recharts + shadcn chart 展示 4 指标卡与两组三态图表（折线/饼图/降序条形图，Top 10 + 其他）。
   - 供应商用量查询：`GET /api/providers/{id}/usage?refresh=1`（`src/usage/`）。对 `extra.usage=true` 的供应商按 base_url host（火山/阶跃再看 path 区分订阅 Plan 与按量账户）分发到各厂商 fetcher（API key 直查 / Copilot OAuth / 火山与阿里 AK/SK 签名 / CookieCloud cookie 系），归一化为订阅制窗口（5h/周/月，厂商不提供的窗口 `available=false`）或按量余额条目；成功结果写**数据库缓存**（`provider_usage_cache` 表，10 分钟内直出，过期/缺失才真实抓取并重新落库；更新/删除供应商时失效；`?refresh=1` 强制重取），详情页内嵌「用量信息」卡片（进度条按剩余百分比着色）。
   - 用量自动刷新与额度门控：内置定时任务 `usage_refresh`（`@every 5m`，`src/cron/seed.rs` 种子行）刷新全部用量供应商（**不含 enable 过滤**，停用的也持续监测）并落库；订阅制供应商额度耗尽（任一厂商已提供的窗口剩余为 0）时自动停用该 Provider 及名下全部虚拟模型子模型，恢复后自动启用（`src/usage/persist.rs::apply_usage_gate`）。
-  - 虚拟模型 LB 用量感知排序：策略 0/1（订阅制优先/按量优先）分组后组内排序——订阅制按 5h→周→月**剩余百分比**逐层比较、三层全平随机选一，按量付费按剩余金额合计降序；用量优先取 10 分钟数据库缓存，缺失/过期才真实抓取（`src/proxy/usage_rank.rs`）。**剔除口径**：订阅制任一已提供窗口剩余为 0（`UsageData::subscription_usable()` 为 false）即从候选剔除；按量付费查得到余额且合计为 0（`UsageData::balance_usable()` 为 false）即从候选剔除，查不到余额的按量成员**不剔除**（无法判定视为可用）；剔除后的顺序即 failover 尝试顺序（降级策略=1 时每次失败在剩余成员中按同策略重新选路）。
+  - 虚拟模型 LB 用量感知排序：策略 0/1（订阅制优先/按量优先）分组后组内排序——订阅制按 5h→周→月**剩余百分比**逐层比较、同层打平比该层重置时间（早的优先）、全平随机选一，按量付费按 fetcher 标记的主余额字段（`BalanceItem.primary`，各家指定单字段不做合计）降序；用量优先取 10 分钟数据库缓存，缺失/过期才真实抓取（`src/proxy/usage_rank.rs`）。**剔除口径**：订阅制任一已提供窗口剩余为 0（`UsageData::subscription_usable()` 为 false）即从候选剔除；按量付费查得到余额且合计为 0（`UsageData::balance_usable()` 为 false）即从候选剔除，查不到余额的按量成员**不剔除**（无法判定视为可用）；剔除后的顺序即 failover 尝试顺序（降级策略=1 时每次失败在剩余成员中按同策略重新选路）。
 - **运行方式**: 后端启动后监听 `0.0.0.0:4007`，前端 SPA 以静态资源形式内嵌在后端中，通过 `/api/*` 与后端通信。
 
 ## 技术栈

@@ -67,19 +67,20 @@ fn parse_xiaomi_balance(body: &str) -> Result<FetchOutput, UsageError> {
         .map(str::to_string);
 
     let mut items = Vec::new();
-    for (key, label) in [
-        ("balance", "余额"),
-        ("cashBalance", "现金余额"),
-        ("giftBalance", "赠送余额"),
-        ("frozenBalance", "冻结金额"),
-        ("overdraftLimit", "透支额度"),
-        ("remainingOverdraftLimit", "剩余透支额度"),
+    for (key, label, primary) in [
+        ("balance", "余额", true),
+        ("cashBalance", "现金余额", false),
+        ("giftBalance", "赠送余额", false),
+        ("frozenBalance", "冻结金额", false),
+        ("overdraftLimit", "透支额度", false),
+        ("remainingOverdraftLimit", "剩余透支额度", false),
     ] {
         if let Some(amount) = data.get(key).and_then(num) {
             items.push(BalanceItem {
                 label: label.to_string(),
                 amount,
                 currency: currency.clone(),
+                primary,
             });
         }
     }

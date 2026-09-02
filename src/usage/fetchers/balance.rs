@@ -52,10 +52,13 @@ fn parse_deepseek(body: &str) -> Result<FetchOutput, UsageError> {
             ("granted_balance", "赠送余额"),
         ] {
             if let Some(amount) = info.get(key).and_then(num) {
+                // 多币种并存时主余额字段取 CNY 条目。
+                let primary = key == "total_balance" && currency == "CNY";
                 items.push(BalanceItem {
                     label: format!("{label}（{currency}）"),
                     amount,
                     currency: Some(currency.clone()),
+                    primary,
                 });
             }
         }
@@ -101,16 +104,17 @@ fn parse_moonshot(body: &str) -> Result<FetchOutput, UsageError> {
         .ok_or_else(|| UsageError::Parse("缺少 data 字段".to_string()))?;
 
     let mut items = Vec::new();
-    for (key, label) in [
-        ("available_balance", "可用余额"),
-        ("cash_balance", "现金余额"),
-        ("voucher_balance", "代金券余额"),
+    for (key, label, primary) in [
+        ("available_balance", "可用余额", true),
+        ("cash_balance", "现金余额", false),
+        ("voucher_balance", "代金券余额", false),
     ] {
         if let Some(amount) = data.get(key).and_then(num) {
             items.push(BalanceItem {
                 label: label.to_string(),
                 amount,
                 currency: None,
+                primary,
             });
         }
     }
@@ -165,16 +169,19 @@ fn parse_openrouter(body: &str) -> Result<FetchOutput, UsageError> {
                 label: "剩余额度".to_string(),
                 amount: (total - used).max(0.0),
                 currency: usd(),
+                primary: true,
             },
             BalanceItem {
                 label: "已使用".to_string(),
                 amount: used,
                 currency: usd(),
+                primary: false,
             },
             BalanceItem {
                 label: "总充值".to_string(),
                 amount: total,
                 currency: usd(),
+                primary: false,
             },
         ],
     })
@@ -212,16 +219,17 @@ fn parse_stepfun_account(body: &str) -> Result<FetchOutput, UsageError> {
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
     let cny = || Some("CNY".to_string());
     let mut items = Vec::new();
-    for (key, label) in [
-        ("balance", "可用余额"),
-        ("total_cash_balance", "累计充值"),
-        ("total_voucher_balance", "赠送余额"),
+    for (key, label, primary) in [
+        ("balance", "可用余额", true),
+        ("total_cash_balance", "累计充值", false),
+        ("total_voucher_balance", "赠送余额", false),
     ] {
         if let Some(amount) = v.get(key).and_then(num) {
             items.push(BalanceItem {
                 label: label.to_string(),
                 amount,
                 currency: cny(),
+                primary,
             });
         }
     }
