@@ -877,6 +877,21 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
     for (index, member) in ordered.iter().enumerate() {
         let has_more = index + 1 < ordered.len();
         let start_time = now_ms();
+        // 降级失败统一落库：与最终失败同字段，request_id 带尝试序号后缀区分。
+        let record_degraded = |message: &str, ttft_start_ms: i64| {
+            record_failure(
+                &state.db,
+                &format!("{request_id}-{}", index + 1),
+                virtual_model.virtual_model_id,
+                member,
+                &api_key.name,
+                start_time,
+                false,
+                client_stream,
+                message,
+                ttft_start_ms,
+            );
+        };
         let decrypted_key = match crypto::decrypt(&member.api_key_encrypted) {
             Ok(key) => key,
             Err(e) => {
@@ -892,6 +907,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                         fail_reason = %message,
                         "上游成员失败，降级重试下一成员",
                     );
+                    record_degraded(&message, start_time);
                     last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
@@ -931,6 +947,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                             fail_reason = %message,
                             "上游成员请求构造失败，降级重试下一成员",
                         );
+                        record_degraded(&message, start_time);
                         last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                         continue;
                     }
@@ -976,6 +993,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                         fail_reason = %message,
                         "上游成员调用失败，降级重试下一成员",
                     );
+                    record_degraded(&message, start_time);
                     last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
@@ -1016,6 +1034,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                     fail_reason = %message,
                     "上游成员返回可重试错误，降级重试下一成员",
                 );
+                record_degraded(&message, reply.start_at_ms);
                 last_failure = Some((member.clone(), message, status));
                 continue;
             }

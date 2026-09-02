@@ -441,7 +441,8 @@ async fn failover_retries_next_member_on_429() {
     let vm = virtual_model::ActiveModel {
         display_id: Set("vm-fo".to_string()),
         enable: Set(true),
-        load_balancing_strategy: Set(3),
+        // RoundRobin：成员顺序确定（A→B），保证 A 的 429 必被尝试后降级到 B。
+        load_balancing_strategy: Set(2),
         fallback_strategy: Set(1), // RetryEnabledMembers
         created_at: Set(chrono::Utc::now()),
         updated_at: Set(chrono::Utc::now()),
@@ -465,11 +466,112 @@ async fn failover_retries_next_member_on_429() {
     let (status, text) = send_chat(&app, chat_body("vm-fo", false)).await;
     assert_eq!(status, 200, "应 failover 到成员 B：{text}");
 
-    let rows = wait_for_records(&db, 1).await;
-    let record = &rows[0];
-    assert_eq!(record.success, true);
+    let rows = wait_for_records(&db, 2).await;
+    // 降级失败行：成员 A 带 -1 后缀，success=false，fail_reason 记上游原因。
+    let failed = rows.iter().find(|r| !r.success).expect("应有降级失败行");
+    assert_eq!(failed.provider_id, provider_a);
+    assert_eq!(failed.model_id, "m-a");
+    assert!(
+        failed
+            .fail_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("rate limited")
+    );
+    assert!(
+        failed.request_id.ends_with("-1"),
+        "降级失败行 request_id 应带 -1 后缀：{}",
+        failed.request_id
+    );
+    // 最终成功行：成员 B，原始 request_id。
+    let record = rows.iter().find(|r| r.success).expect("应有成功行");
     assert_eq!(record.provider_id, provider_b, "记录最终成功的成员");
     assert_eq!(record.model_id, "m-b");
+    assert!(
+        !record.request_id.ends_with("-1"),
+        "成功行应为原始 request_id：{}",
+        record.request_id
+    );
+}
+
+#[tokio::test]
+async fn all_members_fail_records_each_attempt() {
+    // 全部成员失败：A、B 均返回 429（fallback=1）。每个成员尝试各落一行：
+    // 降级中失败行带 -1 后缀，最后失败行用原始 request_id。
+    let fail_router = Router::new().route(
+        "/v1/chat/completions",
+        post(|| async {
+            (
+                HttpStatus::TOO_MANY_REQUESTS,
+                Json(json!({"error": {"message": "rate limited"}})),
+            )
+                .into_response()
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fail_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, fail_router).await.unwrap();
+    });
+    let fail_base = format!("http://{fail_addr}");
+
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+    let provider_a = seed_provider(&db, "p-a", &fail_base, 0, 0).await;
+    let model_a = seed_provider_model(&db, provider_a, "m-a").await;
+    let provider_b = seed_provider(&db, "p-b", &fail_base, 0, 0).await;
+    let model_b = seed_provider_model(&db, provider_b, "m-b").await;
+
+    let vm = virtual_model::ActiveModel {
+        display_id: Set("vm-all-fail".to_string()),
+        enable: Set(true),
+        // RoundRobin：成员顺序确定（A→B），A 行必为降级中失败（-1 后缀）、
+        // B 行为最后失败（原始 id），断言可绑定具体 provider。
+        load_balancing_strategy: Set(2),
+        fallback_strategy: Set(1), // RetryEnabledMembers
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    let vm = vm.insert(&db).await.unwrap();
+    for model_id in [model_a, model_b] {
+        virtual_model_item::ActiveModel {
+            virtual_model_id: Set(vm.virtual_model_id),
+            model_id: Set(model_id),
+            enable: Set(true),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+    }
+
+    let (status, _text) = send_chat(&app, chat_body("vm-all-fail", false)).await;
+    assert_eq!(status, 429, "全败取最后成员的状态");
+
+    let rows = wait_for_records(&db, 2).await;
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|r| !r.success), "全败所有行 success=false");
+
+    // RoundRobin 下成员顺序确定（A→B）：A 行（降级中失败）带 -1 后缀，
+    // B 行（最后失败）用原始 request_id。
+    let first = rows.iter().find(|r| r.provider_id == provider_a).unwrap();
+    assert_eq!(first.model_id, "m-a");
+    assert!(
+        first.request_id.ends_with("-1"),
+        "A 行应带 -1 后缀：{}",
+        first.request_id
+    );
+    let last = rows.iter().find(|r| r.provider_id == provider_b).unwrap();
+    assert_eq!(last.model_id, "m-b");
+    assert!(
+        !last.request_id.ends_with("-1"),
+        "B 行应为原始 request_id：{}",
+        last.request_id
+    );
 }
 
 #[tokio::test]

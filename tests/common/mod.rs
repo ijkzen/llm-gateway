@@ -26,7 +26,17 @@ const TEST_COOKIE: &str = "lg_session=itest-session-token-0123456789abcdef";
 const TEST_API_KEY_PLAIN: &str = "lg-itest-api-key-0000000000000";
 const TEST_BEARER: &str = "Bearer lg-itest-api-key-0000000000000";
 
-/// Creates an in-memory database, starts a job worker, and builds the
+/// 集成测试共享临时库目录（进程内首次使用时创建，避免泄漏）。
+fn shared_test_db_dir() -> &'static std::path::Path {
+    use std::sync::OnceLock;
+    static DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
+    DIR.get_or_init(|| tempfile::tempdir().unwrap()).path()
+}
+
+/// 每个连接一个唯一数据库文件（并发测试互不共享）。
+static DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Creates a temp-file database, starts a job worker, and builds the
 /// scheduler on top of it. The scheduler is returned unstarted so each test
 /// can register handlers and seed data before calling `start()`.
 pub async fn setup_db_and_scheduler() -> (
@@ -34,7 +44,16 @@ pub async fn setup_db_and_scheduler() -> (
     SchedulerRuntime,
     tokio::sync::broadcast::Sender<JobLogEvent>,
 ) {
-    let db = db::connect("sqlite::memory:").await.unwrap();
+    // 用临时文件库而非 `sqlite::memory:`：连接池 max_connections(5) 下，
+    // 内存库每个连接是独立数据库，异步落库（tokio::spawn insert）与查询
+    // 可能落到不同连接而互相不可见（并发时池子开第二连接即触发）。
+    let n = DB_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // 绝对路径须用 sqlite:///（三斜杠）前缀，两斜杠会被当相对路径；
+    // mode=rwc 使 sqlx 在文件不存在时自动创建（同生产 DATABASE_URL 默认值）。
+    let db_path = shared_test_db_dir().join(format!("itest-{n}.db"));
+    let db = db::connect(&format!("sqlite:///{}?mode=rwc", db_path.display()))
+        .await
+        .unwrap();
 
     let (log_tx, _) = tokio::sync::broadcast::channel::<JobLogEvent>(64);
     let worker = JobWorker::new(db.clone(), 2, 100, log_tx.clone());
