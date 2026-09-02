@@ -220,6 +220,69 @@ async fn test_filters_provider_model_success() {
 }
 
 #[tokio::test]
+async fn test_multi_value_filters() {
+    let (app, db) = setup_app().await;
+    seed_request(&db, "r1", 1, "key-a", 1_700_000_000_000, true).await;
+    seed_request(&db, "r2", 2, "key-b", 1_700_000_100_000, true).await;
+    seed_request(&db, "r3", 3, "key-c", 1_700_000_200_000, true).await;
+
+    // vmId 逗号分隔多值 = IN 语义（并集）。
+    let (_, body) = get(&app, "/api/request-logs?vmId=1,2").await;
+    assert_eq!(body["data"]["total"], 2);
+    let ids: Vec<&str> = body["data"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["requestId"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["r2", "r1"]);
+
+    // 单值形式兼容。
+    let (_, body) = get(&app, "/api/request-logs?vmId=3").await;
+    assert_eq!(body["data"]["total"], 1);
+    assert_eq!(body["data"]["items"][0]["requestId"], "r3");
+
+    // apiKey 多值 + 空段忽略。
+    let (_, body) = get(&app, "/api/request-logs?apiKey=key-a,,key-c").await;
+    assert_eq!(body["data"]["total"], 2);
+
+    // 多值过滤缺省 = 不过滤。
+    let (_, body) = get(&app, "/api/request-logs?apiKey=").await;
+    assert_eq!(body["data"]["total"], 3);
+}
+
+#[tokio::test]
+async fn test_multi_value_provider_and_model_filters() {
+    let (app, db) = setup_app().await;
+    seed_request_full(&db, "m1", 1, 1, "gpt-4o", "key-a", 1_700_000_000_000, true).await;
+    seed_request_full(
+        &db,
+        "m2",
+        1,
+        1,
+        "claude-3",
+        "key-a",
+        1_700_000_100_000,
+        true,
+    )
+    .await;
+    seed_request_full(&db, "m3", 1, 2, "gpt-4o", "key-a", 1_700_000_200_000, true).await;
+
+    // providerId 多值。
+    let (_, body) = get(&app, "/api/request-logs?providerId=1,2").await;
+    assert_eq!(body["data"]["total"], 3);
+
+    // modelId 多值。
+    let (_, body) = get(&app, "/api/request-logs?modelId=gpt-4o,claude-3").await;
+    assert_eq!(body["data"]["total"], 3);
+
+    // 组合：providerId + modelId 多值交集。
+    let (_, body) = get(&app, "/api/request-logs?providerId=1&modelId=claude-3").await;
+    assert_eq!(body["data"]["total"], 1);
+    assert_eq!(body["data"]["items"][0]["requestId"], "m2");
+}
+
+#[tokio::test]
 async fn test_sorting_and_page_size() {
     let (app, db) = setup_app().await;
     seed_request(&db, "a", 1, "k", 1_700_000_000_000, true).await;
