@@ -2,7 +2,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::Request;
-use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -673,4 +673,76 @@ async fn test_delete_provider_cascades_virtual_model_items() {
     // 已删除供应商的模型不能再被映射（已不存在）。
     let (status, _) = send_json(app, "POST", "/api/virtual-models", vm_payload("vm3", &[a])).await;
     assert_eq!(status, 400);
+}
+
+/// 手动禁用供应商应级联停用其名下虚拟模型子模型，且成员排序把停用者沉底；
+/// 重新启用后级联恢复（与用量额度门控 apply_usage_gate 语义一致）。
+#[tokio::test]
+async fn provider_disable_cascades_to_virtual_model_items_and_resorts() {
+    let (app, db) = setup_app().await;
+    // "a-model" 挂在将被禁用的供应商下，字母序本就排在前；"b-model" 挂在保留启用的供应商下。
+    let p_keep = seed_provider(&db, "keep").await;
+    let p_disable = seed_provider(&db, "disable").await;
+    let m_alpha = seed_provider_model(&db, p_disable, "a-model").await;
+    let m_beta = seed_provider_model(&db, p_keep, "b-model").await;
+
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload("vm", &[m_alpha, m_beta]),
+    )
+    .await;
+    assert_eq!(status, 201);
+
+    // 手动禁用供应商（供应商详情卡片的启用开关即此接口）。
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{p_disable}"),
+        json!({ "enable": false }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["code"], "0");
+
+    // DB 层：该供应商名下全部虚拟模型子模型同步停用（不是只翻 provider.enable）。
+    let disabled_item = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(m_alpha))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!disabled_item.enable, "禁用供应商后子模型条目应被级联停用");
+
+    // API 层：被禁用的成员沉底排在启用成员之后，且带 providerEnable=false。
+    let (status, body) = send_json(app.clone(), "GET", "/api/virtual-models", Value::Null).await;
+    assert_eq!(status, 200);
+    let vms = body["data"].as_array().unwrap();
+    let vm = vms.iter().find(|v| v["displayId"] == "vm").unwrap();
+    let members = vm["items"].as_array().unwrap();
+    assert_eq!(members.len(), 2);
+    assert_eq!(members[0]["providerModelId"], "b-model");
+    assert!(members[0]["enable"].as_bool().unwrap());
+    assert!(members[0]["providerEnable"].as_bool().unwrap());
+    assert_eq!(members[1]["providerModelId"], "a-model");
+    assert!(!members[1]["enable"].as_bool().unwrap());
+    assert!(!members[1]["providerEnable"].as_bool().unwrap());
+
+    // 重新启用 → 级联恢复子模型。
+    let (status, _) = send_json(
+        app,
+        "PUT",
+        &format!("/api/providers/{p_disable}"),
+        json!({ "enable": true }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let reenabled = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(m_alpha))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(reenabled.enable, "重新启用供应商后子模型条目应被级联恢复");
 }

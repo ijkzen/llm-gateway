@@ -415,6 +415,8 @@ async fn update_provider(
         .custom_header
         .unwrap_or_else(|| model.custom_header.clone());
     let extra = req.extra.unwrap_or_else(|| model.extra.clone());
+    let enable_new = req.enable.unwrap_or(model.enable);
+    let enable_changed = enable_new != model.enable;
     // 空字符串表示"不修改"，其余值覆盖。
     let new_api_key = req
         .api_key
@@ -442,7 +444,7 @@ async fn update_provider(
 
     let mut active: ActiveModel = model.into();
     active.name = Set(name.trim().to_string());
-    active.enable = Set(req.enable.unwrap_or(active.enable.unwrap()));
+    active.enable = Set(enable_new);
     active.base_url = Set(base_url.trim().to_string());
     active.protocol_type = Set(protocol_type);
     active.billing_mode = Set(billing_mode);
@@ -459,6 +461,14 @@ async fn update_provider(
 
     match crate::provider_repo::update_provider(&state.db, active).await {
         Ok(model) => {
+            // 手动切换启用状态时级联同步该供应商名下全部虚拟模型子模型
+            // （与用量额度门控共用 set_items_enabled，保证成员排序/编辑态一致）。
+            if enable_changed
+                && let Err(e) =
+                    crate::provider_repo::set_items_enabled(&state.db, id, enable_new).await
+            {
+                tracing::warn!(provider_id = id, "级联更新虚拟模型子模型启用状态失败：{e}");
+            }
             // 凭据/字段可能变化，失效（内存 + 数据库）用量缓存避免展示旧结果。
             state.usage_cache.invalidate(id).await;
             if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {

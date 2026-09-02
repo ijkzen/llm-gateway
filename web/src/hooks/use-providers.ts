@@ -1,3 +1,4 @@
+import { virtualModelKeys } from "@/hooks/use-virtual-models";
 import { type ApiResponse, api, unwrap } from "@/lib/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -125,7 +126,11 @@ export function useUpdateProvider() {
 			const res = await api.put(`providers/${id}`, { json: body }).json<ApiResponse<Provider>>();
 			return unwrap(res);
 		},
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: providerKeys.all });
+			// 启用状态变化会级联到虚拟模型成员（停用/排序），一并刷新。
+			queryClient.invalidateQueries({ queryKey: virtualModelKeys.all });
+		},
 	});
 }
 
