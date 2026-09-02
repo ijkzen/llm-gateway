@@ -68,7 +68,7 @@ export default function SettingsPage() {
 	return (
 		<div className="space-y-6">
 			<PageHeader icon={SETTINGS_PAGE.icon} title={t(SETTINGS_PAGE.titleKey)}>
-				<Button variant="outline" onClick={() => setChangePasswordOpen(true)}>
+				<Button variant="outline" size="sm" onClick={() => setChangePasswordOpen(true)}>
 					<KeyRound className="size-4" />
 					{t("settings.changePassword")}
 				</Button>

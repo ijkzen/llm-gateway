@@ -36,9 +36,9 @@ export function usageEnabled(extra: string): boolean {
 
 /** 剩余百分比 → 进度条颜色：充足绿 / 紧张黄 / 告急红。 */
 function barColor(remainingPercent: number): string {
-	if (remainingPercent > 50) return "bg-emerald-500";
-	if (remainingPercent > 20) return "bg-amber-500";
-	return "bg-red-500";
+	if (remainingPercent > 50) return "bg-success";
+	if (remainingPercent > 20) return "bg-warning";
+	return "bg-destructive";
 }
 
 function formatReset(

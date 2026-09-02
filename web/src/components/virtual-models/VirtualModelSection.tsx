@@ -45,9 +45,7 @@ function MemberCard({ item }: { item: VirtualModelItem }) {
 			<p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
 				<span className="truncate">{item.providerName}</span>
 				{providerDisabled && (
-					<span className="shrink-0 text-amber-600 dark:text-amber-400">
-						{t("virtualModels.disabledWithProvider")}
-					</span>
+					<span className="shrink-0 text-warning">{t("virtualModels.disabledWithProvider")}</span>
 				)}
 				{item.enable === false && (
 					<span className="shrink-0">{t("virtualModels.disabledMark")}</span>

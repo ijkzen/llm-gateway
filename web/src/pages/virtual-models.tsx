@@ -1,8 +1,8 @@
+import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualModelDeleteDialog } from "@/components/virtual-models/VirtualModelDeleteDialog";
 import { VirtualModelEditDialog } from "@/components/virtual-models/VirtualModelEditDialog";
@@ -95,11 +95,10 @@ export default function VirtualModelsPage() {
 			</PageHeader>
 
 			{models.length === 0 ? (
-				<Card>
-					<CardContent className="p-6 text-center text-sm text-muted-foreground">
-						{t("virtualModels.emptyHint")}
-					</CardContent>
-				</Card>
+				<EmptyState
+					title={t("virtualModels.emptyTitle")}
+					description={t("virtualModels.emptyHint")}
+				/>
 			) : (
 				<div className="space-y-6 pb-6">
 					{models.map((vm) => (

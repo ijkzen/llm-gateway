@@ -27,6 +27,9 @@
 		--success-foreground: 0 0% 100%;
 		--warning: 38 92% 50%;
 		--warning-foreground: 0 0% 100%;
+		--info: 221 83% 53%;
+		--info-foreground: 0 0% 100%;
+		--warning-foreground: 0 0% 100%;
 		--border: 214 24% 88%;
 		--input: 214 24% 88%;
 		--ring: 222 47% 8%;
@@ -67,6 +70,9 @@
 		--success: 160 60% 45%;
 		--success-foreground: 222 47% 6%;
 		--warning: 38 92% 55%;
+		--warning-foreground: 222 47% 6%;
+		--info: 217 91% 65%;
+		--info-foreground: 222 47% 6%;
 		--warning-foreground: 222 47% 6%;
 		--border: 217 15% 18%;
 		--input: 217 15% 18%;
@@ -316,6 +322,18 @@ body {
 }
 
 /* View Transition animation for theme toggle — controlled by JS-injected <style> */
+
+/* 路由切换：内容区淡入 + 轻微上移（reduced-motion 由全局兜底关闭） */
+@keyframes page-enter {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+}
+
+.page-enter {
+	animation: page-enter 0.24s ease-out;
+}
 
 /* Sticky header 吸顶样式见 sticky-header.css（由 main.tsx 引入）：
    使用 scroll-state 容器查询替代 JS 滚动监听，Biome 1.9 不支持该语法故单独抽离 */

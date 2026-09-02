@@ -56,7 +56,7 @@ function SortableProviderRow({ provider, selected, onSelect }: SortableProviderR
 					"flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition-colors",
 					selected
 						? "bg-foreground text-background dark:bg-primary dark:text-primary-foreground"
-						: "hover:bg-slate-100/60 dark:hover:bg-white/5",
+						: "hover:bg-foreground/5",
 				)}
 			>
 				<GripVertical
@@ -77,7 +77,7 @@ function SortableProviderRow({ provider, selected, onSelect }: SortableProviderR
 				<span
 					className={cn(
 						"size-2 shrink-0 rounded-full",
-						provider.enable ? "bg-emerald-500" : "bg-red-500",
+						provider.enable ? "bg-success" : "bg-destructive",
 					)}
 					aria-label={provider.enable ? t("common.enabled") : t("common.disabled")}
 				/>

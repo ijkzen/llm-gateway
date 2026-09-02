@@ -311,7 +311,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 													onClick={() => applyTemplate(template)}
 													className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/60"
 												>
-													<Sparkles className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+													<Sparkles className="size-4 shrink-0 text-success" />
 													<span className="truncate">
 														{t("providers.applyTemplate")}{" "}
 														<span className="font-medium">{template.name}</span>{" "}
@@ -460,7 +460,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 							<button
 								type="button"
 								onClick={() => setAdvancedOpen((v) => !v)}
-								className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium transition-colors hover:bg-muted/50"
+								className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium transition-colors hover:bg-foreground/5"
 							>
 								<span>{t("providers.advanced")}</span>
 								{advancedOpen ? (

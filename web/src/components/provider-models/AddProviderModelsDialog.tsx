@@ -84,14 +84,14 @@ function MatchStateLabel({ state }: { state: MatchState }) {
 	const { t } = useTranslation();
 	if (state === "smart") {
 		return (
-			<span className="shrink-0 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+			<span className="shrink-0 text-xs font-medium text-success">
 				{t("providerModels.smartFilled")}
 			</span>
 		);
 	}
 	if (state === "partial") {
 		return (
-			<span className="shrink-0 text-xs font-medium text-amber-600 dark:text-amber-400">
+			<span className="shrink-0 text-xs font-medium text-warning">
 				{t("providerModels.partialInfo")}
 			</span>
 		);
@@ -496,7 +496,7 @@ export function AddProviderModelsDialog({
 														onClick={() => applyCatalogCandidate(hit)}
 														className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60"
 													>
-														<Sparkles className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+														<Sparkles className="size-4 shrink-0 text-success" />
 														<span className="min-w-0">
 															<span className="block truncate font-mono">{hit.id}</span>
 															<span className="block truncate text-xs text-muted-foreground">

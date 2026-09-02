@@ -3,6 +3,8 @@ import {
 	type RaceWindowState,
 	raceWindowBounds,
 } from "@/components/race-window-control";
+import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useInView } from "@/hooks/use-in-view";
 import {
 	type ProviderRankItem,
@@ -113,10 +115,7 @@ export function ProviderRaceCard() {
 	};
 
 	return (
-		<div
-			ref={ref}
-			className="rounded-2xl border border-white/70 bg-white/65 p-5 shadow-[0_4px_16px_rgba(15,23,42,0.05),inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]"
-		>
+		<Card ref={ref} className="p-5">
 			<div className="mb-4 flex flex-wrap items-center gap-3">
 				<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
 					<TrendingUp className="h-4 w-4" />
@@ -144,7 +143,7 @@ export function ProviderRaceCard() {
 					{t("race.loadingAfterScroll")}
 				</div>
 			) : query.isLoading ? (
-				<div className="h-[220px] animate-pulse rounded-lg bg-slate-200/60 dark:bg-white/5" />
+				<Skeleton className="h-[220px] rounded-lg" />
 			) : query.isError ? (
 				<div className="flex h-[220px] flex-col items-center justify-center gap-2 text-xs text-muted-foreground">
 					<span>{t("race.loadFailed")}</span>
@@ -168,7 +167,7 @@ export function ProviderRaceCard() {
 					onRowClick={openProviderOverview}
 				/>
 			)}
-		</div>
+		</Card>
 	);
 }
 

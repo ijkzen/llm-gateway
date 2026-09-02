@@ -1,6 +1,8 @@
 import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { TrendLineChart } from "@/components/dashboard-charts";
+import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
+import { PageHeader } from "@/components/page-header";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
@@ -126,10 +128,7 @@ export default function ModelOverviewPage() {
 
 	return (
 		<div className="space-y-6">
-			<div className="flex items-center gap-2">
-				<TrendingUp className="size-5 text-muted-foreground" />
-				<h1 className="text-2xl font-bold tracking-tight">{title}</h1>
-			</div>
+			<PageHeader icon={TrendingUp} title={title} />
 
 			{/* 单模型指标卡片：独立时间段（置顶，概览优先） */}
 			<Card>
@@ -154,9 +153,7 @@ export default function ModelOverviewPage() {
 							))}
 						</div>
 					) : metrics.isError || !metrics.data ? (
-						<div className="flex h-[160px] items-center justify-center text-xs text-muted-foreground">
-							{t("overview.dataLoadFailed")}
-						</div>
+						<ErrorState onRetry={() => metrics.refetch()} />
 					) : (
 						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 							<StatsCard
@@ -219,9 +216,7 @@ export default function ModelOverviewPage() {
 					{callCharts.isLoading ? (
 						<Skeleton className="h-[260px] w-full" />
 					) : callCharts.isError || !callCharts.data ? (
-						<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-							{t("overview.dataLoadFailed")}
-						</div>
+						<ErrorState onRetry={() => callCharts.refetch()} />
 					) : (
 						<TrendLineChart
 							data={callCharts.data.callTrend}
@@ -251,9 +246,7 @@ export default function ModelOverviewPage() {
 					{tokenCharts.isLoading ? (
 						<Skeleton className="h-[260px] w-full" />
 					) : tokenCharts.isError || !tokenCharts.data ? (
-						<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-							{t("overview.dataLoadFailed")}
-						</div>
+						<ErrorState onRetry={() => tokenCharts.refetch()} />
 					) : (
 						<TrendLineChart
 							data={tokenCharts.data.tokenTrend}
@@ -281,9 +274,7 @@ export default function ModelOverviewPage() {
 				{insightQuery.isLoading ? (
 					<Skeleton className="h-[260px] w-full" />
 				) : insightQuery.isError || !insightQuery.data ? (
-					<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-						{t("overview.dataLoadFailed")}
-					</div>
+					<ErrorState onRetry={() => insightQuery.refetch()} />
 				) : (
 					<InsightAnalysisCard
 						data={insightQuery.data}

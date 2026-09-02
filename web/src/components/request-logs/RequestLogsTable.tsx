@@ -7,8 +7,10 @@ import {
 	raceWindowBounds,
 } from "@/components/race-window-control";
 import { RequestLogDetailDialog } from "@/components/request-logs/RequestLogDetailDialog";
+import { TableSkeleton } from "@/components/table-skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
 	Select,
 	SelectContent,
@@ -319,7 +321,7 @@ export function RequestLogsTable() {
 	return (
 		<div className="space-y-4">
 			{/* 过滤卡片：条件（上，重置右对齐）+ 时间（下，显示列右对齐） */}
-			<div className="rounded-2xl border border-white/70 bg-white/65 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
+			<Card className="p-3">
 				<div className="flex flex-wrap items-end gap-3">
 					<div className="space-y-1">
 						<p className="text-xs text-muted-foreground">{t("requestLogs.virtualModel")}</p>
@@ -446,7 +448,7 @@ export function RequestLogsTable() {
 						<DataTableViewOptions table={table} />
 					</div>
 				</div>
-			</div>
+			</Card>
 
 			{isError ? (
 				<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-destructive">
@@ -455,8 +457,10 @@ export function RequestLogsTable() {
 						{t("common.retry")}
 					</Button>
 				</div>
+			) : isLoading ? (
+				<TableSkeleton columns={columns.length} />
 			) : (
-				<div className="overflow-x-auto rounded-2xl border border-white/70 bg-white/65 shadow-[0_4px_16px_rgba(15,23,42,0.05),inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.06)]">
+				<Card className="overflow-x-auto">
 					<Table>
 						<TableHeader>
 							{table.getHeaderGroups().map((headerGroup) => (
@@ -472,20 +476,11 @@ export function RequestLogsTable() {
 							))}
 						</TableHeader>
 						<TableBody>
-							{isLoading ? (
-								<TableRow>
-									<TableCell
-										colSpan={columns.length}
-										className="py-10 text-center text-muted-foreground"
-									>
-										{t("common.loading")}
-									</TableCell>
-								</TableRow>
-							) : data && data.items.length > 0 ? (
+							{data && data.items.length > 0 ? (
 								table.getRowModel().rows.map((row) => (
 									<TableRow
 										key={row.id}
-										className="cursor-pointer transition-colors hover:bg-muted/50"
+										className="cursor-pointer"
 										onClick={() => setDetailRow(row.original)}
 									>
 										{row.getVisibleCells().map((cell) => (
@@ -508,7 +503,7 @@ export function RequestLogsTable() {
 							)}
 						</TableBody>
 					</Table>
-				</div>
+				</Card>
 			)}
 
 			{/* 服务端分页 */}

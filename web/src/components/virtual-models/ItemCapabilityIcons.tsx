@@ -26,7 +26,7 @@ export function ItemCapabilityIcons({ item, className }: ItemCapabilityIconsProp
 							<TooltipTrigger asChild>
 								<span
 									aria-label={label}
-									className="flex size-6 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-600 dark:bg-emerald-400/10 dark:text-emerald-400"
+									className="flex size-6 items-center justify-center rounded-md bg-success/10 text-success"
 								>
 									<Icon className="size-3.5" />
 								</span>

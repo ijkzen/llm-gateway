@@ -1,7 +1,9 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
 import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
+import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
+import { PageHeader } from "@/components/page-header";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
@@ -289,12 +291,7 @@ export default function VirtualModelOverviewPage() {
 
 	return (
 		<div className="space-y-6">
-			<div className="flex items-center gap-2">
-				<Boxes className="size-5 text-muted-foreground" />
-				<h1 className="text-2xl font-bold tracking-tight">
-					{displayId} · {t("dashboardPage.titleSuffix")}
-				</h1>
-			</div>
+			<PageHeader icon={Boxes} title={`${displayId} · ${t("dashboardPage.titleSuffix")}`} />
 
 			{/* 顶部：6 指标概览（独立时间段；虚拟模型无用量信息） */}
 			<MetricsSummaryCard
@@ -323,9 +320,7 @@ export default function VirtualModelOverviewPage() {
 				{callCharts.isLoading ? (
 					<Skeleton className="h-[260px] w-full" />
 				) : callCharts.isError || !callCharts.data ? (
-					<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-						{t("overview.dataLoadFailed")}
-					</div>
+					<ErrorState onRetry={() => callCharts.refetch()} />
 				) : (
 					<CallAnalysisCard
 						charts={callCharts.data}
@@ -350,9 +345,7 @@ export default function VirtualModelOverviewPage() {
 				{tokenCharts.isLoading ? (
 					<Skeleton className="h-[260px] w-full" />
 				) : tokenCharts.isError || !tokenCharts.data ? (
-					<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-						{t("overview.dataLoadFailed")}
-					</div>
+					<ErrorState onRetry={() => tokenCharts.refetch()} />
 				) : (
 					<TokenAnalysisCard
 						charts={tokenCharts.data}
@@ -377,9 +370,7 @@ export default function VirtualModelOverviewPage() {
 				{insightQuery.isLoading ? (
 					<Skeleton className="h-[260px] w-full" />
 				) : insightQuery.isError || !insightQuery.data ? (
-					<div className="flex h-[260px] items-center justify-center text-xs text-muted-foreground">
-						{t("overview.dataLoadFailed")}
-					</div>
+					<ErrorState onRetry={() => insightQuery.refetch()} />
 				) : (
 					<InsightAnalysisCard
 						data={insightQuery.data}

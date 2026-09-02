@@ -5,6 +5,7 @@ import { EmptyState } from "@/components/empty-state";
 import { RelativeTime } from "@/components/relative-time";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -182,7 +183,7 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 					className="border-0 bg-transparent shadow-none"
 				/>
 			) : (
-				<div className="overflow-x-auto rounded-2xl border border-white/70 bg-white/65 shadow-[0_4px_16px_rgba(15,23,42,0.05),inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04] dark:shadow-[0_10px_24px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.06)]">
+				<Card className="overflow-x-auto">
 					<Table>
 						<TableHeader>
 							{table.getHeaderGroups().map((headerGroup) => (
@@ -199,7 +200,7 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 						</TableHeader>
 						<TableBody>
 							{rows.map((row) => (
-								<TableRow key={row.id} className="transition-colors hover:bg-muted/50">
+								<TableRow key={row.id}>
 									{row.getVisibleCells().map((cell) => (
 										<TableCell key={cell.id}>
 											{flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -209,7 +210,7 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 							))}
 						</TableBody>
 					</Table>
-				</div>
+				</Card>
 			)}
 			<DataTablePagination table={table} />
 		</div>

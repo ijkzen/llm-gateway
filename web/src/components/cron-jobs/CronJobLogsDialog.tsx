@@ -25,9 +25,9 @@ interface CronJobLogsDialogProps {
 const SCROLL_BOTTOM_THRESHOLD = 24;
 
 const LEVEL_CLASS: Record<CronJobLogLevel, string> = {
-	INFO: "text-sky-500",
-	WARN: "text-amber-500",
-	ERROR: "text-red-500",
+	INFO: "text-info",
+	WARN: "text-warning",
+	ERROR: "text-destructive",
 };
 
 function formatDateTime(ts: string) {
@@ -84,7 +84,7 @@ function RunItem({
 			<button
 				type="button"
 				onClick={onToggle}
-				className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-slate-100/60 dark:hover:bg-white/5"
+				className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-foreground/5"
 			>
 				{expanded ? (
 					<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
@@ -101,7 +101,7 @@ function RunItem({
 				</span>
 			</button>
 			{expanded && (
-				<div className="border-t border-slate-200/70 bg-slate-50/60 py-1 dark:border-white/10 dark:bg-black/20">
+				<div className="border-t border-border/70 bg-muted/40 py-1 dark:bg-black/20">
 					{isLoading ? (
 						<p className="px-3 py-1 font-mono text-xs text-muted-foreground">
 							{t("common.loading")}
@@ -177,7 +177,7 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 				<div className="flex min-h-0 flex-1 flex-col gap-4 px-6 pb-6">
 					{/* 实时日志区 */}
 					<div className="relative flex h-64 shrink-0 flex-col overflow-hidden rounded-xl border border-white/70 bg-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-						<div className="flex items-center justify-between border-b border-slate-200/70 bg-white/50 px-3 py-2 dark:border-white/10 dark:bg-white/5">
+						<div className="flex items-center justify-between border-b border-border/70 bg-muted/50 px-3 py-2 dark:bg-white/5">
 							<div className="flex items-center gap-2 text-sm font-medium">
 								{t("cronJobs.realTimeLogs")}
 								{stream.currentRun && (
@@ -188,13 +188,13 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 								)}
 							</div>
 							{stream.connection === "reconnecting" && (
-								<span className="text-xs text-amber-500">{t("cronJobs.reconnecting")}</span>
+								<span className="text-xs text-warning">{t("cronJobs.reconnecting")}</span>
 							)}
 						</div>
 						<div
 							ref={liveRef}
 							onScroll={handleScroll}
-							className="min-h-0 flex-1 overflow-y-auto bg-white/30 py-1 dark:bg-black/20"
+							className="min-h-0 flex-1 overflow-y-auto bg-muted/30 py-1 dark:bg-black/20"
 						>
 							{!stream.currentRun ? (
 								<div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -235,7 +235,7 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 
 					{/* 历史执行区 */}
 					<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/70 bg-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-						<div className="border-b border-slate-200/70 bg-white/50 px-3 py-2 text-sm font-medium dark:border-white/10 dark:bg-white/5">
+						<div className="border-b border-border/70 bg-muted/50 px-3 py-2 text-sm font-medium dark:bg-white/5">
 							{t("cronJobs.historyRuns")}
 						</div>
 						<div className="min-h-0 flex-1 overflow-y-auto">
@@ -244,7 +244,7 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 									{t("cronJobs.noRunLogs")}
 								</div>
 							) : (
-								<ul className="divide-y divide-slate-200/70 dark:divide-white/10">
+								<ul className="divide-y divide-border/70">
 									{runs.map((run) => (
 										<RunItem
 											key={run.run_id}

@@ -1,3 +1,4 @@
+import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
@@ -5,7 +6,6 @@ import { AddProviderModelsDialog } from "@/components/provider-models/AddProvide
 import { ProviderModelDetailDialog } from "@/components/provider-models/ProviderModelDetailDialog";
 import { ProviderModelSection } from "@/components/provider-models/ProviderModelSection";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type ProviderModel, useProviderModels } from "@/hooks/use-provider-models";
 import { type Provider, useProviders } from "@/hooks/use-providers";
@@ -70,14 +70,15 @@ export default function ProviderModelsPage() {
 		return (
 			<div className="flex h-full min-h-0 flex-col space-y-6">
 				<PageHeader icon={PROVIDER_MODELS_PAGE.icon} title={t(PROVIDER_MODELS_PAGE.titleKey)} />
-				<Card>
-					<CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-						<p className="text-sm text-muted-foreground">{t("providerModels.emptyHint")}</p>
+				<EmptyState
+					title={t("providerModels.emptyTitle")}
+					description={t("providerModels.emptyHint")}
+					action={
 						<Button asChild variant="outline" size="sm">
 							<Link to="/providers">{t("providerModels.goCreateProvider")}</Link>
 						</Button>
-					</CardContent>
-				</Card>
+					}
+				/>
 			</div>
 		);
 	}

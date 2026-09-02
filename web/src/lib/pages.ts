@@ -14,8 +14,6 @@ export interface PageConfig {
 	path: string;
 	/** 标题 i18n key（nav.pages.<page>.title），用于侧边栏与页面标题。 */
 	titleKey: string;
-	/** 描述 i18n key（nav.pages.<page>.description）。 */
-	descriptionKey: string;
 	icon: LucideIcon;
 }
 
@@ -28,56 +26,48 @@ export interface PageGroup {
 export const OVERVIEW_PAGE: PageConfig = {
 	path: "/",
 	titleKey: "nav.pages.overview.title",
-	descriptionKey: "nav.pages.overview.description",
 	icon: LayoutDashboard,
 };
 
 export const CRON_JOBS_PAGE: PageConfig = {
 	path: "/cron-jobs",
 	titleKey: "nav.pages.cronJobs.title",
-	descriptionKey: "nav.pages.cronJobs.description",
 	icon: Clock,
 };
 
 export const SETTINGS_PAGE: PageConfig = {
 	path: "/settings",
 	titleKey: "nav.pages.settings.title",
-	descriptionKey: "nav.pages.settings.description",
 	icon: Settings,
 };
 
 export const PROVIDERS_PAGE: PageConfig = {
 	path: "/providers",
 	titleKey: "nav.pages.providers.title",
-	descriptionKey: "nav.pages.providers.description",
 	icon: Server,
 };
 
 export const PROVIDER_MODELS_PAGE: PageConfig = {
 	path: "/provider-models",
 	titleKey: "nav.pages.providerModels.title",
-	descriptionKey: "nav.pages.providerModels.description",
 	icon: Boxes,
 };
 
 export const VIRTUAL_MODELS_PAGE: PageConfig = {
 	path: "/virtual-models",
 	titleKey: "nav.pages.virtualModels.title",
-	descriptionKey: "nav.pages.virtualModels.description",
 	icon: Layers,
 };
 
 export const API_KEYS_PAGE: PageConfig = {
 	path: "/api-keys",
 	titleKey: "nav.pages.apiKeys.title",
-	descriptionKey: "nav.pages.apiKeys.description",
 	icon: KeyRound,
 };
 
 export const REQUEST_LOGS_PAGE: PageConfig = {
 	path: "/request-logs",
 	titleKey: "nav.pages.requestLogs.title",
-	descriptionKey: "nav.pages.requestLogs.description",
 	icon: ScrollText,
 };
 

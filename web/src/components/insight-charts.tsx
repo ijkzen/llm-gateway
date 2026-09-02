@@ -1,6 +1,7 @@
 import {
 	ChartContainer,
 	ChartLegend,
+	ChartLegendContent,
 	ChartTooltip,
 	ChartTooltipContent,
 } from "@/components/ui/chart";
@@ -66,6 +67,18 @@ function labelInterval(count: number): number {
 	return Math.max(0, Math.floor(count / 6) - 1);
 }
 
+/** 面积图纵向渐变填充（顶部 45% → 底部 8% 透明度），替代纯色平铺。 */
+function AreaGradient({ id, color }: { id: string; color: string }) {
+	return (
+		<defs>
+			<linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+				<stop offset="0%" stopColor={color} stopOpacity={0.45} />
+				<stop offset="100%" stopColor={color} stopOpacity={0.08} />
+			</linearGradient>
+		</defs>
+	);
+}
+
 /** 延迟分位多线图：同一时间轴的 P50/P90/P95/P99。 */
 export function PercentileLineChart({
 	data,
@@ -93,7 +106,7 @@ export function PercentileLineChart({
 			className="h-[260px] w-full"
 		>
 			<LineChart data={chartData} margin={{ left: 8, right: 8, top: 8 }}>
-				<CartesianGrid vertical={false} />
+				<CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
 				<XAxis
 					dataKey="label"
 					tickLine={false}
@@ -118,11 +131,39 @@ export function PercentileLineChart({
 						/>
 					}
 				/>
-				<Line type="monotone" dataKey="p50" stroke="var(--color-p50)" strokeWidth={2} dot={false} />
-				<Line type="monotone" dataKey="p90" stroke="var(--color-p90)" strokeWidth={2} dot={false} />
-				<Line type="monotone" dataKey="p95" stroke="var(--color-p95)" strokeWidth={2} dot={false} />
-				<Line type="monotone" dataKey="p99" stroke="var(--color-p99)" strokeWidth={2} dot={false} />
-				<ChartLegend />
+				<Line
+					type="monotone"
+					dataKey="p50"
+					stroke="var(--color-p50)"
+					strokeWidth={2}
+					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
+				/>
+				<Line
+					type="monotone"
+					dataKey="p90"
+					stroke="var(--color-p90)"
+					strokeWidth={2}
+					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
+				/>
+				<Line
+					type="monotone"
+					dataKey="p95"
+					stroke="var(--color-p95)"
+					strokeWidth={2}
+					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
+				/>
+				<Line
+					type="monotone"
+					dataKey="p99"
+					stroke="var(--color-p99)"
+					strokeWidth={2}
+					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
+				/>
+				<ChartLegend content={<ChartLegendContent />} />
 			</LineChart>
 		</ChartContainer>
 	);
@@ -158,7 +199,9 @@ export function FailureTrendChart({
 			className="h-[260px] w-full"
 		>
 			<AreaChart data={chartData} margin={{ left: 8, right: 8, top: 8 }}>
-				<CartesianGrid vertical={false} />
+				<AreaGradient id="grad-success" color="var(--color-success)" />
+				<AreaGradient id="grad-failed" color="var(--color-failed)" />
+				<CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
 				<XAxis
 					dataKey="label"
 					tickLine={false}
@@ -204,8 +247,7 @@ export function FailureTrendChart({
 					dataKey="success"
 					stackId="1"
 					stroke="var(--color-success)"
-					fill="var(--color-success)"
-					fillOpacity={0.5}
+					fill="url(#grad-success)"
 				/>
 				<Area
 					yAxisId="count"
@@ -213,8 +255,7 @@ export function FailureTrendChart({
 					dataKey="failed"
 					stackId="1"
 					stroke="var(--color-failed)"
-					fill="var(--color-failed)"
-					fillOpacity={0.5}
+					fill="url(#grad-failed)"
 				/>
 				<Line
 					yAxisId="rate"
@@ -223,8 +264,9 @@ export function FailureTrendChart({
 					stroke="var(--color-failureRate)"
 					strokeWidth={2}
 					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
 				/>
-				<ChartLegend />
+				<ChartLegend content={<ChartLegendContent />} />
 			</AreaChart>
 		</ChartContainer>
 	);
@@ -261,7 +303,9 @@ export function TokenStructureChart({
 			className="h-[260px] w-full"
 		>
 			<AreaChart data={chartData} margin={{ left: 8, right: 8, top: 8 }}>
-				<CartesianGrid vertical={false} />
+				<AreaGradient id="grad-input" color="var(--color-input)" />
+				<AreaGradient id="grad-output" color="var(--color-output)" />
+				<CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
 				<XAxis
 					dataKey="label"
 					tickLine={false}
@@ -315,8 +359,7 @@ export function TokenStructureChart({
 					dataKey="input"
 					stackId="1"
 					stroke="var(--color-input)"
-					fill="var(--color-input)"
-					fillOpacity={0.5}
+					fill="url(#grad-input)"
 				/>
 				<Area
 					yAxisId="tokens"
@@ -324,8 +367,7 @@ export function TokenStructureChart({
 					dataKey="output"
 					stackId="1"
 					stroke="var(--color-output)"
-					fill="var(--color-output)"
-					fillOpacity={0.5}
+					fill="url(#grad-output)"
 				/>
 				<Line
 					yAxisId="rate"
@@ -334,8 +376,9 @@ export function TokenStructureChart({
 					stroke="var(--color-cacheHitRate)"
 					strokeWidth={2}
 					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
 				/>
-				<ChartLegend />
+				<ChartLegend content={<ChartLegendContent />} />
 			</AreaChart>
 		</ChartContainer>
 	);
@@ -373,7 +416,7 @@ export function ThroughputChart({
 			className="h-[260px] w-full"
 		>
 			<LineChart data={chartData} margin={{ left: 8, right: 8, top: 8 }}>
-				<CartesianGrid vertical={false} />
+				<CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
 				<XAxis
 					dataKey="label"
 					tickLine={false}
@@ -428,6 +471,7 @@ export function ThroughputChart({
 					stroke="var(--color-rpm)"
 					strokeWidth={2}
 					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
 				/>
 				<Line
 					yAxisId="count"
@@ -436,6 +480,7 @@ export function ThroughputChart({
 					stroke="var(--color-tpm)"
 					strokeWidth={2}
 					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
 				/>
 				<Line
 					yAxisId="rate"
@@ -444,8 +489,9 @@ export function ThroughputChart({
 					stroke="var(--color-streamRatio)"
 					strokeWidth={2}
 					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
 				/>
-				<ChartLegend />
+				<ChartLegend content={<ChartLegendContent />} />
 			</LineChart>
 		</ChartContainer>
 	);
@@ -467,10 +513,10 @@ export function OutputPerSecLineChart({
 	return (
 		<ChartContainer
 			config={{ value: { label: "token/s", color: "hsl(var(--chart-2))" } }}
-			className="h-[220px] w-full"
+			className="h-[260px] w-full"
 		>
 			<LineChart data={chartData} margin={{ left: 8, right: 8, top: 8 }}>
-				<CartesianGrid vertical={false} />
+				<CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
 				<XAxis
 					dataKey="label"
 					tickLine={false}
@@ -496,6 +542,7 @@ export function OutputPerSecLineChart({
 					stroke="var(--color-value)"
 					strokeWidth={2}
 					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
 				/>
 			</LineChart>
 		</ChartContainer>

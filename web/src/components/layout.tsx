@@ -1,4 +1,5 @@
 import LocaleToggle from "@/components/locale-toggle";
+import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { SkipToMain } from "@/components/skip-to-main";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import {
 	SidebarProvider,
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useLogout, useMe } from "@/hooks/use-auth";
 import { fetchHealth } from "@/lib/api";
 import { NAV_GROUPS } from "@/lib/pages";
@@ -59,6 +61,10 @@ export default function AppLayout() {
 		});
 	};
 
+	// 二级/三级页（如 /providers/:id/overview）按路径前缀点亮所属一级导航。
+	const isPageActive = (path: string) =>
+		location.pathname === path || (path !== "/" && location.pathname.startsWith(`${path}/`));
+
 	return (
 		<SidebarProvider>
 			<SkipToMain />
@@ -88,7 +94,7 @@ export default function AppLayout() {
 								<SidebarMenu>
 									{group.pages.map((page) => (
 										<SidebarMenuItem key={page.path}>
-											<SidebarMenuButton asChild isActive={location.pathname === page.path}>
+											<SidebarMenuButton asChild isActive={isPageActive(page.path)}>
 												<Link to={page.path}>
 													<page.icon />
 													<span>{t(page.titleKey)}</span>
@@ -157,16 +163,16 @@ export default function AppLayout() {
 				<div id="content" className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 p-6">
 					<Suspense
 						fallback={
-							<div
-								className="flex flex-1 items-center justify-center text-muted-foreground"
-								aria-busy="true"
-								aria-live="polite"
-							>
-								{t("common.loadingPage")}
+							<div className="space-y-6" aria-busy="true" aria-live="polite">
+								<PageHeaderSkeleton />
+								<Skeleton className="h-[260px] w-full" />
+								<Skeleton className="h-[260px] w-full" />
 							</div>
 						}
 					>
-						<Outlet />
+						<div key={location.pathname} className="page-enter">
+							<Outlet />
+						</div>
 					</Suspense>
 				</div>
 			</SidebarInset>

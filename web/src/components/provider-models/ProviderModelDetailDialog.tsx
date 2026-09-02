@@ -263,7 +263,7 @@ export function ProviderModelDetailDialog({
 											key={key}
 											className={
 												model[key]
-													? "flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400"
+													? "flex items-center gap-1.5 text-sm text-success"
 													: "flex items-center gap-1.5 text-sm text-muted-foreground/60"
 											}
 										>

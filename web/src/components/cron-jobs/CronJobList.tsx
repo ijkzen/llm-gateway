@@ -53,7 +53,7 @@ export function CronJobList({ jobs, selectedName, onSelect }: CronJobListProps) 
 											"flex w-full items-center justify-between gap-3 rounded-lg px-4 py-3 text-left transition-colors",
 											selectedName === job.name
 												? "bg-foreground text-background dark:bg-primary dark:text-primary-foreground"
-												: "hover:bg-slate-100/60 dark:hover:bg-white/5",
+												: "hover:bg-foreground/5",
 										)}
 									>
 										<div className="min-w-0">

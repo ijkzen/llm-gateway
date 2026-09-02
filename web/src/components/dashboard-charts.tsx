@@ -20,9 +20,11 @@ import {
 	LineChart,
 	Pie,
 	PieChart,
+	Sector,
 	XAxis,
 	YAxis,
 } from "recharts";
+import type { PieSectorDataItem } from "recharts/types/polar/Pie";
 
 export const CHART_COLORS = [
 	"hsl(var(--chart-1))",
@@ -132,7 +134,7 @@ export function TrendLineChart({
 			className="h-[260px] w-full"
 		>
 			<LineChart data={chartData} margin={{ left: 8, right: 8, top: 8 }}>
-				<CartesianGrid vertical={false} />
+				<CartesianGrid vertical={false} stroke="hsl(var(--border))" strokeOpacity={0.5} />
 				<XAxis
 					dataKey="label"
 					tickLine={false}
@@ -171,6 +173,7 @@ export function TrendLineChart({
 					stroke="var(--color-value)"
 					strokeWidth={2}
 					dot={false}
+					activeDot={{ r: 4, strokeWidth: 2, stroke: "hsl(var(--background))" }}
 				/>
 			</LineChart>
 		</ChartContainer>
@@ -256,6 +259,11 @@ function percentText(value: number, total: number): string {
 	return `${percent}%`;
 }
 
+/** 选中扇区沿半径外扩，配合图例下划线构成「点选高亮」。 */
+function renderActiveSector(sector: PieSectorDataItem) {
+	return <Sector {...sector} outerRadius={(sector.outerRadius ?? 0) + 8} />;
+}
+
 /** 按模型占比的饼图（Top 10 + 其他）。 */
 export function ModelPieChart({ data, formatValue, kind = "calls" }: ModelChartProps) {
 	const { t } = useTranslation();
@@ -263,6 +271,7 @@ export function ModelPieChart({ data, formatValue, kind = "calls" }: ModelChartP
 	const total = ranked.reduce((sum, item) => sum + item.value, 0);
 	const [activeLabel, setActiveLabel] = useState<string | null>(null);
 	const isTokens = kind === "tokens";
+	const activeIndex = ranked.findIndex((item) => item.label === activeLabel);
 
 	return (
 		<ChartContainer config={toPieConfig(ranked)} className="mx-auto h-[260px] w-full">
@@ -292,6 +301,10 @@ export function ModelPieChart({ data, formatValue, kind = "calls" }: ModelChartP
 					nameKey="label"
 					strokeWidth={2}
 					outerRadius={110}
+					paddingAngle={2}
+					cornerRadius={4}
+					activeIndex={activeIndex >= 0 ? activeIndex : undefined}
+					activeShape={renderActiveSector}
 					onClick={(entry) => setActiveLabel((prev) => (prev === entry.label ? null : entry.label))}
 					style={{ cursor: "pointer", outline: "none" }}
 				>

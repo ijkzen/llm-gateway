@@ -319,7 +319,7 @@ export function VirtualModelEditDialog({
 												<div className="flex min-w-0 items-center gap-2">
 													<h4 className="text-sm font-medium">{group.provider.name}</h4>
 													{!group.provider.enable && (
-														<span className="shrink-0 text-xs text-amber-600 dark:text-amber-400">
+														<span className="shrink-0 text-xs text-warning">
 															{t("virtualModels.providerDisabled")}
 														</span>
 													)}
@@ -367,7 +367,7 @@ export function VirtualModelEditDialog({
 																			{formatContextLength(model.contextLength)}
 																		</span>
 																		{providerDisabled && (
-																			<span className="shrink-0 text-amber-600 dark:text-amber-400">
+																			<span className="shrink-0 text-warning">
 																				{t("virtualModels.disabledWithProvider")}
 																			</span>
 																		)}
