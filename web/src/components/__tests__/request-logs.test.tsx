@@ -56,6 +56,22 @@ function makeRow(overrides: Partial<Parameters<typeof mocks.useRequestLogs>[0]> 
 	};
 }
 
+function makeProviderModel(modelId: number, providerId: number, providerModelId: string) {
+	return {
+		modelId,
+		providerId,
+		providerModelId,
+		contextLength: 0,
+		maxOutputTokens: 0,
+		reasoning: false,
+		toolUse: false,
+		imageUnderstand: false,
+		videoUnderstand: false,
+		createdAt: "",
+		updatedAt: "",
+	};
+}
+
 function mockQuery(data: { items: ReturnType<typeof makeRow>[]; total: number }) {
 	mocks.useRequestLogs.mockReturnValue({
 		data,
@@ -79,21 +95,7 @@ describe("RequestLogsTable", () => {
 			data: [{ id: 2, name: "Provider Beta" }],
 		});
 		mocks.useProviderModels.mockReturnValue({
-			data: [
-				{
-					modelId: 10,
-					providerId: 2,
-					providerModelId: "gpt-4o",
-					contextLength: 0,
-					maxOutputTokens: 0,
-					reasoning: false,
-					toolUse: false,
-					imageUnderstand: false,
-					videoUnderstand: false,
-					createdAt: "",
-					updatedAt: "",
-				},
-			],
+			data: [makeProviderModel(10, 2, "gpt-4o")],
 		});
 	});
 
@@ -243,5 +245,60 @@ describe("RequestLogsTable", () => {
 		const calls = mocks.useRequestLogs.mock.calls;
 		const lastCall = calls[calls.length - 1]?.[0];
 		expect(lastCall?.pageSize).toBe(10);
+	});
+
+	it("上游模型下拉按供应商分组，同名模型分属各自供应商组", () => {
+		mocks.useProviders.mockReturnValue({
+			data: [
+				{ id: 2, name: "Provider Beta" },
+				{ id: 3, name: "Provider Alpha" },
+			],
+		});
+		mocks.useProviderModels.mockReturnValue({
+			data: [
+				makeProviderModel(10, 2, "gpt-4o"),
+				makeProviderModel(11, 3, "gpt-4o"),
+				makeProviderModel(12, 3, "gemini-2.5-pro"),
+			],
+		});
+		mockQuery({ items: [], total: 0 });
+		render(<RequestLogsTable />);
+
+		fireEvent.click(screen.getByLabelText("按供应商模型过滤"));
+		// 分组标题按供应商列表顺序展示。
+		const labels = screen.getAllByText(/^Provider (Beta|Alpha)$/);
+		expect(labels.map((l) => l.textContent)).toEqual(["Provider Beta", "Provider Alpha"]);
+		// 同名模型在两个供应商组下各出现一次。
+		expect(screen.getAllByRole("option", { name: "gpt-4o" })).toHaveLength(2);
+		expect(screen.getByRole("option", { name: "gemini-2.5-pro" })).toBeInTheDocument();
+	});
+
+	it("选中供应商后模型下拉只剩该供应商分组", () => {
+		mocks.useProviders.mockReturnValue({
+			data: [
+				{ id: 2, name: "Provider Beta" },
+				{ id: 3, name: "Provider Alpha" },
+			],
+		});
+		mocks.useProviderModels.mockReturnValue({
+			data: [makeProviderModel(10, 2, "gpt-4o"), makeProviderModel(11, 3, "gpt-4o")],
+		});
+		mockQuery({ items: [], total: 0 });
+		render(<RequestLogsTable />);
+
+		fireEvent.click(screen.getByLabelText("按供应商过滤"));
+		fireEvent.click(screen.getByRole("option", { name: "Provider Alpha" }));
+		// 选择供应商后重新打开模型下拉。
+		fireEvent.click(screen.getByLabelText("按供应商模型过滤"));
+		expect(screen.queryByText("Provider Beta")).not.toBeInTheDocument();
+		// 分组标题与供应商触发按钮的选中值都可能含该文本，用 getAll 断言存在即可。
+		expect(screen.getAllByText("Provider Alpha").length).toBeGreaterThan(0);
+		expect(screen.getAllByRole("option", { name: "gpt-4o" })).toHaveLength(1);
+
+		// 点选分组中的模型：过滤参数映射为供应商侧模型 ID，触发按钮显示模型名。
+		fireEvent.click(screen.getByRole("option", { name: "gpt-4o" }));
+		const calls = mocks.useRequestLogs.mock.calls;
+		expect(calls[calls.length - 1]?.[0]?.modelId).toBe("gpt-4o");
+		expect(screen.getByRole("combobox", { name: "按供应商模型过滤" })).toHaveTextContent("gpt-4o");
 	});
 });
