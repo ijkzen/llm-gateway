@@ -1,6 +1,7 @@
 import { DataTableColumnHeader } from "@/components/data-table/column-header";
 import { DataTableViewOptions } from "@/components/data-table/view-options";
 import { EmptyState } from "@/components/empty-state";
+import { MultiSelect, type MultiSelectOption } from "@/components/multi-select";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
@@ -14,9 +15,7 @@ import { Card } from "@/components/ui/card";
 import {
 	Select,
 	SelectContent,
-	SelectGroup,
 	SelectItem,
-	SelectLabel,
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
@@ -137,12 +136,13 @@ export function RequestLogsTable() {
 	}, [pageSize]);
 
 	// 过滤条件：先过滤（虚拟模型/供应商/供应商模型/结果状态/API Key），再选时间段。
-	const [vmId, setVmId] = useState<number | undefined>(undefined);
-	const [providerId, setProviderId] = useState<number | undefined>(undefined);
+	// 多值过滤：空数组 = 全部（勾满全部选项时 MultiSelect 归一化为空数组）。
+	const [vmIds, setVmIds] = useState<string[]>([]);
+	const [providerIds, setProviderIds] = useState<string[]>([]);
 	// 选中模型存本地主键（选项 value 唯一），过滤参数（供应商侧模型 ID）由它派生。
-	const [modelPk, setModelPk] = useState<number | undefined>(undefined);
+	const [selectedModelKeys, setSelectedModelKeys] = useState<string[]>([]);
 	const [success, setSuccess] = useState<boolean | undefined>(undefined);
-	const [apiKey, setApiKey] = useState<string | undefined>(undefined);
+	const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
 	// 时间过滤：通用时间组件（天/周/月/年/自定义），默认今天。
 	const [timeWindow, setTimeWindow] = useState<RaceWindowState>(defaultTimeWindow);
 	// now 随重置刷新：当前周期（offset=0）的 endTime 由它派生，
@@ -155,56 +155,85 @@ export function RequestLogsTable() {
 	const { data: allProviderModels } = useProviderModels();
 	const { data: apiKeys } = useApiKeys();
 
-	// 供应商模型选项随所选供应商级联过滤。
+	const vmOptions = useMemo<MultiSelectOption[]>(
+		() =>
+			(virtualModels ?? []).map((vm) => ({
+				value: String(vm.virtualModelId),
+				label: vm.displayId,
+			})),
+		[virtualModels],
+	);
+	const providerOptions = useMemo<MultiSelectOption[]>(
+		() => (providers ?? []).map((p) => ({ value: String(p.id), label: p.name })),
+		[providers],
+	);
+
+	// 供应商模型选项随所选供应商级联过滤（多选取并集，未选 = 全部）。
+	const selectedProviderIds = useMemo(() => providerIds.map(Number), [providerIds]);
 	const providerModelOptions = useMemo(
 		() =>
 			(allProviderModels ?? []).filter(
-				(model) => providerId === undefined || model.providerId === providerId,
+				(model) =>
+					selectedProviderIds.length === 0 || selectedProviderIds.includes(model.providerId),
 			),
-		[allProviderModels, providerId],
+		[allProviderModels, selectedProviderIds],
 	);
 
 	// 模型下拉按供应商分组：分组顺序跟随供应商列表，供应商名查不到时兜底 #<id>。
-	const modelGroups = useMemo(() => {
+	const modelOptions = useMemo<MultiSelectOption[]>(() => {
 		const providerList = providers ?? [];
 		const nameById = new Map(providerList.map((p) => [p.id, p.name]));
-		const modelsByProvider = new Map<number, typeof providerModelOptions>();
+		const order = providerList.map((p) => p.id);
 		for (const model of providerModelOptions) {
-			const list = modelsByProvider.get(model.providerId) ?? [];
-			list.push(model);
-			modelsByProvider.set(model.providerId, list);
-		}
-		const order = providerList.map((p) => p.id).filter((id) => modelsByProvider.has(id));
-		for (const id of modelsByProvider.keys()) {
-			if (!order.includes(id)) {
-				order.push(id);
+			if (!order.includes(model.providerId)) {
+				order.push(model.providerId);
 			}
 		}
-		return order.map((id) => ({
-			id,
-			name: nameById.get(id) ?? `#${id}`,
-			models: modelsByProvider.get(id) ?? [],
-		}));
+		return order.flatMap((id) =>
+			providerModelOptions
+				.filter((m) => m.providerId === id)
+				.map((m) => ({
+					value: String(m.modelId),
+					label: m.providerModelId,
+					group: nameById.get(id) ?? `#${id}`,
+				})),
+		);
 	}, [providers, providerModelOptions]);
 
-	// 选项 value 用本地唯一主键 modelId（避免不同供应商同名模型 value 重复导致选中态双高亮）。
-	const filterModelById = useMemo(
-		() => new Map((allProviderModels ?? []).map((m) => [m.modelId, m.providerModelId])),
+	// 供应商选择变化后剔除不再可选的已选模型。
+	useEffect(() => {
+		setSelectedModelKeys((prev) => {
+			const valid = new Set(modelOptions.map((o) => o.value));
+			const next = prev.filter((pk) => valid.has(pk));
+			return next.length === prev.length ? prev : next;
+		});
+	}, [modelOptions]);
+
+	// 选项 value 用本地唯一主键 modelId（避免不同供应商同名模型 value 重复），过滤参数映射为供应商侧模型 ID。
+	const providerModelIdByKey = useMemo(
+		() => new Map((allProviderModels ?? []).map((m) => [String(m.modelId), m.providerModelId])),
 		[allProviderModels],
 	);
-	const modelId = modelPk === undefined ? undefined : filterModelById.get(modelPk);
+	const modelIds = useMemo(
+		() =>
+			selectedModelKeys
+				.map((pk) => providerModelIdByKey.get(pk))
+				.filter((id): id is string => id !== undefined),
+		[selectedModelKeys, providerModelIdByKey],
+	);
 
 	const sortBy = sorting[0]?.id;
 	const sortOrder = sorting[0]?.desc ? "desc" : "asc";
 
+	// 过滤参数：空数组（=全部）归一化为 undefined，请求不携带该参数。
 	const query = useRequestLogs({
 		page,
 		pageSize,
-		vmId,
-		providerId,
-		modelId,
+		vmId: vmIds.length > 0 ? vmIds.map(Number) : undefined,
+		providerId: selectedProviderIds.length > 0 ? selectedProviderIds : undefined,
+		modelId: modelIds.length > 0 ? modelIds : undefined,
 		success,
-		apiKey,
+		apiKey: selectedApiKeys.length > 0 ? selectedApiKeys : undefined,
 		startTime: timeBounds.startTime,
 		endTime: timeBounds.endTime,
 		sortBy,
@@ -215,11 +244,11 @@ export function RequestLogsTable() {
 	const resetAll = () => {
 		setNow(Date.now());
 		setTimeWindow(defaultTimeWindow());
-		setVmId(undefined);
-		setProviderId(undefined);
-		setModelPk(undefined);
+		setVmIds([]);
+		setProviderIds([]);
+		setSelectedModelKeys([]);
 		setSuccess(undefined);
-		setApiKey(undefined);
+		setSelectedApiKeys([]);
 		setPage(1);
 	};
 
@@ -358,76 +387,43 @@ export function RequestLogsTable() {
 				<div className="flex flex-wrap items-end gap-3">
 					<div className="space-y-1">
 						<p className="text-xs text-muted-foreground">{t("requestLogs.virtualModel")}</p>
-						<Select
-							value={vmId !== undefined ? String(vmId) : "all"}
-							onValueChange={(v) => {
-								setVmId(v === "all" ? undefined : Number(v));
+						<MultiSelect
+							options={vmOptions}
+							selected={vmIds}
+							onChange={(v) => {
+								setVmIds(v);
 								setPage(1);
 							}}
-						>
-							<SelectTrigger className="w-[160px]" aria-label={t("requestLogs.filterByVm")}>
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="all">{t("common.all")}</SelectItem>
-								{virtualModels?.map((vm) => (
-									<SelectItem key={vm.virtualModelId} value={String(vm.virtualModelId)}>
-										{vm.displayId}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
+							className="w-[160px]"
+							aria-label={t("requestLogs.filterByVm")}
+						/>
 					</div>
 					<div className="space-y-1">
 						<p className="text-xs text-muted-foreground">{t("requestLogs.provider")}</p>
-						<Select
-							value={providerId !== undefined ? String(providerId) : "all"}
-							onValueChange={(v) => {
-								setProviderId(v === "all" ? undefined : Number(v));
-								// 供应商变化后旧模型过滤不再适用，清空并回到全部。
-								setModelPk(undefined);
+						<MultiSelect
+							options={providerOptions}
+							selected={providerIds}
+							onChange={(v) => {
+								// 供应商变化后模型选项并集随之更新，失效已选模型由 effect 剔除。
+								setProviderIds(v);
 								setPage(1);
 							}}
-						>
-							<SelectTrigger className="w-[160px]" aria-label={t("requestLogs.filterByProvider")}>
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="all">{t("common.all")}</SelectItem>
-								{providers?.map((p) => (
-									<SelectItem key={p.id} value={String(p.id)}>
-										{p.name}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
+							className="w-[160px]"
+							aria-label={t("requestLogs.filterByProvider")}
+						/>
 					</div>
 					<div className="space-y-1">
 						<p className="text-xs text-muted-foreground">{t("requestLogs.upstreamModel")}</p>
-						<Select
-							value={modelPk !== undefined ? String(modelPk) : "all"}
-							onValueChange={(v) => {
-								setModelPk(v === "all" ? undefined : Number(v));
+						<MultiSelect
+							options={modelOptions}
+							selected={selectedModelKeys}
+							onChange={(v) => {
+								setSelectedModelKeys(v);
 								setPage(1);
 							}}
-						>
-							<SelectTrigger className="w-[180px]" aria-label={t("requestLogs.filterByModel")}>
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="all">{t("common.all")}</SelectItem>
-								{modelGroups.map((group) => (
-									<SelectGroup key={group.id}>
-										<SelectLabel>{group.name}</SelectLabel>
-										{group.models.map((model) => (
-											<SelectItem key={model.modelId} value={String(model.modelId)}>
-												{model.providerModelId}
-											</SelectItem>
-										))}
-									</SelectGroup>
-								))}
-							</SelectContent>
-						</Select>
+							className="w-[180px]"
+							aria-label={t("requestLogs.filterByModel")}
+						/>
 					</div>
 					<div className="space-y-1">
 						<p className="text-xs text-muted-foreground">{t("requestLogs.status")}</p>
@@ -450,25 +446,16 @@ export function RequestLogsTable() {
 					</div>
 					<div className="space-y-1">
 						<p className="text-xs text-muted-foreground">{t("requestLogs.apiKey")}</p>
-						<Select
-							value={apiKey ?? "all"}
-							onValueChange={(v) => {
-								setApiKey(v === "all" ? undefined : v);
+						<MultiSelect
+							options={(apiKeys ?? []).map((key) => ({ value: key.name, label: key.name }))}
+							selected={selectedApiKeys}
+							onChange={(v) => {
+								setSelectedApiKeys(v);
 								setPage(1);
 							}}
-						>
-							<SelectTrigger className="w-[160px]" aria-label={t("requestLogs.filterByApiKey")}>
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="all">{t("common.all")}</SelectItem>
-								{apiKeys?.map((key) => (
-									<SelectItem key={key.id} value={key.name}>
-										{key.name}
-									</SelectItem>
-								))}
-							</SelectContent>
-						</Select>
+							className="w-[160px]"
+							aria-label={t("requestLogs.filterByApiKey")}
+						/>
 					</div>
 					<Button type="button" variant="outline" size="sm" onClick={resetAll} className="ml-auto">
 						<RotateCcw className="mr-1.5 size-4" />

@@ -35,14 +35,15 @@ export interface RequestLogPage {
 export interface RequestLogFilters {
 	page: number;
 	pageSize: number;
-	vmId?: number;
-	/** 按供应商过滤（request.provider_id）。 */
-	providerId?: number;
-	/** 按供应商模型过滤（request.model_id，供应商侧真实模型 ID）。 */
-	modelId?: string;
+	/** 多值过滤：空数组/缺省 = 不过滤（前端勾满全部选项时归一化为空数组）。 */
+	vmId?: number[];
+	/** 按供应商过滤（request.provider_id），多值。 */
+	providerId?: number[];
+	/** 按供应商模型过滤（request.model_id，供应商侧真实模型 ID），多值。 */
+	modelId?: string[];
 	/** 按结果状态过滤：省略 = 全部，true = 成功，false = 失败。 */
 	success?: boolean;
-	apiKey?: string;
+	apiKey?: string[];
 	startTime?: number;
 	endTime?: number;
 	sortBy?: string;
@@ -58,11 +59,11 @@ function buildQuery(filters: RequestLogFilters): string {
 	const params = new URLSearchParams();
 	params.set("page", String(filters.page));
 	params.set("pageSize", String(filters.pageSize));
-	if (filters.vmId !== undefined) params.set("vmId", String(filters.vmId));
-	if (filters.providerId !== undefined) params.set("providerId", String(filters.providerId));
-	if (filters.modelId) params.set("modelId", filters.modelId);
+	if (filters.vmId?.length) params.set("vmId", filters.vmId.join(","));
+	if (filters.providerId?.length) params.set("providerId", filters.providerId.join(","));
+	if (filters.modelId?.length) params.set("modelId", filters.modelId.join(","));
 	if (filters.success !== undefined) params.set("success", String(filters.success));
-	if (filters.apiKey) params.set("apiKey", filters.apiKey);
+	if (filters.apiKey?.length) params.set("apiKey", filters.apiKey.join(","));
 	if (filters.startTime !== undefined) params.set("startTime", String(filters.startTime));
 	if (filters.endTime !== undefined) params.set("endTime", String(filters.endTime));
 	if (filters.sortBy) params.set("sortBy", filters.sortBy);
