@@ -1,3 +1,4 @@
+import { virtualModelKeys } from "@/hooks/use-virtual-models";
 import { type ApiResponse, api, unwrap } from "@/lib/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -120,7 +121,11 @@ export function useUpdateProviderModel(providerId: number) {
 				.json<ApiResponse<ProviderModel>>();
 			return unwrap(res);
 		},
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: providerModelKeys.all }),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: providerModelKeys.all });
+			// 模型字段变化会反映在虚拟模型成员（能力图标等）上，一并刷新。
+			queryClient.invalidateQueries({ queryKey: virtualModelKeys.all });
+		},
 	});
 }
 
@@ -133,7 +138,11 @@ export function useDeleteProviderModel(providerId: number) {
 				.json<ApiResponse<unknown>>();
 			return unwrap(res);
 		},
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: providerModelKeys.all }),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: providerModelKeys.all });
+			// 删除模型会级联清理引用它的虚拟模型成员，一并刷新。
+			queryClient.invalidateQueries({ queryKey: virtualModelKeys.all });
+		},
 	});
 }
 

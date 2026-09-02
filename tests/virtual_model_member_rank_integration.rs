@@ -87,14 +87,15 @@ async fn seed_member(
     enable: bool,
 ) {
     let now = chrono::Utc::now();
-    virtual_model_item_entity::ActiveModel {
-        virtual_model_item_id: Set(item_id),
-        virtual_model_id: Set(virtual_model_id),
-        model_id: Set(model_id),
-        enable: Set(enable),
-        created_at: Set(now),
-        updated_at: Set(now),
-    }
+virtual_model_item_entity::ActiveModel {
+		virtual_model_item_id: Set(item_id),
+		virtual_model_id: Set(virtual_model_id),
+		model_id: Set(model_id),
+		enable: Set(enable),
+		cascade_disabled: Set(false),
+		created_at: Set(now),
+		updated_at: Set(now),
+	}
     .insert(db)
     .await
     .unwrap();

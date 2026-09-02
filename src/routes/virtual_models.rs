@@ -543,10 +543,11 @@ async fn update_virtual_model(
         let now = chrono::Utc::now();
         for item in &items {
             match current_map.get(&item.model_id) {
-                // 保留的成员：enable 有变化才更新。
+                // 保留的成员：enable 有变化才更新（手动接管，清除级联停用标记）。
                 Some(existing_item) if existing_item.enable != item.enable => {
                     let mut active: virtual_model_item::ActiveModel = existing_item.clone().into();
                     active.enable = Set(item.enable);
+                    active.cascade_disabled = Set(false);
                     active.updated_at = Set(now);
                     if let Err(e) = active.update(&txn).await {
                         return response::db_error::<()>(e.to_string()).into_response();

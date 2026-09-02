@@ -2,13 +2,14 @@ mod common;
 
 use axum::body::Body;
 use axum::http::Request;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use llm_gateway::crypto;
 use llm_gateway::entity::provider;
 use llm_gateway::entity::provider_model;
+use llm_gateway::entity::virtual_model_item;
 
 /// 建一个测试 Provider（api_key 加密存储），返回其 id。
 async fn seed_provider(db: &sea_orm::DatabaseConnection, name: &str) -> i32 {
@@ -460,4 +461,60 @@ async fn test_refresh_returns_404_for_missing_provider() {
     )
     .await;
     assert_eq!(status, 404);
+}
+
+/// 删除单个供应商模型应级联清理引用它的虚拟模型成员（不残留悬空 virtual_model_item），
+/// 与删除供应商的级联语义一致。
+#[tokio::test]
+async fn test_delete_provider_model_cascades_virtual_model_items() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p1").await;
+    let (status, created) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        model_payload("gpt-4o"),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let model_id = created["data"]["modelId"].as_i64().unwrap() as i32;
+
+    // 建虚拟模型并挂载该模型。
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        json!({
+            "displayId": "vm-gpt-4o",
+            "loadBalancingStrategy": 3,
+            "fallbackStrategy": 1,
+            "items": [{"modelId": model_id}],
+        }),
+    )
+    .await;
+    assert_eq!(status, 201);
+
+    // 删除模型后，引用它的虚拟模型成员应被级联清理（删除供应商同款事务语义）。
+    let (status, _) = send_json(
+        app.clone(),
+        "DELETE",
+        &format!("/api/providers/{provider_id}/models/{model_id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let orphan_count = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(model_id))
+        .count(&db)
+        .await
+        .unwrap();
+    assert_eq!(orphan_count, 0, "删除供应商模型后不应残留悬空虚拟模型成员");
+
+    // 虚拟模型详情返回的成员列表不再包含该模型。
+    let (status, body) = send_json(app.clone(), "GET", "/api/virtual-models", Value::Null).await;
+    assert_eq!(status, 200);
+    let vms = body["data"].as_array().unwrap();
+    let vm = vms.iter().find(|v| v["displayId"] == "vm-gpt-4o").unwrap();
+    assert_eq!(vm["items"].as_array().unwrap().len(), 0);
 }

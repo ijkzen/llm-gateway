@@ -358,3 +358,102 @@ async fn usage_refresh_job_seed_is_scheduled() {
     assert_eq!(jobs[0].expression, "@every 5m");
     assert!(jobs[0].enabled);
 }
+
+/// 分层控制：用户手动关闭的成员（虚拟模型编辑器操作，无级联标记）不会被
+/// 级联恢复打开；被级联停用的成员带 cascade_disabled 标记，恢复时清除。
+#[tokio::test]
+async fn manual_disabled_item_survives_gate_reenable() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (pid, model_id) = seed_subscription_provider(&db).await;
+
+    // 用户手动关闭成员（模拟编辑器操作，cascade_disabled 保持 false，无标记）。
+    let item = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(model_id))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: virtual_model_item::ActiveModel = item.into();
+    active.enable = Set(false);
+    active.updated_at = Set(chrono::Utc::now());
+    active.update(&db).await.unwrap();
+
+    // 额度耗尽 → 级联停用；手动关闭的成员不被打级联标记。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &quota_data(pid, 0.0, 80.0, 100.0))
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await);
+    let item = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(model_id))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!item.enable);
+    assert!(!item.cascade_disabled, "手动关闭的成员不应被打级联停用标记");
+
+    // 额度恢复 → 只恢复带级联标记的条目；手动关闭的成员保持关闭。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &quota_data(pid, 40.0, 50.0, 100.0))
+        .await
+        .unwrap();
+    assert!(provider_enabled(&db, pid).await);
+    let item = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(model_id))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!item.enable, "手动关闭的成员不应被级联恢复打开");
+    assert!(!item.cascade_disabled);
+}
+
+/// 被级联停用的启用成员在恢复时重新启用并清除标记。
+#[tokio::test]
+async fn cascade_disabled_item_reenabled_and_flag_cleared_on_recovery() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (pid, model_id) = seed_subscription_provider(&db).await;
+
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &quota_data(pid, 0.0, 80.0, 100.0))
+        .await
+        .unwrap();
+    let item = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(model_id))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!item.enable);
+    assert!(item.cascade_disabled, "被级联停用的成员应带标记");
+
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &quota_data(pid, 40.0, 50.0, 100.0))
+        .await
+        .unwrap();
+    let item = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(model_id))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(item.enable);
+    assert!(!item.cascade_disabled, "恢复后应清除级联停用标记");
+}

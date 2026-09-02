@@ -114,6 +114,10 @@ pub async fn set_provider_enabled(
 
 /// 级联开关该供应商名下全部虚拟模型子模型，返回实际变更的条目数。
 /// 幂等：已处于目标状态的条目跳过。逐行更新，变更后输出日志。
+///
+/// 分层语义：级联停用（enabled=false）只动当前启用条目，并打上 `cascade_disabled`
+/// 标记；级联恢复（enabled=true）只恢复带该标记的条目并清除标记，用户手动关闭的
+/// 成员（无标记）保持不变。
 pub async fn set_items_enabled(
     db: &DatabaseConnection,
     provider_id: i32,
@@ -129,18 +133,32 @@ pub async fn set_items_enabled(
     if model_ids.is_empty() {
         return Ok(0);
     }
-    let items = virtual_model_item::Entity::find()
-        .filter(virtual_model_item::Column::ModelId.is_in(model_ids))
-        .all(db)
-        .await?;
+    let mut query = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.is_in(model_ids));
+    // 恢复时只取被级联停用的条目，避免覆盖用户手动关闭的成员。
+    if enabled {
+        query = query.filter(virtual_model_item::Column::CascadeDisabled.eq(true));
+    }
+    let items = query.all(db).await?;
     let now = chrono::Utc::now();
     let mut count = 0;
     for item in items {
-        if item.enable == enabled {
+        let (new_enable, new_flag) = if enabled {
+            (true, false)
+        } else {
+            (false, true)
+        };
+        // 已处于目标状态则跳过（幂等）。
+        if item.enable == new_enable && item.cascade_disabled == new_flag {
+            continue;
+        }
+        // 停用时只操作当前启用条目（已禁用的条目可能是手动关闭的，不碰标记）。
+        if !enabled && !item.enable {
             continue;
         }
         let mut active: virtual_model_item::ActiveModel = item.into();
-        active.enable = Set(enabled);
+        active.enable = Set(new_enable);
+        active.cascade_disabled = Set(new_flag);
         active.updated_at = Set(now);
         active.update(db).await?;
         count += 1;

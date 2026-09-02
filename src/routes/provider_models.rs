@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use crate::crypto;
 use crate::entity::provider;
 use crate::entity::provider_model::{self, ActiveModel, Entity};
+use crate::entity::virtual_model_item;
 use crate::i18n::Lang;
 use crate::provider_model::{catalog, refresh};
 use crate::proxy;
@@ -449,17 +450,44 @@ async fn delete_provider_model(
     Path((provider_id, model_id)): Path<(i32, i32)>,
 ) -> impl IntoResponse {
     let lang = state.settings.lang().await;
+    // 级联清理引用该模型的虚拟模型成员，避免 virtual_model_item 悬空；
+    // 与删除供应商的事务模式一致，模型不存在时回滚不误删成员。
+    let txn = match state.db.begin().await {
+        Ok(txn) => txn,
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    let deleted_item_count = match virtual_model_item::Entity::delete_many()
+        .filter(virtual_model_item::Column::ModelId.eq(model_id))
+        .exec(&txn)
+        .await
+    {
+        Ok(result) => result.rows_affected,
+        Err(e) => return response::db_error(e.to_string()),
+    };
     match Entity::delete_many()
         .filter(provider_model::Column::ProviderId.eq(provider_id))
         .filter(provider_model::Column::ModelId.eq(model_id))
-        .exec(&state.db)
+        .exec(&txn)
         .await
     {
-        Ok(result) if result.rows_affected > 0 => {
-            tracing::info!(provider_id, model_id, "删除供应商模型",);
-            (StatusCode::OK, Json(Response::success(())))
+        Ok(result) if result.rows_affected > 0 => match txn.commit().await {
+            Ok(()) => {
+                tracing::info!(
+                    provider_id,
+                    model_id,
+                    deleted_virtual_item_count = deleted_item_count,
+                    "删除供应商模型（级联清理虚拟模型成员）"
+                );
+                (StatusCode::OK, Json(Response::success(())))
+            }
+            Err(e) => response::db_error(e.to_string()),
+        },
+        Ok(_) => {
+            if let Err(e) = txn.rollback().await {
+                tracing::warn!("回滚删除供应商模型失败：{e}");
+            }
+            not_found_model(lang, model_id)
         }
-        Ok(_) => not_found_model(lang, model_id),
         Err(e) => response::db_error(e.to_string()),
     }
 }

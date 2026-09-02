@@ -156,6 +156,10 @@ export function useDeleteProvider() {
 			const res = await api.delete(`providers/${id}`).json<ApiResponse<unknown>>();
 			return unwrap(res);
 		},
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: providerKeys.all });
+			// 删除供应商会级联清理虚拟模型成员，一并刷新。
+			queryClient.invalidateQueries({ queryKey: virtualModelKeys.all });
+		},
 	});
 }

@@ -343,6 +343,22 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         changed |= ensure_migration(db, 13, &migration_13_statements).await?;
     }
 
+    // Migration 14: virtual_model_item.cascade_disabled —— 区分「用户手动关闭」与
+    // 「被供应商级联停用」。级联恢复（供应商重新启用/额度恢复）只恢复带该标记的条目，
+    // 用户手动关闭的成员保持不变。新库已由第一遍 create_table_from_entity 建表带该列，
+    // 此处兜底历史库。
+    let mut migration_14_statements: Vec<&str> = Vec::new();
+    if !column_exists(db, "virtual_model_item", "cascade_disabled").await? {
+        migration_14_statements.push(
+            "ALTER TABLE virtual_model_item ADD COLUMN cascade_disabled boolean NOT NULL DEFAULT '0'",
+        );
+    }
+    if migration_14_statements.is_empty() {
+        changed |= ensure_migration(db, 14, &["SELECT 1"]).await?;
+    } else {
+        changed |= ensure_migration(db, 14, &migration_14_statements).await?;
+    }
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)

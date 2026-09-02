@@ -16,6 +16,9 @@ pub struct Model {
     /// 是否启用;实际可用性还受所属供应商 enable 影响。
     #[sea_orm(default_value = "1")]
     pub enable: bool,
+    /// 是否被供应商级联停用（区分手动关闭：级联恢复只恢复该标记为 true 的条目）。
+    #[sea_orm(default_value = "0")]
+    pub cascade_disabled: bool,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }
