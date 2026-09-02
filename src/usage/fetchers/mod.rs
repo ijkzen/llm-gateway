@@ -8,6 +8,7 @@ pub mod api_key;
 pub mod balance;
 pub mod cloud_balance;
 pub mod copilot;
+pub mod sensenova;
 pub mod stepfun;
 pub mod volcengine;
 pub mod xiaomi;

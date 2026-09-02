@@ -47,12 +47,57 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
             }
             .insert(db)
             .await?;
+            backfill_provider_extra(db, tmpl).await?;
             inserted += 1;
         }
     }
 
     tracing::info!("Provider templates seeded: {inserted} inserted, {updated} updated");
     Ok(inserted + updated)
+}
+
+/// 模板首次插入时，向 base_url host 匹配的既有 provider 的 extra 补齐
+/// 模板中存在而 provider 缺失的键（只补缺、不覆盖用户已设值）。
+/// 仅在首次插入分支调用；模板更新不触发，尊重用户后续修改。
+async fn backfill_provider_extra(
+    db: &DatabaseConnection,
+    tmpl: &seed::Template,
+) -> Result<(), DbErr> {
+    let Some(host) = host_of(tmpl.base_url) else {
+        return Ok(());
+    };
+    let template_extra: serde_json::Map<String, serde_json::Value> =
+        match serde_json::from_str(tmpl.extra) {
+            Ok(map) => map,
+            Err(_) => return Ok(()),
+        };
+    if template_extra.is_empty() {
+        return Ok(());
+    }
+
+    let providers = crate::entity::provider::Entity::find().all(db).await?;
+    for p in providers {
+        if host_of(&p.base_url).as_deref() != Some(host.as_str()) {
+            continue;
+        }
+        let Ok(serde_json::Value::Object(mut map)) =
+            serde_json::from_str::<serde_json::Value>(&p.extra)
+        else {
+            continue;
+        };
+        let before = map.len();
+        for (key, value) in &template_extra {
+            map.entry(key.clone()).or_insert(value.clone());
+        }
+        if map.len() == before {
+            continue;
+        }
+        let mut am: crate::entity::provider::ActiveModel = p.into();
+        am.extra = Set(serde_json::Value::Object(map).to_string());
+        am.update(db).await?;
+        tracing::info!(provider_template = tmpl.name, "回填 provider extra 缺失键");
+    }
+    Ok(())
 }
 
 /// 从 base_url 中提取 host（去协议、路径、端口、`${VAR}` 占位符）。

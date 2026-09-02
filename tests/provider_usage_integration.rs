@@ -290,3 +290,191 @@ async fn refresh_all_usage_only_writes_usage_enabled_providers() {
     })
     .await;
 }
+
+// ── SenseNova：OAuth 续期 + refresh_token 轮换写回 + pool-usage ──
+
+const SENSENOVA_POOL_USAGE_BODY: &str = r#"{
+  "plan": { "id": "free", "name": "Free Plan", "type": "TOKEN_PLAN_PLAN_TYPE_FREE" },
+  "pools": [
+    { "id": "pool_a", "name": "通用积分池", "pool_type": "default",
+      "window_5h": { "limit": "60000", "used": "33586.30032", "remaining": "26413.69968", "reset_at": "1788365437" },
+      "window_7d": { "limit": "600000", "used": "51388.65712", "remaining": "548611.34288", "reset_at": "1788862237" } },
+    { "id": "pool_b", "name": "Flash-Lite积分池", "pool_type": "dedicated",
+      "window_5h": { "limit": "10000", "used": "9999", "remaining": "1", "reset_at": "1788365437" } }
+  ]
+}"#;
+
+#[derive(Clone, Default)]
+struct SensenovaMockState {
+    renewal_hits: Arc<AtomicUsize>,
+    usage_hits: Arc<AtomicUsize>,
+    last_renewal_form: Arc<std::sync::Mutex<Option<String>>>,
+    last_auth: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+/// mock：POST /oauth2/token 返回固定续期响应（轮换出 rt-new），
+/// GET pool-usage 返回双积分池响应，并记录收到的表单与 Authorization。
+async fn spawn_sensenova_mock() -> (String, SensenovaMockState) {
+    spawn_sensenova_mock_with_renewal(serde_json::json!({
+        "access_token": "at-1",
+        "expires_in": 10799,
+        "refresh_token": "rt-new",
+        "token_type": "bearer"
+    }))
+    .await
+}
+
+/// 同上，但续期响应体可自定义（如 invalid_grant 失败场景）。
+async fn spawn_sensenova_mock_with_renewal(renewal: Value) -> (String, SensenovaMockState) {
+    use axum::http::HeaderMap;
+    use axum::routing::{get, post};
+
+    let state = SensenovaMockState::default();
+    let app = {
+        let renewal_state = state.clone();
+        let usage_state = state.clone();
+        axum::Router::new()
+            .route(
+                "/oauth2/token",
+                post(move |body: String| {
+                    let state = renewal_state.clone();
+                    let renewal = renewal.clone();
+                    async move {
+                        state.renewal_hits.fetch_add(1, Ordering::SeqCst);
+                        *state.last_renewal_form.lock().unwrap() = Some(body);
+                        Json(renewal)
+                    }
+                }),
+            )
+            .route(
+                "/lite/console/v1/tokenplan/pool-usage",
+                get(move |headers: HeaderMap| {
+                    let state = usage_state.clone();
+                    async move {
+                        state.usage_hits.fetch_add(1, Ordering::SeqCst);
+                        *state.last_auth.lock().unwrap() = headers
+                            .get("authorization")
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_string);
+                        Json(serde_json::from_str::<Value>(SENSENOVA_POOL_USAGE_BODY).unwrap())
+                    }
+                }),
+            )
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{addr}"), state)
+}
+
+#[tokio::test]
+async fn sensenova_usage_full_chain_with_rotation_writeback() {
+    let (mock_base, mock) = spawn_sensenova_mock().await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let (app, db) = setup_app_with_db().await;
+        let id = create_provider(
+            &app,
+            "SenseNova-订阅",
+            "https://token.sensenova.cn/v1",
+            r#"{"usage": true, "usage_type": 0, "refresh_token": "rt-1"}"#,
+        )
+        .await;
+
+        let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::OK, "查询失败：{body}");
+        let data = &body["data"];
+        assert_eq!(data["kind"], "quota");
+        assert_eq!(data["plan"], "Free Plan");
+        // 每池独立窗口，label = 池名。
+        let windows = data["windows"].as_array().unwrap();
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0]["window"], "five_hour");
+        assert_eq!(windows[0]["label"], "通用积分池");
+        assert_eq!(windows[0]["used"], 33586.3);
+        assert_eq!(windows[0]["limit"], 60000.0);
+        assert_eq!(windows[0]["unit"], "积分");
+        assert_eq!(windows[1]["window"], "weekly");
+        assert_eq!(windows[1]["label"], "通用积分池");
+        assert_eq!(windows[2]["label"], "Flash-Lite积分池");
+        assert_eq!(windows[2]["remainingPercent"], 0.01);
+        // pool-usage 用续期得到的 access_token 调用。
+        assert_eq!(
+            mock.last_auth.lock().unwrap().as_deref(),
+            Some("Bearer at-1")
+        );
+
+        // 轮换出的新 refresh_token 已写回 provider extra。
+        let model = provider::Entity::find_by_id(id as i32)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let extra: Value = serde_json::from_str(&model.extra).unwrap();
+        assert_eq!(extra["refresh_token"], "rt-new");
+
+        // 绕过缓存再查一次：续期用的是写回后的 rt-new（凭据链不断）。
+        let (status, _) = send(
+            &app,
+            "GET",
+            &format!("/api/providers/{id}/usage?refresh=1"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            mock.last_renewal_form
+                .lock()
+                .unwrap()
+                .as_deref()
+                .unwrap()
+                .contains("refresh_token=rt-new")
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn sensenova_platform_host_dispatch_and_missing_credential() {
+    let (mock_base, _mock) = spawn_sensenova_mock().await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let app = setup_app().await;
+        // 控制台域名同样分发到 SenseNova fetcher。
+        let id = create_provider(
+            &app,
+            "SenseNova-控制台域",
+            "https://platform.sensenova.cn/v1",
+            r#"{"usage": true, "usage_type": 0}"#,
+        )
+        .await;
+        let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(body["msg"].as_str().unwrap().contains("refresh_token"));
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn sensenova_invalid_grant_maps_to_auth_error() {
+    // 续期端点返回 200 + error 字段（refresh_token 失效）→ 走鉴权失败链路。
+    let (mock_base, _mock) = spawn_sensenova_mock_with_renewal(serde_json::json!({
+        "error": "invalid_grant",
+        "error_description": "The refresh token is invalid"
+    }))
+    .await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let app = setup_app().await;
+        let id = create_provider(
+            &app,
+            "SenseNova-失效",
+            "https://token.sensenova.cn/v1",
+            r#"{"usage": true, "usage_type": 0, "refresh_token": "rt-dead"}"#,
+        )
+        .await;
+        let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["msg"], "用量查询凭据无效或已过期");
+    })
+    .await;
+}

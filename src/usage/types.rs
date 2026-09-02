@@ -57,6 +57,9 @@ pub struct QuotaWindow {
     pub limit: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit: Option<String>,
+    /// 窗口所属容量容器标注（如商汤积分池名）；无标注即厂商整体口径。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 impl QuotaWindow {
@@ -94,6 +97,7 @@ impl QuotaWindow {
             used: None,
             limit: None,
             unit: None,
+            label: None,
         }
     }
 
@@ -405,6 +409,7 @@ mod tests {
             used: None,
             limit: None,
             unit: None,
+            label: None,
         };
         assert_eq!(w.remaining_percent_value(), Some(63.5));
         // used_percent 推导：100 - 42.5 = 57.5。
@@ -420,6 +425,7 @@ mod tests {
             used: Some(30.0),
             limit: Some(100.0),
             unit: None,
+            label: None,
         };
         assert_eq!(w.remaining_percent_value(), Some(70.0));
         // 不可用窗口返回 None。

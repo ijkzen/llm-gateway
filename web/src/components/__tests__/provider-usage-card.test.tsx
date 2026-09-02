@@ -135,3 +135,43 @@ describe("ProviderUsageCard", () => {
 		expect(mocks.useProviderUsage).toHaveBeenCalledWith(7, 1);
 	});
 });
+
+describe("ProviderUsageCard 积分池徽标", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("窗口带 label 时显示池名徽标，多池同类窗口不撞 key", () => {
+		mockQuery({
+			data: quotaUsage([
+				{
+					window: "five_hour",
+					available: true,
+					remainingPercent: 55,
+					label: "通用积分池",
+				},
+				{
+					window: "five_hour",
+					available: true,
+					remainingPercent: 1,
+					label: "Flash-Lite积分池",
+				},
+			]),
+		});
+		render(<ProviderUsageCard providerId={1} />);
+		expect(screen.getByText("通用积分池")).toBeInTheDocument();
+		expect(screen.getByText("Flash-Lite积分池")).toBeInTheDocument();
+		// 两个池各自渲染剩余百分比。
+		expect(screen.getByText("剩余 55%")).toBeInTheDocument();
+		expect(screen.getByText("剩余 1%")).toBeInTheDocument();
+	});
+
+	it("无 label 的窗口展示不变（不渲染徽标）", () => {
+		mockQuery({
+			data: quotaUsage([{ window: "weekly", available: true, remainingPercent: 90 }]),
+		});
+		render(<ProviderUsageCard providerId={1} />);
+		expect(screen.getByText("本周")).toBeInTheDocument();
+		expect(screen.queryByText("通用积分池")).not.toBeInTheDocument();
+	});
+});

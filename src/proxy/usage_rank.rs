@@ -34,20 +34,22 @@ pub fn cmp_quota_remaining(a: Option<&UsageData>, b: Option<&UsageData>) -> Orde
 fn cmp_window(x: &UsageData, y: &UsageData, kind: WindowKind) -> Ordering {
     // 缺失/不可用的窗口视为平局（进入下一层比较），而不是判负：
     // 厂商不提供某窗口不代表该供应商更差（如 Kimi 无月窗）。
-    let xp = x
-        .windows
-        .iter()
-        .find(|w| w.window == kind)
-        .and_then(|w| w.remaining_percent_value());
-    let yp = y
-        .windows
-        .iter()
-        .find(|w| w.window == kind)
-        .and_then(|w| w.remaining_percent_value());
+    let xp = worst_remaining(x, kind);
+    let yp = worst_remaining(y, kind);
     match (xp, yp) {
         (Some(a), Some(b)) => a.partial_cmp(&b).unwrap_or(Ordering::Equal),
         _ => Ordering::Equal,
     }
+}
+
+/// 同类窗口可能有多条（如商汤各积分池独立产出），取最差剩余参与比较：
+/// 任一容器耗尽即接近不可用，与额度门控的逐窗口判定口径一致。
+fn worst_remaining(data: &UsageData, kind: WindowKind) -> Option<f64> {
+    data.windows
+        .iter()
+        .filter(|w| w.window == kind)
+        .filter_map(|w| w.remaining_percent_value())
+        .reduce(|a, b| if a < b { a } else { b })
 }
 
 /// 按量付费剩余金额（balances 合计）；非 balance 形态或无数据返回 0.0。
@@ -148,6 +150,18 @@ mod tests {
         let a = quota(1, Some(50.0), Some(50.0), Some(50.0));
         let b = quota(2, Some(50.0), Some(50.0), Some(50.0));
         assert_eq!(cmp_quota_remaining(a.as_ref(), b.as_ref()), Ordering::Equal);
+    }
+
+    #[test]
+    fn duplicate_windows_take_worst_remaining() {
+        // 多池（商汤）同类窗口多条：取最差剩余参与比较。
+        let mut multi = quota(1, Some(90.0), None, None).unwrap();
+        multi.windows.push(window(WindowKind::FiveHour, 5.0));
+        let plain = quota(2, Some(50.0), None, None);
+        assert_eq!(
+            cmp_quota_remaining(Some(&multi), plain.as_ref()),
+            Ordering::Less
+        );
     }
 
     #[test]

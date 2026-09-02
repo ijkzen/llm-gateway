@@ -67,7 +67,14 @@ function WindowRow({ window }: { window: UsageWindow }) {
 	return (
 		<div className="space-y-1.5">
 			<div className="flex items-baseline justify-between gap-2 text-sm">
-				<span className="text-muted-foreground">{t(WINDOW_LABEL_KEYS[window.window])}</span>
+				<span className="flex items-center gap-1.5 text-muted-foreground">
+					{t(WINDOW_LABEL_KEYS[window.window])}
+					{window.label && (
+						<Badge variant="secondary" className="px-1.5 py-0 text-xs font-normal">
+							{window.label}
+						</Badge>
+					)}
+				</span>
 				<span className="font-medium tabular-nums">
 					{remaining !== undefined ? t("providers.remainingPercent", { percent: remaining }) : "—"}
 				</span>
@@ -170,7 +177,7 @@ export function ProviderUsageCard({
 			) : availableWindows.length > 0 ? (
 				<div className="space-y-4">
 					{availableWindows.map((w) => (
-						<WindowRow key={w.window} window={w} />
+						<WindowRow key={`${w.window}-${w.label ?? ""}`} window={w} />
 					))}
 				</div>
 			) : (

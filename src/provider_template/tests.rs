@@ -1,6 +1,6 @@
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, PaginatorTrait,
-    QueryFilter,
+    QueryFilter, Set,
 };
 
 use super::{find_by_domain, find_by_domain_all, seed, upsert_templates};
@@ -74,6 +74,7 @@ async fn test_seed_has_expected_entries() {
         "Zhipu AI Coding Plan",
         "OpenCode Go",
         "Command Code",
+        "SenseNova",
     ] {
         assert!(names.contains(&expect), "missing {expect}");
     }
@@ -203,4 +204,85 @@ fn test_host_of_extracts_domain() {
     );
     assert_eq!(host_of("${CLOUDFLARE_ACCOUNT_ID}/ai/v1"), None);
     assert_eq!(host_of(""), None);
+}
+
+// ── 模板首次插入时向同 host 既有 provider 回填 extra 缺失键 ──
+
+async fn insert_provider(db: &DatabaseConnection, name: &str, base_url: &str, extra: &str) {
+    use crate::entity::provider;
+    let now = chrono::Utc::now();
+    provider::ActiveModel {
+        name: Set(name.to_string()),
+        base_url: Set(base_url.to_string()),
+        api_key: Set(String::new()),
+        extra: Set(extra.to_string()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+}
+
+async fn provider_extra(db: &DatabaseConnection, name: &str) -> serde_json::Value {
+    use crate::entity::provider;
+    let row = provider::Entity::find()
+        .filter(provider::Column::Name.eq(name))
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap();
+    serde_json::from_str(&row.extra).unwrap()
+}
+
+#[tokio::test]
+async fn test_first_insert_backfills_matching_provider_extra() {
+    let db = setup_db().await.unwrap();
+    // provider 先于模板存在（历史上手动创建的商汤供应商）。
+    insert_provider(
+        &db,
+        "商汤",
+        "https://token.sensenova.cn/v1",
+        r#"{"custom": "keep"}"#,
+    )
+    .await;
+    // 无模板命中的 host 不动（DeepSeek 等自身带 usage 标记的模板也会回填其 host）。
+    insert_provider(&db, "其他", "https://usage.example.com/v1", r#"{"own": 1}"#).await;
+
+    upsert_templates(&db).await.unwrap();
+
+    // 同 host 的既有 provider 补齐模板 extra 缺失键，已有键保留。
+    let extra = provider_extra(&db, "商汤").await;
+    assert_eq!(extra["custom"], "keep");
+    assert_eq!(extra["usage"], true);
+    assert_eq!(extra["usage_type"], 1);
+    assert_eq!(extra["refresh_token"], "");
+
+    // 非 host 匹配的 provider 不动。
+    let other = provider_extra(&db, "其他").await;
+    assert_eq!(other, serde_json::json!({ "own": 1 }));
+}
+
+#[tokio::test]
+async fn test_backfill_only_on_first_insert_not_on_update() {
+    let db = setup_db().await.unwrap();
+    insert_provider(&db, "商汤", "https://token.sensenova.cn/v1", r#"{}"#).await;
+    upsert_templates(&db).await.unwrap();
+    assert_eq!(provider_extra(&db, "商汤").await["usage"], true);
+
+    // 模拟用户关闭 usage 后再次 upsert（更新分支）：不回填。
+    use crate::entity::provider;
+    let row = provider::Entity::find()
+        .filter(provider::Column::Name.eq("商汤"))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut am: provider::ActiveModel = row.into();
+    am.extra = Set(r#"{"usage": false}"#.to_string());
+    am.update(&db).await.unwrap();
+
+    upsert_templates(&db).await.unwrap();
+    assert_eq!(provider_extra(&db, "商汤").await["usage"], false);
 }

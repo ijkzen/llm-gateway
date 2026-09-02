@@ -980,6 +980,13 @@ pub const TEMPLATES: &[Template] = &[
         extra: "{}",
     },
     Template {
+        name: "SenseNova",
+        base_url: "https://token.sensenova.cn/v1",
+        protocol_type: 0,
+        billing_mode: 1,
+        extra: "{\"refresh_token\": \"\", \"usage\": true, \"usage_type\": 1}",
+    },
+    Template {
         name: "SiliconFlow",
         base_url: "https://api.siliconflow.com/v1",
         protocol_type: 0,

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
@@ -91,7 +91,14 @@ pub async fn query_provider_usage(
     let fetcher = fetcher_for(&host, &path_of(&model.base_url)).ok_or(UsageError::Unsupported)?;
 
     let http = http::UsageHttp::new();
-    let output = fetcher.fetch(&http, &creds).await?;
+    let mut rotated_refresh_token = None;
+    let output = fetcher
+        .fetch(&http, &creds, &mut rotated_refresh_token)
+        .await?;
+    // 轮换出的新 refresh_token 立即写回；写回失败会作废凭据链，必须报错。
+    if let Some(token) = rotated_refresh_token {
+        write_back_refresh_token(db, provider_id, &token).await?;
+    }
     let data = match output {
         FetchOutput::Quota { plan, windows } => UsageData {
             provider_id,
@@ -112,6 +119,37 @@ pub async fn query_provider_usage(
     };
     cache.put(provider_id, data.clone()).await;
     Ok(data)
+}
+
+/// 把轮换出的新 refresh_token 写回 provider extra（只改该键，其余保留）。
+/// 写回时重读最新行再合并，缩小与并发 extra 编辑之间的丢更新窗口。
+async fn write_back_refresh_token(
+    db: &DatabaseConnection,
+    provider_id: i32,
+    token: &str,
+) -> Result<(), UsageError> {
+    let latest = provider::Entity::find_by_id(provider_id)
+        .one(db)
+        .await
+        .map_err(|e| UsageError::Network(format!("写回 refresh_token 失败：{e}")))?
+        .ok_or(UsageError::Auth)?;
+    let mut map = match serde_json::from_str::<Value>(&latest.extra) {
+        Ok(Value::Object(map)) => map,
+        _ => Default::default(),
+    };
+    map.insert(
+        "refresh_token".to_string(),
+        Value::String(token.to_string()),
+    );
+    let am = provider::ActiveModel {
+        id: Set(provider_id),
+        extra: Set(Value::Object(map).to_string()),
+        ..Default::default()
+    };
+    am.update(db)
+        .await
+        .map_err(|e| UsageError::Network(format!("写回 refresh_token 失败：{e}")))?;
+    Ok(())
 }
 
 /// 提取 base_url 的路径部分（小写，无路径返回 "/"）。
@@ -170,6 +208,7 @@ fn fetcher_for(host: &str, path: &str) -> Option<Fetcher> {
         _ if host.starts_with("token-plan-") && host.ends_with(".xiaomimimo.com") => {
             Fetcher::XiaomiTokenPlan
         }
+        "token.sensenova.cn" | "platform.sensenova.cn" => Fetcher::Sensenova,
         _ => return None,
     })
 }
@@ -194,6 +233,7 @@ enum Fetcher {
     StepfunBalance { intl: bool },
     AlibabaCoding { intl: bool },
     AlibabaToken { intl: bool },
+    Sensenova,
 }
 
 impl Fetcher {
@@ -201,9 +241,11 @@ impl Fetcher {
         &self,
         http: &http::UsageHttp,
         creds: &Credentials<'_>,
+        rotated_refresh_token: &mut Option<String>,
     ) -> Result<FetchOutput, UsageError> {
         use fetchers::{
-            alibaba, api_key, balance, cloud_balance, copilot, stepfun, volcengine, xiaomi,
+            alibaba, api_key, balance, cloud_balance, copilot, sensenova, stepfun, volcengine,
+            xiaomi,
         };
         match self {
             Fetcher::OpenCodeGo => api_key::fetch_opencode_go(http, creds).await,
@@ -258,6 +300,11 @@ impl Fetcher {
             }
             Fetcher::AlibabaToken { intl } => {
                 alibaba::fetch_alibaba_token(http, creds, *intl).await
+            }
+            Fetcher::Sensenova => {
+                let (output, rotated) = sensenova::fetch_sensenova(http, creds).await?;
+                *rotated_refresh_token = rotated;
+                Ok(output)
             }
         }
     }

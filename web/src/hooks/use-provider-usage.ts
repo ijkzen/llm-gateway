@@ -10,6 +10,8 @@ export interface UsageWindow {
 	used?: number;
 	limit?: number;
 	unit?: string;
+	/** 所属容量容器标注（如商汤积分池名）。 */
+	label?: string;
 }
 
 export interface BalanceItem {
