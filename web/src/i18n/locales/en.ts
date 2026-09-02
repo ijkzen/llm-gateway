@@ -492,6 +492,12 @@ const en: Translation = {
 		cacheHitTokens: "Cache hit tokens",
 		failReason: "Failure reason",
 	},
+	multiSelect: {
+		searchPlaceholder: "Search options…",
+		selectedCount: "{{count}} selected",
+		selectAll: "Select all",
+		noMatch: "No matching options",
+	},
 	settings: {
 		title: "Settings",
 		key: "Key",
