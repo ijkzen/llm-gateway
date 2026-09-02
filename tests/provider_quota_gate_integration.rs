@@ -78,6 +78,89 @@ async fn seed_subscription_provider(db: &sea_orm::DatabaseConnection) -> (i32, i
     (p.id, m.model_id)
 }
 
+async fn seed_balance_provider(db: &sea_orm::DatabaseConnection) -> (i32, i32) {
+    let now = chrono::Utc::now();
+    let p = provider::ActiveModel {
+        name: Set("按量供应商".to_string()),
+        enable: Set(true),
+        base_url: Set("https://api.deepseek.com/v1".to_string()),
+        api_key: Set(llm_gateway::crypto::encrypt("sk-x")),
+        custom_header: Set("{}".to_string()),
+        status: Set(0),
+        protocol_type: Set(0),
+        billing_mode: Set(0),
+        extra: Set(r#"{"usage": true, "usage_type": 0}"#.to_string()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+
+    let m = provider_model::ActiveModel {
+        provider_id: Set(p.id),
+        provider_model_id: Set("deepseek-chat".to_string()),
+        context_length: Set(64000),
+        max_output_tokens: Set(8192),
+        reasoning: Set(false),
+        tool_use: Set(true),
+        image_understand: Set(false),
+        video_understand: Set(false),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+
+    let vm = virtual_model::ActiveModel {
+        display_id: Set("vm-balance".to_string()),
+        enable: Set(true),
+        load_balancing_strategy: Set(0),
+        fallback_strategy: Set(1),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+
+    virtual_model_item::ActiveModel {
+        virtual_model_id: Set(vm.virtual_model_id),
+        model_id: Set(m.model_id),
+        enable: Set(true),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+
+    (p.id, m.model_id)
+}
+
+fn balance_data(provider_id: i32, amounts: &[f64]) -> UsageData {
+    UsageData {
+        provider_id,
+        fetched_at: chrono::Utc::now(),
+        kind: UsageKind::Balance,
+        plan: None,
+        windows: vec![],
+        balances: amounts
+            .iter()
+            .map(|a| llm_gateway::usage::types::BalanceItem {
+                label: "余额".to_string(),
+                amount: *a,
+                currency: None,
+            })
+            .collect(),
+    }
+}
+
 fn quota_data(provider_id: i32, five_hour: f64, weekly: f64, monthly: f64) -> UsageData {
     UsageData {
         provider_id,
@@ -185,6 +268,67 @@ async fn gate_skips_unjudgeable_data() {
         .unwrap();
     apply_usage_gate(&db, &p, &balance).await.unwrap();
     assert!(provider_enabled(&db, pid).await);
+
+    // 按量供应商（billing_mode=0）+ 查不到余额（空 balances）→ 不动。
+    let (bpid, bmodel_id) = seed_balance_provider(&db).await;
+    let p = provider::Entity::find_by_id(bpid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &balance_data(bpid, &[]))
+        .await
+        .unwrap();
+    assert!(provider_enabled(&db, bpid).await);
+    assert!(item_enabled(&db, bmodel_id).await);
+}
+
+#[tokio::test]
+async fn balance_exhaustion_disables_and_restore_reenables() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (pid, model_id) = seed_balance_provider(&db).await;
+
+    // 余额耗尽（合计 0）→ 停用 provider 及其虚拟模型子模型。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &balance_data(pid, &[0.0]))
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await);
+    assert!(!item_enabled(&db, model_id).await);
+
+    // 余额恢复（>0）→ 恢复启用 provider 及其子模型。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &balance_data(pid, &[50.0]))
+        .await
+        .unwrap();
+    assert!(provider_enabled(&db, pid).await);
+    assert!(item_enabled(&db, model_id).await);
+}
+
+#[tokio::test]
+async fn balance_unjudgeable_keeps_state() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (pid, model_id) = seed_balance_provider(&db).await;
+
+    // 查不到余额（空 balances）→ 无法判定，保持原状。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &balance_data(pid, &[]))
+        .await
+        .unwrap();
+    assert!(provider_enabled(&db, pid).await);
+    assert!(item_enabled(&db, model_id).await);
 }
 
 #[tokio::test]

@@ -3,8 +3,8 @@
 //! - `read_usage_cache` / `write_usage_cache`：数据库缓存读写（fresh ≤ 10 分钟）。
 //! - `fetch_and_store`：真实抓取一次用量并落库（供接口缓存过期与 LB 选路兜底）。
 //! - `refresh_all_usage`：定时任务主体，刷新全部「已开启用量展示」的供应商并执行额度门控。
-//! - `apply_usage_gate`：订阅制额度耗尽 → 停用 Provider 及其全部虚拟模型子模型；
-//!   恢复可用 → 反向启用（「不可用」= 任一厂商已提供的窗口剩余为 0）。
+//! - `apply_usage_gate`：订阅制额度耗尽或按量余额耗尽 → 停用 Provider 及其全部虚拟模型子模型；
+//!   恢复可用 → 反向启用（「不可用」= 订阅任一已提供窗口剩余为 0，或按量查得到余额且合计为 0）。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -158,36 +158,42 @@ pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> 
 // 「订阅制是否可用」判定已收敛到 `UsageData::subscription_usable`（src/usage/types.rs），
 // 用量门控与 LB 选路共用同一口径。
 
-/// 订阅额度自动停用/恢复。仅对订阅制（billing_mode=1）且能判定的数据生效；
-/// 抓取失败/无窗口数据的场景由调用方保证不传入或不做动作。
+/// 用量额度自动停用/恢复。
+///
+/// - 订阅制（billing_mode=1）：按 `subscription_usable` 判定（任一已提供窗口剩余为 0 即不可用）。
+/// - 按量付费（billing_mode=0）：按 `balance_usable` 判定（查得到余额且合计为 0 即不可用）。
+///
+/// 无法判定（None）或未开启用量查询的供应商不做任何动作；抓取失败/无数据的场景由调用方保证不传入。
 pub async fn apply_usage_gate(
     db: &DatabaseConnection,
     p: &provider::Model,
     data: &UsageData,
 ) -> Result<(), DbErr> {
-    if p.billing_mode != 1 {
-        return Ok(());
-    }
-    let usable = match data.subscription_usable() {
-        Some(v) => v,
-        None => return Ok(()),
+    let usable = match p.billing_mode {
+        1 => data.subscription_usable(),
+        0 => data.balance_usable(),
+        _ => return Ok(()),
+    };
+    let Some(usable) = usable else { return Ok(()) };
+    let (recovered_msg, exhausted_msg) = if p.billing_mode == 1 {
+        (
+            "订阅额度已恢复，自动启用供应商及其全部虚拟模型子模型",
+            "订阅额度已耗尽，自动停用供应商及其全部虚拟模型子模型",
+        )
+    } else {
+        (
+            "余额已恢复，自动启用供应商及其全部虚拟模型子模型",
+            "余额已耗尽，自动停用供应商及其全部虚拟模型子模型",
+        )
     };
     if usable && !p.enable {
         crate::provider_repo::set_provider_enabled(db, p.id, true).await?;
         let items = crate::provider_repo::set_items_enabled(db, p.id, true).await?;
-        tracing::info!(
-            provider_id = p.id,
-            items,
-            "订阅额度已恢复，自动启用供应商及其全部虚拟模型子模型"
-        );
+        tracing::info!(provider_id = p.id, items, "{recovered_msg}");
     } else if !usable && p.enable {
         crate::provider_repo::set_provider_enabled(db, p.id, false).await?;
         let items = crate::provider_repo::set_items_enabled(db, p.id, false).await?;
-        tracing::info!(
-            provider_id = p.id,
-            items,
-            "订阅额度已耗尽，自动停用供应商及其全部虚拟模型子模型"
-        );
+        tracing::info!(provider_id = p.id, items, "{exhausted_msg}");
     }
     Ok(())
 }
@@ -195,9 +201,162 @@ pub async fn apply_usage_gate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::entity::provider_model;
+    use crate::entity::virtual_model;
+    use crate::entity::virtual_model_item;
     use crate::usage::types::{
-        QuotaWindow, UsageData, UsageKind, WindowKind, empty_windows, set_window,
+        BalanceItem, QuotaWindow, UsageData, UsageKind, WindowKind, empty_windows, set_window,
     };
+
+    fn balance_data(provider_id: i32, amounts: &[f64]) -> UsageData {
+        UsageData {
+            provider_id,
+            fetched_at: Utc::now(),
+            kind: UsageKind::Balance,
+            plan: None,
+            windows: vec![],
+            balances: amounts
+                .iter()
+                .map(|a| BalanceItem {
+                    label: "余额".to_string(),
+                    amount: *a,
+                    currency: None,
+                })
+                .collect(),
+        }
+    }
+
+    async fn seed_balance_provider(db: &DatabaseConnection) -> (i32, i32) {
+        let now = Utc::now();
+        let p = provider::ActiveModel {
+            name: Set("按量供应商".to_string()),
+            enable: Set(true),
+            base_url: Set("https://api.deepseek.com/v1".to_string()),
+            api_key: Set(crate::crypto::encrypt("sk-x")),
+            custom_header: Set("{}".to_string()),
+            status: Set(0),
+            protocol_type: Set(0),
+            billing_mode: Set(0),
+            extra: Set(r#"{"usage": true, "usage_type": 0}"#.to_string()),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+
+        let m = provider_model::ActiveModel {
+            provider_id: Set(p.id),
+            provider_model_id: Set("deepseek-chat".to_string()),
+            context_length: Set(64000),
+            max_output_tokens: Set(8192),
+            reasoning: Set(false),
+            tool_use: Set(true),
+            image_understand: Set(false),
+            video_understand: Set(false),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+
+        let vm = virtual_model::ActiveModel {
+            display_id: Set("vm-balance".to_string()),
+            enable: Set(true),
+            load_balancing_strategy: Set(0),
+            fallback_strategy: Set(1),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+
+        virtual_model_item::ActiveModel {
+            virtual_model_id: Set(vm.virtual_model_id),
+            model_id: Set(m.model_id),
+            enable: Set(true),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+
+        (p.id, m.model_id)
+    }
+
+    async fn provider_enabled(db: &DatabaseConnection, id: i32) -> bool {
+        provider::Entity::find_by_id(id)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+            .enable
+    }
+
+    async fn item_enabled(db: &DatabaseConnection, model_id: i32) -> bool {
+        virtual_model_item::Entity::find()
+            .filter(virtual_model_item::Column::ModelId.eq(model_id))
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+            .enable
+    }
+
+    #[tokio::test]
+    async fn balance_exhaustion_disables_and_restore_reenables() {
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        let (pid, model_id) = seed_balance_provider(&db).await;
+
+        // 余额耗尽（合计 0）→ 停用 provider 及其虚拟模型子模型。
+        let p = provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        apply_usage_gate(&db, &p, &balance_data(pid, &[0.0]))
+            .await
+            .unwrap();
+        assert!(!provider_enabled(&db, pid).await);
+        assert!(!item_enabled(&db, model_id).await);
+
+        // 余额恢复（>0）→ 恢复启用 provider 及其子模型。
+        let p = provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        apply_usage_gate(&db, &p, &balance_data(pid, &[50.0]))
+            .await
+            .unwrap();
+        assert!(provider_enabled(&db, pid).await);
+        assert!(item_enabled(&db, model_id).await);
+    }
+
+    #[tokio::test]
+    async fn balance_unjudgeable_keeps_state() {
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        let (pid, model_id) = seed_balance_provider(&db).await;
+
+        // 查不到余额（空 balances）→ 无法判定，保持原状。
+        let p = provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        apply_usage_gate(&db, &p, &balance_data(pid, &[]))
+            .await
+            .unwrap();
+        assert!(provider_enabled(&db, pid).await);
+        assert!(item_enabled(&db, model_id).await);
+    }
 
     fn quota_data(provider_id: i32, windows: Vec<crate::usage::types::QuotaWindow>) -> UsageData {
         UsageData {
