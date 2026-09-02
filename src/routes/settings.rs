@@ -8,7 +8,7 @@ use axum::{
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
 
-use crate::app_settings::{KEY_LANGUAGE, KEY_TIMEZONE};
+use crate::app_settings::{KEY_LANGUAGE, KEY_MAX_CONSECUTIVE_FAILURES, KEY_TIMEZONE};
 use crate::entity::setting;
 use crate::i18n::Lang;
 use crate::response::{self, Response};
@@ -94,6 +94,16 @@ fn validate_setting_value(
             .tr(
                 "timezone 必须是合法的 IANA 时区（如 Asia/Shanghai）",
                 "timezone must be a valid IANA timezone (e.g. Asia/Shanghai)",
+            )
+            .to_string());
+    }
+    if key == KEY_MAX_CONSECUTIVE_FAILURES
+        && value.trim().parse::<i64>().map(|v| v < 1).unwrap_or(true)
+    {
+        return Err(lang
+            .tr(
+                "value 必须是正整数（至少为 1）",
+                "value must be a positive integer (at least 1)",
             )
             .to_string());
     }

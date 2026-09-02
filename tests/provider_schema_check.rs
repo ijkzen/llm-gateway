@@ -57,6 +57,11 @@ async fn provider_table_ddl_matches_expected() {
             "varchar".to_string(),
             "'{}'".to_string(),
         ),
+        (
+            "failure_disabled".to_string(),
+            "boolean".to_string(),
+            "'0'".to_string(),
+        ),
         ("id".to_string(), "INTEGER".to_string(), String::new()),
         ("name".to_string(), "varchar".to_string(), String::new()),
         (

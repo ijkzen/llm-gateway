@@ -599,3 +599,39 @@ async fn test_update_provider_proxy() {
     assert_eq!(body["data"]["proxyEnabled"], true);
     assert_eq!(body["data"]["proxyAddr"], "http://10.0.0.1:8080");
 }
+
+#[tokio::test]
+async fn test_manual_enable_clears_failure_disabled_flag() {
+    use sea_orm::{ActiveModelTrait, Set};
+
+    let (app, db) = setup_app().await;
+    let id = create_named_provider(&app, "FailDisable").await as i32;
+
+    // 模拟连续失败熔断后的状态：禁用 + failure_disabled 标记。
+    let model = llm_gateway::entity::provider::Entity::find_by_id(id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: llm_gateway::entity::provider::ActiveModel = model.into();
+    active.enable = Set(false);
+    active.failure_disabled = Set(true);
+    active.update(&db).await.unwrap();
+
+    // 手动启用 → 标记清除。
+    let (status, _) = send_json(
+        &app,
+        "PUT",
+        &format!("/api/providers/{id}"),
+        r#"{"enable":true}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let model = llm_gateway::entity::provider::Entity::find_by_id(id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(model.enable);
+    assert!(!model.failure_disabled);
+}

@@ -442,9 +442,16 @@ async fn update_provider(
         return response::bad_request(msg);
     }
 
+    let had_failure_disabled = model.failure_disabled;
     let mut active: ActiveModel = model.into();
     active.name = Set(name.trim().to_string());
     active.enable = Set(enable_new);
+    // 手动启用即解除连续失败禁用（清除熔断标记并清零内存计数）。
+    if enable_new && had_failure_disabled {
+        active.failure_disabled = Set(false);
+        state.failure_counter.reset(id);
+        tracing::info!(provider_id = id, "手动启用供应商，清除连续失败禁用标记");
+    }
     active.base_url = Set(base_url.trim().to_string());
     active.protocol_type = Set(protocol_type);
     active.billing_mode = Set(billing_mode);
@@ -700,12 +707,7 @@ async fn get_provider_usage(
         }
         Err(e) => return response::db_error(e.to_string()),
     };
-    let extra = match serde_json::from_str::<Value>(&model.extra) {
-        Ok(Value::Object(map)) => map,
-        _ => Default::default(),
-    };
-    let usage_enabled = extra.get("usage").and_then(Value::as_bool).unwrap_or(false);
-    if !usage_enabled {
+    if !crate::usage::usage_enabled(&model.extra) {
         return response::bad_request(
             crate::usage::error::UsageError::NotEnabled.user_message(lang),
         );
@@ -802,12 +804,7 @@ async fn get_provider_usage_estimate(
             "usage estimation is only supported for subscription providers",
         ));
     }
-    let extra = match serde_json::from_str::<Value>(&model.extra) {
-        Ok(Value::Object(map)) => map,
-        _ => Default::default(),
-    };
-    let usage_enabled = extra.get("usage").and_then(Value::as_bool).unwrap_or(false);
-    if !usage_enabled {
+    if !crate::usage::usage_enabled(&model.extra) {
         return response::bad_request(
             crate::usage::error::UsageError::NotEnabled.user_message(lang),
         );

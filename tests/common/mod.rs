@@ -67,6 +67,8 @@ pub fn build_app_with_settings(
         scheduler,
         log_tx,
         lb_state: llm_gateway::proxy::LbState::default(),
+        failure_counter: llm_gateway::proxy::failure_counter::FailureCounter::default(),
+        recheck_gate: llm_gateway::proxy::failure_recheck::RecheckGate::default(),
         usage_cache: llm_gateway::usage::UsageCache::default(),
         upstream_pool: llm_gateway::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(
             600,

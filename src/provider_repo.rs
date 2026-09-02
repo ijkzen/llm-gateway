@@ -112,6 +112,40 @@ pub async fn set_provider_enabled(
     Ok(true)
 }
 
+/// 连续失败达到阈值时的熔断停用：供应商停用 + 名下虚拟模型条目级联停用 +
+/// 打 `failure_disabled` 标记。与额度门控禁用区分：用量定时刷新不会自动恢复，
+/// 仅管理员手动启用（清标记）解除。
+/// 原子性：条件更新 `failure_disabled=0 → 1`，并发仅一个胜出，返回 true。
+pub async fn disable_provider_on_failures(
+    db: &DatabaseConnection,
+    provider_id: i32,
+    consecutive: u32,
+    request_id: &str,
+) -> Result<bool, DbErr> {
+    use sea_orm::sea_query::Expr;
+    let now = chrono::Utc::now();
+    let affected = provider::Entity::update_many()
+        .col_expr(provider::Column::Enable, Expr::value(false))
+        .col_expr(provider::Column::FailureDisabled, Expr::value(true))
+        .col_expr(provider::Column::UpdatedAt, Expr::value(now))
+        .filter(provider::Column::Id.eq(provider_id))
+        .filter(provider::Column::FailureDisabled.eq(false))
+        .exec(db)
+        .await?;
+    if affected.rows_affected == 0 {
+        return Ok(false);
+    }
+    let items = set_items_enabled(db, provider_id, false).await?;
+    tracing::warn!(
+        request_id,
+        provider_id,
+        consecutive,
+        items,
+        "连续失败达到阈值，熔断停用供应商及其全部虚拟模型子模型（仅手动启用可恢复）"
+    );
+    Ok(true)
+}
+
 /// 级联开关该供应商名下全部虚拟模型子模型，返回实际变更的条目数。
 /// 幂等：已处于目标状态的条目跳过。逐行更新，变更后输出日志。
 ///

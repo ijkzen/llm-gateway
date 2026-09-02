@@ -197,6 +197,8 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         scheduler,
         log_tx,
         lb_state: crate::proxy::LbState::default(),
+        failure_counter: crate::proxy::failure_counter::FailureCounter::default(),
+        recheck_gate: crate::proxy::failure_recheck::RecheckGate::default(),
         usage_cache: crate::usage::UsageCache::default(),
         upstream_pool: crate::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
         settings,

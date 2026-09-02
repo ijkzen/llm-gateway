@@ -227,6 +227,59 @@ async fn quota_exhaustion_disables_and_restore_reenables() {
     assert!(item_enabled(&db, model_id).await);
 }
 
+async fn failure_disabled(db: &sea_orm::DatabaseConnection, id: i32) -> bool {
+    provider::Entity::find_by_id(id)
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap()
+        .failure_disabled
+}
+
+#[tokio::test]
+async fn failure_disabled_provider_not_auto_restored() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (pid, _model_id) = seed_subscription_provider(&db).await;
+
+    // 模拟连续失败禁用后的状态：禁用 + failure_disabled 标记。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: provider::ActiveModel = p.into();
+    active.enable = Set(false);
+    active.failure_disabled = Set(true);
+    active.update(&db).await.unwrap();
+    assert!(!provider_enabled(&db, pid).await);
+    assert!(failure_disabled(&db, pid).await);
+
+    // 额度恢复也不自动恢复：连续失败禁用只允许手动解除。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &quota_data(pid, 40.0, 50.0, 100.0))
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await);
+    assert!(failure_disabled(&db, pid).await);
+
+    // 子模型条目也保持停用（被级联停用的不因额度恢复而恢复）。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: provider::ActiveModel = p.into();
+    active.enable = Set(true);
+    active.failure_disabled = Set(false);
+    active.update(&db).await.unwrap();
+    assert!(provider_enabled(&db, pid).await);
+    assert!(!failure_disabled(&db, pid).await);
+}
+
 #[tokio::test]
 async fn gate_skips_unjudgeable_data() {
     let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;

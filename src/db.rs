@@ -361,6 +361,21 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         changed |= ensure_migration(db, 16, &migration_16_statements).await?;
     }
 
+    // Migration 17: provider.failure_disabled —— 标记「连续失败禁用」来源。
+    // 额度门控禁用会在额度恢复后自动重新启用，连续失败禁用只能手动启用解除；
+    // 用量定时刷新的恢复分支依据该标记跳过。新库已由建表带该列，此处兜底历史库
+    // （含生产残留的 14/15 废弃号段，沿用 column_exists 逐列检测）。
+    let mut migration_17_statements: Vec<&str> = Vec::new();
+    if !column_exists(db, "provider", "failure_disabled").await? {
+        migration_17_statements
+            .push("ALTER TABLE provider ADD COLUMN failure_disabled boolean NOT NULL DEFAULT '0'");
+    }
+    if migration_17_statements.is_empty() {
+        changed |= ensure_migration(db, 17, &["SELECT 1"]).await?;
+    } else {
+        changed |= ensure_migration(db, 17, &migration_17_statements).await?;
+    }
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)

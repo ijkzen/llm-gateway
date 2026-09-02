@@ -32,6 +32,7 @@ async fn seed_provider(db: &DatabaseConnection, id: i32, name: &str) {
         updated_at: Set(now),
         proxy_enabled: Set(false),
         proxy_addr: Set(String::new()),
+        failure_disabled: Set(false),
     }
     .insert(db)
     .await

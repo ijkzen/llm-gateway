@@ -56,6 +56,14 @@ impl UsageCache {
     }
 }
 
+/// provider 的 extra JSON 是否开启用量查询（`usage: true`）。
+pub fn usage_enabled(extra: &str) -> bool {
+    serde_json::from_str::<Value>(extra)
+        .ok()
+        .and_then(|v| v.get("usage").and_then(Value::as_bool))
+        .unwrap_or(false)
+}
+
 /// 查询指定 provider 的用量。`force_refresh` 绕过 60s 缓存。
 pub async fn query_provider_usage(
     db: &DatabaseConnection,
@@ -73,8 +81,7 @@ pub async fn query_provider_usage(
         Ok(Value::Object(map)) => map,
         _ => Default::default(),
     };
-    let usage_enabled = extra.get("usage").and_then(Value::as_bool).unwrap_or(false);
-    if !usage_enabled {
+    if !usage_enabled(&model.extra) {
         return Err(UsageError::NotEnabled);
     }
 

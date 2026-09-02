@@ -13,7 +13,6 @@ use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
 };
-use serde_json::Value;
 
 use crate::entity::{provider, usage_cache};
 use crate::usage::types::UsageData;
@@ -110,11 +109,7 @@ pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> 
     let providers = provider::Entity::find().all(db).await?;
     let mut targets = Vec::new();
     for p in providers {
-        let extra = match serde_json::from_str::<Value>(&p.extra) {
-            Ok(Value::Object(map)) => map,
-            _ => Default::default(),
-        };
-        if extra.get("usage").and_then(Value::as_bool).unwrap_or(false) {
+        if super::usage_enabled(&p.extra) {
             targets.push(p);
         }
     }
@@ -186,7 +181,8 @@ pub async fn apply_usage_gate(
             "余额已耗尽，自动停用供应商及其全部虚拟模型子模型",
         )
     };
-    if usable && !p.enable {
+    // 连续失败禁用（failure_disabled）只允许手动解除：额度恢复不自动放回。
+    if usable && !p.enable && !p.failure_disabled {
         crate::provider_repo::set_provider_enabled(db, p.id, true).await?;
         let items = crate::provider_repo::set_items_enabled(db, p.id, true).await?;
         tracing::info!(provider_id = p.id, items, "{recovered_msg}");

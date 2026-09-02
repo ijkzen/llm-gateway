@@ -1,8 +1,8 @@
-//! 语言/时区设置项的进程内缓存与种子。
+//! 语言/时区/熔断阈值等设置项的进程内缓存与种子。
 //!
-//! 设置项存于 `setting` 表（`language` / `timezone` 两行）。启动时从数据库
-//! 加载进内存，`PUT /api/settings/{key}` 更新后同步刷新。时区用于定时任务的
-//! cron 语义（见 `src/cron/`），语言用于 API 消息本地化（见 `src/i18n.rs`）。
+//! 设置项存于 `setting` 表。启动时从数据库加载进内存，`PUT /api/settings/{key}`
+//! 更新后同步刷新。时区用于定时任务的 cron 语义（见 `src/cron/`），语言用于
+//! API 消息本地化（见 `src/i18n.rs`），熔断阈值用于转发链路连续失败禁用。
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -19,6 +19,11 @@ pub const KEY_LANGUAGE: &str = "language";
 /// 未设置或非法时回退到服务器本地时区（`chrono::Local`）。
 pub const KEY_TIMEZONE: &str = "timezone";
 
+/// 设置项 key：供应商连续失败熔断阈值（正整数）。
+pub const KEY_MAX_CONSECUTIVE_FAILURES: &str = "max_consecutive_failures";
+/// 连续失败熔断阈值的种子默认值。
+pub const DEFAULT_MAX_CONSECUTIVE_FAILURES: u32 = 5;
+
 /// 种子的默认时区：与生产容器 `TZ=Asia/Shanghai` 语义一致。
 /// 引导页初始化后会用浏览器时区覆盖该值。
 pub const DEFAULT_TIMEZONE: &str = "Asia/Shanghai";
@@ -28,6 +33,8 @@ struct AppSettingsInner {
     language: Lang,
     /// 定时任务 cron 语义时区；`None` 表示服务器本地时区。
     timezone: Option<chrono_tz::Tz>,
+    /// 连续失败熔断阈值（正整数）。
+    max_consecutive_failures: u32,
 }
 
 /// 语言/时区设置的可克隆句柄。内部用 `RwLock` 支持运行时热更新
@@ -43,6 +50,7 @@ impl Default for AppSettings {
             inner: Arc::new(RwLock::new(AppSettingsInner {
                 language: Lang::default(),
                 timezone: None,
+                max_consecutive_failures: DEFAULT_MAX_CONSECUTIVE_FAILURES,
             })),
         }
     }
@@ -66,11 +74,12 @@ impl AppSettings {
 static PROCESS_GLOBAL: std::sync::OnceLock<AppSettings> = std::sync::OnceLock::new();
 
 impl AppSettings {
-    /// 从 setting 表加载 language / timezone 两行（缺失时用默认值），并幂等
-    /// 写入种子行，保证「空表起步」的库也有这两行可被 `PUT` 更新。
+    /// 从 setting 表加载设置行（缺失时用默认值），并幂等写入种子行，保证
+    /// 「空表起步」的库也有这些行可被 `PUT` 更新。
     pub async fn load_from_db(db: &DatabaseConnection) -> anyhow::Result<Self> {
         let mut language = Lang::default();
         let mut timezone: Option<chrono_tz::Tz> = None;
+        let mut max_consecutive_failures = DEFAULT_MAX_CONSECUTIVE_FAILURES;
 
         for model in setting::Entity::find().all(db).await? {
             match model.key.as_str() {
@@ -82,6 +91,13 @@ impl AppSettings {
                 KEY_TIMEZONE => {
                     timezone = chrono_tz::Tz::from_str(model.value.trim()).ok();
                 }
+                KEY_MAX_CONSECUTIVE_FAILURES => {
+                    if let Ok(v) = model.value.trim().parse::<u32>()
+                        && v >= 1
+                    {
+                        max_consecutive_failures = v;
+                    }
+                }
                 _ => {}
             }
         }
@@ -89,13 +105,17 @@ impl AppSettings {
         *LANG_SYNC.lock().unwrap() = language;
 
         let settings = Self {
-            inner: Arc::new(RwLock::new(AppSettingsInner { language, timezone })),
+            inner: Arc::new(RwLock::new(AppSettingsInner {
+                language,
+                timezone,
+                max_consecutive_failures,
+            })),
         };
         settings.ensure_seed_rows(db).await?;
         Ok(settings)
     }
 
-    /// 幂等插入 language / timezone 种子行（已存在则跳过）。
+    /// 幂等插入种子行（已存在则跳过）。
     async fn ensure_seed_rows(&self, db: &DatabaseConnection) -> anyhow::Result<()> {
         for (key, value, setting_type) in [
             (
@@ -107,6 +127,11 @@ impl AppSettings {
                 KEY_TIMEZONE,
                 DEFAULT_TIMEZONE.to_string(),
                 SettingType::String,
+            ),
+            (
+                KEY_MAX_CONSECUTIVE_FAILURES,
+                DEFAULT_MAX_CONSECUTIVE_FAILURES.to_string(),
+                SettingType::Int,
             ),
         ] {
             let exists = setting::Entity::find()
@@ -138,6 +163,11 @@ impl AppSettings {
         self.inner.read().await.timezone
     }
 
+    /// 当前连续失败熔断阈值。
+    pub async fn max_consecutive_failures(&self) -> u32 {
+        self.inner.read().await.max_consecutive_failures
+    }
+
     /// 更新设置（由 `PUT /api/settings/{key}` 调用）。`timezone` 值非法时
     /// 保持原值（校验已在上层拒绝非法输入，这里只是防御性处理）。
     pub async fn update(&self, key: &str, value: &str) {
@@ -151,6 +181,13 @@ impl AppSettings {
             }
             KEY_TIMEZONE => {
                 inner.timezone = chrono_tz::Tz::from_str(value.trim()).ok();
+            }
+            KEY_MAX_CONSECUTIVE_FAILURES => {
+                if let Ok(v) = value.trim().parse::<u32>()
+                    && v >= 1
+                {
+                    inner.max_consecutive_failures = v;
+                }
             }
             _ => {}
         }

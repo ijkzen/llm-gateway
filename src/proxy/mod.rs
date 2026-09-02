@@ -5,6 +5,8 @@
 //! 并把每次请求的指标异步写入 request 表。
 
 pub mod convert;
+pub mod failure_counter;
+pub mod failure_recheck;
 pub mod metrics;
 pub mod pool;
 pub mod sse;
@@ -63,6 +65,41 @@ impl Protocol {
 /// 可重试的失败路径：LLM 网关惯用的 408/429/5xx（nyro 同款）。
 fn is_retryable_status(status: StatusCode) -> bool {
     matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 529)
+}
+
+/// 成员请求失败后记连续失败（所有失败，含不可重试 4xx）；达到设置项
+/// `max_consecutive_failures` 阈值时熔断停用供应商（原子化，详见
+/// `provider_repo::disable_provider_on_failures`）。
+/// `counted` 为本次请求已计数的 provider 集合：同一请求内同一供应商的多个
+/// 成员失败只计一次，避免一次降级链把计数顶到阈值。
+async fn note_member_failure(
+    state: &AppState,
+    member: &Member,
+    request_id: &str,
+    counted: &mut HashSet<i32>,
+) {
+    if !counted.insert(member.provider_id) {
+        return;
+    }
+    let consecutive = state.failure_counter.record_failure(member.provider_id);
+    // 失败复查（异步节流）：耗尽即门控禁用，切断缓存过期导致的后续降级。
+    failure_recheck::trigger(state, member.provider_id, request_id);
+    let threshold = state.settings.max_consecutive_failures().await;
+    if consecutive >= threshold
+        && let Err(e) = crate::provider_repo::disable_provider_on_failures(
+            &state.db,
+            member.provider_id,
+            consecutive,
+            request_id,
+        )
+        .await
+    {
+        tracing::warn!(
+            request_id,
+            provider_id = member.provider_id,
+            "连续失败熔断执行失败：{e}"
+        );
+    }
 }
 
 /// LB 轮转状态：虚拟模型 id → 已轮转次数。
@@ -835,6 +872,8 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
     }
 
     let mut last_failure: Option<(Member, String, StatusCode)> = None;
+    // 本次请求已记连续失败的 provider：同一请求内同供应商多个成员失败只计一次。
+    let mut counted_failures: HashSet<i32> = HashSet::new();
     for (index, member) in ordered.iter().enumerate() {
         let has_more = index + 1 < ordered.len();
         let start_time = now_ms();
@@ -842,6 +881,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             Ok(key) => key,
             Err(e) => {
                 let message = format!("解密供应商密钥失败：{e}");
+                note_member_failure(state, member, &request_id, &mut counted_failures).await;
                 if retry_enabled && has_more {
                     tracing::warn!(
                         request_id,
@@ -880,6 +920,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             match build_upstream_call(member, &client_body, client_stream, &decrypted_key) {
                 Ok(result) => result,
                 Err(message) => {
+                    note_member_failure(state, member, &request_id, &mut counted_failures).await;
                     if retry_enabled && has_more {
                         tracing::warn!(
                             request_id,
@@ -924,6 +965,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             Ok(reply) => reply,
             Err(e) => {
                 let message = e.fail_reason();
+                note_member_failure(state, member, &request_id, &mut counted_failures).await;
                 if retry_enabled && has_more {
                     tracing::warn!(
                         request_id,
@@ -962,6 +1004,7 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             let body = upstream::read_body(reply.body).await.unwrap_or_default();
             let message = extract_error_message(&String::from_utf8_lossy(&body));
             let status = reply.status;
+            note_member_failure(state, member, &request_id, &mut counted_failures).await;
             if retry_enabled && is_retryable_status(status) && has_more {
                 tracing::warn!(
                     request_id,
@@ -1076,6 +1119,9 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
         include_usage,
         json_mode_tool,
     } = ctx;
+
+    // 成功即清零该供应商的连续失败计数（偶发失败不累积）。
+    state.failure_counter.reset(member.provider_id);
 
     match (member.protocol, client_stream) {
         // OpenAI Compat 非流式：JSON 原样透传。
