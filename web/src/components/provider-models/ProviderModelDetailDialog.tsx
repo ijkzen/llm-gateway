@@ -110,7 +110,9 @@ export function ProviderModelDetailDialog({
 	}, [open, model, form]);
 
 	const onSubmit = (values: FormValues) => {
-		if (!model) return;
+		// 进入编辑态后未改动任何值不提交：防止双击「编辑」时第二击落在同槽位的「更新」上，
+		// 把未变更的值原样 PUT 并误报「更新成功」。
+		if (!model || !form.formState.isDirty) return;
 		updateModel.mutate(
 			{ modelId: model.modelId, ...values },
 			{
@@ -296,7 +298,7 @@ export function ProviderModelDetailDialog({
 									type="submit"
 									size="sm"
 									form="provider-model-detail-form"
-									disabled={updateModel.isPending}
+									disabled={updateModel.isPending || !form.formState.isDirty}
 								>
 									{t("providerModels.update")}
 								</Button>
