@@ -1,7 +1,7 @@
 import { AddProviderModelsDialog } from "@/components/provider-models/AddProviderModelsDialog";
 import { ProviderModelDetailDialog } from "@/components/provider-models/ProviderModelDetailDialog";
 import type { ProviderModel, RefreshCandidate } from "@/hooks/use-provider-models";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -365,6 +365,33 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 		expect(screen.queryByRole("button", { name: "编辑" })).toBeNull();
 		expect(screen.getByRole("button", { name: "删除" })).toBeTruthy();
 		expect(screen.getByRole("button", { name: "更新" })).toBeTruthy();
+	});
+
+	it("进入编辑态但未改动任何值时，更新按钮禁用且不触发提交（双击编辑不会立即更新成功）", async () => {
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel()}
+			/>,
+		);
+
+		// 真实浏览器按坐标命中：双击「编辑」的第二击落在同一槽位换上来的「更新」提交按钮上。
+		// jsdom 无坐标命中，按角色查询同一位置的新按钮等价模拟。
+		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+		const updateBtn = screen.getByRole("button", { name: "更新" }) as HTMLButtonElement;
+		fireEvent.click(updateBtn);
+
+		// zodResolver 校验异步完成，先冲刷微任务让提交流程跑完再断言。
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		});
+
+		expect(mocks.updateMutate).not.toHaveBeenCalled();
+		expect(mocks.toastSuccess).not.toHaveBeenCalled();
+		expect(updateBtn.disabled).toBe(true);
 	});
 
 	it("更新提交后调用更新接口", async () => {
