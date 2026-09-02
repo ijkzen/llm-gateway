@@ -487,6 +487,12 @@ const zhCN = {
 		cacheHitTokens: "缓存命中 Token",
 		failReason: "失败原因",
 	},
+	multiSelect: {
+		searchPlaceholder: "搜索选项…",
+		selectedCount: "已选 {{count}} 项",
+		selectAll: "全选",
+		noMatch: "无匹配选项",
+	},
 	settings: {
 		title: "设置",
 		key: "键",

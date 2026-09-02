@@ -42,18 +42,50 @@ const SORTABLE_COLUMNS: &[(&str, &str)] = &[
 struct ListQuery {
     page: Option<u32>,
     page_size: Option<u32>,
-    vm_id: Option<i32>,
-    /// 按供应商过滤（request.provider_id）。
-    provider_id: Option<i32>,
-    /// 按供应商模型过滤（request.model_id，供应商侧真实模型 ID）。
+    /// 逗号分隔多值（如 `1,2,3`），单值兼容；空 = 不过滤。
+    vm_id: Option<String>,
+    /// 按供应商过滤（request.provider_id），逗号分隔多值。
+    provider_id: Option<String>,
+    /// 按供应商模型过滤（request.model_id，供应商侧真实模型 ID），逗号分隔多值。
     model_id: Option<String>,
     /// 按结果状态过滤：省略 = 全部，true = 成功，false = 失败。
     success: Option<bool>,
+    /// 按 API Key 名过滤，逗号分隔多值。
     api_key: Option<String>,
     start_time: Option<i64>,
     end_time: Option<i64>,
     sort_by: Option<String>,
     sort_order: Option<String>,
+}
+
+fn parse_csv_i32(raw: Option<&String>) -> Vec<i32> {
+    raw.into_iter()
+        .flat_map(|s| s.split(','))
+        .filter_map(|part| part.trim().parse().ok())
+        .collect()
+}
+
+fn parse_csv_string(raw: Option<&String>) -> Vec<String> {
+    raw.into_iter()
+        .flat_map(|s| s.split(','))
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn push_in_clause(
+    where_sql: &mut String,
+    column: &str,
+    values: Vec<sea_orm::Value>,
+    params: &mut Vec<sea_orm::Value>,
+) {
+    if values.is_empty() {
+        return;
+    }
+    let placeholders = vec!["?"; values.len()].join(",");
+    where_sql.push_str(&format!(" AND {column} IN ({placeholders})"));
+    params.extend(values);
 }
 
 #[derive(Serialize)]
@@ -104,26 +136,46 @@ async fn list_request_logs(
     // 拼接 WHERE 条件与绑定参数。
     let mut where_sql = String::from("WHERE 1=1");
     let mut params: Vec<sea_orm::Value> = Vec::new();
-    if let Some(vm_id) = query.vm_id {
-        where_sql.push_str(" AND r.virtual_model_id = ?");
-        params.push(vm_id.into());
-    }
-    if let Some(provider_id) = query.provider_id {
-        where_sql.push_str(" AND r.provider_id = ?");
-        params.push(provider_id.into());
-    }
-    if let Some(model_id) = query.model_id.filter(|m| !m.trim().is_empty()) {
-        where_sql.push_str(" AND r.model_id = ?");
-        params.push(model_id.trim().to_string().into());
-    }
+    push_in_clause(
+        &mut where_sql,
+        "r.virtual_model_id",
+        parse_csv_i32(query.vm_id.as_ref())
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        &mut params,
+    );
+    push_in_clause(
+        &mut where_sql,
+        "r.provider_id",
+        parse_csv_i32(query.provider_id.as_ref())
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        &mut params,
+    );
+    push_in_clause(
+        &mut where_sql,
+        "r.model_id",
+        parse_csv_string(query.model_id.as_ref())
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        &mut params,
+    );
     if let Some(success) = query.success {
         where_sql.push_str(" AND r.success = ?");
         params.push(success.into());
     }
-    if let Some(api_key) = query.api_key.filter(|k| !k.trim().is_empty()) {
-        where_sql.push_str(" AND r.api_key_name = ?");
-        params.push(api_key.trim().to_string().into());
-    }
+    push_in_clause(
+        &mut where_sql,
+        "r.api_key_name",
+        parse_csv_string(query.api_key.as_ref())
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        &mut params,
+    );
     if let Some(start) = query.start_time {
         where_sql.push_str(" AND r.start_time >= ?");
         params.push(start.into());
