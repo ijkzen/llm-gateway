@@ -343,20 +343,22 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         changed |= ensure_migration(db, 13, &migration_13_statements).await?;
     }
 
-    // Migration 14: virtual_model_item.cascade_disabled —— 区分「用户手动关闭」与
+    // Migration 16: virtual_model_item.cascade_disabled —— 区分「用户手动关闭」与
     // 「被供应商级联停用」。级联恢复（供应商重新启用/额度恢复）只恢复带该标记的条目，
     // 用户手动关闭的成员保持不变。新库已由第一遍 create_table_from_entity 建表带该列，
     // 此处兜底历史库。
-    let mut migration_14_statements: Vec<&str> = Vec::new();
+    // 注意：版本号 14/15 已被生产库残留的旧 lg-proxy 方案迁移记录占用（该方案已删除），
+    // 新迁移必须从 16 起编，否则 ALTER 会被 ensure_migration 的版本守卫静默吞掉。
+    let mut migration_16_statements: Vec<&str> = Vec::new();
     if !column_exists(db, "virtual_model_item", "cascade_disabled").await? {
-        migration_14_statements.push(
+        migration_16_statements.push(
             "ALTER TABLE virtual_model_item ADD COLUMN cascade_disabled boolean NOT NULL DEFAULT '0'",
         );
     }
-    if migration_14_statements.is_empty() {
-        changed |= ensure_migration(db, 14, &["SELECT 1"]).await?;
+    if migration_16_statements.is_empty() {
+        changed |= ensure_migration(db, 16, &["SELECT 1"]).await?;
     } else {
-        changed |= ensure_migration(db, 14, &migration_14_statements).await?;
+        changed |= ensure_migration(db, 16, &migration_16_statements).await?;
     }
 
     tracing::info!("Database tables migrated");
@@ -523,5 +525,36 @@ mod tests {
                 .unwrap()
         );
         assert!(column_exists(&db, "provider", "proxy_addr").await.unwrap());
+    }
+
+    /// 历史库迁移：schema_migrations 残留废弃号段的版本记录（旧 lg-proxy 方案
+    /// 曾占用 14/15），且 virtual_model_item 缺 cascade_disabled 列——migrate()
+    /// 必须用 16 号段兜底补列。回归：migration 14 曾与生产残留记录撞号，ALTER
+    /// 被版本守卫静默吞掉导致线上缺列。
+    #[tokio::test]
+    async fn migration_16_backfills_cascade_disabled_despite_stale_versions() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        migrate(&db).await.unwrap();
+        // 模拟生产库：删列 + 注入废弃号段的版本记录（14/15 为旧方案残留）。
+        db.execute_unprepared("ALTER TABLE virtual_model_item DROP COLUMN cascade_disabled")
+            .await
+            .unwrap();
+        db.execute_unprepared(
+                "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (14, datetime('now')), (15, datetime('now'))",
+            )
+            .await
+            .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 16")
+            .await
+            .unwrap();
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        assert!(
+            column_exists(&db, "virtual_model_item", "cascade_disabled")
+                .await
+                .unwrap()
+        );
     }
 }
