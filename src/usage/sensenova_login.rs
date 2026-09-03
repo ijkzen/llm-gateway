@@ -16,6 +16,8 @@ use serde_json::Value;
 use super::error::UsageError;
 
 const PLATFORM_BASE: &str = "https://platform.sensenova.cn";
+/// 商汤账号体系 REST API 独立域（research：`iam.sensecoreapi.cn/iam/authn`）。
+const IAM_BASE: &str = "https://iam.sensecoreapi.cn";
 const IAM_LOGIN_PATH: &str = "/iam/authn/v1/auth/nova/login";
 const JWKS_URL: &str = "https://signin.sensecore.cn/.well-known/jwks.json";
 const OVERRIDE_ENV: &str = "LLM_GATEWAY_USAGE_HTTP_OVERRIDE";
@@ -129,7 +131,7 @@ impl SensenovaLogin {
         jwe_password: &str,
         challenge: &str,
     ) -> Result<Option<String>, UsageError> {
-        let url = self.rewrite(&format!("{PLATFORM_BASE}{IAM_LOGIN_PATH}"));
+        let url = self.rewrite(&format!("{IAM_BASE}{IAM_LOGIN_PATH}"));
         let body = serde_json::json!({
             "username": username,
             "password": jwe_password,
