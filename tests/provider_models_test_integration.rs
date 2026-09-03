@@ -227,6 +227,10 @@ async fn test_openai_model_success_records_request() {
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["code"], "0");
     assert_eq!(body["data"]["ok"], true);
+    // 成功响应携带本次请求耗时（毫秒，上游处理+传输，后端口径）。
+    body["data"]["duration_ms"]
+        .as_u64()
+        .expect("duration_ms 应为数值");
 
     // 上游收到固定提示词「你好」+ max_tokens 映射。
     let upstream_bodies = captured.lock().unwrap();

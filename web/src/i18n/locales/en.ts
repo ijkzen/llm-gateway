@@ -280,6 +280,12 @@ const en: Translation = {
 		deleteProviderDesc: "Delete provider",
 		deleteProviderDescSuffix: "? This cannot be undone.",
 		submitting: "Submitting...",
+		speedTest: "Speed test models",
+		speedTestDesc:
+			"Send a test request per model to verify upstream connectivity and measure latency.",
+		speedTestNoModels: "This provider has no models yet",
+		speedTestNoModelsHint: "Add models from the Provider Models page first.",
+		speedTestResult: "{{duration}} ms",
 	},
 	providerModels: {
 		title: "Provider Models",

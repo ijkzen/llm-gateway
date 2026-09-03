@@ -279,6 +279,11 @@ const zhCN = {
 		deleteProviderDesc: "确定要删除 Provider",
 		deleteProviderDescSuffix: "吗？此操作无法撤销。",
 		submitting: "提交中...",
+		speedTest: "模型测速",
+		speedTestDesc: "逐个模型发送测试请求，验证上游连通性并测量耗时。",
+		speedTestNoModels: "该供应商暂无模型",
+		speedTestNoModelsHint: "请先到「供应商模型」页添加模型。",
+		speedTestResult: "耗时 {{duration}} ms",
 	},
 	providerModels: {
 		title: "供应商模型",

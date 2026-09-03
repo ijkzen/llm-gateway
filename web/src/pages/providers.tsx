@@ -5,6 +5,7 @@ import { ProviderDeleteDialog } from "@/components/providers/ProviderDeleteDialo
 import { ProviderDetail } from "@/components/providers/ProviderDetail";
 import { ProviderEditDialog } from "@/components/providers/ProviderEditDialog";
 import { ProviderList } from "@/components/providers/ProviderList";
+import { ProviderSpeedTestDialog } from "@/components/providers/ProviderSpeedTestDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type Provider, useProviders } from "@/hooks/use-providers";
@@ -19,6 +20,7 @@ export default function ProvidersPage() {
 	const [creating, setCreating] = useState(false);
 	const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
 	const [deletingProvider, setDeletingProvider] = useState<Provider | null>(null);
+	const [speedTestProvider, setSpeedTestProvider] = useState<Provider | null>(null);
 
 	const { data: providers, isLoading, isError, refetch } = useProviders();
 
@@ -83,6 +85,7 @@ export default function ProvidersPage() {
 						provider={effectiveProvider}
 						onEdit={setEditingProvider}
 						onDelete={setDeletingProvider}
+						onSpeedTest={setSpeedTestProvider}
 					/>
 				</div>
 			</div>
@@ -102,6 +105,12 @@ export default function ProvidersPage() {
 				provider={deletingProvider}
 				open={!!deletingProvider}
 				onOpenChange={(open) => !open && setDeletingProvider(null)}
+			/>
+
+			<ProviderSpeedTestDialog
+				provider={speedTestProvider}
+				open={speedTestProvider !== null}
+				onOpenChange={(open) => !open && setSpeedTestProvider(null)}
 			/>
 		</div>
 	);
