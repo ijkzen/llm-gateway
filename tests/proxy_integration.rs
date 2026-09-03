@@ -119,6 +119,13 @@ async fn spawn_mock(captured: Captured) -> String {
                 let captured = captured_responses;
                 async move {
                     record_capture(&captured, &body);
+                    let parsed: Value = serde_json::from_str(&body).unwrap();
+                    if parsed.pointer("/input/0/content/0/text") == Some(&json!("final-only")) {
+                        return sse(&[
+                            json!({"type":"response.created","response":{"id":"resp_final","model":"final-only"}}).to_string(),
+                            json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"最终内容"},{"type":"reasoning","summary":[{"type":"summary_text","text":"最终推理"}]}]}],"usage":{"input_tokens":12,"output_tokens":6,"input_tokens_details":{"cached_tokens":5}}}}).to_string(),
+                        ]);
+                    }
                     sse(&[
                         json!({"type":"response.created","response":{"id":"resp_1","model":"gpt-x"}}).to_string(),
                         json!({"type":"response.output_text.delta","delta":"你好"}).to_string(),
@@ -322,6 +329,7 @@ async fn anthropic_non_stream_converts_and_merges_cache_tokens() {
     assert_eq!(body["object"], "chat.completion");
     assert_eq!(body["choices"][0]["message"]["content"], "你好");
     assert_eq!(body["choices"][0]["finish_reason"], "stop");
+    assert!(body["usage"].get("prompt_tokens_details").is_none());
 
     // 上游请求为 Anthropic 形状。
     let upstream_bodies = captured.lock().unwrap();
@@ -356,6 +364,40 @@ async fn anthropic_stream_converts_to_openai_chunks() {
 }
 
 #[tokio::test]
+async fn responses_final_output_recovers_non_stream_and_stream_content() {
+    let base = spawn_mock(capture()).await;
+    let (app, _) = common_setup_with_member(&base, 1, 0, 0).await;
+    let body = json!({
+        "model": "vm-x",
+        "messages": [{"role": "user", "content": "final-only"}],
+        "max_tokens": 128,
+    });
+
+    let (status, text) = send_chat(&app, body.clone()).await;
+    assert_eq!(status, 200, "{text}");
+    let completion: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(completion["choices"][0]["message"]["content"], "最终内容");
+    assert_eq!(
+        completion["choices"][0]["message"]["reasoning_content"],
+        "最终推理"
+    );
+
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "stream": true,
+            "messages": [{"role": "user", "content": "final-only"}],
+            "max_tokens": 128,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert_eq!(text.matches(r#""content":"最终内容""#).count(), 1);
+    assert_eq!(text.matches(r#""reasoning_content":"最终推理""#).count(), 1);
+}
+
+#[tokio::test]
 async fn responses_forced_stream_aggregates_for_non_stream_client() {
     let captured = capture();
     let base = spawn_mock(captured.clone()).await;
@@ -366,6 +408,7 @@ async fn responses_forced_stream_aggregates_for_non_stream_client() {
     let body: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(body["choices"][0]["message"]["content"], "你好");
     assert_eq!(body["usage"]["prompt_tokens"], 12);
+    assert_eq!(body["usage"]["prompt_tokens_details"]["cached_tokens"], 5);
 
     // 上游被强制 stream: true，且 max_tokens → max_output_tokens。
     let upstream_bodies = captured.lock().unwrap();
@@ -381,6 +424,36 @@ async fn responses_forced_stream_aggregates_for_non_stream_client() {
 }
 
 #[tokio::test]
+async fn responses_stream_includes_cached_tokens_in_usage_chunk() {
+    let base = spawn_mock(capture()).await;
+    let (app, _) = common_setup_with_member(&base, 1, 0, 0).await;
+
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "stream": true,
+            "stream_options": {"include_usage": true},
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 128,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert!(text.contains(r#""prompt_tokens_details":{"cached_tokens":5}"#));
+    let usage_chunk = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter(|data| *data != "[DONE]")
+        .map(|data| serde_json::from_str::<Value>(data).unwrap())
+        .find(|chunk| chunk["choices"].as_array().is_some_and(Vec::is_empty))
+        .unwrap();
+    assert_eq!(usage_chunk["id"], "chatcmpl-resp_1");
+    assert_eq!(usage_chunk["model"], "gpt-x");
+    assert!(text.contains("data: [DONE]"));
+}
+
+#[tokio::test]
 async fn gemini_non_stream_converts() {
     let captured = capture();
     let base = spawn_mock(captured.clone()).await;
@@ -391,6 +464,7 @@ async fn gemini_non_stream_converts() {
     let body: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(body["choices"][0]["message"]["content"], "你好");
     assert_eq!(body["choices"][0]["finish_reason"], "stop");
+    assert_eq!(body["usage"]["prompt_tokens_details"]["cached_tokens"], 6);
 
     let upstream_bodies = captured.lock().unwrap();
     assert_eq!(
@@ -405,6 +479,27 @@ async fn gemini_non_stream_converts() {
     assert_eq!(record.input_cache_tokens, 6);
     // 输出 = candidates 4 + thoughts 2（含思考）。
     assert_eq!(record.output_tokens, Some(6));
+}
+
+#[tokio::test]
+async fn gemini_stream_includes_cached_tokens_in_usage_chunk() {
+    let base = spawn_mock(capture()).await;
+    let (app, _) = common_setup_with_member(&base, 3, 0, 0).await;
+
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "stream": true,
+            "stream_options": {"include_usage": true},
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 128,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert!(text.contains(r#""prompt_tokens_details":{"cached_tokens":6}"#));
+    assert!(text.contains("data: [DONE]"));
 }
 
 #[tokio::test]

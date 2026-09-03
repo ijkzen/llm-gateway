@@ -32,8 +32,8 @@ use crate::auth::{AuthedApiKey, openai_error};
 use crate::crypto;
 use crate::entity::{provider, provider_model, virtual_model, virtual_model_item};
 use crate::proxy::convert::{
-    anthropic, build_upstream_url, chunk_json, extract_error_message, gemini, openai, responses,
-    truncate_chars, usage_chunk_json,
+    anthropic, build_upstream_url, cached_client_usage_json, chunk_json, client_usage_json,
+    extract_error_message, gemini, openai, responses, truncate_chars, usage_chunk_json,
 };
 use crate::proxy::metrics::{RequestRecord, StreamMetrics, Usage, now_ms};
 use crate::proxy::pool::PooledBody;
@@ -635,6 +635,15 @@ impl Converter {
         }
     }
 
+    fn completion_model(&self) -> String {
+        match self {
+            Converter::Responses(c) => c.completion_model().to_string(),
+            Converter::Anthropic(_) | Converter::Gemini(_) => {
+                unreachable!("only Responses uses upstream completion metadata")
+            }
+        }
+    }
+
     fn completion_id(&self) -> String {
         match self {
             Converter::Anthropic(c) => c.completion_id().to_string(),
@@ -755,7 +764,7 @@ pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
             "message": Value::Object(message),
             "finish_reason": finish_reason,
         }],
-        "usage": convert::client_usage_json(usage),
+        "usage": cached_client_usage_json(usage),
     })
 }
 
@@ -1261,6 +1270,8 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 return openai_error(status, error, "api_error", "upstream_error");
             }
             let usage = converter.usage().unwrap_or_default();
+            let completion_id = converter.completion_id();
+            let completion_model = converter.completion_model();
             let completion = accumulate_chunks(&events.chunks, &usage);
             let end_time = now_ms();
             let usage_for_chunk = usage.clone();
@@ -1287,7 +1298,6 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
             .insert(&state.db);
             if client_stream {
                 let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
-                let request_id_for_chunk = request_id.clone();
                 tokio::spawn(async move {
                     for chunk in events.chunks {
                         if tx
@@ -1303,9 +1313,9 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     if include_usage {
                         let frame = crate::proxy::sse::sse_frame(
                             &usage_chunk_json(
-                                &request_id_for_chunk,
-                                &requested_model,
-                                &usage_for_chunk,
+                                &completion_id,
+                                &completion_model,
+                                cached_client_usage_json(&usage_for_chunk),
                             )
                             .to_string(),
                         );
@@ -1491,9 +1501,17 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                             .await;
                     }
                     if include_usage && let Some(usage) = converter.usage() {
-                        let frame =
-                            usage_chunk_json(&converter.completion_id(), &requested_model, &usage)
-                                .to_string();
+                        let usage_json = if protocol == Protocol::Gemini {
+                            cached_client_usage_json(&usage)
+                        } else {
+                            client_usage_json(&usage)
+                        };
+                        let usage_chunk = usage_chunk_json(
+                            &converter.completion_id(),
+                            &requested_model,
+                            usage_json,
+                        );
+                        let frame = usage_chunk.to_string();
                         let _ = tx
                             .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(&frame))))
                             .await;
