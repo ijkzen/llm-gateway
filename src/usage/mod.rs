@@ -123,7 +123,7 @@ pub async fn query_provider_usage(
             }
             Err(error) => return Err(error),
         }
-    } else if matches!(fetcher_for(&host, &path), Some(Fetcher::Sensenova)) {
+    } else if crate::provider_template::is_sensenova_host(&host) {
         // SenseNova：登录/轮换都要写回 refresh_token（需要 db/provider_id 与
         // 带 cookie/重定向的登录客户端），因此在这里单独处理。
         let login = sensenova_login::SensenovaLogin::with_proxy(proxy);

@@ -314,6 +314,58 @@ async fn krill_history_backfill_is_idempotent_and_preserves_user_values() {
 }
 
 #[tokio::test]
+async fn sensenova_history_backfill_is_idempotent_and_preserves_user_values() {
+    temp_env::async_with_vars(
+        [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
+        async {
+            let db = setup_db().await.unwrap();
+            // 先 upsert 让 SenseNova 模板入库（后续走 update 分支，不再触发首次插入回填）。
+            upsert_templates(&db).await.unwrap();
+
+            // 模拟合并前创建的历史 SenseNova provider：extra 只有旧键 refresh_token/usage。
+            insert_provider_with_billing(
+                &db,
+                "SenseNova-历史",
+                "https://token.sensenova.cn/v1",
+                r#"{"refresh_token":"rt-existing","usage":true,"usage_type":1,"custom":"keep"}"#,
+                1,
+            )
+            .await;
+            // 其它 host 的 provider 不受影响。
+            insert_provider(
+                &db,
+                "SenseNova-其他host",
+                "https://api.deepseek.com/v1",
+                r#"{"own":1}"#,
+            )
+            .await;
+
+            // 再次 upsert（模板走 update 分支），历史 provider 仍应被无条件对齐。
+            upsert_templates(&db).await.unwrap();
+            upsert_templates(&db).await.unwrap();
+
+            let extra = provider_extra(&db, "SenseNova-历史").await;
+            assert_eq!(extra["username"], "");
+            assert_eq!(extra["password"], "");
+            assert_eq!(
+                extra["refresh_token"], "rt-existing",
+                "已有 refresh_token 不被覆盖"
+            );
+            assert_eq!(extra["usage"], true);
+            assert_eq!(extra["custom"], "keep", "未知键保留");
+
+            let other = provider_extra(&db, "SenseNova-其他host").await;
+            assert_eq!(
+                other,
+                serde_json::json!({ "own": 1 }),
+                "非 SenseNova host 不动"
+            );
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn krill_history_backfill_skips_invalid_extra_and_continues() {
     let db = setup_db().await.unwrap();
     insert_provider_with_billing(

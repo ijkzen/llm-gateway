@@ -54,6 +54,7 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
     }
 
     backfill_krill_provider_extra(db).await?;
+    backfill_sensenova_provider_extra(db).await?;
     tracing::info!("Provider templates seeded: {inserted} inserted, {updated} updated");
     Ok(inserted + updated)
 }
@@ -63,6 +64,10 @@ pub(crate) fn is_krill_host(host: &str) -> bool {
         host,
         "api-slb.krill-ai.net" | "api.krill-ai.net" | "api.cdn-krill-ai.com"
     )
+}
+
+pub(crate) fn is_sensenova_host(host: &str) -> bool {
+    matches!(host, "token.sensenova.cn" | "platform.sensenova.cn")
 }
 
 /// 每次启动幂等对齐历史 Krill Provider 的凭据结构与用量类型。
@@ -118,6 +123,72 @@ async fn backfill_krill_provider_extra(db: &DatabaseConnection) -> Result<(), Db
             &serde_json::Value::Object(extra).to_string(),
         ));
         active.update(db).await?;
+    }
+    Ok(())
+}
+
+/// 每次启动幂等对齐历史 SenseNova Provider 的凭据结构。
+///
+/// SenseNova 模板早已随早期版本 upsert 进库，新增 username/password 键后
+/// 走的是 update 分支（不触发 `backfill_provider_extra`），历史 provider 的
+/// extra 不会补入缺失键；这里仿 Krill 每次启动无条件对齐。
+/// 只补缺、不覆盖：已有 refresh_token/username/password/usage 一律保留。
+async fn backfill_sensenova_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let providers = crate::entity::provider::Entity::find().all(db).await?;
+    for provider in providers {
+        let provider_id = provider.id;
+        let Some(host) = host_of(&provider.base_url) else {
+            continue;
+        };
+        if !is_sensenova_host(&host) {
+            continue;
+        }
+
+        let plain = match crypto::decrypt(&provider.extra) {
+            Ok(plain) => plain,
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = provider.id,
+                    "回填 SenseNova provider extra 失败：存储值无法解密：{error}"
+                );
+                continue;
+            }
+        };
+        let mut extra = match serde_json::from_str::<serde_json::Value>(&plain) {
+            Ok(serde_json::Value::Object(extra)) => extra,
+            Ok(_) => {
+                tracing::warn!(
+                    provider_id = provider.id,
+                    "回填 SenseNova provider extra 失败：不是 JSON 对象"
+                );
+                continue;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = provider.id,
+                    "回填 SenseNova provider extra 失败：不是合法 JSON 对象：{error}"
+                );
+                continue;
+            }
+        };
+        let before = extra.clone();
+        for key in ["refresh_token", "username", "password"] {
+            extra.entry(key.to_string()).or_insert_with(|| "".into());
+        }
+        extra.entry("usage".to_string()).or_insert(true.into());
+        if extra == before {
+            continue;
+        }
+
+        let mut active: crate::entity::provider::ActiveModel = provider.into();
+        active.extra = Set(crypto::encrypt(
+            &serde_json::Value::Object(extra).to_string(),
+        ));
+        active.update(db).await?;
+        tracing::info!(
+            provider_id = provider_id,
+            "回填 SenseNova provider extra 缺失键（username/password/refresh_token）"
+        );
     }
     Ok(())
 }
