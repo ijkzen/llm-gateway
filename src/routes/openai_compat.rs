@@ -1,7 +1,7 @@
 use axum::{
     Extension, Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -27,9 +27,14 @@ pub fn routes() -> Router<AppState> {
 async fn chat_completions(
     State(state): State<AppState>,
     Extension(api_key): Extension<AuthedApiKey>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    proxy::forward_chat(&state, api_key, body).await
+    // 按 allowlist 选出透传的下游头（默认 traceparent/tracestate；黑名单优先，
+    // 凭据/框架/hop-by-hop 头已在此被排除）。同一请求多次 failover 出站共用
+    // 同一快照。
+    let forwarded = proxy::select_forwardable_headers(&headers, proxy::forward_allowlist());
+    proxy::forward_chat(&state, api_key, body, forwarded).await
 }
 
 /// OpenAI 格式的单个模型对象。

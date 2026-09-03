@@ -17,10 +17,10 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::header::{HeaderName, HeaderValue};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use http_body_util::BodyExt;
-use hyper::header::HeaderName;
 use rand::seq::SliceRandom;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::{Value, json};
@@ -468,47 +468,32 @@ async fn resolve_usage_map(
 }
 
 /// 组装发往上游的请求。返回 (调用, Anthropic 是否注入了 JSON 模式合成工具)。
+///
+/// Header 组装为四层覆盖模型（低层 → 高层依次 insert）：
+///   第 4 层：`forwarded` 下游 allowlist 透传（调用方已剥离/过滤，first-wins）
+///   第 3 层：provider `custom_header`（覆盖透传层）
+///   第 2 层：协议鉴权/必需头（custom_header 与透传均不得覆盖，D3）
+///   第 1 层：框架头（`Host`/`Content-Type`/`Accept`/`Content-Length`）由
+///            `upstream::send_upstream_request` 发送端唯一写入。
 fn build_upstream_call(
     member: &Member,
     chat: &Value,
     client_stream: bool,
     api_key: &str,
+    forwarded: &[(HeaderName, HeaderValue)],
 ) -> Result<(UpstreamCall, bool), String> {
-    let (body, json_mode_tool, sub_path, auth_headers): (
-        Value,
-        bool,
-        String,
-        Vec<(String, String)>,
-    ) = match member.protocol {
+    let (body, json_mode_tool, sub_path) = match member.protocol {
         Protocol::OpenAiCompat => {
             let body = openai::build_request_body(chat, &member.model_id);
-            (
-                body,
-                false,
-                "chat/completions".to_string(),
-                vec![("authorization".to_string(), format!("Bearer {api_key}"))],
-            )
+            (body, false, "chat/completions".to_string())
         }
         Protocol::OpenAiResponses => {
             let body = responses::build_request_body(chat, &member.model_id)?;
-            (
-                body,
-                false,
-                "responses".to_string(),
-                vec![("authorization".to_string(), format!("Bearer {api_key}"))],
-            )
+            (body, false, "responses".to_string())
         }
         Protocol::Anthropic => {
             let (body, json_mode_tool) = anthropic::build_request_body(chat, &member.model_id)?;
-            (
-                body,
-                json_mode_tool,
-                "messages".to_string(),
-                vec![
-                    ("x-api-key".to_string(), api_key.to_string()),
-                    ("anthropic-version".to_string(), "2023-06-01".to_string()),
-                ],
-            )
+            (body, json_mode_tool, "messages".to_string())
         }
         Protocol::Gemini => {
             let body = gemini::build_request_body(chat, &member.model_id)?;
@@ -518,26 +503,19 @@ fn build_upstream_call(
             } else {
                 format!("models/{}", member.model_id)
             };
-            (
-                body,
-                false,
-                format!("{model_path}:{action}"),
-                vec![("x-goog-api-key".to_string(), api_key.to_string())],
-            )
+            (body, false, format!("{model_path}:{action}"))
         }
     };
 
     let url = build_upstream_url(&member.base_url, member.protocol_code(), &sub_path);
     let body_bytes = Bytes::from(body.to_string());
     let mut headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
-    for (name, value) in auth_headers {
-        headers.push((
-            HeaderName::from_bytes(name.as_bytes())
-                .map_err(|e| format!("无效请求头名 {name}：{e}"))?,
-            HeaderValue::from_str(&value).map_err(|e| format!("无效请求头值：{e}"))?,
-        ));
-    }
+    // 第 4 层：下游透传子集（调用方已过滤）。
+    headers.extend_from_slice(forwarded);
+    // 第 3 层：provider custom_header（insert 覆盖透传层；保留名跳过）。
     merge_custom_headers(&member.custom_header, &mut headers);
+    // 第 2 层：协议鉴权/必需头（insert 覆盖 custom_header 与透传，D3）。
+    apply_protocol_auth_headers(member.protocol, api_key, &mut headers);
 
     Ok((
         UpstreamCall {
@@ -561,6 +539,93 @@ impl Member {
     }
 }
 
+// ─── 上游出站头组装：四层覆盖模型（见 .scratch/upstream-header-forwarding/） ───
+
+/// 剥离清单：命中即不进上游（下游头与 custom_header 都受此约束）。
+/// 分为两类：凭据名与协议保留名（绝不出站/不得作为自定义覆盖名），
+/// 以及框架头保留名（`Host`/`Content-Length`/`Content-Type`/`accept` 由网关生成）。
+/// 框架名也列入禁止名，避免组装层写入后与发送端第 1 层重复。
+const NEVER_OUTBOUND: &[&str] = &[
+    // 凭据 / 身份（下游与 custom_header 都不得带出）
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "x-api-key",
+    "x-goog-api-key",
+    "x-amz-security-token",
+    // hop-by-hop / 连接管理（RFC 9110 §7.6.1）
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "upgrade",
+    "te",
+    "transfer-encoding",
+    "trailer",
+    "proxy-authenticate",
+    // framing / 表示元数据（网关重新生成）
+    "host",
+    "content-length",
+    "content-type",
+    "accept",
+    "content-encoding",
+    "content-language",
+    "content-md5",
+    "expect",
+    // 入站路由/链路头（会污染上游）
+    "forwarded",
+    "x-forwarded-for",
+    "x-forwarded-proto",
+    "x-forwarded-host",
+    "via",
+    "x-real-ip",
+];
+
+/// 第 4 层透传默认 allowlist：W3C Trace Context 头（traceparent 原样透传；
+/// tracestate 仅在透传 traceparent 时透传）。其余下游头一律不透传。
+pub fn forward_allowlist() -> &'static [HeaderName] {
+    use std::sync::OnceLock;
+    static ALLOWLIST: OnceLock<Vec<HeaderName>> = OnceLock::new();
+    ALLOWLIST.get_or_init(|| {
+        vec![
+            HeaderName::from_static("traceparent"),
+            HeaderName::from_static("tracestate"),
+        ]
+    })
+}
+
+/// 判定 header 名是否落在剥离/禁止清单。
+pub fn is_never_outbound(name: &HeaderName) -> bool {
+    NEVER_OUTBOUND
+        .iter()
+        .any(|reserved| name.as_str().eq_ignore_ascii_case(reserved))
+}
+
+/// 从下游请求头中选择可透传的子集（allowlist 命中项）。
+/// - allowlist 命中项 first-wins、单值（HTTP 语义上重复等同逗号列表的项我们不透传）。
+/// - 剥离清单命中项即使 allowlist 里写了也不透传（黑名单优先）。
+///
+/// 供 `/v1` 入口（handler 拿到下游 `HeaderMap`）与本模块单测使用。
+pub fn select_forwardable_headers(
+    downstream: &HeaderMap,
+    allowlist: &[HeaderName],
+) -> Vec<(HeaderName, HeaderValue)> {
+    let mut out: Vec<(HeaderName, HeaderValue)> = Vec::new();
+    for name in allowlist {
+        if is_never_outbound(name) {
+            continue;
+        }
+        if let Some(value) = downstream.get(name) {
+            out.push((name.clone(), value.clone()));
+        }
+    }
+    out
+}
+
+/// 把 `custom_header`（JSON 对象，字符串值）合并进出站表。
+/// - 剥离清单名（含框架头、协议保留名、凭据名）一律跳过（D3：默认禁覆盖协议鉴权头）。
+/// - 其余项 `insert` 覆盖低层同名（下游透传层）。
+///
+/// JSON 非法 / 非对象 / 非字符串值：静默跳过（保持原语义）。
 fn merge_custom_headers(custom_header: &str, headers: &mut Vec<(HeaderName, HeaderValue)>) {
     let Ok(value) = serde_json::from_str::<Value>(custom_header.trim()) else {
         return;
@@ -574,6 +639,38 @@ fn merge_custom_headers(custom_header: &str, headers: &mut Vec<(HeaderName, Head
             HeaderName::from_bytes(name.as_bytes()),
             HeaderValue::from_str(header_value),
         ) {
+            if is_never_outbound(&name) {
+                continue;
+            }
+            headers.retain(|(existing, _)| existing != name);
+            headers.push((name, value));
+        }
+    }
+}
+
+/// 组装第 2 层协议鉴权/必需头并 `insert` 覆盖低层同名（第 3 层 custom_header
+/// 与第 4 层透传都不允许覆盖协议头，D3）。
+fn apply_protocol_auth_headers(
+    protocol: Protocol,
+    api_key: &str,
+    headers: &mut Vec<(HeaderName, HeaderValue)>,
+) {
+    let auth_headers: Vec<(&str, String)> = match protocol {
+        Protocol::OpenAiCompat | Protocol::OpenAiResponses => {
+            vec![("authorization", format!("Bearer {api_key}"))]
+        }
+        Protocol::Anthropic => vec![
+            ("x-api-key", api_key.to_string()),
+            ("anthropic-version", "2023-06-01".to_string()),
+        ],
+        Protocol::Gemini => vec![("x-goog-api-key", api_key.to_string())],
+    };
+    for (name, value) in auth_headers {
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(&value),
+        ) {
+            headers.retain(|(existing, _)| existing != name);
             headers.push((name, value));
         }
     }
@@ -760,7 +857,15 @@ pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
 }
 
 /// 转发入口：处理 POST /v1/chat/completions。
-pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: Value) -> Response {
+///
+/// `forwarded` 是入口从下游请求头中按 allowlist 选出、并已剥离保留名的
+/// 透传子集（可空）；同一请求的多次 failover 出站共用同一快照，保证一致。
+pub async fn forward_chat(
+    state: &AppState,
+    api_key: AuthedApiKey,
+    client_body: Value,
+    forwarded: Vec<(HeaderName, HeaderValue)>,
+) -> Response {
     let request_id = Uuid::new_v4().to_string();
     let requested_model = client_body
         .get("model")
@@ -945,45 +1050,50 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
             }
         };
 
-        let (call, json_mode_tool) =
-            match build_upstream_call(member, &client_body, client_stream, &decrypted_key) {
-                Ok(result) => result,
-                Err(message) => {
-                    note_member_failure(state, member, &request_id, &mut counted_failures).await;
-                    if retry_enabled && has_more {
-                        tracing::warn!(
-                            request_id,
-                            virtual_model_id = virtual_model.virtual_model_id,
-                            provider_id = member.provider_id,
-                            model_id = %member.model_id,
-                            attempt_index = index,
-                            fail_reason = %message,
-                            "上游成员请求构造失败，降级重试下一成员",
-                        );
-                        record_degraded(&message, start_time);
-                        last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
-                        continue;
-                    }
-                    record_failure(
-                        &state.db,
-                        &request_id,
-                        virtual_model.virtual_model_id,
-                        member,
-                        &api_key.name,
-                        start_time,
-                        false,
-                        client_stream,
-                        &message,
-                        start_time,
+        let (call, json_mode_tool) = match build_upstream_call(
+            member,
+            &client_body,
+            client_stream,
+            &decrypted_key,
+            &forwarded,
+        ) {
+            Ok(result) => result,
+            Err(message) => {
+                note_member_failure(state, member, &request_id, &mut counted_failures).await;
+                if retry_enabled && has_more {
+                    tracing::warn!(
+                        request_id,
+                        virtual_model_id = virtual_model.virtual_model_id,
+                        provider_id = member.provider_id,
+                        model_id = %member.model_id,
+                        attempt_index = index,
+                        fail_reason = %message,
+                        "上游成员请求构造失败，降级重试下一成员",
                     );
-                    return openai_error(
-                        StatusCode::BAD_GATEWAY,
-                        message,
-                        "api_error",
-                        "upstream_error",
-                    );
+                    record_degraded(&message, start_time);
+                    last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
+                    continue;
                 }
-            };
+                record_failure(
+                    &state.db,
+                    &request_id,
+                    virtual_model.virtual_model_id,
+                    member,
+                    &api_key.name,
+                    start_time,
+                    false,
+                    client_stream,
+                    &message,
+                    start_time,
+                );
+                return openai_error(
+                    StatusCode::BAD_GATEWAY,
+                    message,
+                    "api_error",
+                    "upstream_error",
+                );
+            }
+        };
 
         // Member 已由 resolve_proxy 归一：proxy_enabled 时地址必非空。
         let proxy = member.proxy_enabled.then_some(member.proxy_addr.as_str());
@@ -1679,7 +1789,8 @@ pub async fn test_model(
         "max_tokens": model.max_output_tokens,
         "messages": [{"role": "user", "content": TEST_PROMPT}],
     });
-    let (call, _json_mode_tool) = build_upstream_call(&member, &chat, false, api_key)?;
+    // test_model 无下游请求头（管理面手动触发）：透传子集为空。
+    let (call, _json_mode_tool) = build_upstream_call(&member, &chat, false, api_key, &[])?;
 
     // Member 已由 resolve_proxy 归一：proxy_enabled 时地址必非空。
     let proxy = member.proxy_enabled.then_some(member.proxy_addr.as_str());
@@ -1859,5 +1970,254 @@ mod tests {
             resolve_proxy(&model(false, ""), &provider(false, "")),
             (false, String::new())
         );
+    }
+
+    // ─── 上游出站头组装（四层覆盖 + 剥离）单测 ───
+
+    fn member(protocol: Protocol, custom_header: &str) -> Member {
+        Member {
+            provider_id: 1,
+            model_id: "m".to_string(),
+            protocol,
+            billing_mode: 0,
+            base_url: "https://api.example.com/v1".to_string(),
+            api_key_encrypted: "enc".to_string(),
+            custom_header: custom_header.to_string(),
+            proxy_enabled: false,
+            proxy_addr: String::new(),
+        }
+    }
+
+    fn hv(value: &str) -> HeaderValue {
+        HeaderValue::from_str(value).unwrap()
+    }
+
+    fn names(call: &UpstreamCall) -> Vec<String> {
+        let mut seen: Vec<String> = call
+            .headers
+            .iter()
+            .map(|(n, _)| n.as_str().to_ascii_lowercase())
+            .collect();
+        seen.sort();
+        seen
+    }
+
+    fn header_map(entries: &[(&str, &str)]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (k, v) in entries {
+            map.insert(HeaderName::from_bytes(k.as_bytes()).unwrap(), hv(v));
+        }
+        map
+    }
+
+    #[test]
+    fn is_never_outbound_covers_credentials_framing_and_hop_by_hop() {
+        for reserved in [
+            "authorization",
+            "cookie",
+            "proxy-authorization",
+            "x-api-key",
+            "x-goog-api-key",
+            "connection",
+            "keep-alive",
+            "proxy-connection",
+            "transfer-encoding",
+            "te",
+            "host",
+            "content-length",
+            "content-type",
+            "accept",
+            "expect",
+            "x-forwarded-for",
+            "forwarded",
+            "via",
+            "x-real-ip",
+        ] {
+            let name = HeaderName::from_bytes(reserved.as_bytes()).unwrap();
+            assert!(is_never_outbound(&name), "{reserved} 应被剥离");
+        }
+        for allowed in ["traceparent", "tracestate", "x-trace-id", "anthropic-beta"] {
+            let name = HeaderName::from_bytes(allowed.as_bytes()).unwrap();
+            assert!(!is_never_outbound(&name), "{allowed} 不应被剥离");
+        }
+    }
+
+    #[test]
+    fn select_forwardable_passes_allowlist_and_blocks_blacklist() {
+        let map = header_map(&[
+            (
+                "traceparent",
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            ),
+            ("tracestate", "vendor=abc"),
+            ("x-trace-id", "client-1"),
+            ("authorization", "Bearer lg-secret"),
+            ("host", "evil.example"),
+        ]);
+        let out = select_forwardable_headers(&map, forward_allowlist());
+        let got: Vec<(String, String)> = out
+            .iter()
+            .map(|(n, v)| (n.as_str().to_string(), v.to_str().unwrap().to_string()))
+            .collect();
+        // trace 头透传；x-trace-id 不在 allowlist 不透传；凭据/框架头即使被
+        // allowlist 点名也不透传（黑名单优先）。
+        assert_eq!(
+            got,
+            vec![
+                (
+                    "traceparent".to_string(),
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string()
+                ),
+                ("tracestate".to_string(), "vendor=abc".to_string()),
+            ]
+        );
+
+        // allowlist 里点名黑名单项也不会放行。
+        let allow_forced = [
+            HeaderName::from_static("authorization"),
+            HeaderName::from_static("traceparent"),
+        ];
+        let out2 = select_forwardable_headers(&map, &allow_forced);
+        assert_eq!(out2.len(), 1);
+        assert_eq!(out2[0].0.as_str(), "traceparent");
+    }
+
+    #[test]
+    fn custom_header_cannot_override_protocol_auth_or_framing() {
+        // Anthropic custom_header 携带 x-api-key / anthropic-version 同名、以及
+        // authorization/content-type 保留名：全部被跳过，协议头保留网关值。
+        let m = member(
+            Protocol::Anthropic,
+            r#"{"x-api-key":"custom","anthropic-version":"2099-01-01","authorization":"Bearer custom","content-type":"text/plain","X-A":"b"}"#,
+        );
+        let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+        let map: std::collections::HashMap<&str, &str> = call
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        assert_eq!(map.get("x-api-key").copied(), Some("sk-provider"));
+        assert_eq!(map.get("anthropic-version").copied(), Some("2023-06-01"));
+        assert!(
+            !map.contains_key("authorization"),
+            "authorization 不进 Anthropic 上游"
+        );
+        assert!(
+            !map.contains_key("content-type"),
+            "content-type 由发送端框架头生成"
+        );
+        assert_eq!(map.get("x-a").copied(), Some("b"), "普通自定义头应生效");
+        // 无同名重复。
+        assert!(!has_duplicate_names(&call));
+    }
+
+    #[test]
+    fn openai_compat_auth_header_uses_provider_key_and_drops_custom() {
+        let m = member(
+            Protocol::OpenAiCompat,
+            r#"{"authorization":"Bearer stale","X-Tenant":"t1"}"#,
+        );
+        let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+        let map: std::collections::HashMap<&str, &str> = call
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        assert_eq!(
+            map.get("authorization").copied(),
+            Some("Bearer sk-provider")
+        );
+        assert_eq!(map.get("x-tenant").copied(), Some("t1"));
+        assert!(!has_duplicate_names(&call));
+    }
+
+    #[test]
+    fn forwarded_trace_is_present_and_custom_overrides_forwarded() {
+        let m = member(
+            Protocol::OpenAiCompat,
+            r#"{"traceparent":"custom-tp","X-A":"b"}"#,
+        );
+        let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let forwarded = vec![
+            (
+                HeaderName::from_static("traceparent"),
+                hv("00-downstream-tp"),
+            ),
+            (HeaderName::from_static("x-trace-id"), hv("client-1")),
+        ];
+        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &forwarded).unwrap();
+        let map: std::collections::HashMap<&str, &str> = call
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        // custom_header 里同名 traceparent 覆盖透传层（第 3 层 insert 覆盖第 4 层）。
+        assert_eq!(map.get("traceparent").copied(), Some("custom-tp"));
+        assert_eq!(map.get("x-trace-id").copied(), Some("client-1"));
+        assert_eq!(map.get("x-a").copied(), Some("b"));
+        assert!(!has_duplicate_names(&call));
+    }
+
+    #[test]
+    fn gemini_auth_header_is_x_goog_api_key() {
+        let m = member(Protocol::Gemini, r#"{"x-goog-api-key":"custom","X-A":"b"}"#);
+        let chat = json!({"model":"m","contents":[{"role":"user","parts":[{"text":"hi"}]}]});
+        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+        let map: std::collections::HashMap<&str, &str> = call
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        assert_eq!(map.get("x-goog-api-key").copied(), Some("sk-provider"));
+        assert_eq!(map.get("x-a").copied(), Some("b"));
+        assert!(!has_duplicate_names(&call));
+    }
+
+    #[test]
+    fn invalid_custom_header_is_ignored() {
+        for raw in ["not-json", "[]", r#"{"x":123}"#, r#"{"x":"v","y":1}"#] {
+            let m = member(Protocol::OpenAiCompat, raw);
+            let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+            let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+            // 非对象 JSON / 非字符串值整体跳过：只剩协议鉴权头。
+            let map: std::collections::HashMap<&str, &str> = call
+                .headers
+                .iter()
+                .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+                .collect();
+            assert_eq!(
+                map.get("authorization").copied(),
+                Some("Bearer sk-provider")
+            );
+        }
+    }
+
+    /// 断言出站头无同名重复。
+    fn has_duplicate_names(call: &UpstreamCall) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        call.headers
+            .iter()
+            .any(|(n, _)| !seen.insert(n.as_str().to_ascii_lowercase()))
+    }
+
+    #[test]
+    fn never_outbound_headers_never_reach_upstream_call_headers() {
+        // 通过 merge_custom_headers 直接验证剥离清单在 custom_header 层生效。
+        let m = member(
+            Protocol::OpenAiCompat,
+            r#"{"connection":"keep-alive","host":"evil","x-custom":"ok"}"#,
+        );
+        let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+        let joined = names(&call).join(",");
+        assert!(
+            !joined.contains("connection"),
+            "connection 应被剥离：{joined}"
+        );
+        assert!(!joined.contains("host"), "host 应被剥离：{joined}");
+        assert!(joined.contains("x-custom"), "x-custom 应保留：{joined}");
+        assert!(!has_duplicate_names(&call));
     }
 }

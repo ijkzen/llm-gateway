@@ -400,6 +400,11 @@ fn authority(scheme: &str, host: &str, port: u16) -> String {
 }
 
 /// 一次上游调用。
+///
+/// `headers` 是**已最终确定的唯一表**：不得含框架头同名项（`Host`/
+/// `Content-Type`/`accept`/`Content-Length`）。这些保留名在组装层被剥离
+/// （见 `proxy::merge_custom_headers`/allowlist 选择），由发送端最后唯一写入，
+/// 因此不会出现重复值（`Builder::header` 是追加语义，重复保证在组装层）。
 pub struct UpstreamCall {
     pub url: String,
     pub headers: Vec<(hyper::header::HeaderName, hyper::header::HeaderValue)>,
@@ -505,16 +510,17 @@ async fn send_upstream_request(
     call: &UpstreamCall,
     authority: &str,
 ) -> Result<(StatusCode, Incoming), UpstreamError> {
-    let mut builder = Builder::new()
-        .method(Method::POST)
-        .uri(path_query)
+    let mut builder = Builder::new().method(Method::POST).uri(path_query);
+    for (name, value) in &call.headers {
+        builder = builder.header(name, value);
+    }
+    // 框架头（第 1 层，优先级最高）由发送端唯一写入。组装层保证
+    // `call.headers` 不含这四个保留名，故此处不会产生重复值。
+    builder = builder
         .header(HOST, authority)
         .header(CONTENT_TYPE, "application/json")
         .header("accept", "application/json, text/event-stream")
         .header(CONTENT_LENGTH, call.body.len());
-    for (name, value) in &call.headers {
-        builder = builder.header(name, value);
-    }
     let request = builder
         .body(Full::new(call.body.clone()))
         .map_err(|e| UpstreamError::Request(format!("构造上游请求失败：{e}")))?;

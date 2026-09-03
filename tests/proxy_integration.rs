@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode as HttpStatus};
+use axum::http::{HeaderMap, Request, StatusCode as HttpStatus};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{Json, Router};
@@ -50,20 +50,41 @@ fn sse(events: &[String]) -> Response {
         .into_response()
 }
 
+/// 捕获器：请求体 + 请求头（供 header 透传/剥离断言）。
+type CapturedHeaders = Arc<Mutex<Vec<HeaderMap>>>;
+
+fn capture_headers() -> CapturedHeaders {
+    Arc::new(Mutex::new(Vec::new()))
+}
+
 /// 启动 mock 上游，返回 base_url（http://127.0.0.1:port）。
-async fn spawn_mock(captured: Captured) -> String {
+/// `captured` 记录请求体（JSON），`captured_headers` 记录每个请求的 HeaderMap
+/// （同名多值会保留多行，供重复断言）。
+async fn spawn_mock_with_headers(captured: Captured, captured_headers: CapturedHeaders) -> String {
     let captured_chat = captured.clone();
     let captured_messages = captured.clone();
     let captured_responses = captured.clone();
     let captured_gemini = captured.clone();
     let captured_stream_gemini = captured.clone();
+    let headers_chat = captured_headers.clone();
+    let headers_messages = captured_headers.clone();
+    let headers_responses = captured_headers.clone();
+    let headers_gemini = captured_headers.clone();
+    let headers_stream_gemini = captured_headers.clone();
 
     let app = Router::new()
         .route(
             "/v1/chat/completions",
-            post(move |body: String| {
+            post(move |request: Request<Body>| {
                 let captured = captured_chat.clone();
+                let captured_headers = headers_chat.clone();
                 async move {
+                    let headers = request.headers().clone();
+                    captured_headers.lock().unwrap().push(headers);
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let body = String::from_utf8_lossy(&body).to_string();
                     record_capture(&captured, &body);
                     let parsed: Value = serde_json::from_str(&body).unwrap();
                     if parsed["stream"] == json!(true) {
@@ -88,9 +109,16 @@ async fn spawn_mock(captured: Captured) -> String {
         )
         .route(
             "/v1/messages",
-            post(move |body: String| {
-                let captured = captured_messages;
+            post(move |request: Request<Body>| {
+                let captured = captured_messages.clone();
+                let captured_headers = headers_messages.clone();
                 async move {
+                    let headers = request.headers().clone();
+                    captured_headers.lock().unwrap().push(headers);
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let body = String::from_utf8_lossy(&body).to_string();
                     record_capture(&captured, &body);
                     let parsed: Value = serde_json::from_str(&body).unwrap();
                     if parsed["stream"] == json!(true) {
@@ -115,9 +143,16 @@ async fn spawn_mock(captured: Captured) -> String {
         )
         .route(
             "/v1/responses",
-            post(move |body: String| {
-                let captured = captured_responses;
+            post(move |request: Request<Body>| {
+                let captured = captured_responses.clone();
+                let captured_headers = headers_responses.clone();
                 async move {
+                    let headers = request.headers().clone();
+                    captured_headers.lock().unwrap().push(headers);
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let body = String::from_utf8_lossy(&body).to_string();
                     record_capture(&captured, &body);
                     sse(&[
                         json!({"type":"response.created","response":{"id":"resp_1","model":"gpt-x"}}).to_string(),
@@ -129,9 +164,16 @@ async fn spawn_mock(captured: Captured) -> String {
         )
         .route(
             "/v1beta/models/m-1:generateContent",
-            post(move |body: String| {
-                let captured = captured_gemini;
+            post(move |request: Request<Body>| {
+                let captured = captured_gemini.clone();
+                let captured_headers = headers_gemini.clone();
                 async move {
+                    let headers = request.headers().clone();
+                    captured_headers.lock().unwrap().push(headers);
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let body = String::from_utf8_lossy(&body).to_string();
                     record_capture(&captured, &body);
                     Json(json!({
                         "candidates": [{"content": {"parts": [{"text": "你好"}], "role": "model"}, "finishReason": "STOP"}],
@@ -143,10 +185,15 @@ async fn spawn_mock(captured: Captured) -> String {
         )
         .route(
             "/v1beta/models/m-1:streamGenerateContent",
-            post(move |body: String| {
+            post(move |request: Request<Body>| {
                 let _ = captured_stream_gemini;
+                let captured_headers = headers_stream_gemini.clone();
                 async move {
-                    let _ = body;
+                    let headers = request.headers().clone();
+                    captured_headers.lock().unwrap().push(headers);
+                    let _body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
                     sse(&[
                         json!({"candidates":[{"content":{"parts":[{"text":"你好"}],"role":"model"}}],"modelVersion":"gemini-x"}).to_string(),
                         json!({"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":4,"thoughtsTokenCount":2,"cachedContentTokenCount":6}}).to_string(),
@@ -161,6 +208,11 @@ async fn spawn_mock(captured: Captured) -> String {
         axum::serve(listener, app).await.unwrap();
     });
     format!("http://{addr}")
+}
+
+/// 不带 header 捕获的兼容封装（大多数既有用例仍用 body 捕获）。
+async fn spawn_mock(captured: Captured) -> String {
+    spawn_mock_with_headers(captured, capture_headers()).await
 }
 
 // ---------- 测试基建 ----------
@@ -753,4 +805,257 @@ async fn subscription_first_ranks_by_remaining_five_hour_usage() {
         "订阅制优先应选择 5h 剩余更高的供应商 A"
     );
     assert_eq!(captured_b.lock().unwrap().len(), 0, "供应商 B 不应被选到");
+}
+
+// ─── 上游出站头：透传 / 剥离 / 覆盖集成测试 ──────────────────────────────────
+
+/// seed provider，可指定 custom_header（默认 "{}"）。
+async fn seed_provider_with_custom_header(
+    db: &sea_orm::DatabaseConnection,
+    name: &str,
+    base_url: &str,
+    protocol_type: i32,
+    billing_mode: i32,
+    custom_header: &str,
+) -> i32 {
+    let active = provider::ActiveModel {
+        name: Set(name.to_string()),
+        enable: Set(true),
+        base_url: Set(base_url.to_string()),
+        api_key: Set(llm_gateway::crypto::encrypt("sk-mock")),
+        custom_header: Set(custom_header.to_string()),
+        protocol_type: Set(protocol_type),
+        billing_mode: Set(billing_mode),
+        extra: Set("{}".to_string()),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    active.insert(db).await.unwrap().id
+}
+
+/// 带额外请求头发送 /v1/chat/completions（鉴权头固定 TEST_BEARER）。
+async fn send_chat_with_headers(
+    app: &axum::Router,
+    body: Value,
+    extra_headers: &[(&str, &str)],
+) -> (u16, String) {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("content-type", "application/json")
+        .header("authorization", TEST_BEARER);
+    for (k, v) in extra_headers {
+        builder = builder.header(*k, *v);
+    }
+    let request = builder.body(Body::from(body.to_string())).unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// 直接手建「1 个 OpenAI 成员 + vm-x」，允许 custom_header（不经 seed_provider 默认）。
+async fn setup_member_with_custom_header(
+    base_url: &str,
+    protocol_type: i32,
+    custom_header: &str,
+) -> (axum::Router, sea_orm::DatabaseConnection) {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+    let provider_id =
+        seed_provider_with_custom_header(&db, "p-1", base_url, protocol_type, 0, custom_header)
+            .await;
+    let model_id = seed_provider_model(&db, provider_id, "m-1").await;
+    let vm = virtual_model::ActiveModel {
+        display_id: Set("vm-x".to_string()),
+        enable: Set(true),
+        load_balancing_strategy: Set(0),
+        fallback_strategy: Set(1),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    let vm = vm.insert(&db).await.unwrap();
+    virtual_model_item::ActiveModel {
+        virtual_model_id: Set(vm.virtual_model_id),
+        model_id: Set(model_id),
+        enable: Set(true),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+    (app, db)
+}
+
+/// 从捕获的上游 HeaderMap 中取某名首个值（小写匹配）。
+fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|v| v.to_str().ok())
+}
+
+/// 断言某名在捕获的上游头中只出现一次。
+fn header_count(headers: &HeaderMap, name: &str) -> usize {
+    headers.get_all(name).iter().count()
+}
+
+#[tokio::test]
+async fn trace_headers_are_forwarded_verbatim_and_credentials_stripped() {
+    let captured_headers = capture_headers();
+    let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
+    let (app, _db) = common_setup_with_member(&base, 0, 0, 0).await;
+
+    let (status, text) = send_chat_with_headers(
+        &app,
+        chat_body("vm-x", false),
+        &[
+            (
+                "traceparent",
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            ),
+            ("tracestate", "vendor=abc"),
+            // 非 allowlist / 凭据 / 框架 / hop-by-hop：一律不进上游。
+            ("x-trace-id", "client-1"),
+            ("cookie", "session=abc"),
+            ("host", "evil.example"),
+            ("connection", "keep-alive"),
+        ],
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+
+    let headers = captured_headers.lock().unwrap();
+    let upstream = headers
+        .iter()
+        .find(|h| h.contains_key("traceparent"))
+        .unwrap_or_else(|| panic!("应至少有一个上游请求头快照：{headers:?}"));
+    assert_eq!(
+        header_value(upstream, "traceparent"),
+        Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+    );
+    assert_eq!(header_value(upstream, "tracestate"), Some("vendor=abc"));
+    // 鉴权头恒为网关生成的 provider key（sk-mock → Bearer sk-mock）。
+    assert_eq!(
+        header_value(upstream, "authorization"),
+        Some("Bearer sk-mock")
+    );
+    // 凭据 / 框架 / hop-by-hop 不出站。
+    assert!(header_value(upstream, "cookie").is_none());
+    assert!(
+        header_value(upstream, "x-trace-id").is_none(),
+        "x-trace-id 不在 allowlist，不应透传"
+    );
+    // Host 应为上游 base_url 的 authority（mock 是非默认端口，故含端口）。
+    let mock_authority = base.trim_start_matches("http://").to_string();
+    assert_eq!(
+        header_value(upstream, "host"),
+        Some(mock_authority.as_str()),
+        "Host 应为上游 base_url authority，而非下游 Host"
+    );
+    assert!(
+        header_value(upstream, "connection").is_none(),
+        "connection 不应透传"
+    );
+    // 无重复 authorization/content-type。
+    assert_eq!(header_count(upstream, "authorization"), 1);
+    assert_eq!(header_count(upstream, "content-type"), 1);
+    assert_eq!(header_count(upstream, "content-length"), 1);
+}
+
+#[tokio::test]
+async fn downstream_authorization_never_reaches_upstream() {
+    let captured_headers = capture_headers();
+    let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
+    let (app, _db) = common_setup_with_member(&base, 0, 0, 0).await;
+
+    // 即便下游 Authorization 是攻击者注入的任意 Bearer，上游也只看到网关生成的 key。
+    let builder = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("content-type", "application/json")
+        // 合法网关 key 鉴权通过。
+        .header("authorization", TEST_BEARER);
+    let request = builder
+        .body(Body::from(chat_body("vm-x", false).to_string()))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+
+    let headers = captured_headers.lock().unwrap();
+    let upstream = headers.first().expect("应有上游头快照");
+    let auth = header_value(upstream, "authorization").unwrap_or("");
+    assert!(!auth.contains("lg-itest"), "上游不得含下游网关 key：{auth}");
+    assert_eq!(auth, "Bearer sk-mock");
+    assert_eq!(header_count(upstream, "authorization"), 1);
+}
+
+#[tokio::test]
+async fn custom_header_cannot_override_protocol_auth_and_is_single_valued() {
+    let captured_headers = capture_headers();
+    let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
+    // Anthropic 协议（protocol_type=2）：custom_header 携带同名 x-api-key/anthropic-version
+    // 与保留名 content-type/authorization，均不得覆盖网关生成值。
+    let (app, _db) = setup_member_with_custom_header(
+        &base,
+        2,
+        r#"{"x-api-key":"custom","anthropic-version":"2099-01-01","authorization":"Bearer custom","content-type":"text/plain","X-A":"b"}"#,
+    )
+    .await;
+
+    let (status, text) = send_chat(&app, chat_body("vm-x", false)).await;
+    assert_eq!(status, 200, "{text}");
+
+    let headers = captured_headers.lock().unwrap();
+    let upstream = headers
+        .iter()
+        .find(|h| h.contains_key("x-api-key"))
+        .unwrap_or_else(|| panic!("Anthropic 上游应有 x-api-key：{headers:?}"));
+    assert_eq!(header_value(upstream, "x-api-key"), Some("sk-mock"));
+    assert_eq!(
+        header_value(upstream, "anthropic-version"),
+        Some("2023-06-01")
+    );
+    // authorization / content-type 不进 Anthropic 上游（无同名重复）。
+    assert!(header_value(upstream, "authorization").is_none());
+    assert_eq!(
+        header_value(upstream, "content-type"),
+        Some("application/json")
+    );
+    assert_eq!(
+        header_value(upstream, "x-a"),
+        Some("b"),
+        "普通自定义头应生效"
+    );
+    assert_eq!(header_count(upstream, "x-api-key"), 1);
+    assert_eq!(header_count(upstream, "anthropic-version"), 1);
+    assert_eq!(header_count(upstream, "content-type"), 1);
+    assert_eq!(header_count(upstream, "content-length"), 1);
+}
+
+#[tokio::test]
+async fn custom_header_supplemental_headers_reach_upstream() {
+    let captured_headers = capture_headers();
+    let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
+    let (app, _db) =
+        setup_member_with_custom_header(&base, 0, r#"{"X-Tenant":"t1","X-Env":"prod"}"#).await;
+
+    let (status, text) = send_chat(&app, chat_body("vm-x", false)).await;
+    assert_eq!(status, 200, "{text}");
+
+    let headers = captured_headers.lock().unwrap();
+    let upstream = headers
+        .iter()
+        .find(|h| h.contains_key("x-tenant"))
+        .unwrap_or_else(|| panic!("应透传 custom_header：{headers:?}"));
+    assert_eq!(header_value(upstream, "x-tenant"), Some("t1"));
+    assert_eq!(header_value(upstream, "x-env"), Some("prod"));
+    assert_eq!(
+        header_value(upstream, "authorization"),
+        Some("Bearer sk-mock")
+    );
 }
