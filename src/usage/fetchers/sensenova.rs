@@ -1,27 +1,85 @@
-//! SenseNova Token Plan（控制台 OAuth，extra.refresh_token）。
+//! SenseNova Token Plan（控制台 OAuth）用量查询 + 登录自愈。
 //!
-//! 续期：POST /oauth2/token（form：grant_type=refresh_token、client_id=nova），
-//! refresh_token 每次刷新轮换，返回的新值由调用方写回 provider extra。
-//! 查询：GET /lite/console/v1/tokenplan/pool-usage（Bearer access_token），
-//! 逐积分池产出 5h/7d 窗口（label=池名）；sk- 密钥不能调用量接口（401）。
+//! 凭据：`extra.refresh_token`（后端派生，续期/登录后写回）为主，`extra.username` +
+//! `extra.password`（用户维护）用于 refresh_token 失效时登录换新。
+//!
+//! 状态机（仿 Krill JWT 自愈）：
+//! - `refresh_token` 非空 → 先续期（POST /oauth2/token，form `grant_type=refresh_token`、
+//!   `client_id=nova`）→ 用 access_token 查 pool-usage；续期成功把轮换出的新 refresh_token
+//!   写回 provider extra。
+//! - 仅当 refresh_token **缺失**，或续期**明确鉴权失败**（HTTP 401/403，或 200 但响应
+//!   `{"error":"invalid_grant"}` / 解析不出 access_token）→ 用 username/password 走登录
+//!   （见 `sensenova_login` 模块）换取新 refresh_token → 先写回 extra → 用新 refresh_token
+//!   重试一次续期+查询。
+//! - 网络错误 / 5xx / 非认证业务错误 / 解析错误不触发登录；登录失败（密码错/无 redirect）
+//!   → `UsageError::Auth`。
+//!
+//! 查询：GET /lite/console/v1/tokenplan/pool-usage（Bearer access_token），逐积分池产出
+//! 5h/7d 窗口（label=池名）；sk- 密钥不能调用量接口（401）。
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::{Credentials, num, snippet};
+use super::{Credentials, SensenovaContext, num, snippet};
 use crate::usage::error::UsageError;
 use crate::usage::http::{UsageHttp, ensure_not_auth_error};
+use crate::usage::sensenova_login::SensenovaLogin;
 use crate::usage::types::{FetchOutput, QuotaWindow, WindowKind, ts_secs};
 
 const TOKEN_URL: &str = "https://platform.sensenova.cn/oauth2/token";
 const USAGE_URL: &str = "https://platform.sensenova.cn/lite/console/v1/tokenplan/pool-usage";
 
-/// 返回 (用量数据, 轮换出的新 refresh_token；与旧值相同或缺失时为 None)。
+/// 统一用量入口（由 `query_provider_usage` 对 SenseNova host 调用）：
+/// refresh_token 有效 → 续期查询；缺失或明确鉴权失败 → 登录一次 → 写回新 refresh_token →
+/// 用新 token 重试一次续期查询。
+///
+/// `login` 是带 cookie/重定向的登录客户端（仅当需要登录时才真正发请求）。
 pub async fn fetch_sensenova(
     http: &UsageHttp,
+    login: &SensenovaLogin,
     creds: &Credentials<'_>,
+    ctx: &SensenovaContext<'_>,
+) -> Result<FetchOutput, UsageError> {
+    // 有 refresh_token → 先走续期查询。
+    if let Some(refresh_token) = creds.extra_str("refresh_token") {
+        match renew_and_query(http, refresh_token).await {
+            Ok((output, rotated)) => {
+                // 轮换出的新 token 立即写回（与旧值相同/缺失则跳过）。
+                if let Some(new_token) = rotated {
+                    super::super::write_back_refresh_token(ctx.db, ctx.provider_id, &new_token)
+                        .await?;
+                }
+                return Ok(output);
+            }
+            Err(UsageError::Auth) => {
+                // 明确失效：有账号密码 → 走登录重试；没有 → 保持原「凭据失效」语义
+                // （不能自愈，避免报误导性的「缺少 username」）。
+                if creds.extra_str("username").is_none() && creds.extra_str("password").is_none() {
+                    return Err(UsageError::Auth);
+                }
+            }
+            Err(e) => return Err(e), // 网络/5xx/解析失败不登录
+        }
+    }
+    // 重新登录最多一次（refresh_token 缺失时同样先进来）。
+    let username = creds.require("username")?;
+    let password = creds.require("password")?;
+    let tokens = login.login(username, password).await?;
+    // 新 refresh_token 必须先回写（重读最新行、严格解密、只合并该键），失败不继续重试。
+    super::super::write_back_refresh_token(ctx.db, ctx.provider_id, &tokens.refresh_token).await?;
+    let (output, _) = renew_and_query(http, &tokens.refresh_token).await?;
+    Ok(output)
+}
+
+/// 用 refresh_token 续期并查询 pool-usage。
+/// 返回 (用量数据, 轮换出的新 refresh_token；与旧值相同或缺失时为 None)。
+///
+/// 鉴权失败（HTTP 401/403，或 200 但续期响应 `{"error":"invalid_grant"}` / 缺 access_token）
+/// → `UsageError::Auth`（触发调用方登录）。
+async fn renew_and_query(
+    http: &UsageHttp,
+    refresh_token: &str,
 ) -> Result<(FetchOutput, Option<String>), UsageError> {
-    let refresh_token = creds.require("refresh_token")?;
     // refresh_token 为 JWT/base64url 字符，均为 form 安全字符，直接内嵌。
     let form = format!("grant_type=refresh_token&client_id=nova&refresh_token={refresh_token}");
     let reply = http.post_form(TOKEN_URL, &[], &form).await?;
@@ -31,6 +89,7 @@ pub async fn fetch_sensenova(
     }
     let token: Value = serde_json::from_str(&reply.body)
         .map_err(|e| UsageError::Parse(format!("续期响应不是合法 JSON：{e}")))?;
+    // invalid_grant 等错误响应（200 但无 access_token）→ 视为鉴权失败。
     let access_token = token
         .get("access_token")
         .and_then(Value::as_str)

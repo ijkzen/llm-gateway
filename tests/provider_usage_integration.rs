@@ -443,12 +443,13 @@ async fn sensenova_platform_host_dispatch_and_missing_credential() {
             &app,
             "SenseNova-控制台域",
             "https://platform.sensenova.cn/v1",
+            // 无 refresh_token 也无 username/password → 缺用户可维护凭据 username。
             r#"{"usage": true, "usage_type": 0}"#,
         )
         .await;
         let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(body["msg"].as_str().unwrap().contains("refresh_token"));
+        assert!(body["msg"].as_str().unwrap().contains("username"));
     })
     .await;
 }
@@ -468,6 +469,261 @@ async fn sensenova_invalid_grant_maps_to_auth_error() {
             "SenseNova-失效",
             "https://token.sensenova.cn/v1",
             r#"{"usage": true, "usage_type": 0, "refresh_token": "rt-dead"}"#,
+        )
+        .await;
+        let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["msg"], "用量查询凭据无效或已过期");
+    })
+    .await;
+}
+
+// ─── SenseNova 登录自愈：refresh_token 失效 → 账号密码登录 → 写回 → 重试 ──
+//
+// mock 覆盖登录六步（research.md）：
+//   GET  /oauth2/auth（无 login_verifier）→ 302 /login?login_challenge=
+//   GET  /.well-known/jwks.json             → 测试 RSA 公钥
+//   POST /iam/authn/v1/auth/nova/login      → 200 {redirect:/oauth2/auth?login_verifier=}
+//   GET  /oauth2/auth?login_verifier=       → 302 /?code=login-code
+//   POST /oauth2/token（authorization_code）→ access_token + refresh_token(rt-logged-in)
+// 续期/查询复用既有 /oauth2/token 与 pool-usage 路由：按 grant_type/refresh_token 区分。
+// 所有 host 经 OVERRIDE_ENV 重写到本 mock；登录子客户端同样读该环境变量。
+
+#[derive(Clone, Default)]
+struct SensenovaLoginMockState {
+    login_hits: Arc<AtomicUsize>,
+    token_hits: Arc<AtomicUsize>,
+    last_login_body: Arc<std::sync::Mutex<Option<String>>>,
+    login_should_fail: Arc<std::sync::Mutex<bool>>,
+}
+
+async fn spawn_sensenova_login_mock() -> (String, SensenovaLoginMockState) {
+    use axum::Router;
+    use axum::http::header::LOCATION;
+    use axum::http::{HeaderMap, HeaderValue, StatusCode as AxumStatus};
+    use axum::routing::{get, post};
+
+    let state = SensenovaLoginMockState::default();
+    let app = {
+        let st = state.clone();
+        let st2 = state.clone();
+        let st3 = state.clone();
+        let st4 = state.clone();
+        Router::new()
+            // 初始 authorize → 302 到登录页（带 login_challenge）。
+            .route(
+                "/oauth2/auth",
+                get(move |uri: axum::http::Uri| {
+                    let st = st.clone();
+                    async move {
+                        let q = uri.query().unwrap_or("");
+                        if q.contains("login_verifier=") {
+                            // 登录后携 login_verifier 回来 → 302 到 ?code=
+                            let mut r = axum::response::Response::new(axum::body::Body::empty());
+                            *r.status_mut() = AxumStatus::FOUND;
+                            r.headers_mut().insert(
+                                LOCATION,
+                                HeaderValue::from_str("/?code=login-code-1").unwrap(),
+                            );
+                            r
+                        } else {
+                            // 初始 authorize → 登录页
+                            let _ = &st;
+                            let mut r = axum::response::Response::new(axum::body::Body::empty());
+                            *r.status_mut() = AxumStatus::FOUND;
+                            r.headers_mut().insert(
+                                LOCATION,
+                                HeaderValue::from_str(
+                                    "/login?login_challenge=abc123loginchallenge",
+                                )
+                                .unwrap(),
+                            );
+                            r
+                        }
+                    }
+                }),
+            )
+            // 登录页本体：200（跟随到此处即拿到 login_challenge）。
+            .route("/login", get(|| async { "login page" }))
+            // JWKS：测试 RSA 公钥（2048 位，kid=public:hydra.openid.id-token）。
+            .route(
+                "/.well-known/jwks.json",
+                get(|| async {
+                    Json(serde_json::json!({
+                        "keys": [{
+                            "kid": "public:hydra.openid.id-token",
+                            "kty": "RSA",
+                            "alg": "RS256",
+                            "use": "sig",
+                            "n": "5nsU994-8lnsOb93Lzu8lIYr92Rhdyw7UXaEKBpIRJYdVQRKFUFynWUS-MlDi19STFK_PvYBmC0fTLhfsTEp-zJIPuBLhpvW_3nHwtiLnlhCuRTelZYwsIsMds2-4gCx_bynVKSp6ZvdZ7781mWvy3zpVuG-2z02YSno1Yi_txVTjXzZnb0Jf_EOjbWjh9N6s-gaTVLVu34gZ0vkEICQ_Mn1mzdMVpcBfN4v7KxnsiyjYorGAdeMwPxAyPlIFi1oxKhknLZTWGuypURZp2adMY9CiK0yZqVR3TaRgQ3cowrTHW-oIbXq5lHFVNickn_NnBq-wiGgwjgsg54lFDvWrw",
+                            "e": "AQAB"
+                        }]
+                    }))
+                }),
+            )
+            // nova/login：记录请求体；默认返回 redirect（登录成功），可配置失败。
+            .route(
+                "/iam/authn/v1/auth/nova/login",
+                post(move |body: String| {
+                    let st = st2.clone();
+                    async move {
+                        st.login_hits.fetch_add(1, Ordering::SeqCst);
+                        *st.last_login_body.lock().unwrap() = Some(body.clone());
+                        if *st.login_should_fail.lock().unwrap() {
+                            return Json(serde_json::json!({
+                                "code": 3,
+                                "message": "InvalidArgument",
+                                "details": [{
+                                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                                    "reason": "incorrectUsernameOrPassword",
+                                    "domain": "iam",
+                                    "metadata": {}
+                                }]
+                            }));
+                        }
+                        Json(serde_json::json!({
+                            "access_token": "",
+                            "refresh_token": "",
+                            "redirect": "https://platform.sensenova.cn/oauth2/auth?client_id=nova&login_verifier=verifier-1&redirect_uri=https%3A%2F%2Fplatform.sensenova.cn&response_type=code&scope=openid+offline+offline_access&state=s",
+                        }))
+                    }
+                }),
+            )
+            // token 端点：authorization_code → 登录产物 rt-logged-in；
+            // refresh_token=rt-dead → invalid_grant；refresh_token=rt-logged-in → 续期成功。
+            .route(
+                "/oauth2/token",
+                post(move |body: String| {
+                    let st = st3.clone();
+                    async move {
+                        st.token_hits.fetch_add(1, Ordering::SeqCst);
+                        if body.contains("grant_type=authorization_code") {
+                            Json(serde_json::json!({
+                                "access_token": "at-login",
+                                "expires_in": 10799,
+                                "refresh_token": "rt-logged-in",
+                                "scope": "openid offline offline_access",
+                                "token_type": "bearer"
+                            }))
+                        } else if body.contains("refresh_token=rt-dead") {
+                            Json(serde_json::json!({
+                                "error": "invalid_grant",
+                                "error_description": "The refresh token is invalid"
+                            }))
+                        } else {
+                            Json(serde_json::json!({
+                                "access_token": "at-renewed",
+                                "expires_in": 10799,
+                                "refresh_token": "rt-renewed-2",
+                                "token_type": "bearer"
+                            }))
+                        }
+                    }
+                }),
+            )
+            // 根路径（code 落地）+ pool-usage。
+            .route("/", get(|| async { "callback" }))
+            .route(
+                "/lite/console/v1/tokenplan/pool-usage",
+                get(move |headers: HeaderMap| {
+                    let st = st4.clone();
+                    async move {
+                        let _ = &st;
+                        let _ = headers;
+                        Json(serde_json::from_str::<Value>(SENSENOVA_POOL_USAGE_BODY).unwrap())
+                    }
+                }),
+            )
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{addr}"), state)
+}
+
+/// 场景 1：refresh_token 失效（invalid_grant）且有账号密码 → 自动登录 → 写回新
+/// refresh_token → 用新 token 续期查询成功。
+#[tokio::test]
+async fn sensenova_invalid_grant_self_heals_via_login_and_writes_back() {
+    let (mock_base, mock) = spawn_sensenova_login_mock().await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let (app, db) = setup_app_with_db().await;
+        let id = create_provider(
+            &app,
+            "SenseNova-自愈",
+            "https://token.sensenova.cn/v1",
+            r#"{"usage": true, "usage_type": 0, "refresh_token": "rt-dead", "username": "ijkzen", "password": "pw"}"#,
+        )
+        .await;
+
+        let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::OK, "查询失败：{body}");
+        // 登录确实发生了一次。
+        assert_eq!(mock.login_hits.load(Ordering::SeqCst), 1);
+        // 登录请求体包含 username 与 5 段 JWE 密码。
+        let login_body = mock.last_login_body.lock().unwrap().clone().unwrap();
+        let login_json: Value = serde_json::from_str(&login_body).unwrap();
+        assert_eq!(login_json["username"], "ijkzen");
+        assert_eq!(login_json["is_encrypt"], true);
+        let jwe = login_json["password"].as_str().unwrap();
+        assert_eq!(jwe.split('.').count(), 5, "密码应为 5 段 JWE");
+
+        // 新 refresh_token 已写回 provider extra。
+        let model = provider::Entity::find_by_id(id as i32)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let extra: Value = serde_json::from_str(&model.extra).unwrap();
+        assert_eq!(extra["refresh_token"], "rt-logged-in");
+        assert_eq!(extra["username"], "ijkzen", "其余键保留");
+        assert_eq!(extra["password"], "pw");
+    })
+    .await;
+}
+
+/// 场景 2：refresh_token 缺失、只有账号密码 → 直接登录引导写回并查询成功。
+#[tokio::test]
+async fn sensenova_missing_refresh_token_logs_in_with_credentials() {
+    let (mock_base, mock) = spawn_sensenova_login_mock().await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let (app, db) = setup_app_with_db().await;
+        let id = create_provider(
+            &app,
+            "SenseNova-仅账号密码",
+            "https://token.sensenova.cn/v1",
+            r#"{"usage": true, "usage_type": 0, "username": "ijkzen", "password": "pw"}"#,
+        )
+        .await;
+
+        let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::OK, "查询失败：{body}");
+        assert_eq!(mock.login_hits.load(Ordering::SeqCst), 1);
+        let model = provider::Entity::find_by_id(id as i32)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let extra: Value = serde_json::from_str(&model.extra).unwrap();
+        assert_eq!(extra["refresh_token"], "rt-logged-in");
+    })
+    .await;
+}
+
+/// 场景 3：登录失败（账号或密码错误）→ Auth → 400「用量查询凭据无效或已过期」。
+#[tokio::test]
+async fn sensenova_login_failure_maps_to_auth_error() {
+    let (mock_base, mock) = spawn_sensenova_login_mock().await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let app = setup_app().await;
+        *mock.login_should_fail.lock().unwrap() = true;
+        let id = create_provider(
+            &app,
+            "SenseNova-登录失败",
+            "https://token.sensenova.cn/v1",
+            r#"{"usage": true, "usage_type": 0, "refresh_token": "rt-dead", "username": "ijkzen", "password": "wrong"}"#,
         )
         .await;
         let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;

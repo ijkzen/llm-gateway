@@ -103,10 +103,12 @@ function isJsonObject(value: string): boolean {
 	}
 }
 
-/** 需要用户填写的 extra 字段：排除 usage/usage_type 标记字段。 */
+/** 需要用户填写的 extra 字段：排除 usage/usage_type 标记与后端派生的 refresh_token。 */
 function editableExtraKeys(extra: string | undefined): string[] {
 	const map = parseExtra(extra);
-	return Object.keys(map).filter((k) => k !== "usage" && k !== "usage_type");
+	return Object.keys(map).filter(
+		(k) => k !== "usage" && k !== "usage_type" && k !== "refresh_token",
+	);
 }
 
 /** 模板 extra 中值为 true 的 usage 标记。 */
@@ -488,6 +490,8 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 												<Label htmlFor={`extra-${key}`}>{key}</Label>
 												<Input
 													id={`extra-${key}`}
+													type={key === "password" ? "password" : "text"}
+													autoComplete="off"
 													value={extraValues[key] ?? ""}
 													onChange={(e) =>
 														setExtraValues((prev) => ({ ...prev, [key]: e.target.value }))
