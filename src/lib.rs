@@ -106,6 +106,11 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
     // 回填历史 api_key 的 key_hash（migration 7 新增列，无法在 SQL 内解密计算）。
     auth::backfill_api_key_hashes(&db).await;
 
+    // 迁移历史明文 provider extra 为加密存储（幂等，未配置密钥时跳过）。
+    if let Err(e) = crate::provider_repo::backfill_extra_encryption(&db).await {
+        tracing::warn!("Provider extra 加密迁移失败：{e}");
+    }
+
     // 初始化 provider 模板：批量 upsert 种子数据（已存在则更新）。
     if let Err(e) = crate::provider_template::upsert_templates(&db).await {
         tracing::warn!("Failed to seed provider templates: {e}");

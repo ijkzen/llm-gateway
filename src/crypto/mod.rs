@@ -25,6 +25,11 @@ pub fn encryption_enabled() -> bool {
         .unwrap_or(false)
 }
 
+/// 判断存储值是否已是密文（带 `enc:v1:` 前缀）。
+pub fn is_encrypted(stored: &str) -> bool {
+    stored.starts_with(CIPHER_PREFIX)
+}
+
 /// 从环境变量派生 AES-256 密钥。
 fn derive_key(secret: &str) -> [u8; 32] {
     let digest = Sha256::digest(secret.as_bytes());
@@ -107,6 +112,12 @@ pub fn decrypt(ciphertext: &str) -> anyhow::Result<String> {
         // 未加密的旧数据/开发环境明文,原样返回。
         Ok(ciphertext.to_string())
     }
+}
+
+/// 解密存储值；无法解密时（密钥缺失/变更、非 UTF-8）原样返回，不报错。
+/// 用于「读展示类」路径：解不开就把原文透传给上层，由上层按明文处理。
+pub fn decrypt_or_passthrough(stored: &str) -> String {
+    decrypt(stored).unwrap_or_else(|_| stored.to_string())
 }
 
 /// 对明文密钥做掩码:保留前 3 位与后 4 位,中间用星号填充;
@@ -226,6 +237,31 @@ mod tests {
     fn mask_keeps_head_and_tail() {
         assert_eq!(mask("sk-secret-1234"), "sk-****1234");
         assert_eq!(mask("lg-0123456789abcdef0123456789abcdef"), "lg-****cdef");
+    }
+
+    #[test]
+    fn is_encrypted_recognizes_prefix() {
+        with_key(Some(KEY), || {
+            assert!(!is_encrypted("plain"));
+            assert!(!is_encrypted(""));
+            let ciphertext = encrypt("sk-x");
+            assert!(is_encrypted(&ciphertext));
+        });
+    }
+
+    #[test]
+    fn decrypt_or_passthrough_never_fails() {
+        // 能解开时返回明文。
+        let ciphertext = with_key(Some(KEY), || encrypt("sk-secret"));
+        with_key(Some(KEY), || {
+            assert_eq!(decrypt_or_passthrough(&ciphertext), "sk-secret");
+        });
+        // 无密钥/破损密文时原样透传，不报错。
+        with_key(None, || {
+            assert_eq!(decrypt_or_passthrough(&ciphertext), ciphertext);
+        });
+        assert_eq!(decrypt_or_passthrough("plain-json"), "plain-json");
+        assert_eq!(decrypt_or_passthrough(""), "");
     }
 
     #[test]

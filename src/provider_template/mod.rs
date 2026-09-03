@@ -8,6 +8,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
 };
 
+use crate::crypto;
 use crate::entity::provider_template::{self, ActiveModel, Entity};
 
 /// 将种子模板数据批量 upsert 到 provider_template 表。
@@ -80,8 +81,15 @@ async fn backfill_provider_extra(
         if host_of(&p.base_url).as_deref() != Some(host.as_str()) {
             continue;
         }
+        let Ok(plain) = crypto::decrypt(&p.extra) else {
+            tracing::warn!(
+                provider_id = p.id,
+                "回填 provider extra 失败：存储值无法解密"
+            );
+            continue;
+        };
         let Ok(serde_json::Value::Object(mut map)) =
-            serde_json::from_str::<serde_json::Value>(&p.extra)
+            serde_json::from_str::<serde_json::Value>(&plain)
         else {
             continue;
         };
@@ -93,7 +101,7 @@ async fn backfill_provider_extra(
             continue;
         }
         let mut am: crate::entity::provider::ActiveModel = p.into();
-        am.extra = Set(serde_json::Value::Object(map).to_string());
+        am.extra = Set(crypto::encrypt(&serde_json::Value::Object(map).to_string()));
         am.update(db).await?;
         tracing::info!(provider_template = tmpl.name, "回填 provider extra 缺失键");
     }

@@ -58,7 +58,8 @@ impl UsageCache {
 
 /// provider 的 extra JSON 是否开启用量查询（`usage: true`）。
 pub fn usage_enabled(extra: &str) -> bool {
-    serde_json::from_str::<Value>(extra)
+    let plain = crate::crypto::decrypt_or_passthrough(extra);
+    serde_json::from_str::<Value>(&plain)
         .ok()
         .and_then(|v| v.get("usage").and_then(Value::as_bool))
         .unwrap_or(false)
@@ -77,11 +78,12 @@ pub async fn query_provider_usage(
         .map_err(|e| UsageError::Network(format!("数据库查询失败：{e}")))?
         .ok_or(UsageError::Unsupported)?; // 路由层先查存在性，这里兜底
 
-    let extra = match serde_json::from_str::<Value>(&model.extra) {
+    let extra_plain = crate::crypto::decrypt_or_passthrough(&model.extra);
+    let extra = match serde_json::from_str::<Value>(&extra_plain) {
         Ok(Value::Object(map)) => map,
         _ => Default::default(),
     };
-    if !usage_enabled(&model.extra) {
+    if !usage_enabled(&extra_plain) {
         return Err(UsageError::NotEnabled);
     }
 
@@ -130,6 +132,8 @@ pub async fn query_provider_usage(
 
 /// 把轮换出的新 refresh_token 写回 provider extra（只改该键，其余保留）。
 /// 写回时重读最新行再合并，缩小与并发 extra 编辑之间的丢更新窗口。
+/// 存储值无法解密（如密钥变更）时返回 Err，避免在密文上解析失败后
+/// 只留下 refresh_token 而清空其余凭据。
 async fn write_back_refresh_token(
     db: &DatabaseConnection,
     provider_id: i32,
@@ -140,7 +144,8 @@ async fn write_back_refresh_token(
         .await
         .map_err(|e| UsageError::Network(format!("写回 refresh_token 失败：{e}")))?
         .ok_or(UsageError::Auth)?;
-    let mut map = match serde_json::from_str::<Value>(&latest.extra) {
+    let extra_plain = crate::crypto::decrypt(&latest.extra).map_err(|_| UsageError::Auth)?;
+    let mut map = match serde_json::from_str::<Value>(&extra_plain) {
         Ok(Value::Object(map)) => map,
         _ => Default::default(),
     };
@@ -150,7 +155,7 @@ async fn write_back_refresh_token(
     );
     let am = provider::ActiveModel {
         id: Set(provider_id),
-        extra: Set(Value::Object(map).to_string()),
+        extra: Set(crate::crypto::encrypt(&Value::Object(map).to_string())),
         ..Default::default()
     };
     am.update(db)
@@ -320,6 +325,7 @@ impl Fetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::ENCRYPTION_KEY_ENV;
 
     #[test]
     fn host_dispatch_covers_seed_templates() {
@@ -399,5 +405,62 @@ mod tests {
         assert!(cache.get(1).await.is_some());
         cache.invalidate(1).await;
         assert!(cache.get(1).await.is_none());
+    }
+
+    #[test]
+    fn usage_enabled_handles_encrypted_extra() {
+        temp_env::with_vars([(ENCRYPTION_KEY_ENV, Some("test-key"))], || {
+            let plain = r#"{"usage": true, "usage_type": 0}"#;
+            let encrypted = crate::crypto::encrypt(plain);
+            assert!(usage_enabled(&encrypted), "密文 extra 应判读 usage=true");
+            assert!(usage_enabled(plain), "明文 extra 行为不变");
+            assert!(!usage_enabled(&crate::crypto::encrypt(
+                r#"{"usage": false}"#
+            )));
+            // 解密失败（如密钥变更）时安全降级为未开启。
+            assert!(!usage_enabled("enc:v1:broken"));
+        });
+    }
+
+    #[tokio::test]
+    async fn write_back_refresh_token_preserves_encryption() {
+        temp_env::async_with_vars([(ENCRYPTION_KEY_ENV, Some("test-key"))], async {
+            let db = crate::db::connect("sqlite::memory:").await.unwrap();
+            let now = chrono::Utc::now();
+            let extra_plain = r#"{"refresh_token":"old-token","usage":true}"#;
+            let p = crate::entity::provider::ActiveModel {
+                name: Set("Sensenova".to_string()),
+                enable: Set(true),
+                base_url: Set("https://token.sensenova.cn/v1".to_string()),
+                api_key: Set(crate::crypto::encrypt("sk-x")),
+                custom_header: Set("{}".to_string()),
+                status: Set(0),
+                protocol_type: Set(0),
+                billing_mode: Set(1),
+                extra: Set(crate::crypto::encrypt(extra_plain)),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+
+            write_back_refresh_token(&db, p.id, "new-token")
+                .await
+                .unwrap();
+
+            let row = crate::entity::provider::Entity::find_by_id(p.id)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(row.extra.starts_with("enc:v1:"), "写回后 extra 仍应为密文");
+            let decrypted = crate::crypto::decrypt(&row.extra).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&decrypted).unwrap();
+            assert_eq!(parsed["refresh_token"], "new-token");
+            assert_eq!(parsed["usage"], true, "其余键保留");
+        })
+        .await;
     }
 }

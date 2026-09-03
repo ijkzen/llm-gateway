@@ -22,6 +22,41 @@ fn mask_stored_key(stored: &str) -> String {
     }
 }
 
+/// 启动时一次性迁移：把 provider 表中未加密的明文 extra 加密写回。
+///
+/// 幂等：已带 `enc:v1:` 前缀的行跳过。未配置密钥时跳过并记录日志
+/// （与 api_key 的明文降级行为一致），配置密钥后下次启动自动完成。
+/// 单行迁移失败仅记录 warn 并继续，不阻塞其余行与启动。
+pub async fn backfill_extra_encryption(db: &DatabaseConnection) -> Result<usize, DbErr> {
+    if !crypto::encryption_enabled() {
+        tracing::info!(
+            "{} 未配置，provider extra 保持明文存储，跳过加密迁移",
+            crypto::ENCRYPTION_KEY_ENV
+        );
+        return Ok(0);
+    }
+    let rows = provider::Entity::find().all(db).await?;
+    let mut migrated = 0usize;
+    for row in rows {
+        if crypto::is_encrypted(&row.extra) || row.extra.is_empty() {
+            continue;
+        }
+        let encrypted = crypto::encrypt(&row.extra);
+        let mut active: provider::ActiveModel = row.clone().into();
+        active.extra = Set(encrypted);
+        match active.update(db).await {
+            Ok(_) => migrated += 1,
+            Err(e) => {
+                tracing::warn!(provider_id = row.id, "迁移 provider extra 加密失败：{e}");
+            }
+        }
+    }
+    if migrated > 0 {
+        tracing::info!(migrated, "Provider extra 加密迁移完成");
+    }
+    Ok(migrated)
+}
+
 /// 插入一条供应商记录，成功落库后输出全字段结构化日志（api_key 脱敏）。
 pub async fn insert_provider(
     db: &impl ConnectionTrait,
@@ -206,4 +241,92 @@ pub async fn set_items_enabled(
         );
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn insert_provider(db: &DatabaseConnection, name: &str, extra: &str) -> i32 {
+        let now = chrono::Utc::now();
+        let row = provider::ActiveModel {
+            name: Set(name.to_string()),
+            enable: Set(true),
+            base_url: Set(format!("https://{name}.example.com/v1")),
+            api_key: Set(crate::crypto::encrypt("sk-x")),
+            custom_header: Set("{}".to_string()),
+            status: Set(0),
+            protocol_type: Set(0),
+            billing_mode: Set(0),
+            extra: Set(extra.to_string()),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+        row.id
+    }
+
+    async fn extra_of(db: &DatabaseConnection, id: i32) -> String {
+        provider::Entity::find_by_id(id)
+            .one(db)
+            .await
+            .unwrap()
+            .unwrap()
+            .extra
+    }
+
+    #[tokio::test]
+    async fn migration_encrypts_plaintext_extra() {
+        temp_env::async_with_vars(
+            [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
+            async {
+                let db = crate::db::connect("sqlite::memory:").await.unwrap();
+                let plain = r#"{"ak":"sk-secret","usage":true}"#;
+                let id = insert_provider(&db, "plain", plain).await;
+
+                let n = backfill_extra_encryption(&db).await.unwrap();
+                assert_eq!(n, 1);
+
+                let stored = extra_of(&db, id).await;
+                assert!(crate::crypto::is_encrypted(&stored), "迁移后应为密文");
+                assert_eq!(crate::crypto::decrypt(&stored).unwrap(), plain);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn migration_skips_encrypted_rows_idempotent() {
+        temp_env::async_with_vars(
+            [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
+            async {
+                let db = crate::db::connect("sqlite::memory:").await.unwrap();
+                let encrypted = crate::crypto::encrypt(r#"{"ak":"sk-enc","usage":true}"#);
+                let id = insert_provider(&db, "already", &encrypted).await;
+
+                // 已加密行不重复迁移（幂等）。
+                let n = backfill_extra_encryption(&db).await.unwrap();
+                assert_eq!(n, 0);
+                assert_eq!(extra_of(&db, id).await, encrypted);
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn migration_skips_when_key_missing() {
+        temp_env::async_with_vars([(crate::crypto::ENCRYPTION_KEY_ENV, None::<&str>)], async {
+            let db = crate::db::connect("sqlite::memory:").await.unwrap();
+            let plain = r#"{"ak":"sk-plain","usage":true}"#;
+            let id = insert_provider(&db, "nokey", plain).await;
+
+            let n = backfill_extra_encryption(&db).await.unwrap();
+            assert_eq!(n, 0);
+            assert_eq!(extra_of(&db, id).await, plain);
+        })
+        .await;
+    }
 }

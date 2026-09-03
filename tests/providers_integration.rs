@@ -635,3 +635,143 @@ async fn test_manual_enable_clears_failure_disabled_flag() {
     assert!(model.enable);
     assert!(!model.failure_disabled);
 }
+
+#[tokio::test]
+async fn test_create_provider_encrypts_extra_in_db() {
+    temp_env::async_with_vars([(ENCRYPTION_KEY_ENV, Some(TEST_KEY))], async {
+        let (app, db) = setup_app().await;
+        let extra = r#"{"ak":"sk-ak-123","usage":true,"usage_type":0}"#;
+        let (status, body) = send_json(
+            &app,
+            "POST",
+            "/api/providers",
+            &create_body("EncExtra", "https://api.enc.test/v1", "sk-abc", extra),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = body["data"]["id"].as_i64().unwrap() as i32;
+
+        // 数据库里必须是加密后的密文。
+        let model = llm_gateway::entity::provider::Entity::find_by_id(id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            llm_gateway::crypto::is_encrypted(&model.extra),
+            "extra 应以密文落库，实际: {}",
+            &model.extra[..16.min(model.extra.len())]
+        );
+        assert_eq!(llm_gateway::crypto::decrypt(&model.extra).unwrap(), extra);
+
+        // 列表/详情接口返回解密后的明文 extra。
+        let (status, list_body) = send_json(&app, "GET", "/api/providers", "{}").await;
+        assert_eq!(status, StatusCode::OK);
+        let list = list_body["data"].as_array().unwrap();
+        let item = list.iter().find(|p| p["id"] == id).unwrap();
+        assert_eq!(item["extra"], extra);
+
+        let (status, detail_body) =
+            send_json(&app, "GET", &format!("/api/providers/{id}"), "{}").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(detail_body["data"]["extra"], extra);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_update_provider_encrypts_new_extra_and_keeps_existing() {
+    temp_env::async_with_vars([(ENCRYPTION_KEY_ENV, Some(TEST_KEY))], async {
+        let (app, db) = setup_app().await;
+        let (_, created) = send_json(
+            &app,
+            "POST",
+            "/api/providers",
+            &create_body(
+                "UpdExtra",
+                "https://api.upd-extra.test/v1",
+                "sk-abc",
+                r#"{"initial":1}"#,
+            ),
+        )
+        .await;
+        let id = created["data"]["id"].as_i64().unwrap() as i32;
+
+        // 未传 extra 时保持原值（密文不变）。
+        let (status, body) = send_json(
+            &app,
+            "PUT",
+            &format!("/api/providers/{id}"),
+            r#"{"enable":false}"#,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["extra"], r#"{"initial":1}"#);
+        let model = llm_gateway::entity::provider::Entity::find_by_id(id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            llm_gateway::crypto::is_encrypted(&model.extra),
+            "未传 extra 时保持密文"
+        );
+        assert_eq!(
+            llm_gateway::crypto::decrypt(&model.extra).unwrap(),
+            r#"{"initial":1}"#
+        );
+
+        // 传新 extra 时重新加密。
+        let new_extra = r#"{"ak":"sk-updated","usage":true}"#;
+        let update_body = serde_json::json!({
+            "extra": new_extra,
+            "enable": true,
+        })
+        .to_string();
+        let (status, body) =
+            send_json(&app, "PUT", &format!("/api/providers/{id}"), &update_body).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["extra"], new_extra);
+        let model = llm_gateway::entity::provider::Entity::find_by_id(id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(llm_gateway::crypto::is_encrypted(&model.extra));
+        assert_eq!(
+            llm_gateway::crypto::decrypt(&model.extra).unwrap(),
+            new_extra
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_create_provider_extra_plaintext_when_no_key() {
+    // 不设密钥时 extra 明文存储（与 api_key 行为一致）。
+    temp_env::async_with_vars([(ENCRYPTION_KEY_ENV, None::<&str>)], async {
+        let (app, db) = setup_app().await;
+        let extra = r#"{"ak":"sk-test","usage":true}"#;
+        let (status, body) = send_json(
+            &app,
+            "POST",
+            "/api/providers",
+            &create_body("NoKeyExtra", "https://api.nokey.test/v1", "sk-abc", extra),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        let id = body["data"]["id"].as_i64().unwrap() as i32;
+        let model = llm_gateway::entity::provider::Entity::find_by_id(id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        // 无密钥时 extra 明文存储（无 enc:v1: 前缀）。
+        assert!(
+            !llm_gateway::crypto::is_encrypted(&model.extra),
+            "无密钥时 extra 应为明文"
+        );
+        assert_eq!(model.extra, extra);
+    })
+    .await;
+}

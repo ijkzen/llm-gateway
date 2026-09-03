@@ -67,6 +67,7 @@ struct ProviderResponse {
 impl ProviderResponse {
     fn from_model(model: provider::Model) -> Self {
         let api_key_masked = mask_api_key(&model.api_key);
+        let extra = crypto::decrypt_or_passthrough(&model.extra);
         Self {
             id: model.id,
             name: model.name,
@@ -77,7 +78,7 @@ impl ProviderResponse {
             protocol_type: model.protocol_type,
             billing_mode: model.billing_mode,
             custom_header: model.custom_header,
-            extra: model.extra,
+            extra,
             proxy_enabled: model.proxy_enabled,
             proxy_addr: model.proxy_addr,
             created_at: model.created_at.to_rfc3339(),
@@ -363,7 +364,7 @@ async fn create_provider(
         base_url: Set(req.base_url.trim().to_string()),
         api_key: Set(crypto::encrypt(api_key)),
         custom_header: Set(req.custom_header),
-        extra: Set(req.extra),
+        extra: Set(crypto::encrypt(&req.extra)),
         status: Set(0),
         protocol_type: Set(req.protocol_type),
         billing_mode: Set(req.billing_mode),
@@ -414,7 +415,9 @@ async fn update_provider(
     let custom_header = req
         .custom_header
         .unwrap_or_else(|| model.custom_header.clone());
-    let extra = req.extra.unwrap_or_else(|| model.extra.clone());
+    let has_new_extra = req.extra.is_some();
+    // 未提交新 extra 时跳过 extra 校验（存储值已通过历史校验，且可能为密文无法直接解析）。
+    let extra_for_validate = req.extra.as_deref().unwrap_or("{}");
     let enable_new = req.enable.unwrap_or(model.enable);
     let enable_changed = enable_new != model.enable;
     // 空字符串表示"不修改"，其余值覆盖。
@@ -424,10 +427,17 @@ async fn update_provider(
         .map(|k| k.trim().to_string());
     let _api_key = new_api_key.clone().unwrap_or_else(|| model.api_key.clone());
 
-    if let Some(msg) = validate_fields(&name, &base_url, &custom_header, &extra, None, lang) {
+    if let Some(msg) = validate_fields(
+        &name,
+        &base_url,
+        &custom_header,
+        extra_for_validate,
+        None,
+        lang,
+    ) {
         return response::bad_request(msg);
     }
-    if let Some(msg) = validate_extra(&extra, lang) {
+    if has_new_extra && let Some(msg) = validate_extra(extra_for_validate, lang) {
         return response::bad_request(msg);
     }
     let protocol_type = req.protocol_type.unwrap_or(model.protocol_type);
@@ -460,7 +470,10 @@ async fn update_provider(
         active.api_key = Set(crypto::encrypt(&plain));
     }
     active.custom_header = Set(custom_header);
-    active.extra = Set(extra);
+    // 仅在提交了新 extra 时加密写回；未提交时保持存储值（可能已是密文）。
+    if let Some(plain) = &req.extra {
+        active.extra = Set(crypto::encrypt(plain));
+    }
     active.sort_order = Set(req.sort_order.unwrap_or(active.sort_order.unwrap()));
     active.proxy_enabled = Set(proxy_enabled);
     active.proxy_addr = Set(proxy_addr.trim().to_string());
