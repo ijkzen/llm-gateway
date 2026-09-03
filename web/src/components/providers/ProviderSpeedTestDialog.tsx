@@ -9,12 +9,14 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
 	type ProviderModel,
 	useProviderModels,
 	useTestProviderModel,
 } from "@/hooks/use-provider-models";
-import type { Provider } from "@/hooks/use-providers";
+import { type Provider, useUpdateProvider } from "@/hooks/use-providers";
+import { useToastActions } from "@/hooks/use-toast";
 import { Gauge, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -35,20 +37,41 @@ export function ProviderSpeedTestDialog({
 	provider,
 }: ProviderSpeedTestDialogProps) {
 	const { t } = useTranslation();
+	const { toastSuccess, toastError } = useToastActions();
 	const { data: models, isLoading } = useProviderModels();
 	const testModel = useTestProviderModel(provider?.id ?? 0);
+	const updateProvider = useUpdateProvider();
+	// 本地乐观的启用态：开关先即时反映，请求失败再回滚。provider 切换/弹窗重开时重置。
+	const [enabled, setEnabled] = useState(provider?.enable ?? false);
 	const [results, setResults] = useState<ResultMap>({});
 	const [testingId, setTestingId] = useState<number | null>(null);
 	const [activeError, setActiveError] = useState<string | null>(null);
 
-	// 每次打开（含关闭后重开）都清空上一次的结果，重新开始。
+	// 每次打开（含关闭后重开）都重置启用态与测试结果。
 	useEffect(() => {
-		if (open) {
+		if (open && provider) {
+			setEnabled(provider.enable);
 			setResults({});
 			setTestingId(null);
 			setActiveError(null);
 		}
-	}, [open]);
+	}, [open, provider]);
+
+	const toggleEnable = () => {
+		if (!provider) return;
+		const next = !enabled;
+		setEnabled(next);
+		updateProvider.mutate(
+			{ id: provider.id, enable: next },
+			{
+				onSuccess: () => toastSuccess(t("common.success")),
+				onError: (error) => {
+					setEnabled(provider.enable);
+					toastError(t("common.error"), error);
+				},
+			},
+		);
+	};
 
 	const providerModels = useMemo(
 		() => (models ?? []).filter((m) => provider !== null && m.providerId === provider.id),
@@ -76,10 +99,23 @@ export function ProviderSpeedTestDialog({
 			<Dialog open={open} onOpenChange={onOpenChange}>
 				<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[520px]">
 					<DialogHeader className="space-y-3">
-						<DialogTitle className="flex items-center gap-2">
-							<Gauge className="size-4" />
-							{t("providers.speedTest")}
-						</DialogTitle>
+						<div className="flex items-center justify-between gap-3">
+							<DialogTitle
+								className="flex min-w-0 items-center gap-2"
+								title={t("providers.speedTestTitle", { name: provider?.name ?? "" })}
+							>
+								<Gauge className="size-4 shrink-0" />
+								<span className="truncate">
+									{t("providers.speedTestTitle", { name: provider?.name ?? "" })}
+								</span>
+							</DialogTitle>
+							<Switch
+								checked={enabled}
+								disabled={updateProvider.isPending}
+								aria-label={`${t("providers.toggleProviderStatus")} ${provider?.name ?? ""} ${t("cronJobs.toggleStatusSuffix")}`}
+								onCheckedChange={toggleEnable}
+							/>
+						</div>
 						<DialogDescription>{t("providers.speedTestDesc")}</DialogDescription>
 					</DialogHeader>
 

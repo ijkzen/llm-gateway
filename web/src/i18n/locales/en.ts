@@ -281,6 +281,7 @@ const en: Translation = {
 		deleteProviderDescSuffix: "? This cannot be undone.",
 		submitting: "Submitting...",
 		speedTest: "Speed test models",
+		speedTestTitle: "{{name}} · Speed test",
 		speedTestDesc:
 			"Send a test request per model to verify upstream connectivity and measure latency.",
 		speedTestNoModels: "This provider has no models yet",

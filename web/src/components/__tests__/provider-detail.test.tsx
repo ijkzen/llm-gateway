@@ -290,6 +290,8 @@ describe("ProviderSpeedTestDialog 测速弹窗", () => {
 		renderSpeedTestDialog();
 
 		expect(screen.getByRole("dialog")).toBeTruthy();
+		// 标题带供应商名称（插值 speedTestTitle）。
+		expect(screen.getByText("OpenAI · 模型测速")).toBeTruthy();
 		expect(screen.getByText("gpt-4o")).toBeTruthy();
 		expect(screen.getByText("gpt-4o-mini")).toBeTruthy();
 		expect(screen.queryByText("claude")).toBeNull();
@@ -344,5 +346,66 @@ describe("ProviderSpeedTestDialog 测速弹窗", () => {
 		rerender(<ProviderSpeedTestDialog open={false} provider={provider} onOpenChange={vi.fn()} />);
 		rerender(<ProviderSpeedTestDialog open provider={provider} onOpenChange={vi.fn()} />);
 		expect(screen.queryByText(/999/)).toBeNull();
+	});
+
+	it("右上角开关展示当前启用态，点击切换调用更新接口", () => {
+		mocks.models = [makeModel()];
+		renderSpeedTestDialog();
+
+		const toggle = screen.getByRole("switch", {
+			name: `切换 Provider ${provider.name} 状态`,
+		});
+		// 初始 enable=true → 开关开。
+		expect(toggle).toHaveAttribute("data-state", "checked");
+
+		mocks.updateMutate.mockImplementation((_payload, opts) => {
+			required(opts).onSuccess();
+		});
+		fireEvent.click(toggle);
+		expect(mocks.updateMutate).toHaveBeenCalledTimes(1);
+		expect(mocks.updateMutate).toHaveBeenCalledWith({ id: 7, enable: false }, expect.anything());
+		// 乐观更新：请求成功后开关仍为关。
+		expect(
+			screen.getByRole("switch", { name: `切换 Provider ${provider.name} 状态` }),
+		).toHaveAttribute("data-state", "unchecked");
+	});
+
+	it("开关切换失败回滚并提示错误", () => {
+		mocks.models = [makeModel()];
+		renderSpeedTestDialog();
+
+		mocks.updateMutate.mockImplementation((_payload, opts) => {
+			required(opts).onError(new Error("network"));
+		});
+		fireEvent.click(screen.getByRole("switch", { name: `切换 Provider ${provider.name} 状态` }));
+
+		// 失败回滚到 provider.enable（true）。
+		expect(
+			screen.getByRole("switch", { name: `切换 Provider ${provider.name} 状态` }),
+		).toHaveAttribute("data-state", "checked");
+		expect(mocks.toastError).toHaveBeenCalled();
+	});
+
+	it("弹窗重开后开关重置为供应商当前启用态", () => {
+		mocks.models = [makeModel()];
+		const { rerender } = render(
+			<ProviderSpeedTestDialog open provider={provider} onOpenChange={vi.fn()} />,
+		);
+
+		// 先切成关。
+		mocks.updateMutate.mockImplementation((_payload, opts) => {
+			required(opts).onSuccess();
+		});
+		fireEvent.click(screen.getByRole("switch", { name: `切换 Provider ${provider.name} 状态` }));
+		expect(
+			screen.getByRole("switch", { name: `切换 Provider ${provider.name} 状态` }),
+		).toHaveAttribute("data-state", "unchecked");
+
+		// 关闭重开 → 回到 provider.enable（true）。
+		rerender(<ProviderSpeedTestDialog open={false} provider={provider} onOpenChange={vi.fn()} />);
+		rerender(<ProviderSpeedTestDialog open provider={provider} onOpenChange={vi.fn()} />);
+		expect(
+			screen.getByRole("switch", { name: `切换 Provider ${provider.name} 状态` }),
+		).toHaveAttribute("data-state", "checked");
 	});
 });
