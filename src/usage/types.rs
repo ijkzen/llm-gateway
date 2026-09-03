@@ -162,6 +162,15 @@ impl QuotaWindow {
 }
 
 impl UsageData {
+    /// 按供应商付费模式返回当前是否可用：1=订阅制，0=按量付费，其他模式无法判定。
+    pub fn usable_for_billing_mode(&self, billing_mode: i32) -> Option<bool> {
+        match billing_mode {
+            1 => self.subscription_usable(),
+            0 => self.balance_usable(),
+            _ => None,
+        }
+    }
+
     /// 订阅制「当前是否可用」判定：全部厂商已提供的窗口剩余 > 0 → true；
     /// 任一已提供窗口剩余为 0 → false；无任何可用窗口数据（无法判定）→ None。
     /// 调用方在 None 时必须保持原状，避免上游抖动误伤。

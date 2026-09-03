@@ -6,7 +6,7 @@
 
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
-    QueryFilter, Set,
+    QueryFilter, Set, TransactionTrait,
 };
 
 use crate::crypto;
@@ -146,8 +146,8 @@ pub async fn set_provider_enabled(
 }
 
 /// 连续失败达到阈值时的熔断停用：供应商停用 + 名下虚拟模型条目级联停用 +
-/// 打 `failure_disabled` 标记。与额度门控禁用区分：用量定时刷新不会自动恢复，
-/// 仅管理员手动启用（清标记）解除。
+/// 打 `failure_disabled` 标记。与额度门控禁用区分：普通用量刷新不会自动恢复，
+/// 仅管理员手动启用或自动恢复探测成功时解除。
 /// 原子性：条件更新 `failure_disabled=0 → 1`，并发仅一个胜出，返回 true。
 pub async fn disable_provider_on_failures(
     db: &DatabaseConnection,
@@ -174,8 +174,36 @@ pub async fn disable_provider_on_failures(
         provider_id,
         consecutive,
         items,
-        "连续失败达到阈值，熔断停用供应商及其全部虚拟模型子模型（仅手动启用可恢复）"
+        "连续失败达到阈值，熔断停用供应商及其全部虚拟模型子模型"
     );
+    Ok(true)
+}
+
+/// 连续失败禁用供应商探测成功后的条件恢复。
+/// 仅当 `failure_disabled=true` 且探测期间未发生更新时恢复，避免旧探测覆盖新状态。
+pub async fn recover_provider_from_failures(
+    db: &DatabaseConnection,
+    provider_id: i32,
+    expected_updated_at: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, DbErr> {
+    use sea_orm::sea_query::Expr;
+    let txn = db.begin().await?;
+    let affected = provider::Entity::update_many()
+        .col_expr(provider::Column::Enable, Expr::value(true))
+        .col_expr(provider::Column::FailureDisabled, Expr::value(false))
+        .col_expr(provider::Column::UpdatedAt, Expr::value(chrono::Utc::now()))
+        .filter(provider::Column::Id.eq(provider_id))
+        .filter(provider::Column::FailureDisabled.eq(true))
+        .filter(provider::Column::UpdatedAt.eq(expected_updated_at))
+        .exec(&txn)
+        .await?;
+    if affected.rows_affected == 0 {
+        txn.commit().await?;
+        return Ok(false);
+    }
+    let items = set_items_enabled(&txn, provider_id, true).await?;
+    txn.commit().await?;
+    tracing::info!(provider_id, items, "自动恢复连续失败禁用供应商");
     Ok(true)
 }
 
@@ -186,7 +214,7 @@ pub async fn disable_provider_on_failures(
 /// 标记；级联恢复（enabled=true）只恢复带该标记的条目并清除标记，用户手动关闭的
 /// 成员（无标记）保持不变。
 pub async fn set_items_enabled(
-    db: &DatabaseConnection,
+    db: &impl ConnectionTrait,
     provider_id: i32,
     enabled: bool,
 ) -> Result<usize, DbErr> {

@@ -141,6 +141,17 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
 
     let scheduler =
         SchedulerRuntime::new_with_settings(worker_handle.tx.clone(), settings.clone()).await?;
+    let state = AppState {
+        db: db.clone(),
+        scheduler: scheduler.clone(),
+        log_tx: log_tx.clone(),
+        lb_state: crate::proxy::LbState::default(),
+        failure_counter: crate::proxy::failure_counter::FailureCounter::default(),
+        recheck_gate: crate::proxy::failure_recheck::RecheckGate::default(),
+        usage_cache: crate::usage::UsageCache::default(),
+        upstream_pool: crate::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
+        settings: settings.clone(),
+    };
 
     // Register example handler; business handlers are added here.
     scheduler
@@ -189,25 +200,38 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         })
         .await;
 
-    // 内置定时任务种子：用量刷新（每 5 分钟），与上面的 handler 注册一一对应。
+    // 连续失败供应商恢复 handler：每个整点探测 failure_disabled 供应商。
+    let failure_recovery_lock = Arc::new(tokio::sync::Mutex::new(()));
+    scheduler
+        .register_handler(crate::cron::seed::FAILURE_RECOVERY_JOB, {
+            let lock = failure_recovery_lock.clone();
+            let state = state.clone();
+            Arc::new(move |_ctx: JobContext| {
+                let lock = lock.clone();
+                let state = state.clone();
+                Box::pin(async move {
+                    let Ok(_guard) = lock.try_lock() else {
+                        tracing::warn!("连续失败供应商恢复上次仍在运行，本次跳过");
+                        return Ok(());
+                    };
+                    match crate::proxy::failure_recovery::recover_failure_disabled(&state).await {
+                        Ok(n) => tracing::info!("连续失败供应商恢复完成，成功恢复 {n} 家供应商"),
+                        Err(e) => tracing::error!("连续失败供应商恢复失败：{e}"),
+                    }
+                    Ok(())
+                })
+            })
+        })
+        .await;
+
+    // 内置定时任务种子，与上面的 handler 注册一一对应。
     crate::cron::seed::ensure_usage_refresh_job(&db).await?;
+    crate::cron::seed::ensure_failure_recovery_job(&db).await?;
 
     scheduler.load_from_db(&repo).await?;
     scheduler.start().await?;
 
     logs_cleanup::spawn_cleanup_task(config.env.log_dir().to_string(), LOG_RETENTION_DAYS);
-
-    let state = AppState {
-        db: db.clone(),
-        scheduler,
-        log_tx,
-        lb_state: crate::proxy::LbState::default(),
-        failure_counter: crate::proxy::failure_counter::FailureCounter::default(),
-        recheck_gate: crate::proxy::failure_recheck::RecheckGate::default(),
-        usage_cache: crate::usage::UsageCache::default(),
-        upstream_pool: crate::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
-        settings,
-    };
 
     Ok(AppContext {
         log_guard,
