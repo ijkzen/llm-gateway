@@ -70,11 +70,18 @@ impl SensenovaLogin {
         password: &str,
     ) -> Result<SensenovaTokens, UsageError> {
         tracing::info!(username, "SenseNova 登录开始");
+        // PKCE：verifier 与 challenge 必须是同一对（challenge = S256(verifier)），
+        // 换 token 时用回 verifier；此前两者各自随机导致 invalid_grant。
+        let (verifier, challenge) = self.pkce_pair();
+        let state = self.rand_b64u(16);
         // 1. authorize（PKCE）→ login?login_challenge=（cookie 会话开启）
-        let challenge = self.start_challenge().await.map_err(|e| {
-            tracing::warn!(error = %e, "登录步骤 1/6 authorize 失败");
-            e
-        })?;
+        let login_challenge = self
+            .start_challenge(&state, &challenge)
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "登录步骤 1/6 authorize 失败");
+                e
+            })?;
         tracing::info!("登录步骤 1/6 authorize 成功，拿到 login_challenge");
         // 2. JWKS 取 RSA 公钥
         let pubkey = self.fetch_public_key().await.map_err(|e| {
@@ -87,7 +94,7 @@ impl SensenovaLogin {
         tracing::info!("登录步骤 3/6 密码已加密为 5 段 JWE");
         // 4. nova/login → redirect（带 login_verifier）
         let redirect = self
-            .nova_login(username, &jwe, &challenge)
+            .nova_login(username, &jwe, &login_challenge)
             .await
             .map_err(|e| {
                 tracing::warn!(error = %e, "登录步骤 4/6 nova/login 失败");
@@ -104,8 +111,7 @@ impl SensenovaLogin {
             e
         })?;
         tracing::info!("登录步骤 5/6 跟随 redirect 成功，拿到 code");
-        // 6. code → refresh_token
-        let verifier = self.rand_b64u(32);
+        // 6. code → refresh_token（用最初的 verifier）
         let tokens = self.exchange_code(&code, &verifier).await.map_err(|e| {
             tracing::warn!(error = %e, "登录步骤 6/6 code 换 refresh_token 失败");
             e
@@ -115,13 +121,17 @@ impl SensenovaLogin {
     }
 
     /// authorize 拿 login_challenge。用受限重定向跟随到登录页，再从 URL 取 challenge。
-    async fn start_challenge(&self) -> Result<String, UsageError> {
+    /// `state`/`code_challenge` 由调用方生成（PKCE 配对，见 `pkce_pair`），保证换 token
+    /// 时能用同一 verifier 通过校验。
+    async fn start_challenge(
+        &self,
+        state: &str,
+        code_challenge: &str,
+    ) -> Result<String, UsageError> {
         let url = self.rewrite(&format!(
             "{PLATFORM_BASE}/oauth2/auth?client_id=nova&response_type=code\
              &redirect_uri={PLATFORM_BASE}&scope=openid%20offline%20offline_access\
-             &state={}&code_challenge={}&code_challenge_method=S256",
-            self.rand_b64u(16),
-            self.rand_b64u(32),
+             &state={state}&code_challenge={code_challenge}&code_challenge_method=S256",
         ));
         let resp = self
             .client
@@ -269,6 +279,16 @@ impl SensenovaLogin {
         let mut buf = vec![0u8; nbytes];
         rand::thread_rng().fill_bytes(&mut buf);
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&buf)
+    }
+
+    /// 生成 PKCE 配对：返回 (code_verifier, code_challenge)，challenge = base64url(SHA256(verifier))。
+    /// 换 token 时必须用回同一 verifier；此前 challenge 与 verifier 各自随机导致 invalid_grant。
+    fn pkce_pair(&self) -> (String, String) {
+        use sha2::{Digest, Sha256};
+        let verifier = self.rand_b64u(32);
+        let digest = Sha256::digest(verifier.as_bytes());
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
+        (verifier, challenge)
     }
 
     fn rewrite(&self, url: &str) -> String {
@@ -481,6 +501,22 @@ fn snippet(body: &str) -> String {
 mod tests {
     use super::*;
     use rsa::traits::PublicKeyParts;
+
+    #[test]
+    fn pkce_pair_challenge_is_s256_of_verifier() {
+        let login = SensenovaLogin::new();
+        let (verifier, challenge) = login.pkce_pair();
+        assert!(!verifier.is_empty());
+        // challenge 必须等于 base64url(SHA256(verifier))，否则换 token 时 invalid_grant。
+        use base64::Engine;
+        use sha2::{Digest, Sha256};
+        let expect = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(Sha256::digest(verifier.as_bytes()));
+        assert_eq!(challenge, expect);
+        // 两次生成不同（随机性）。
+        let (v2, c2) = login.pkce_pair();
+        assert_ne!((verifier, challenge), (v2, c2));
+    }
 
     #[test]
     fn parse_login_challenge_extracts_hex() {
