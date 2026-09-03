@@ -178,7 +178,7 @@ async fn load_members(
         .filter_map(|item| {
             let model = model_by_pk.get(&item.model_id)?;
             let p = provider_by_id.get(&model.provider_id)?;
-            if !p.enable || p.status != 0 {
+            if !p.enable {
                 return None;
             }
             Some(Member {

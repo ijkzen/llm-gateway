@@ -178,7 +178,6 @@ async fn seed_provider(
         base_url: Set(base_url.to_string()),
         api_key: Set(llm_gateway::crypto::encrypt("sk-mock")),
         custom_header: Set("{}".to_string()),
-        status: Set(0),
         protocol_type: Set(protocol_type),
         billing_mode: Set(billing_mode),
         extra: Set("{}".to_string()),

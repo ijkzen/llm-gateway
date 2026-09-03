@@ -434,7 +434,6 @@ mod tests {
                 base_url: Set("https://token.sensenova.cn/v1".to_string()),
                 api_key: Set(crate::crypto::encrypt("sk-x")),
                 custom_header: Set("{}".to_string()),
-                status: Set(0),
                 protocol_type: Set(0),
                 billing_mode: Set(1),
                 extra: Set(crate::crypto::encrypt(extra_plain)),

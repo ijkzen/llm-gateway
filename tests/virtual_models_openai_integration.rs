@@ -16,7 +16,6 @@ async fn seed_provider(db: &sea_orm::DatabaseConnection, name: &str) -> i32 {
         base_url: Set("https://api.example.com/v1".to_string()),
         api_key: Set(llm_gateway::crypto::encrypt("sk-test")),
         custom_header: Set("{}".to_string()),
-        status: Set(0),
         protocol_type: Set(0),
         billing_mode: Set(0),
         extra: Set("{}".to_string()),

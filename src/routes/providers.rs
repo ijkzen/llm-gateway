@@ -51,7 +51,6 @@ struct ProviderResponse {
     base_url: String,
     /// 掩码后的 api_key，如 `sk-****abcd`；无法解密时为空字符串。
     api_key_masked: String,
-    status: i32,
     protocol_type: i32,
     billing_mode: i32,
     custom_header: String,
@@ -74,7 +73,6 @@ impl ProviderResponse {
             enable: model.enable,
             base_url: model.base_url,
             api_key_masked,
-            status: model.status,
             protocol_type: model.protocol_type,
             billing_mode: model.billing_mode,
             custom_header: model.custom_header,
@@ -365,7 +363,6 @@ async fn create_provider(
         api_key: Set(crypto::encrypt(api_key)),
         custom_header: Set(req.custom_header),
         extra: Set(crypto::encrypt(&req.extra)),
-        status: Set(0),
         protocol_type: Set(req.protocol_type),
         billing_mode: Set(req.billing_mode),
         proxy_enabled: Set(req.proxy_enabled),

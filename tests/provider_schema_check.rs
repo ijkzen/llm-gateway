@@ -85,11 +85,6 @@ async fn provider_table_ddl_matches_expected() {
             "'0'".to_string(),
         ),
         (
-            "status".to_string(),
-            "INTEGER".to_string(),
-            "'0'".to_string(),
-        ),
-        (
             "updated_at".to_string(),
             "timestamp_with_timezone_text".to_string(),
             String::new(),

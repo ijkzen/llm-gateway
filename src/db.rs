@@ -376,6 +376,21 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         changed |= ensure_migration(db, 17, &migration_17_statements).await?;
     }
 
+    // Migration 18: 移除 provider.status 死字段。该字段自旧 lg-proxy 方案遗留，
+    // 全库没有任何写入为 1（不可用）的路径，恒为 0（可用），真实启停语义由
+    // enable + failure_disabled 承载，选路过滤也早已不再依赖它。SQLite 从
+    // 3.35 起支持 DROP COLUMN；历史库兜底按列存在与否执行。
+    let migration_18_statements: Vec<&str> = if column_exists(db, "provider", "status").await? {
+        vec!["ALTER TABLE provider DROP COLUMN status"]
+    } else {
+        Vec::new()
+    };
+    if migration_18_statements.is_empty() {
+        changed |= ensure_migration(db, 18, &["SELECT 1"]).await?;
+    } else {
+        changed |= ensure_migration(db, 18, &migration_18_statements).await?;
+    }
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)
@@ -570,6 +585,68 @@ mod tests {
             column_exists(&db, "virtual_model_item", "cascade_disabled")
                 .await
                 .unwrap()
+        );
+    }
+
+    /// 历史库迁移：provider 表残留 status 死字段（旧 lg-proxy 方案遗留，恒为 0，
+    /// 无任何写入为 1 的路径）——migrate() 必须 DROP 该列；已删的库不重复执行
+    /// （幂等，只记录版本号）。
+    #[tokio::test]
+    async fn migration_18_drops_stale_provider_status() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        migrate(&db).await.unwrap();
+        // 模拟历史库：migrate 建表时实体已无 status 列，需手动加回 + 移除 18 版本记录。
+        db.execute_unprepared("ALTER TABLE provider ADD COLUMN status INTEGER NOT NULL DEFAULT 0")
+            .await
+            .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 18")
+            .await
+            .unwrap();
+        assert!(
+            column_exists(&db, "provider", "status").await.unwrap(),
+            "前置：应存在残留 status 列"
+        );
+
+        // 首次执行应 DROP 列并报告变更。
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        assert!(
+            !column_exists(&db, "provider", "status").await.unwrap(),
+            "status 列应被删除"
+        );
+
+        // 再次执行：列已删，只记录版本不报变更（幂等）。
+        let changed_again = migrate(&db).await.unwrap();
+        assert!(!changed_again, "重复执行不应再报告变更");
+    }
+
+    /// 历史库迁移：schema_migrations 残留废弃号段版本记录（14/15）时，
+    /// 新迁移 18 号段（13 之后 + 废弃 14/15 + 16/17 均已占用）不与其撞号，
+    /// DROP status 仍会正常执行。
+    #[tokio::test]
+    async fn migration_18_applies_despite_stale_versions() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        migrate(&db).await.unwrap();
+        // 模拟生产库：手动加回 status 列 + 注入废弃号段记录 + 移除 18。
+        db.execute_unprepared("ALTER TABLE provider ADD COLUMN status INTEGER NOT NULL DEFAULT 0")
+            .await
+            .unwrap();
+        db.execute_unprepared(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (14, datetime('now')), (15, datetime('now'))",
+        )
+        .await
+        .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 18")
+            .await
+            .unwrap();
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        assert!(
+            !column_exists(&db, "provider", "status").await.unwrap(),
+            "status 列应被删除（即使残留 14/15 号段）"
         );
     }
 }

@@ -85,7 +85,6 @@ async fn seed_provider(db: &sea_orm::DatabaseConnection, name: &str, base_url: &
         base_url: Set(base_url.to_string()),
         api_key: Set(llm_gateway::crypto::encrypt("sk-mock")),
         custom_header: Set("{}".to_string()),
-        status: Set(0),
         protocol_type: Set(0),
         billing_mode: Set(0),
         extra: Set("{}".to_string()),
@@ -335,7 +334,6 @@ async fn seed_usage_provider(
         base_url: Set("https://ark.cn-beijing.volces.com/v1".to_string()),
         api_key: Set("enc:v1:AA==".to_string()),
         custom_header: Set("{}".to_string()),
-        status: Set(0),
         protocol_type: Set(0),
         billing_mode: Set(0),
         extra: Set(

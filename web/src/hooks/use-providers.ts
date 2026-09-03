@@ -8,7 +8,6 @@ export interface Provider {
 	enable: boolean;
 	baseUrl: string;
 	apiKeyMasked: string;
-	status: number;
 	protocolType: number;
 	billingMode: number;
 	customHeader: string;

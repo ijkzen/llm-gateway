@@ -21,7 +21,6 @@ async fn seed_provider(db: &DatabaseConnection, id: i32, name: &str) {
         base_url: Set("https://example.com".to_string()),
         api_key: Set("encrypted".to_string()),
         custom_header: Set("{}".to_string()),
-        status: Set(0),
         protocol_type: Set(0),
         billing_mode: Set(0),
         extra: Set("{}".to_string()),

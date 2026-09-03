@@ -36,7 +36,6 @@ const provider: Provider = {
 	enable: true,
 	baseUrl: "https://api.example.com/v1",
 	apiKeyMasked: "sk-****test",
-	status: 0,
 	protocolType: 0,
 	billingMode: 0,
 	customHeader: "{}",

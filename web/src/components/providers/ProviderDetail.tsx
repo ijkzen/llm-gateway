@@ -178,11 +178,6 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 					<DetailRow label={t("providers.billingModeDetail")}>
 						{t(BILLING_LABELS[provider.billingMode] ?? "common.unknown")}
 					</DetailRow>
-					<DetailRow label={t("providers.status")}>
-						<Badge variant="outline">
-							{provider.status === 0 ? t("providers.available") : t("providers.unavailable")}
-						</Badge>
-					</DetailRow>
 					<DetailRow label={t("providers.proxyEnabled")}>
 						{provider.proxyEnabled ? (
 							<span className="inline-flex items-center gap-1.5">

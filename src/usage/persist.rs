@@ -232,7 +232,6 @@ mod tests {
             base_url: Set("https://api.deepseek.com/v1".to_string()),
             api_key: Set(crate::crypto::encrypt("sk-x")),
             custom_header: Set("{}".to_string()),
-            status: Set(0),
             protocol_type: Set(0),
             billing_mode: Set(0),
             extra: Set(r#"{"usage": true, "usage_type": 0}"#.to_string()),
