@@ -1,5 +1,5 @@
 import { RequestLogsTable } from "@/components/request-logs/RequestLogsTable";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -36,6 +36,7 @@ function makeRow(overrides: Partial<Parameters<typeof mocks.useRequestLogs>[0]> 
 		virtualModelId: 1,
 		virtualModelDisplayId: "vm-a",
 		providerId: 2,
+		providerName: "Provider Beta",
 		modelId: "gpt-4o",
 		stream: false,
 		ttft: null,
@@ -107,16 +108,26 @@ describe("RequestLogsTable", () => {
 		render(<RequestLogsTable />);
 
 		expect(screen.getByText("vm-a")).toBeInTheDocument();
+		expect(screen.getByText("Provider Beta")).toBeInTheDocument();
 		expect(screen.getByText("key-a")).toBeInTheDocument();
 
 		// 点击行打开详情弹窗。
 		fireEvent.click(screen.getByText("vm-a"));
 		await waitFor(() => expect(screen.getByText(/请求 req-1/)).toBeInTheDocument());
+		const dialog = screen.getByRole("dialog");
 		// 弹窗包含失败原因等字段。
-		expect(screen.getByText("首 token 耗时 (TTFT)")).toBeInTheDocument();
-		expect(screen.getByText("缓存命中率")).toBeInTheDocument();
-		// 供应商名称通过详情接口查询展示。
-		expect(screen.getAllByText("Provider Beta").length).toBeGreaterThan(0);
+		expect(within(dialog).getByText("首 token 耗时 (TTFT)")).toBeInTheDocument();
+		expect(within(dialog).getByText("缓存命中率")).toBeInTheDocument();
+		// 供应商名称通过详情接口查询展示（限定弹窗内，避免与表格新列文本混淆）。
+		expect(within(dialog).getAllByText("Provider Beta").length).toBeGreaterThan(0);
+	});
+
+	it("供应商列缺失名称时兜底显示 #providerId", () => {
+		// providerName 为 null（对应供应商已删除）：表格行应显示 #id 而非空。
+		mockQuery({ items: [makeRow({ providerName: null })], total: 1 });
+		render(<RequestLogsTable />);
+
+		expect(screen.getByText("#2")).toBeInTheDocument();
 	});
 
 	it("空数据显示空态", () => {
@@ -201,6 +212,7 @@ describe("RequestLogsTable", () => {
 		expect(lastCall?.pageSize).toBe(20);
 		// 列显隐为空对象 → 全部列显示（表头齐全；过滤卡片有同名 label 故用 getAll）。
 		expect(screen.getAllByText("虚拟模型").length).toBeGreaterThan(0);
+		expect(screen.getAllByText("供应商").length).toBeGreaterThan(0);
 		expect(screen.getAllByText("API Key").length).toBeGreaterThan(0);
 		expect(screen.getAllByText("上游模型").length).toBeGreaterThan(0);
 	});
@@ -224,6 +236,30 @@ describe("RequestLogsTable", () => {
 		render(<RequestLogsTable />);
 		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
 		expect(screen.getByRole("menuitemcheckbox", { name: "结果" })).toHaveAttribute(
+			"data-state",
+			"unchecked",
+		);
+	});
+
+	it("勾选隐藏供应商列后写入 localStorage，重新渲染保持隐藏", () => {
+		mockQuery({ items: [makeRow()], total: 1 });
+		const { unmount } = render(<RequestLogsTable />);
+
+		// Radix DropdownMenu 在 jsdom 下通过键盘事件打开。
+		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
+		fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "供应商" }));
+
+		const stored = JSON.parse(
+			window.localStorage.getItem("request-logs:column-visibility") ?? "{}",
+		);
+		expect(stored).toEqual({ providerName: false });
+
+		// 重新渲染（模拟刷新）：供应商列保持隐藏。
+		unmount();
+		mockQuery({ items: [makeRow()], total: 1 });
+		render(<RequestLogsTable />);
+		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
+		expect(screen.getByRole("menuitemcheckbox", { name: "供应商" })).toHaveAttribute(
 			"data-state",
 			"unchecked",
 		);

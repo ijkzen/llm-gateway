@@ -8,7 +8,28 @@ use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 use serde_json::Value;
 use tower::ServiceExt;
 
-use llm_gateway::entity::request;
+use llm_gateway::entity::{provider, request};
+
+/// 种入一条 provider 行（指定 id/name），供列表 JOIN 断言供应商名。
+async fn seed_provider(db: &DatabaseConnection, id: i32, name: &str) {
+    provider::ActiveModel {
+        id: Set(id),
+        name: Set(name.to_string()),
+        enable: Set(true),
+        base_url: Set("https://example.com".to_string()),
+        api_key: Set(llm_gateway::crypto::encrypt("sk-test")),
+        custom_header: Set("{}".to_string()),
+        protocol_type: Set(0),
+        billing_mode: Set(0),
+        extra: Set("{}".to_string()),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+}
 
 async fn setup_app() -> (axum::Router, DatabaseConnection) {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
@@ -321,6 +342,7 @@ async fn test_rows_include_all_fields() {
         "requestId",
         "virtualModelId",
         "providerId",
+        "providerName",
         "modelId",
         "stream",
         "ttft",
@@ -340,4 +362,44 @@ async fn test_rows_include_all_fields() {
     ] {
         assert!(item.get(key).is_some(), "缺少字段 {key}");
     }
+}
+
+#[tokio::test]
+async fn test_provider_name_joined_from_provider_table() {
+    let (app, db) = setup_app().await;
+    // provider 1 有名字、provider 2 无记录（如已删除）。
+    seed_provider(&db, 1, "Provider Alpha").await;
+    seed_request_full(
+        &db,
+        "r-with-p",
+        1,
+        1,
+        "gpt-4o",
+        "key-a",
+        1_700_000_000_000,
+        true,
+    )
+    .await;
+    seed_request_full(
+        &db,
+        "r-orphan",
+        1,
+        2,
+        "claude-3",
+        "key-a",
+        1_700_000_100_000,
+        true,
+    )
+    .await;
+
+    let (_, body) = get(&app, "/api/request-logs").await;
+    let items = body["data"]["items"].as_array().unwrap();
+
+    let with_provider = items.iter().find(|i| i["requestId"] == "r-with-p").unwrap();
+    assert_eq!(with_provider["providerName"], "Provider Alpha");
+
+    let orphan = items.iter().find(|i| i["requestId"] == "r-orphan").unwrap();
+    assert_eq!(orphan["providerId"], 2);
+    // 供应商不存在时 providerName 为 null，前端兜底 #providerId。
+    assert!(orphan["providerName"].is_null());
 }

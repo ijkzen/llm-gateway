@@ -7,6 +7,8 @@ export interface RequestLogRow {
 	virtualModelId: number;
 	virtualModelDisplayId?: string | null;
 	providerId: number;
+	/** 供应商名称（后端 LEFT JOIN provider 补出；供应商缺失时为 null，兜底显示 #providerId）。 */
+	providerName?: string | null;
 	modelId: string;
 	stream: boolean;
 	ttft?: number | null;

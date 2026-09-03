@@ -1,8 +1,8 @@
 //! 请求日志查询：`GET /api/request-logs`。
 //!
 //! 服务端分页 + 过滤（时间段 / 虚拟模型 / 供应商 / 供应商模型 / 结果状态 /
-//! API Key）+ 排序，返回全字段行（含 JOIN 出的虚拟模型 displayId），供前端
-//! 表格与行详情弹窗使用。
+//! API Key）+ 排序，返回全字段行（含 JOIN 出的虚拟模型 displayId 与供应商名称
+//! provider_name），供前端表格与行详情弹窗使用。
 
 use axum::{
     Json, Router,
@@ -95,6 +95,8 @@ struct RequestLogRow {
     virtual_model_id: i32,
     virtual_model_display_id: Option<String>,
     provider_id: i32,
+    /// 供应商名称（LEFT JOIN provider 补出；供应商已删/缺失时为 null，前端兜底 #id）。
+    provider_name: Option<String>,
     model_id: String,
     stream: bool,
     ttft: Option<i64>,
@@ -212,11 +214,12 @@ async fn list_request_logs(
         Err(e) => return response::db_error(e.to_string()),
     };
 
-    // 列表查询：LEFT JOIN virtual_model 补 display_id。
+    // 列表查询：LEFT JOIN virtual_model 补 display_id、LEFT JOIN provider 补名称。
     let list_sql = format!(
-        "SELECT r.*, vm.display_id AS virtual_model_display_id \
+        "SELECT r.*, vm.display_id AS virtual_model_display_id, p.name AS provider_name \
          FROM request r \
          LEFT JOIN virtual_model vm ON vm.virtual_model_id = r.virtual_model_id \
+         LEFT JOIN provider p ON p.id = r.provider_id \
          {where_sql} \
          ORDER BY r.{order_col} {order_dir} \
          LIMIT ? OFFSET ?"
@@ -259,6 +262,7 @@ fn row_to_entry(row: &sea_orm::QueryResult) -> Result<RequestLogRow, sea_orm::Tr
         virtual_model_id: row.try_get("", "virtual_model_id")?,
         virtual_model_display_id: row.try_get("", "virtual_model_display_id").ok().flatten(),
         provider_id: row.try_get("", "provider_id")?,
+        provider_name: row.try_get("", "provider_name").ok().flatten(),
         model_id: row.try_get("", "model_id")?,
         stream: row.try_get("", "stream")?,
         ttft: row.try_get("", "ttft")?,
