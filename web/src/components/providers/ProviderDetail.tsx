@@ -16,7 +16,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { type Provider, fetchProviderApiKey, useUpdateProvider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
-import { Copy, Eye, EyeOff, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+	ChevronRight,
+	Copy,
+	Eye,
+	EyeOff,
+	KeyRound,
+	MoreHorizontal,
+	Pencil,
+	Trash2,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -51,6 +61,35 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
 		<div>
 			<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
 			<div className="mt-1 text-sm">{children}</div>
+		</div>
+	);
+}
+
+/** 详情页可折叠区：整行标题可点切换，右侧方向键指示状态（默认折叠），展开内容带轻量下滑动画。 */
+function CollapsibleSection({ title, children }: { title: string; children: React.ReactNode }) {
+	const [open, setOpen] = useState(false);
+	return (
+		<div>
+			<button
+				type="button"
+				aria-expanded={open}
+				onClick={() => setOpen((v) => !v)}
+				className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
+			>
+				<span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+					{title}
+				</span>
+				<ChevronRight
+					aria-hidden="true"
+					className={cn(
+						"size-4 shrink-0 text-muted-foreground transition-transform",
+						open && "rotate-90",
+					)}
+				/>
+			</button>
+			{open && (
+				<div className="mt-2 animate-in fade-in slide-in-from-top-2 duration-200">{children}</div>
+			)}
 		</div>
 	);
 }
@@ -197,11 +236,9 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 				{usageEnabled(provider.extra) && <ProviderUsageCard providerId={provider.id} />}
 
 				{provider.extra && provider.extra !== "{}" && (
-					<div>
-						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							{t("providers.extraConfig")}
-						</p>
-						<div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-2">
+					// key 按供应商 id：切换供应商时 remount，折叠态随之重置。
+					<CollapsibleSection key={`extra-${provider.id}`} title={t("providers.extraConfig")}>
+						<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
 							{Object.entries(JSON.parse(provider.extra) as Record<string, unknown>).map(
 								([key, value]) => (
 									<div key={key} className="space-y-1">
@@ -211,18 +248,15 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 								),
 							)}
 						</div>
-					</div>
+					</CollapsibleSection>
 				)}
 
 				{provider.customHeader && provider.customHeader !== "{}" && (
-					<div>
-						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-							{t("providers.customHeader")}
-						</p>
-						<pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-3 font-mono text-xs">
+					<CollapsibleSection key={`header-${provider.id}`} title={t("providers.customHeader")}>
+						<pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-3 font-mono text-xs">
 							{JSON.stringify(JSON.parse(provider.customHeader), null, 2)}
 						</pre>
-					</div>
+					</CollapsibleSection>
 				)}
 
 				<div className="flex items-center gap-2 pt-4">

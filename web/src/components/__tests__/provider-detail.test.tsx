@@ -110,3 +110,77 @@ describe("ProviderDetail 明文 API Key 展示", () => {
 		await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
 	});
 });
+
+describe("ProviderDetail 额外配置 / 自定义请求头折叠", () => {
+	const extraConfigTitle = "额外配置";
+	const customHeaderTitle = "自定义请求头";
+
+	function renderWithData(overrides: Partial<Provider> = {}) {
+		const p: Provider = {
+			...provider,
+			extra: '{"refresh_token": "rt-123"}',
+			customHeader: '{"X-Custom": "abc"}',
+			...overrides,
+		};
+		return render(<ProviderDetail provider={p} onEdit={vi.fn()} onDelete={vi.fn()} />);
+	}
+
+	it("默认折叠：只显示标题行，内容（键值输入框 / pre 块）不可见", () => {
+		renderWithData();
+		const extraBtn = screen.getByRole("button", { name: extraConfigTitle });
+		const headerBtn = screen.getByRole("button", { name: customHeaderTitle });
+		expect(extraBtn).toHaveAttribute("aria-expanded", "false");
+		expect(headerBtn).toHaveAttribute("aria-expanded", "false");
+		// 折叠时不渲染内容：额外配置键值输入框与自定义请求头 pre 内容都不在。
+		expect(screen.queryByDisplayValue("rt-123")).not.toBeInTheDocument();
+		expect(screen.queryByText(/X-Custom/)).not.toBeInTheDocument();
+	});
+
+	it("点标题行（整行按钮，方向键在按钮内）展开/收起，两个区独立", () => {
+		renderWithData();
+		const extraBtn = screen.getByRole("button", { name: extraConfigTitle });
+		const headerBtn = screen.getByRole("button", { name: customHeaderTitle });
+
+		fireEvent.click(extraBtn);
+		expect(extraBtn).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByDisplayValue("rt-123")).toBeInTheDocument();
+		// 额外配置展开不影响自定义请求头。
+		expect(headerBtn).toHaveAttribute("aria-expanded", "false");
+
+		fireEvent.click(headerBtn);
+		expect(headerBtn).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByText(/X-Custom/)).toBeInTheDocument();
+
+		// 再点标题行收起。
+		fireEvent.click(extraBtn);
+		expect(extraBtn).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByDisplayValue("rt-123")).not.toBeInTheDocument();
+	});
+
+	it("切换供应商时展开态重置回折叠", () => {
+		const initial: Provider = { ...provider, extra: '{"refresh_token": "rt-123"}' };
+		const other: Provider = { ...provider, id: 8, name: "Anthropic", extra: '{"k": "v"}' };
+		const { rerender } = render(
+			<ProviderDetail provider={initial} onEdit={vi.fn()} onDelete={vi.fn()} />,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: extraConfigTitle }));
+		expect(screen.getByRole("button", { name: extraConfigTitle })).toHaveAttribute(
+			"aria-expanded",
+			"true",
+		);
+
+		rerender(<ProviderDetail provider={other} onEdit={vi.fn()} onDelete={vi.fn()} />);
+		expect(screen.getByRole("button", { name: extraConfigTitle })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+		expect(screen.queryByDisplayValue("v")).not.toBeInTheDocument();
+	});
+
+	it("extra/customHeader 为空对象时不渲染对应标题行", () => {
+		renderWithData({ extra: "{}", customHeader: "{}" });
+		expect(screen.queryByRole("button", { name: extraConfigTitle })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: customHeaderTitle })).not.toBeInTheDocument();
+	});
+});
