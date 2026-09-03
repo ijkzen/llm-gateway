@@ -58,11 +58,29 @@ describe("MultiSelect", () => {
 		expect(onChange).toHaveBeenCalledWith([]);
 	});
 
-	it("「全部」态下取消任一选项回调其余全部选项", () => {
+	it("「全部」态下点击子条目退化为仅选该项", () => {
 		const onChange = setup([]);
 		openPopover();
 		fireEvent.click(screen.getByText("Beta"));
-		expect(onChange).toHaveBeenCalledWith(["a", "c"]);
+		expect(onChange).toHaveBeenCalledWith(["b"]);
+	});
+
+	it("「全部」态下子条目显示为未勾选，仅「全选」为勾选态", () => {
+		setup([]);
+		openPopover();
+		expect(screen.getByRole("checkbox", { name: "全选" })).toBeChecked();
+		expect(screen.getByRole("checkbox", { name: "Alpha" })).not.toBeChecked();
+		expect(screen.getByRole("checkbox", { name: "Beta" })).not.toBeChecked();
+		expect(screen.getByRole("checkbox", { name: "Gamma" })).not.toBeChecked();
+	});
+
+	it("显式选中时子条目按选择勾选，全选为半选态", () => {
+		setup(["a", "c"]);
+		openPopover();
+		expect(screen.getByRole("checkbox", { name: "全选" })).not.toBeChecked();
+		expect(screen.getByRole("checkbox", { name: "Alpha" })).toBeChecked();
+		expect(screen.getByRole("checkbox", { name: "Beta" })).not.toBeChecked();
+		expect(screen.getByRole("checkbox", { name: "Gamma" })).toBeChecked();
 	});
 
 	it("搜索框按关键词过滤选项，无匹配显示提示", () => {

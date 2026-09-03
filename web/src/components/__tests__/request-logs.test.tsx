@@ -290,34 +290,29 @@ describe("RequestLogsTable", () => {
 		mockQuery({ items: [], total: 0 });
 		render(<RequestLogsTable />);
 
-		// 「全部」态下取消 Provider Beta → 只选 Provider Alpha。
+		// 「全部」态下点 Provider Beta → 退化为只选 Beta。
 		fireEvent.click(screen.getByRole("button", { name: "按供应商过滤" }));
 		fireEvent.click(screen.getByRole("checkbox", { name: "Provider Beta" }));
 		// 点击模型触发按钮：供应商弹层经外部点击关闭，模型弹层打开。
 		fireEvent.click(screen.getByRole("button", { name: "按供应商模型过滤" }));
-		// 模型弹层不应有 Provider Beta 分组标题；供应商触发器显示 Provider Alpha（含"Provider Alpha"文本）。
-		expect(screen.queryAllByText("Provider Beta")).toHaveLength(0);
-		expect(screen.getAllByText("Provider Alpha").length).toBeGreaterThan(0);
+		// 模型弹层只应剩 Provider Beta 分组的模型；供应商触发器显示 Provider Beta。
+		expect(screen.queryAllByText("Provider Alpha")).toHaveLength(0);
 		expect(screen.getAllByRole("checkbox", { name: "gpt-4o" })).toHaveLength(1);
-
-		// 模型处于「全部」态全勾选：反选 claude-3 后只剩 gpt-4o 被选。
-		fireEvent.click(screen.getByRole("checkbox", { name: "claude-3" }));
-		const calls = mocks.useRequestLogs.mock.calls;
-		expect(calls[calls.length - 1]?.[0]?.modelId).toEqual(["gpt-4o"]);
-		expect(screen.getByRole("button", { name: "按供应商模型过滤" })).toHaveTextContent("gpt-4o");
+		expect(screen.queryByRole("checkbox", { name: "claude-3" })).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "按供应商过滤" })).toHaveTextContent("Provider Beta");
 	});
 
-	it("「全部」态取消一项后过滤参数为剩余虚拟模型集合", () => {
+	it("「全部」态点虚拟模型退化为仅选该项，过滤参数为该项", () => {
 		mockQuery({ items: [], total: 0 });
 		render(<RequestLogsTable />);
 
-		// 初始为「全部」（全部勾选），取消 vm-b 后只剩 vm-a。
+		// 初始为「全部」，点 vm-b 退化为只选 vm-b。
 		fireEvent.click(screen.getByRole("button", { name: "按虚拟模型过滤" }));
 		fireEvent.click(screen.getByRole("checkbox", { name: "vm-b" }));
 
 		const calls = mocks.useRequestLogs.mock.calls;
-		expect(calls[calls.length - 1]?.[0]?.vmId).toEqual([1]);
-		expect(screen.getByRole("button", { name: "按虚拟模型过滤" })).toHaveTextContent("vm-a");
+		expect(calls[calls.length - 1]?.[0]?.vmId).toEqual([2]);
+		expect(screen.getByRole("button", { name: "按虚拟模型过滤" })).toHaveTextContent("vm-b");
 	});
 
 	it("勾满全部选项归一化为「全部」，不传过滤参数", () => {
@@ -333,7 +328,38 @@ describe("RequestLogsTable", () => {
 		expect(screen.getByRole("button", { name: "按虚拟模型过滤" })).toHaveTextContent("全部");
 	});
 
-	it("多选供应商后模型选项为并集，失效已选模型被剔除", () => {
+	it("多选供应商后模型下拉含各供应商模型（并集，未全选不归一化）", async () => {
+		mocks.useProviders.mockReturnValue({
+			data: [
+				{ id: 1, name: "Provider Gamma" },
+				{ id: 2, name: "Provider Beta" },
+				{ id: 3, name: "Provider Alpha" },
+			],
+		});
+		mocks.useProviderModels.mockReturnValue({
+			data: [
+				makeProviderModel(10, 2, "gpt-4o"),
+				makeProviderModel(11, 3, "gpt-4o"),
+				makeProviderModel(13, 3, "claude-3"),
+			],
+		});
+		mockQuery({ items: [], total: 0 });
+		render(<RequestLogsTable />);
+
+		// 供应商「全部」态点 Provider Alpha → 退化为只选 Alpha。
+		fireEvent.click(screen.getByRole("button", { name: "按供应商过滤" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "Provider Alpha" }));
+		// 再选 Provider Beta（显式态新增）→ [Beta, Alpha]，Gamma 未选故不归一化。
+		fireEvent.click(screen.getByRole("checkbox", { name: "Provider Beta" }));
+		expect(screen.getByRole("button", { name: "按供应商过滤" })).toHaveTextContent("已选 2 项");
+
+		// 模型下拉为两供应商模型并集：两个 gpt-4o + claude-3。
+		fireEvent.click(screen.getByRole("button", { name: "按供应商模型过滤" }));
+		expect(screen.getAllByRole("checkbox", { name: "gpt-4o" })).toHaveLength(2);
+		expect(screen.getByRole("checkbox", { name: "claude-3" })).toBeInTheDocument();
+	});
+
+	it("换选供应商后失效的已选模型被剔除", async () => {
 		mocks.useProviders.mockReturnValue({
 			data: [
 				{ id: 2, name: "Provider Beta" },
@@ -350,20 +376,24 @@ describe("RequestLogsTable", () => {
 		mockQuery({ items: [], total: 0 });
 		render(<RequestLogsTable />);
 
-		// 「全部」态下取消 Provider Beta → 只选 Provider Alpha。
+		// 供应商「全部」态点 Provider Alpha → 只选 Alpha。
 		fireEvent.click(screen.getByRole("button", { name: "按供应商过滤" }));
-		fireEvent.click(screen.getByRole("checkbox", { name: "Provider Beta" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "Provider Alpha" }));
+		// 模型下拉只剩 Alpha 组；点 claude-3 → 只选 claude-3（pk 13）。
 		fireEvent.click(screen.getByRole("button", { name: "按供应商模型过滤" }));
-		// 模型「全部」态全勾选：反选 claude-3 → 剩 gpt-4o（pk 11）。
 		fireEvent.click(screen.getByRole("checkbox", { name: "claude-3" }));
 
-		// 换选 Provider Beta：先取消 Provider Alpha（回到「全部」），再取消一次（只剩 Beta）。
+		// 换选供应商：供应商弹层取消 Provider Alpha → 回「全部」，再点 Provider Beta → 只选 Beta。
 		fireEvent.click(screen.getByRole("button", { name: "按供应商过滤" }));
 		fireEvent.click(screen.getByRole("checkbox", { name: "Provider Alpha" }));
-		fireEvent.click(screen.getByRole("checkbox", { name: "Provider Alpha" }));
+		fireEvent.click(screen.getByRole("checkbox", { name: "Provider Beta" }));
+		expect(screen.getByRole("button", { name: "按供应商过滤" })).toHaveTextContent("Provider Beta");
 
+		// 模型选项只剩 Beta 的 gpt-4o（pk 10），失效的 claude-3 被剔除，模型回到全部。
+		await waitFor(() =>
+			expect(screen.queryByRole("checkbox", { name: "claude-3" })).not.toBeInTheDocument(),
+		);
 		const calls = mocks.useRequestLogs.mock.calls;
-		// 模型选项变为 Beta 的 gpt-4o（pk 10），已选 pk 11 被剔除。
 		expect(calls[calls.length - 1]?.[0]?.modelId).toBeUndefined();
 		expect(screen.getByRole("button", { name: "按供应商模型过滤" })).toHaveTextContent("全部");
 	});

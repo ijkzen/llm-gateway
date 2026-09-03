@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { cn, middleEllipsis } from "@/lib/utils";
 import { ChevronDown, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -29,14 +29,12 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 	const [keyword, setKeyword] = useState("");
 
 	const allValues = useMemo(() => options.map((o) => o.value), [options]);
-	// 空选择 = 全部：内部按「全选」解释，取消任一项即退化为显式子集。
-	const effective = useMemo(
-		() => (selected.length === 0 ? new Set(allValues) : new Set(selected)),
-		[allValues, selected],
-	);
-	const checkedCount = allValues.filter((v) => effective.has(v)).length;
-	const allChecked = options.length > 0 && checkedCount === options.length;
-	const someChecked = checkedCount > 0 && !allChecked;
+	// 空选择 = 全部（隐式全选）。selected 为空时视为勾满全部，UI 上只有「全选」为勾选态，
+	// 子条目全部显示未勾选；直接点某子条目即从「全部」退化为仅选该项。
+	const isAll = selected.length === 0;
+	const selectedSet = useMemo(() => new Set(selected), [selected]);
+	const allChecked = isAll || (options.length > 0 && selectedSet.size === options.length);
+	const someChecked = !isAll && !allChecked && selectedSet.size > 0;
 
 	const commit = (next: Set<string>) => {
 		const kept = allValues.filter((v) => next.has(v));
@@ -44,7 +42,12 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 	};
 
 	const toggle = (value: string) => {
-		const next = new Set(effective);
+		if (isAll) {
+			// 全选态点击子条目：退化为仅选该项（不等同于「除它以外全部」）。
+			onChange([value]);
+			return;
+		}
+		const next = new Set(selectedSet);
 		if (next.has(value)) {
 			next.delete(value);
 		} else {
@@ -118,7 +121,7 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 					<Checkbox
 						id="multi-select-select-all"
 						checked={allChecked ? true : someChecked ? "indeterminate" : false}
-						onCheckedChange={() => commit(new Set(allValues))}
+						onCheckedChange={() => onChange([])}
 						aria-label={t("multiSelect.selectAll")}
 					/>
 					{t("multiSelect.selectAll")}
@@ -141,11 +144,11 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 								<Checkbox
 									id={`multi-select-${row.option.value}`}
 									aria-label={row.option.label}
-									checked={effective.has(row.option.value)}
+									checked={isAll ? false : selectedSet.has(row.option.value)}
 									onCheckedChange={() => toggle(row.option.value)}
 								/>
 								<span className="truncate" title={row.option.label}>
-									{row.option.label}
+									{middleEllipsis(row.option.label, 18)}
 								</span>
 							</label>
 						),
