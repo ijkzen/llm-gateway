@@ -52,14 +52,14 @@ async fn send(
     (status, value)
 }
 
-fn create_body(name: &str, base_url: &str, extra: &str) -> String {
+fn create_body_with_billing(name: &str, base_url: &str, extra: &str, billing_mode: i32) -> String {
     serde_json::json!({
         "name": name,
         "enable": true,
         "baseUrl": base_url,
         "apiKey": "sk-usage-test",
         "protocolType": 0,
-        "billingMode": 0,
+        "billingMode": billing_mode,
         "customHeader": "{}",
         "extra": extra,
     })
@@ -67,13 +67,18 @@ fn create_body(name: &str, base_url: &str, extra: &str) -> String {
 }
 
 async fn create_provider(app: &axum::Router, name: &str, base_url: &str, extra: &str) -> i64 {
-    let (status, body) = send(
-        app,
-        "POST",
-        "/api/providers",
-        Some(&create_body(name, base_url, extra)),
-    )
-    .await;
+    create_provider_with_billing(app, name, base_url, extra, 0).await
+}
+
+async fn create_provider_with_billing(
+    app: &axum::Router,
+    name: &str,
+    base_url: &str,
+    extra: &str,
+    billing_mode: i32,
+) -> i64 {
+    let body = create_body_with_billing(name, base_url, extra, billing_mode);
+    let (status, body) = send(app, "POST", "/api/providers", Some(&body)).await;
     assert_eq!(status, StatusCode::CREATED, "创建失败：{body}");
     body["data"]["id"].as_i64().unwrap()
 }
@@ -100,6 +105,242 @@ async fn spawn_mock() -> (String, Arc<AtomicUsize>) {
         axum::serve(listener, app).await.unwrap();
     });
     (format!("http://{addr}"), counter)
+}
+
+#[derive(Clone)]
+struct KrillMockState {
+    subscription_replies: Arc<std::sync::Mutex<std::collections::VecDeque<(StatusCode, Value)>>>,
+    subscription_hits: Arc<AtomicUsize>,
+    login_hits: Arc<AtomicUsize>,
+    auth_headers: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+}
+
+async fn spawn_krill_mock(
+    subscription_replies: Vec<(StatusCode, Value)>,
+    login_reply: (StatusCode, Value),
+) -> (String, KrillMockState) {
+    use axum::http::HeaderMap;
+    use axum::response::IntoResponse;
+    use axum::routing::{get, post};
+
+    let state = KrillMockState {
+        subscription_replies: Arc::new(std::sync::Mutex::new(subscription_replies.into())),
+        subscription_hits: Arc::new(AtomicUsize::new(0)),
+        login_hits: Arc::new(AtomicUsize::new(0)),
+        auth_headers: Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let subscription_state = state.clone();
+    let login_state = state.clone();
+    let app = axum::Router::new()
+        .route(
+            "/api/subscription",
+            get(move |headers: HeaderMap| {
+                let state = subscription_state.clone();
+                async move {
+                    state.subscription_hits.fetch_add(1, Ordering::SeqCst);
+                    state.auth_headers.lock().unwrap().push(
+                        headers
+                            .get("authorization")
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_string),
+                    );
+                    let (status, body) = state
+                        .subscription_replies
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("unexpected subscription request");
+                    (status, Json(body)).into_response()
+                }
+            }),
+        )
+        .route(
+            "/api/auth/login",
+            post(move || {
+                let state = login_state.clone();
+                let reply = login_reply.clone();
+                async move {
+                    state.login_hits.fetch_add(1, Ordering::SeqCst);
+                    (reply.0, Json(reply.1)).into_response()
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{addr}"), state)
+}
+
+fn krill_balance_reply() -> Value {
+    serde_json::json!({
+        "success": true,
+        "code": 0,
+        "data": {
+            "subscriptions": [],
+            "summary": {},
+            "credit_balance_usd": "24.5",
+            "welfare_balance_usd": "0.5",
+            "request_count_quota": null
+        }
+    })
+}
+
+fn krill_login_reply() -> (StatusCode, Value) {
+    (
+        StatusCode::OK,
+        serde_json::json!({
+            "success": true,
+            "code": 0,
+            "data": { "token": "jwt-new", "user": {} }
+        }),
+    )
+}
+
+#[tokio::test]
+async fn krill_valid_jwt_queries_balance_without_login() {
+    let (mock_base, mock) = spawn_krill_mock(
+        vec![(StatusCode::OK, krill_balance_reply())],
+        krill_login_reply(),
+    )
+    .await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let app = setup_app().await;
+        let id = create_provider(
+            &app,
+            "Krill-按量",
+            "https://api-slb.krill-ai.net/v1",
+            r#"{"usage":true,"usage_type":0,"email":"u@example.com","password":"pw","jwt":"jwt-old"}"#,
+        )
+        .await;
+
+        let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::OK, "查询失败：{body}");
+        assert_eq!(body["data"]["kind"], "balance");
+        assert_eq!(body["data"]["balances"][0]["amount"], 25.0);
+        assert_eq!(mock.subscription_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(mock.login_hits.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            mock.auth_headers.lock().unwrap().as_slice(),
+            &[Some("Bearer jwt-old".to_string())]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn krill_missing_jwt_logs_in_and_writes_encrypted_token() {
+    use llm_gateway::crypto::ENCRYPTION_KEY_ENV;
+
+    let (mock_base, mock) = spawn_krill_mock(
+        vec![(StatusCode::OK, krill_balance_reply())],
+        krill_login_reply(),
+    )
+    .await;
+    temp_env::async_with_vars(
+        [
+            (OVERRIDE_ENV, Some(mock_base.as_str())),
+            (ENCRYPTION_KEY_ENV, Some("krill-test-key")),
+        ],
+        async {
+            let (app, db) = setup_app_with_db().await;
+            let id = create_provider(
+                &app,
+                "Krill-首次登录",
+                "https://api.krill-ai.net/v1",
+                r#"{"usage":true,"usage_type":0,"email":"u@example.com","password":"pw","jwt":"","keep":"value"}"#,
+            )
+            .await;
+
+            let (status, body) =
+                send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+            assert_eq!(status, StatusCode::OK, "查询失败：{body}");
+            assert_eq!(mock.login_hits.load(Ordering::SeqCst), 1);
+            assert_eq!(mock.subscription_hits.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                mock.auth_headers.lock().unwrap().as_slice(),
+                &[Some("Bearer jwt-new".to_string())]
+            );
+
+            let row = provider::Entity::find_by_id(id as i32)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(row.extra.starts_with("enc:v1:"));
+            let extra: Value =
+                serde_json::from_str(&llm_gateway::crypto::decrypt(&row.extra).unwrap()).unwrap();
+            assert_eq!(extra["jwt"], "jwt-new");
+            assert_eq!(extra["password"], "pw");
+            assert_eq!(extra["keep"], "value");
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn krill_auth_failure_logs_in_once_and_retries_once() {
+    let auth_error = serde_json::json!({ "success": false, "code": 401, "message": "expired" });
+    let (mock_base, mock) = spawn_krill_mock(
+        vec![
+            (StatusCode::OK, auth_error),
+            (StatusCode::OK, krill_balance_reply()),
+        ],
+        krill_login_reply(),
+    )
+    .await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let app = setup_app().await;
+        let id = create_provider(
+            &app,
+            "Krill-JWT过期",
+            "https://api.cdn-krill-ai.com/v1",
+            r#"{"usage":true,"usage_type":0,"email":"u@example.com","password":"pw","jwt":"jwt-old"}"#,
+        )
+        .await;
+
+        let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::OK, "查询失败：{body}");
+        assert_eq!(mock.login_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(mock.subscription_hits.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            mock.auth_headers.lock().unwrap().as_slice(),
+            &[
+                Some("Bearer jwt-old".to_string()),
+                Some("Bearer jwt-new".to_string())
+            ]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn krill_upstream_error_does_not_login() {
+    let (mock_base, mock) = spawn_krill_mock(
+        vec![(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "message": "down" }),
+        )],
+        krill_login_reply(),
+    )
+    .await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let app = setup_app().await;
+        let id = create_provider(
+            &app,
+            "Krill-上游故障",
+            "https://api-slb.krill-ai.net/v1",
+            r#"{"usage":true,"usage_type":0,"email":"u@example.com","password":"pw","jwt":"jwt-old"}"#,
+        )
+        .await;
+
+        let (status, _) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(mock.subscription_hits.load(Ordering::SeqCst), 1);
+        assert_eq!(mock.login_hits.load(Ordering::SeqCst), 0);
+    })
+    .await;
 }
 
 #[tokio::test]

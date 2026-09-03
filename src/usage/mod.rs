@@ -97,7 +97,8 @@ pub async fn query_provider_usage(
         extra: &extra,
     };
     let host = crate::provider_template::host_of(&model.base_url).ok_or(UsageError::Unsupported)?;
-    let fetcher = fetcher_for(&host, &path_of(&model.base_url)).ok_or(UsageError::Unsupported)?;
+    let path = path_of(&model.base_url);
+    let krill = crate::provider_template::is_krill_host(&host);
 
     let http = if model.proxy_enabled && !model.proxy_addr.trim().is_empty() {
         http::UsageHttp::with_proxy(Some(&model.proxy_addr))
@@ -105,12 +106,29 @@ pub async fn query_provider_usage(
         http::UsageHttp::new()
     };
     let mut rotated_refresh_token = None;
-    let output = fetcher
-        .fetch(&http, &creds, &mut rotated_refresh_token)
-        .await?;
+    let output = if krill {
+        let first_attempt = match creds.extra_str("jwt") {
+            Some(jwt) => fetchers::krill::fetch_subscription(&http, jwt, model.billing_mode).await,
+            None => Err(UsageError::Auth),
+        };
+        match first_attempt {
+            Ok(output) => output,
+            Err(UsageError::Auth) => {
+                let jwt = fetchers::krill::login(&http, &creds).await?;
+                write_back_extra_key(db, provider_id, "jwt", &jwt).await?;
+                fetchers::krill::fetch_subscription(&http, &jwt, model.billing_mode).await?
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        let fetcher = fetcher_for(&host, &path).ok_or(UsageError::Unsupported)?;
+        fetcher
+            .fetch(&http, &creds, &mut rotated_refresh_token)
+            .await?
+    };
     // 轮换出的新 refresh_token 立即写回；写回失败会作废凭据链，必须报错。
     if let Some(token) = rotated_refresh_token {
-        write_back_refresh_token(db, provider_id, &token).await?;
+        write_back_extra_key(db, provider_id, "refresh_token", &token).await?;
     }
     let data = match output {
         FetchOutput::Quota { plan, windows } => UsageData {
@@ -134,29 +152,31 @@ pub async fn query_provider_usage(
     Ok(data)
 }
 
-/// 把轮换出的新 refresh_token 写回 provider extra（只改该键，其余保留）。
+/// 把动态凭据（refresh_token / jwt 等）写回 provider extra（只改该键，其余保留）。
 /// 写回时重读最新行再合并，缩小与并发 extra 编辑之间的丢更新窗口。
 /// 存储值无法解密（如密钥变更）时返回 Err，避免在密文上解析失败后
-/// 只留下 refresh_token 而清空其余凭据。
-async fn write_back_refresh_token(
+/// 只留下该键而清空其余凭据。
+async fn write_back_extra_key(
     db: &DatabaseConnection,
     provider_id: i32,
-    token: &str,
+    key: &str,
+    value: &str,
 ) -> Result<(), UsageError> {
     let latest = provider::Entity::find_by_id(provider_id)
         .one(db)
         .await
-        .map_err(|e| UsageError::Network(format!("写回 refresh_token 失败：{e}")))?
+        .map_err(|e| UsageError::Network(format!("写回 {key} 失败：{e}")))?
         .ok_or(UsageError::Auth)?;
     let extra_plain = crate::crypto::decrypt(&latest.extra).map_err(|_| UsageError::Auth)?;
     let mut map = match serde_json::from_str::<Value>(&extra_plain) {
         Ok(Value::Object(map)) => map,
-        _ => Default::default(),
+        _ => {
+            return Err(UsageError::Parse(
+                "写回动态凭据失败：provider extra 不是合法 JSON 对象".to_string(),
+            ));
+        }
     };
-    map.insert(
-        "refresh_token".to_string(),
-        Value::String(token.to_string()),
-    );
+    map.insert(key.to_string(), Value::String(value.to_string()));
     let am = provider::ActiveModel {
         id: Set(provider_id),
         extra: Set(crate::crypto::encrypt(&Value::Object(map).to_string())),
@@ -164,7 +184,7 @@ async fn write_back_refresh_token(
     };
     am.update(db)
         .await
-        .map_err(|e| UsageError::Network(format!("写回 refresh_token 失败：{e}")))?;
+        .map_err(|e| UsageError::Network(format!("写回 {key} 失败：{e}")))?;
     Ok(())
 }
 
@@ -449,7 +469,7 @@ mod tests {
             .await
             .unwrap();
 
-            write_back_refresh_token(&db, p.id, "new-token")
+            write_back_extra_key(&db, p.id, "refresh_token", "new-token")
                 .await
                 .unwrap();
 

@@ -53,8 +53,73 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
         }
     }
 
+    backfill_krill_provider_extra(db).await?;
     tracing::info!("Provider templates seeded: {inserted} inserted, {updated} updated");
     Ok(inserted + updated)
+}
+
+pub(crate) fn is_krill_host(host: &str) -> bool {
+    matches!(
+        host,
+        "api-slb.krill-ai.net" | "api.krill-ai.net" | "api.cdn-krill-ai.com"
+    )
+}
+
+/// 每次启动幂等对齐历史 Krill Provider 的凭据结构与用量类型。
+async fn backfill_krill_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let providers = crate::entity::provider::Entity::find().all(db).await?;
+    for provider in providers {
+        let Some(host) = host_of(&provider.base_url) else {
+            continue;
+        };
+        if !is_krill_host(&host) {
+            continue;
+        }
+
+        let plain = match crypto::decrypt(&provider.extra) {
+            Ok(plain) => plain,
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = provider.id,
+                    "回填 Krill provider extra 失败：存储值无法解密：{error}"
+                );
+                continue;
+            }
+        };
+        let mut extra = match serde_json::from_str::<serde_json::Value>(&plain) {
+            Ok(serde_json::Value::Object(extra)) => extra,
+            Ok(_) => {
+                tracing::warn!(
+                    provider_id = provider.id,
+                    "回填 Krill provider extra 失败：不是 JSON 对象"
+                );
+                continue;
+            }
+            Err(error) => {
+                tracing::warn!(
+                    provider_id = provider.id,
+                    "回填 Krill provider extra 失败：不是合法 JSON 对象：{error}"
+                );
+                continue;
+            }
+        };
+        let before = extra.clone();
+        for key in ["email", "password", "jwt"] {
+            extra.entry(key.to_string()).or_insert_with(|| "".into());
+        }
+        extra.entry("usage".to_string()).or_insert(true.into());
+        extra.insert("usage_type".to_string(), provider.billing_mode.into());
+        if extra == before {
+            continue;
+        }
+
+        let mut active: crate::entity::provider::ActiveModel = provider.into();
+        active.extra = Set(crypto::encrypt(
+            &serde_json::Value::Object(extra).to_string(),
+        ));
+        active.update(db).await?;
+    }
+    Ok(())
 }
 
 /// 模板首次插入时，向 base_url host 匹配的既有 provider 的 extra 补齐

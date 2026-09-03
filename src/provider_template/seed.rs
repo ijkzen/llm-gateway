@@ -532,6 +532,20 @@ pub const TEMPLATES: &[Template] = &[
         extra: "{}",
     },
     Template {
+        name: "Krill（按量付费）",
+        base_url: "https://api-slb.krill-ai.net/v1",
+        protocol_type: 0,
+        billing_mode: 0,
+        extra: "{\"email\": \"\", \"password\": \"\", \"jwt\": \"\", \"usage\": true, \"usage_type\": 0}",
+    },
+    Template {
+        name: "Krill（订阅制）",
+        base_url: "https://api-slb.krill-ai.net/v1",
+        protocol_type: 0,
+        billing_mode: 1,
+        extra: "{\"email\": \"\", \"password\": \"\", \"jwt\": \"\", \"usage\": true, \"usage_type\": 1}",
+    },
+    Template {
         name: "Kimi For Coding",
         base_url: "https://api.kimi.com/coding/v1",
         protocol_type: 2,

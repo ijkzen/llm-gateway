@@ -15,8 +15,8 @@ pub struct UsageData {
     /// 套餐档位（如智谱 level、ZenMux tier），无则缺省。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
-    /// 订阅制窗口用量。固定输出 5h/周/月 三个元素，
-    /// 厂商不提供的窗口 `available=false`（如 Kimi For Coding 无月窗）。
+    /// 订阅制窗口用量。通用 fetcher 固定输出 5h/周/月三个元素，
+    /// 厂商可额外产出 Daily 或同类多窗口；未提供的固定窗口 `available=false`。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<QuotaWindow>,
     /// 按量付费余额条目（可多币种/多账户）。
@@ -35,6 +35,7 @@ pub enum UsageKind {
 #[serde(rename_all = "snake_case")]
 pub enum WindowKind {
     FiveHour,
+    Daily,
     Weekly,
     Monthly,
 }
@@ -230,7 +231,7 @@ impl UsageData {
     }
 }
 
-/// 生成 5h/周/月 三个不可用窗口，fetcher 按需替换其中元素。
+/// 生成 5h/周/月三个兼容槽位，fetcher 按需替换其中元素。
 pub fn empty_windows() -> Vec<QuotaWindow> {
     vec![
         QuotaWindow::unavailable(WindowKind::FiveHour),
@@ -239,7 +240,7 @@ pub fn empty_windows() -> Vec<QuotaWindow> {
     ]
 }
 
-/// 将窗口写入三窗数组（按 window 种类定位替换）。
+/// 按 window 种类定位并替换已有槽位。
 pub fn set_window(windows: &mut [QuotaWindow], w: QuotaWindow) {
     if let Some(slot) = windows.iter_mut().find(|slot| slot.window == w.window) {
         *slot = w;
@@ -267,6 +268,9 @@ fn translate_balance_label(label: &str, lang: Lang) -> &str {
     match label {
         "余额" => "Balance",
         "可用余额" => "Available Balance",
+        "可用总余额" => "Total Available Balance",
+        "钱包余额" => "Wallet Balance",
+        "福利余额" => "Welfare Balance",
         "充值余额" => "Topped-up Balance",
         "赠送余额" => "Granted Balance",
         "现金余额" => "Cash Balance",

@@ -2,7 +2,7 @@ import { type ApiResponse, api, unwrap } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 
 export interface UsageWindow {
-	window: "five_hour" | "weekly" | "monthly";
+	window: "five_hour" | "daily" | "weekly" | "monthly";
 	available: boolean;
 	usedPercent?: number;
 	remainingPercent?: number;
