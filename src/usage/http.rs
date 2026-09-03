@@ -27,11 +27,25 @@ pub struct HttpReply {
 
 impl UsageHttp {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
+        Self::with_proxy(None)
+    }
+
+    /// 指定 HTTP 代理（`http://host:port`，无认证）创建客户端。
+    ///
+    /// 供 provider 级代理透传使用：用量抓取若也需经网络代理访问厂商端点，
+    /// 调用方把 `provider.proxy_addr` 传进来。
+    pub fn with_proxy(proxy_addr: Option<&str>) -> Self {
+        let mut builder = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-            .user_agent(USER_AGENT)
-            .build()
-            .expect("reqwest client build is infallible");
+            .user_agent(USER_AGENT);
+        if let Some(addr) = proxy_addr.map(str::trim).filter(|a| !a.is_empty()) {
+            // 地址已由 provider 校验过（http:// 开头、无认证）；解析失败按无代理降级。
+            // 用 Proxy::all：Proxy::http 只拦截 http:// URL，https 供应商会直连。
+            if let Ok(proxy) = reqwest::Proxy::all(addr) {
+                builder = builder.proxy(proxy);
+            }
+        }
+        let client = builder.build().expect("reqwest client build is infallible");
         let base_override = std::env::var(OVERRIDE_ENV)
             .ok()
             .filter(|v| !v.trim().is_empty());

@@ -516,3 +516,209 @@ async fn test_delete_provider_model_cascades_virtual_model_items() {
     let vm = vms.iter().find(|v| v["displayId"] == "vm-gpt-4o").unwrap();
     assert_eq!(vm["items"].as_array().unwrap().len(), 0);
 }
+
+// ─── 模型列表刷新走 provider 网络代理 ──────────────────────────────────────────
+// 场景：provider 开启网络代理（proxyEnabled + proxyAddr）时，「刷新模型」请求
+// 应经 CONNECT 代理转发到供应商 Models 接口，而不是直连。
+
+/// CONNECT/正向代理 mock：收到 CONNECT（隧道）或 `METHOD http://host/path`
+/// （http 正向代理，reqwest 对 http 目标走此形式）都转发到目标；统计请求次数。
+async fn spawn_connect_proxy() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let connect_count = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&connect_count);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut client, _) = match listener.accept().await {
+                Ok(accepted) => accepted,
+                Err(_) => break,
+            };
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut buf = [0u8; 8192];
+                let mut len = 0usize;
+                loop {
+                    let Ok(n) = client.read(&mut buf[len..]).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    len += n;
+                    if buf[..len].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let head = String::from_utf8_lossy(&buf[..len]);
+                let Some(first_line) = head.lines().next() else {
+                    return;
+                };
+                // CONNECT host:port → 隧道。
+                if let Some(target) = first_line
+                    .strip_prefix("CONNECT ")
+                    .and_then(|l| l.split_whitespace().next())
+                {
+                    let Ok(mut target_stream) = tokio::net::TcpStream::connect(target).await else {
+                        return;
+                    };
+                    let _ = client
+                        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                        .await;
+                    let (mut cr, mut cw) = client.split();
+                    let (mut tr, mut tw) = target_stream.split();
+                    let _ = tokio::join!(
+                        tokio::io::copy(&mut cr, &mut tw),
+                        tokio::io::copy(&mut tr, &mut cw)
+                    );
+                    return;
+                }
+                // 正向代理：`METHOD http://host/path HTTP/1.1` → 转发。
+                let Some((method, rest)) = first_line.split_once(' ') else {
+                    return;
+                };
+                let Some((abs_url, version)) = rest.rsplit_once(' ') else {
+                    return;
+                };
+                let Some(parsed) = abs_url.strip_prefix("http://") else {
+                    return;
+                };
+                let Some((host, path)) = parsed.split_once('/') else {
+                    return;
+                };
+                let Ok(mut target_stream) = tokio::net::TcpStream::connect(host).await else {
+                    return;
+                };
+                let rewritten = format!("{method} /{path} {version}\r\n");
+                let tail = head.split_once("\r\n").map(|(_, t)| t).unwrap_or("");
+                let mut headers = String::new();
+                let mut has_host = false;
+                for line in tail.lines() {
+                    if line.to_ascii_lowercase().starts_with("host:") {
+                        has_host = true;
+                    }
+                    headers.push_str(line);
+                    headers.push_str("\r\n");
+                }
+                let _ = target_stream.write_all(rewritten.as_bytes()).await;
+                if !has_host {
+                    let _ = target_stream
+                        .write_all(format!("Host: {host}\r\n").as_bytes())
+                        .await;
+                }
+                let _ = target_stream.write_all(headers.as_bytes()).await;
+                let _ = target_stream.write_all(b"\r\n").await;
+                let (mut cr, mut cw) = client.split();
+                let (mut tr, mut tw) = target_stream.split();
+                let _ = tokio::join!(
+                    tokio::io::copy(&mut cr, &mut tw),
+                    tokio::io::copy(&mut tr, &mut cw)
+                );
+            });
+        }
+    });
+    (format!("http://{addr}"), connect_count)
+}
+
+/// 目标 mock：返回 OpenAI 风格 models 列表。
+async fn spawn_models_mock() -> String {
+    let app = axum::Router::new().route(
+        "/v1/models",
+        axum::routing::get(|| async {
+            axum::Json(json!({
+                "object": "list",
+                "data": [
+                    { "id": "gpt-4o", "object": "model" },
+                    { "id": "gpt-4o-mini", "object": "model" },
+                ]
+            }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
+/// 开启网络代理的 provider，「刷新模型」请求应经 CONNECT 代理到达目标。
+#[tokio::test]
+async fn test_refresh_models_goes_through_provider_proxy() {
+    let target = spawn_models_mock().await;
+    let (proxy_addr, connect_counter) = spawn_connect_proxy().await;
+    let (app, db) = setup_app().await;
+
+    let active = provider::ActiveModel {
+        name: Set(format!(
+            "proxy-refresh-{}",
+            chrono::Utc::now().timestamp_millis()
+        )),
+        enable: Set(true),
+        base_url: Set(format!("{target}/v1")),
+        api_key: Set(crypto::encrypt("sk-test")),
+        custom_header: Set("{}".to_string()),
+        protocol_type: Set(0),
+        billing_mode: Set(0),
+        extra: Set("{}".to_string()),
+        proxy_enabled: Set(true),
+        proxy_addr: Set(proxy_addr),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    let provider_id = active.insert(&db).await.unwrap().id;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/refresh"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "刷新失败：{body}");
+    let ids: Vec<String> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["providerModelId"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        ids.contains(&"gpt-4o".to_string()),
+        "应解析到 gpt-4o: {ids:?}"
+    );
+    assert_eq!(
+        connect_counter.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "模型刷新应经 CONNECT 代理一次"
+    );
+}
+
+/// 未开启代理的 provider，「刷新模型」仍直连成功。
+#[tokio::test]
+async fn test_refresh_models_direct_without_proxy() {
+    let target = spawn_models_mock().await;
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "direct-refresh").await;
+    // 把 seed 的 base_url 指向本地 mock（seed 默认 api.example.com 不可达）。
+    let row = provider::Entity::find_by_id(provider_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: provider::ActiveModel = row.into();
+    active.base_url = Set(format!("{target}/v1"));
+    active.update(&db).await.unwrap();
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/refresh"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "直连刷新失败：{body}");
+}

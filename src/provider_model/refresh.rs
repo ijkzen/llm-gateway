@@ -36,16 +36,23 @@ pub fn build_models_url(base_url: &str, protocol_type: i32) -> String {
 /// 拉取远端模型 ID 列表。
 ///
 /// `api_key` 为调用方解密后的明文；`custom_header` 为 JSON 对象字符串，
-/// 展开为额外请求头。错误消息为中文、可直接展示给用户。
+/// 展开为额外请求头；`proxy_addr` 为可选 HTTP 代理（`http://host:port`，无认证），
+/// 供应商开启网络代理时传入。错误消息为中文、可直接展示给用户。
 pub async fn fetch_remote_model_ids(
     base_url: &str,
     protocol_type: i32,
     api_key: &str,
     custom_header: &str,
+    proxy_addr: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let url = build_models_url(base_url, protocol_type);
-    let client = reqwest::Client::builder()
-        .timeout(REQUEST_TIMEOUT)
+    let mut builder = reqwest::Client::builder().timeout(REQUEST_TIMEOUT);
+    if let Some(addr) = proxy_addr.map(str::trim).filter(|a| !a.is_empty())
+        && let Ok(proxy) = reqwest::Proxy::all(addr)
+    {
+        builder = builder.proxy(proxy);
+    }
+    let client = builder
         .build()
         .map_err(|e| format!("HTTP 客户端初始化失败：{e}"))?;
 

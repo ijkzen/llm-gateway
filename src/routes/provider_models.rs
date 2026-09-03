@@ -521,11 +521,18 @@ async fn refresh_provider_models(
         }
     };
 
+    let proxy_addr =
+        if provider_model_data.proxy_enabled && !provider_model_data.proxy_addr.trim().is_empty() {
+            Some(provider_model_data.proxy_addr.as_str())
+        } else {
+            None
+        };
     let remote_ids = match refresh::fetch_remote_model_ids(
         &provider_model_data.base_url,
         provider_model_data.protocol_type,
         &api_key,
         &provider_model_data.custom_header,
+        proxy_addr,
     )
     .await
     {

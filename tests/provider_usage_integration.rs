@@ -476,3 +476,177 @@ async fn sensenova_invalid_grant_maps_to_auth_error() {
     })
     .await;
 }
+
+// ─── 用量抓取走 provider 网络代理 ─────────────────────────────────────────────
+// 场景：provider 开启网络代理（proxyEnabled + proxyAddr）。用量抓取应经
+// 代理转发到厂商端点（与主转发链路一致），而不是直连。
+//
+// 验证手法：mock 一个代理服务器（收到请求后桥接到目标），同时用 OVERRIDE_ENV
+// 把厂商 URL 重写到本地目标 mock。若抓取真走了代理，代理收到请求；若代码没生效
+// （直连），目标 mock 也能通但代理计数为 0。
+//
+// 注意：reqwest 对 http:// 目标走「正向代理」（请求行带完整 URL），对 https://
+// 才走 CONNECT 隧道。OVERWRITE 把 URL 变成 http://127.0.0.1:<port>，因此这里
+// 代理 mock 需要支持正向代理形式，而不是只认 CONNECT。
+async fn spawn_forward_proxy_usage() -> (String, Arc<AtomicUsize>) {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let request_count = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&request_count);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (mut client, _) = match listener.accept().await {
+                Ok(accepted) => accepted,
+                Err(_) => break,
+            };
+            count.fetch_add(1, AtomicOrdering::SeqCst);
+            tokio::spawn(async move {
+                // 读请求头（到 \r\n\r\n）。
+                let mut buf = [0u8; 8192];
+                let mut len = 0usize;
+                loop {
+                    let Ok(n) = client.read(&mut buf[len..]).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        return;
+                    }
+                    len += n;
+                    if buf[..len].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let head = String::from_utf8_lossy(&buf[..len]);
+                let Some(first_line) = head.lines().next() else {
+                    return;
+                };
+                // CONNECT host:port → 隧道模式。
+                if let Some(target) = first_line
+                    .strip_prefix("CONNECT ")
+                    .and_then(|l| l.split_whitespace().next())
+                {
+                    let Ok(mut target_stream) = tokio::net::TcpStream::connect(target).await else {
+                        return;
+                    };
+                    let _ = client
+                        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                        .await;
+                    let (mut cr, mut cw) = client.split();
+                    let (mut tr, mut tw) = target_stream.split();
+                    let _ = tokio::join!(
+                        tokio::io::copy(&mut cr, &mut tw),
+                        tokio::io::copy(&mut tr, &mut cw)
+                    );
+                    return;
+                }
+                // 正向代理：请求行是 `METHOD http://host/path HTTP/1.1`，转发给目标。
+                let Some((method, rest)) = first_line.split_once(' ') else {
+                    return;
+                };
+                let Some((abs_url, version)) = rest.rsplit_once(' ') else {
+                    return;
+                };
+                let Some(parsed) = abs_url.strip_prefix("http://") else {
+                    return;
+                };
+                let Some((host, path)) = parsed.split_once('/') else {
+                    return;
+                };
+                let Ok(mut target_stream) = tokio::net::TcpStream::connect(host).await else {
+                    return;
+                };
+                // 重写请求行为 path-only + Host 头，转发。
+                let rewritten = format!("{method} /{path} {version}\r\n");
+                let tail = head.split_once("\r\n").map(|(_, t)| t).unwrap_or("");
+                let mut headers = String::new();
+                let mut has_host = false;
+                for line in tail.lines() {
+                    if line.to_ascii_lowercase().starts_with("host:") {
+                        has_host = true;
+                    }
+                    headers.push_str(line);
+                    headers.push_str("\r\n");
+                }
+                let _ = target_stream.write_all(rewritten.as_bytes()).await;
+                if !has_host {
+                    let _ = target_stream
+                        .write_all(format!("Host: {host}\r\n").as_bytes())
+                        .await;
+                }
+                let _ = target_stream.write_all(headers.as_bytes()).await;
+                let _ = target_stream.write_all(b"\r\n").await;
+                let (mut cr, mut cw) = client.split();
+                let (mut tr, mut tw) = target_stream.split();
+                let _ = tokio::join!(
+                    tokio::io::copy(&mut cr, &mut tw),
+                    tokio::io::copy(&mut tr, &mut cw)
+                );
+            });
+        }
+    });
+    (format!("http://{addr}"), request_count)
+}
+
+/// provider 开启网络代理时，用量抓取经代理转发。
+#[tokio::test]
+async fn usage_goes_through_provider_proxy() {
+    let (mock_base, target_counter) = spawn_mock().await;
+    let (proxy_addr, connect_counter) = spawn_forward_proxy_usage().await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let app = setup_app().await;
+        let body = serde_json::json!({
+            "name": "DeepSeek-代理",
+            "enable": true,
+            "baseUrl": "https://api.deepseek.com",
+            "apiKey": "sk-usage-proxy",
+            "protocolType": 0,
+            "billingMode": 0,
+            "customHeader": "{}",
+            "extra": r#"{"usage": true, "usage_type": 0}"#,
+            "proxyEnabled": true,
+            "proxyAddr": proxy_addr,
+        })
+        .to_string();
+        let (status, body) = send(&app, "POST", "/api/providers", Some(&body)).await;
+        assert_eq!(status, StatusCode::CREATED, "创建失败：{body}");
+        let id = body["data"]["id"].as_i64().unwrap();
+
+        let (status, resp) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::OK, "查询失败：{resp}");
+        assert_eq!(resp["data"]["kind"], "balance");
+        assert_eq!(
+            connect_counter.load(Ordering::SeqCst),
+            1,
+            "用量抓取应经代理一次"
+        );
+        assert_eq!(
+            target_counter.load(Ordering::SeqCst),
+            1,
+            "目标 mock 应收到 1 次请求"
+        );
+    })
+    .await;
+}
+
+/// provider 未开启代理时用量抓取仍直连（不引入代理）。
+#[tokio::test]
+async fn usage_direct_without_proxy_still_works() {
+    let (mock_base, target_counter) = spawn_mock().await;
+    temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
+        let app = setup_app().await;
+        let id = create_provider(
+            &app,
+            "DeepSeek-直连",
+            "https://api.deepseek.com",
+            r#"{"usage": true, "usage_type": 0}"#,
+        )
+        .await;
+        let (status, body) = send(&app, "GET", &format!("/api/providers/{id}/usage"), None).await;
+        assert_eq!(status, StatusCode::OK, "查询失败：{body}");
+        assert_eq!(target_counter.load(Ordering::SeqCst), 1);
+    })
+    .await;
+}

@@ -99,7 +99,11 @@ pub async fn query_provider_usage(
     let host = crate::provider_template::host_of(&model.base_url).ok_or(UsageError::Unsupported)?;
     let fetcher = fetcher_for(&host, &path_of(&model.base_url)).ok_or(UsageError::Unsupported)?;
 
-    let http = http::UsageHttp::new();
+    let http = if model.proxy_enabled && !model.proxy_addr.trim().is_empty() {
+        http::UsageHttp::with_proxy(Some(&model.proxy_addr))
+    } else {
+        http::UsageHttp::new()
+    };
     let mut rotated_refresh_token = None;
     let output = fetcher
         .fetch(&http, &creds, &mut rotated_refresh_token)
