@@ -1,4 +1,5 @@
 import { BILLING_MODES, PROTOCOL_TYPES } from "@/components/providers/ProtocolIcon";
+import { ProxyConfigFields } from "@/components/providers/ProxyConfigFields";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -11,7 +12,6 @@ import {
 import {
 	Form,
 	FormControl,
-	FormDescription,
 	FormField,
 	FormItem,
 	FormLabel,
@@ -426,34 +426,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 						/>
 
 						{/* 网络代理：仅当启用时显示地址输入。 */}
-						<FormField
-							control={form.control}
-							name="proxyEnabled"
-							render={({ field }) => (
-								<FormItem className="flex items-center justify-between rounded-lg border p-3">
-									<FormLabel>{t("providers.proxyEnabled")}</FormLabel>
-									<FormControl>
-										<Switch checked={field.value} onCheckedChange={field.onChange} />
-									</FormControl>
-								</FormItem>
-							)}
-						/>
-						{form.watch("proxyEnabled") && (
-							<FormField
-								control={form.control}
-								name="proxyAddr"
-								render={({ field }) => (
-									<FormItem>
-										<FormLabel>{t("providers.proxyAddr")}</FormLabel>
-										<FormControl>
-											<Input {...field} placeholder="http://127.0.0.1:7890" className="font-mono" />
-										</FormControl>
-										<FormDescription>{t("providers.proxyAddrHint")}</FormDescription>
-										<FormMessage />
-									</FormItem>
-								)}
-							/>
-						)}
+						<ProxyConfigFields control={form.control} withHint />
 
 						{/* 高级设置：常驻展示，默认折叠。 */}
 						<div className="overflow-hidden rounded-lg border">

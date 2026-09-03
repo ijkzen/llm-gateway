@@ -1,6 +1,6 @@
 import { EmptyState } from "@/components/empty-state";
+import { ProviderProxyRow } from "@/components/providers/ProviderProxyRow";
 import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -220,16 +220,7 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 						{t(BILLING_LABELS[provider.billingMode] ?? "common.unknown")}
 					</DetailRow>
 					<DetailRow label={t("providers.proxyEnabled")}>
-						{provider.proxyEnabled ? (
-							<span className="inline-flex items-center gap-1.5">
-								<Badge variant="default">{t("providers.proxyOn")}</Badge>
-								<span className="font-mono text-xs text-muted-foreground">
-									{provider.proxyAddr}
-								</span>
-							</span>
-						) : (
-							<Badge variant="secondary">{t("providers.proxyOff")}</Badge>
-						)}
+						<ProviderProxyRow enabled={provider.proxyEnabled} addr={provider.proxyAddr} />
 					</DetailRow>
 					<DetailRow label={t("providers.createdAt")}>{formatDate(provider.createdAt)}</DetailRow>
 					<DetailRow label={t("providers.updatedAt")}>{formatDate(provider.updatedAt)}</DetailRow>

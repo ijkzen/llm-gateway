@@ -126,6 +126,8 @@ export default function ProviderModelsPage() {
 				}}
 				providerId={selectedModel?.provider.id ?? 0}
 				providerName={selectedModel?.provider.name ?? ""}
+				// 只读态展示「继承供应商代理」时需要供应商代理地址。
+				providerProxyAddr={selectedModel?.provider.proxyAddr}
 				model={selectedModel?.model ?? null}
 			/>
 		</div>

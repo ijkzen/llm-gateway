@@ -69,6 +69,8 @@ function makeModel(overrides: Partial<ProviderModel> = {}): ProviderModel {
 		toolUse: false,
 		imageUnderstand: false,
 		videoUnderstand: false,
+		proxyEnabled: false,
+		proxyAddr: "",
 		createdAt: "2026-08-29T00:00:00Z",
 		updatedAt: "2026-08-29T00:00:00Z",
 		...overrides,
@@ -204,6 +206,9 @@ describe("AddProviderModelsDialog 候选三态", () => {
 				toolUse: false,
 				imageUnderstand: false,
 				videoUnderstand: false,
+				// 批量导入的模型默认关闭模型级代理。
+				proxyEnabled: false,
+				proxyAddr: "",
 			},
 		]);
 	});
@@ -434,5 +439,100 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 		expect(payload.modelId).toBe(1);
 		expect(payload.contextLength).toBe(256000);
 		expect(payload.maxOutputTokens).toBe(4096);
+	});
+});
+
+describe("ProviderModelDetailDialog 模型级代理", () => {
+	it("只读态展示网络代理：开启显示徽标与地址，关闭显示未开启", () => {
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel({ proxyEnabled: true, proxyAddr: "http://127.0.0.1:7890" })}
+			/>,
+		);
+
+		expect(screen.getByText("使用网络代理")).toBeTruthy();
+		expect(screen.getByText("已开启")).toBeTruthy();
+		expect(screen.getByText("http://127.0.0.1:7890")).toBeTruthy();
+
+		// 关闭代理的模型：只显示「未开启」，不显示地址。
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel({ proxyEnabled: false, proxyAddr: "" })}
+			/>,
+		);
+		expect(screen.getAllByText("未开启").length).toBeGreaterThan(0);
+	});
+
+	it("模型级关闭但供应商开启时展示「继承供应商代理」，避免误判为直连", () => {
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				providerProxyAddr="http://127.0.0.1:7891"
+				model={makeModel({ proxyEnabled: false, proxyAddr: "" })}
+			/>,
+		);
+
+		expect(screen.getAllByText("未开启").length).toBeGreaterThan(0);
+		expect(screen.getByText("· 继承供应商代理")).toBeTruthy();
+		// 供应商代理地址不直接展示给模型级（地址属于供应商层）。
+		expect(screen.queryByText("http://127.0.0.1:7891")).toBeNull();
+	});
+
+	it("编辑态开启代理并填地址后提交，payload 携带代理字段", async () => {
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel()}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+		// 点击代理开关（打开），随后出现地址输入框。
+		const proxySwitch = screen.getByRole("switch", { name: "使用网络代理" });
+		fireEvent.click(proxySwitch);
+		const addrInput = screen.getByPlaceholderText("http://127.0.0.1:7890");
+		fireEvent.change(addrInput, { target: { value: "http://127.0.0.1:7890" } });
+		fireEvent.click(screen.getByRole("button", { name: "更新" }));
+
+		await waitFor(() => expect(mocks.updateMutate).toHaveBeenCalledTimes(1));
+		const payload = required(mocks.updateMutate.mock.calls[0])[0];
+		expect(payload.proxyEnabled).toBe(true);
+		expect(payload.proxyAddr).toBe("http://127.0.0.1:7890");
+	});
+
+	it("开启代理但地址为空时不提交（校验错误）", async () => {
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel()}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+		fireEvent.click(screen.getByRole("switch", { name: "使用网络代理" }));
+		fireEvent.click(screen.getByRole("button", { name: "更新" }));
+
+		await act(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		});
+		expect(mocks.updateMutate).not.toHaveBeenCalled();
+		expect(screen.getByText("开启网络代理时必须填写代理地址")).toBeTruthy();
 	});
 });

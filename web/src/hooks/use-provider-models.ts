@@ -13,6 +13,10 @@ export interface ProviderModel {
 	toolUse: boolean;
 	imageUnderstand: boolean;
 	videoUnderstand: boolean;
+	/** 是否开启模型级网络代理（优先于供应商代理）。 */
+	proxyEnabled: boolean;
+	/** HTTP 代理地址（如 http://127.0.0.1:7890，无认证）。 */
+	proxyAddr: string;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -39,6 +43,8 @@ export interface ProviderModelPayload {
 	toolUse: boolean;
 	imageUnderstand: boolean;
 	videoUnderstand: boolean;
+	proxyEnabled: boolean;
+	proxyAddr: string;
 }
 
 export const providerModelKeys = {

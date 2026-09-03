@@ -133,10 +133,22 @@ struct Member {
     base_url: String,
     api_key_encrypted: String,
     custom_header: String,
-    /// 是否经网络代理转发该供应商请求。
+    /// 该成员最终生效的网络代理（模型级优先，其次供应商级；都未开启则直连）。
     proxy_enabled: bool,
     /// HTTP 代理地址（如 `http://127.0.0.1:7890`）。
     proxy_addr: String,
+}
+
+/// 解析成员最终代理：模型级开启且地址有效 → 用模型地址；否则供应商级开启
+/// 且地址有效 → 用供应商地址；都没有 → 直连。
+fn resolve_proxy(model: &provider_model::Model, provider: &provider::Model) -> (bool, String) {
+    if model.proxy_enabled && !model.proxy_addr.trim().is_empty() {
+        (true, model.proxy_addr.clone())
+    } else if provider.proxy_enabled && !provider.proxy_addr.trim().is_empty() {
+        (true, provider.proxy_addr.clone())
+    } else {
+        (false, String::new())
+    }
 }
 
 /// 加载虚拟模型全部可用成员（item 启用 + 供应商启用且状态可用）。
@@ -181,6 +193,7 @@ async fn load_members(
             if !p.enable {
                 return None;
             }
+            let (proxy_enabled, proxy_addr) = resolve_proxy(model, p);
             Some(Member {
                 provider_id: p.id,
                 model_id: model.provider_model_id.clone(),
@@ -189,8 +202,8 @@ async fn load_members(
                 base_url: p.base_url.clone(),
                 api_key_encrypted: p.api_key.clone(),
                 custom_header: p.custom_header.clone(),
-                proxy_enabled: p.proxy_enabled,
-                proxy_addr: p.proxy_addr.clone(),
+                proxy_enabled,
+                proxy_addr,
             })
         })
         .collect())
@@ -972,12 +985,8 @@ pub async fn forward_chat(state: &AppState, api_key: AuthedApiKey, client_body: 
                 }
             };
 
-        // 供应商开启代理且地址有效时经 HTTP 代理转发。
-        let proxy = if member.proxy_enabled && !member.proxy_addr.trim().is_empty() {
-            Some(member.proxy_addr.as_str())
-        } else {
-            None
-        };
+        // Member 已由 resolve_proxy 归一：proxy_enabled 时地址必非空。
+        let proxy = member.proxy_enabled.then_some(member.proxy_addr.as_str());
         let reply = match upstream::call(call, &state.upstream_pool, proxy).await {
             Ok(reply) => reply,
             Err(e) => {
@@ -1651,6 +1660,7 @@ pub async fn test_model(
     model: &crate::entity::provider_model::Model,
     api_key: &str,
 ) -> Result<i64, String> {
+    let (proxy_enabled, proxy_addr) = resolve_proxy(model, provider_row);
     let member = Member {
         provider_id: provider_row.id,
         model_id: model.provider_model_id.clone(),
@@ -1659,8 +1669,8 @@ pub async fn test_model(
         base_url: provider_row.base_url.clone(),
         api_key_encrypted: provider_row.api_key.clone(),
         custom_header: provider_row.custom_header.clone(),
-        proxy_enabled: provider_row.proxy_enabled,
-        proxy_addr: provider_row.proxy_addr.clone(),
+        proxy_enabled,
+        proxy_addr,
     };
 
     let chat = json!({
@@ -1671,11 +1681,8 @@ pub async fn test_model(
     });
     let (call, _json_mode_tool) = build_upstream_call(&member, &chat, false, api_key)?;
 
-    let proxy = if member.proxy_enabled && !member.proxy_addr.trim().is_empty() {
-        Some(member.proxy_addr.as_str())
-    } else {
-        None
-    };
+    // Member 已由 resolve_proxy 归一：proxy_enabled 时地址必非空。
+    let proxy = member.proxy_enabled.then_some(member.proxy_addr.as_str());
     let start_time = now_ms();
     let reply = match upstream::call(call, &state.upstream_pool, proxy).await {
         Ok(reply) => reply,
@@ -1781,4 +1788,76 @@ pub async fn test_model(
     .insert(&state.db);
 
     Ok(duration_ms)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider(proxy_enabled: bool, proxy_addr: &str) -> provider::Model {
+        let now = chrono::Utc::now();
+        provider::Model {
+            id: 1,
+            name: "p".to_string(),
+            enable: true,
+            base_url: "https://api.example.com".to_string(),
+            api_key: "enc".to_string(),
+            custom_header: "{}".to_string(),
+            protocol_type: 0,
+            billing_mode: 0,
+            extra: "{}".to_string(),
+            sort_order: 0,
+            proxy_enabled,
+            proxy_addr: proxy_addr.to_string(),
+            failure_disabled: false,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn model(proxy_enabled: bool, proxy_addr: &str) -> provider_model::Model {
+        let now = chrono::Utc::now();
+        provider_model::Model {
+            model_id: 1,
+            provider_id: 1,
+            provider_model_id: "m".to_string(),
+            context_length: 1000,
+            max_output_tokens: 1000,
+            reasoning: false,
+            tool_use: false,
+            image_understand: false,
+            video_understand: false,
+            proxy_enabled,
+            proxy_addr: proxy_addr.to_string(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn resolve_proxy_prefers_model_then_provider_then_direct() {
+        // 模型开启 → 用模型地址（即使供应商也开着、地址不同）。
+        assert_eq!(
+            resolve_proxy(
+                &model(true, "http://model:1"),
+                &provider(true, "http://p:2")
+            ),
+            (true, "http://model:1".to_string())
+        );
+        // 模型关、供应商开 → 回落供应商地址。
+        assert_eq!(
+            resolve_proxy(&model(false, ""), &provider(true, "http://p:2")),
+            (true, "http://p:2".to_string())
+        );
+        // 模型开但地址空白 → 视为未配置，回落供应商。
+        assert_eq!(
+            resolve_proxy(&model(true, "  "), &provider(true, "http://p:2")),
+            (true, "http://p:2".to_string())
+        );
+        // 两者都关 → 直连。
+        assert_eq!(
+            resolve_proxy(&model(false, ""), &provider(false, "")),
+            (false, String::new())
+        );
+    }
 }

@@ -28,6 +28,13 @@ pub struct Model {
     /// 是否支持视频理解。
     #[sea_orm(default_value = "0")]
     pub video_understand: bool,
+    /// 是否经网络代理（HTTP 代理）转发该模型的上游请求。
+    /// 关闭（false）时回落到供应商代理。
+    #[sea_orm(default_value = "0")]
+    pub proxy_enabled: bool,
+    /// HTTP 代理地址（如 `http://127.0.0.1:7890`，无认证）。
+    #[sea_orm(default_value = "")]
+    pub proxy_addr: String,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

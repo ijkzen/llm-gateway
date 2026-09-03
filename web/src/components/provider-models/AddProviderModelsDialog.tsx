@@ -250,6 +250,9 @@ export function AddProviderModelsDialog({
 				toolUse: candidate.toolUse,
 				imageUnderstand: candidate.imageUnderstand,
 				videoUnderstand: candidate.videoUnderstand,
+				// 添加时不配置模型级代理（默认关闭，添加后到详情编辑）。
+				proxyEnabled: false,
+				proxyAddr: "",
 			}));
 		if (list.some((item) => item.contextLength <= 0 || item.maxOutputTokens <= 0)) {
 			toastError(t("common.addFailed"), new Error(t("providerModels.batchIncomplete")));
@@ -289,7 +292,13 @@ export function AddProviderModelsDialog({
 	const handleManualAdd = (values: ManualFormValues) => {
 		if (!provider) return;
 		createModel.mutate(
-			{ ...values, providerModelId: values.providerModelId.trim() },
+			{
+				...values,
+				providerModelId: values.providerModelId.trim(),
+				// 添加时不配置模型级代理（默认关闭，添加后到详情编辑）。
+				proxyEnabled: false,
+				proxyAddr: "",
+			},
 			{
 				onSuccess: () => {
 					toastSuccess(t("common.addSuccess"));

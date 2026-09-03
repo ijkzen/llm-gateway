@@ -77,6 +77,8 @@ function makeModel(overrides: Partial<ProviderModel> = {}): ProviderModel {
 		toolUse: false,
 		imageUnderstand: false,
 		videoUnderstand: false,
+		proxyEnabled: false,
+		proxyAddr: "",
 		createdAt: "",
 		updatedAt: "",
 		...overrides,

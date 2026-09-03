@@ -40,6 +40,8 @@ struct ProviderModelResponse {
     tool_use: bool,
     image_understand: bool,
     video_understand: bool,
+    proxy_enabled: bool,
+    proxy_addr: String,
     created_at: String,
     updated_at: String,
 }
@@ -56,6 +58,8 @@ impl ProviderModelResponse {
             tool_use: model.tool_use,
             image_understand: model.image_understand,
             video_understand: model.video_understand,
+            proxy_enabled: model.proxy_enabled,
+            proxy_addr: model.proxy_addr,
             created_at: rfc3339(model.created_at),
             updated_at: rfc3339(model.updated_at),
         }
@@ -76,6 +80,10 @@ struct UpsertProviderModelRequest {
     image_understand: bool,
     #[serde(default)]
     video_understand: bool,
+    #[serde(default)]
+    proxy_enabled: bool,
+    #[serde(default)]
+    proxy_addr: String,
 }
 
 #[derive(Deserialize)]
@@ -142,6 +150,12 @@ fn validate_fields(req: &UpsertProviderModelRequest, lang: Lang) -> Option<Strin
             )
             .to_string(),
         );
+    }
+    // 模型级代理：校验规则与供应商一致（开启时地址必填 + http:// 格式 + 无认证）。
+    if let Some(msg) =
+        crate::routes::providers::validate_proxy(req.proxy_enabled, &req.proxy_addr, lang)
+    {
+        return Some(msg);
     }
     None
 }
@@ -267,6 +281,8 @@ async fn create_provider_model(
         tool_use: Set(req.tool_use),
         image_understand: Set(req.image_understand),
         video_understand: Set(req.video_understand),
+        proxy_enabled: Set(req.proxy_enabled),
+        proxy_addr: Set(req.proxy_addr.trim().to_string()),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
@@ -284,6 +300,8 @@ async fn create_provider_model(
                 tool_use = model.tool_use,
                 image_understand = model.image_understand,
                 video_understand = model.video_understand,
+                proxy_enabled = model.proxy_enabled,
+                proxy_addr = %model.proxy_addr,
                 "创建供应商模型",
             );
             let response = ProviderModelResponse::from_model(model);
@@ -361,6 +379,8 @@ async fn batch_create_provider_models(
             tool_use: Set(item.tool_use),
             image_understand: Set(item.image_understand),
             video_understand: Set(item.video_understand),
+            proxy_enabled: Set(item.proxy_enabled),
+            proxy_addr: Set(item.proxy_addr.trim().to_string()),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()
@@ -421,6 +441,8 @@ async fn update_provider_model(
     active.tool_use = Set(req.tool_use);
     active.image_understand = Set(req.image_understand);
     active.video_understand = Set(req.video_understand);
+    active.proxy_enabled = Set(req.proxy_enabled);
+    active.proxy_addr = Set(req.proxy_addr.trim().to_string());
     active.updated_at = Set(chrono::Utc::now());
 
     match active.update(&state.db).await {
@@ -435,6 +457,8 @@ async fn update_provider_model(
                 tool_use = model.tool_use,
                 image_understand = model.image_understand,
                 video_understand = model.video_understand,
+                proxy_enabled = model.proxy_enabled,
+                proxy_addr = %model.proxy_addr,
                 "更新供应商模型",
             );
             let response = ProviderModelResponse::from_model(model);

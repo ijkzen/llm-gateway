@@ -722,3 +722,337 @@ async fn test_refresh_models_direct_without_proxy() {
     .await;
     assert_eq!(status, 200, "直连刷新失败：{body}");
 }
+
+// ─── 供应商模型级网络代理：CRUD 与校验 ────────────────────────────────────────
+
+/// 创建/更新/批量创建支持模型级代理字段（proxyEnabled + proxyAddr），
+/// 校验规则与供应商一致（开启时必填 + http:// + 无认证）。
+#[tokio::test]
+async fn test_model_proxy_crud_roundtrip() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p-proxy-crud").await;
+
+    // 创建带模型级代理 → 响应含字段。
+    let mut payload = model_payload("proxy-model");
+    payload["proxyEnabled"] = json!(true);
+    payload["proxyAddr"] = json!("http://127.0.0.1:7890");
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        payload,
+    )
+    .await;
+    assert_eq!(status, 201, "创建失败：{body}");
+    assert_eq!(body["data"]["proxyEnabled"], true);
+    assert_eq!(body["data"]["proxyAddr"], "http://127.0.0.1:7890");
+    let model_id = body["data"]["modelId"].as_i64().unwrap();
+
+    // GET 列表能取回。
+    let (status, body) = send_json(
+        app.clone(),
+        "GET",
+        &format!("/api/providers/{provider_id}/models"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200);
+    let listed = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["modelId"].as_i64() == Some(model_id))
+        .unwrap();
+    assert_eq!(listed["proxyEnabled"], true);
+    assert_eq!(listed["proxyAddr"], "http://127.0.0.1:7890");
+
+    // 更新代理字段。
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{provider_id}/models/{model_id}"),
+        json!({
+            "providerModelId": "proxy-model",
+            "contextLength": 128000,
+            "maxOutputTokens": 4096,
+            "proxyEnabled": true,
+            "proxyAddr": "http://127.0.0.1:7891",
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "更新失败：{body}");
+    assert_eq!(body["data"]["proxyAddr"], "http://127.0.0.1:7891");
+
+    // 批量创建带代理字段。
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models/batch"),
+        json!({
+            "models": [
+                {
+                    "providerModelId": "batch-a",
+                    "contextLength": 32000,
+                    "maxOutputTokens": 2048,
+                    "proxyEnabled": true,
+                    "proxyAddr": "http://127.0.0.1:7892",
+                },
+                {
+                    "providerModelId": "batch-b",
+                    "contextLength": 32000,
+                    "maxOutputTokens": 2048,
+                },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "批量创建失败：{body}");
+    let created = body["data"].as_array().unwrap();
+    assert_eq!(created.len(), 2);
+    assert_eq!(created[0]["proxyAddr"], "http://127.0.0.1:7892");
+    assert_eq!(created[1]["proxyEnabled"], false, "未传代理字段默认关闭");
+    assert_eq!(created[1]["proxyAddr"], "");
+}
+
+/// 模型级代理校验：开启时地址必填、需 http:// 开头、不支持带认证地址 → 400。
+#[tokio::test]
+async fn test_model_proxy_validation_errors() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p-proxy-validate").await;
+
+    // 开启但地址为空。
+    let mut no_addr = model_payload("m1");
+    no_addr["proxyEnabled"] = json!(true);
+    no_addr["proxyAddr"] = json!("");
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        no_addr,
+    )
+    .await;
+    assert_eq!(status, 400);
+    assert!(body["msg"].as_str().unwrap().contains("代理地址"));
+
+    // 地址非 http:// 开头。
+    let mut bad_scheme = model_payload("m2");
+    bad_scheme["proxyEnabled"] = json!(true);
+    bad_scheme["proxyAddr"] = json!("https://127.0.0.1:7890");
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        bad_scheme,
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    // 带认证的地址。
+    let mut auth = model_payload("m3");
+    auth["proxyEnabled"] = json!(true);
+    auth["proxyAddr"] = json!("http://user:pass@127.0.0.1:7890");
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        auth,
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    // 关闭代理时地址留空合法（回落供应商）。
+    let mut off = model_payload("m4");
+    off["proxyEnabled"] = json!(false);
+    off["proxyAddr"] = json!("");
+    let (status, _) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        off,
+    )
+    .await;
+    assert_eq!(status, 201);
+}
+
+// ─── 模型级代理转发优先级（test_model 路径）───────────────────────────────────
+// 场景：向模型上游发测试请求时，代理解析 = 模型级 → 供应商级 → 直连。
+// 用两个不同端口的 CONNECT 代理 mock 区分命中：请求走哪个代理，哪个计数器 +1。
+
+/// OpenAI 兼容 chat/completions 目标 mock（非流式 200）。
+async fn spawn_chat_mock() -> String {
+    let app = axum::Router::new().route(
+        "/v1/chat/completions",
+        axum::routing::post(|| async {
+            axum::Json(json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "m",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
+/// 直插一个 provider + provider_model（模型级代理两字段可自定义）。
+async fn seed_provider_and_model(
+    db: &sea_orm::DatabaseConnection,
+    name: &str,
+    target: &str,
+    provider_proxy: Option<String>,
+    model_proxy: Option<String>,
+) -> (i32, i32) {
+    let active = provider::ActiveModel {
+        name: Set(name.to_string()),
+        enable: Set(true),
+        base_url: Set(format!("{target}/v1")),
+        api_key: Set(crypto::encrypt("sk-test")),
+        custom_header: Set("{}".to_string()),
+        protocol_type: Set(0),
+        billing_mode: Set(0),
+        extra: Set("{}".to_string()),
+        proxy_enabled: Set(provider_proxy.is_some()),
+        proxy_addr: Set(provider_proxy.unwrap_or_default()),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    let provider_id = active.insert(db).await.unwrap().id;
+
+    let now = chrono::Utc::now();
+    let model = provider_model::ActiveModel {
+        provider_id: Set(provider_id),
+        provider_model_id: Set("proxy-model".to_string()),
+        context_length: Set(128_000),
+        max_output_tokens: Set(4_096),
+        proxy_enabled: Set(model_proxy.is_some()),
+        proxy_addr: Set(model_proxy.unwrap_or_default()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    let model_id = model.insert(db).await.unwrap().model_id;
+    (provider_id, model_id)
+}
+
+/// 模型开了代理（供应商也开了另一个）→ 测试请求走模型代理。
+#[tokio::test]
+async fn test_model_test_goes_through_model_proxy() {
+    let target = spawn_chat_mock().await;
+    let (provider_proxy, provider_hits) = spawn_connect_proxy().await;
+    let (model_proxy, model_hits) = spawn_connect_proxy().await;
+    let (app, db) = setup_app().await;
+    let (provider_id, model_id) = seed_provider_and_model(
+        &db,
+        &format!("pp-{}", chrono::Utc::now().timestamp_millis()),
+        &target,
+        Some(provider_proxy.clone()),
+        Some(model_proxy.clone()),
+    )
+    .await;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/{model_id}/test"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "测试失败：{body}");
+    let provider_hits = provider_hits.load(std::sync::atomic::Ordering::SeqCst);
+    let model_hits = model_hits.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(model_hits, 1, "模型代理应被命中");
+    assert_eq!(provider_hits, 0, "供应商代理不应被命中（模型级优先）");
+}
+
+/// 模型未开代理、供应商开了 → 测试请求回落供应商代理。
+#[tokio::test]
+async fn test_model_test_falls_back_to_provider_proxy() {
+    let target = spawn_chat_mock().await;
+    let (provider_proxy, provider_hits) = spawn_connect_proxy().await;
+    let (app, db) = setup_app().await;
+    let (provider_id, model_id) = seed_provider_and_model(
+        &db,
+        &format!("fp-{}", chrono::Utc::now().timestamp_millis()),
+        &target,
+        Some(provider_proxy),
+        None,
+    )
+    .await;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/{model_id}/test"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "测试失败：{body}");
+    assert_eq!(
+        provider_hits.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "模型未开代理时回落供应商代理"
+    );
+}
+
+/// 模型与供应商都未开代理 → 测试请求直连。
+#[tokio::test]
+async fn test_model_test_direct_without_any_proxy() {
+    let target = spawn_chat_mock().await;
+    let (app, db) = setup_app().await;
+    let (provider_id, model_id) = seed_provider_and_model(
+        &db,
+        &format!("dr-{}", chrono::Utc::now().timestamp_millis()),
+        &target,
+        None,
+        None,
+    )
+    .await;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/{model_id}/test"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "直连测试失败：{body}");
+}
+
+/// 模型配了代理但供应商没配时，用量/刷新路径仍直连（不误用模型代理）。
+/// 回归：模型级代理只影响转发与测速，不影响「刷新模型列表」。
+#[tokio::test]
+async fn test_refresh_ignores_model_proxy() {
+    let target = spawn_models_mock().await;
+    let (model_proxy, model_hits) = spawn_connect_proxy().await;
+    let (app, db) = setup_app().await;
+    let (provider_id, _model_id) = seed_provider_and_model(
+        &db,
+        &format!("mr-{}", chrono::Utc::now().timestamp_millis()),
+        &target,
+        None,
+        Some(model_proxy),
+    )
+    .await;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/refresh"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "刷新失败：{body}");
+    assert_eq!(
+        model_hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "刷新模型列表只认供应商代理，不应走模型级代理"
+    );
+}

@@ -79,6 +79,8 @@ function makeModel(providerId: number, modelId: number, id: string): ProviderMod
 		toolUse: false,
 		imageUnderstand: false,
 		videoUnderstand: false,
+		proxyEnabled: false,
+		proxyAddr: "",
 		createdAt: "",
 		updatedAt: "",
 	};

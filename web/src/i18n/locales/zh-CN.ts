@@ -273,6 +273,7 @@ const zhCN = {
 		proxyAddrInvalid: "代理地址需以 http:// 开头",
 		proxyOn: "已开启",
 		proxyOff: "未开启",
+		proxyInherited: "· 继承供应商代理",
 		extraConfig: "额外配置",
 		unknownProtocol: "未知协议",
 		deleteProviderTitle: "删除 Provider",

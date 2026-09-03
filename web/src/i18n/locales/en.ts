@@ -274,6 +274,7 @@ const en: Translation = {
 		proxyAddrInvalid: "Proxy address must start with http://",
 		proxyOn: "On",
 		proxyOff: "Off",
+		proxyInherited: "· inherits provider proxy",
 		extraConfig: "Extra config",
 		unknownProtocol: "Unknown protocol",
 		deleteProviderTitle: "Delete Provider",

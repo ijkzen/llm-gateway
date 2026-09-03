@@ -1,6 +1,8 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CAPABILITIES } from "@/components/provider-models/CapabilityIcons";
 import { TestFailedDialog } from "@/components/provider-models/TestFailedDialog";
+import { ProviderProxyRow } from "@/components/providers/ProviderProxyRow";
+import { ProxyConfigFields } from "@/components/providers/ProxyConfigFields";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -35,21 +37,42 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
 function makeFormSchema(t: (key: string) => string) {
-	return z.object({
-		providerModelId: z.string().min(1, t("providerModels.modelIdRequired")),
-		contextLength: z.coerce
-			.number()
-			.int(t("providerModels.mustBeInt"))
-			.positive(t("providerModels.mustBePositive")),
-		maxOutputTokens: z.coerce
-			.number()
-			.int(t("providerModels.mustBeInt"))
-			.positive(t("providerModels.mustBePositive")),
-		reasoning: z.boolean(),
-		toolUse: z.boolean(),
-		imageUnderstand: z.boolean(),
-		videoUnderstand: z.boolean(),
-	});
+	return z
+		.object({
+			providerModelId: z.string().min(1, t("providerModels.modelIdRequired")),
+			contextLength: z.coerce
+				.number()
+				.int(t("providerModels.mustBeInt"))
+				.positive(t("providerModels.mustBePositive")),
+			maxOutputTokens: z.coerce
+				.number()
+				.int(t("providerModels.mustBeInt"))
+				.positive(t("providerModels.mustBePositive")),
+			reasoning: z.boolean(),
+			toolUse: z.boolean(),
+			imageUnderstand: z.boolean(),
+			videoUnderstand: z.boolean(),
+			// 模型级网络代理：开启时地址必填且需 http:// 开头（与供应商代理同规则）。
+			proxyEnabled: z.boolean(),
+			proxyAddr: z.string(),
+		})
+		.superRefine((values, ctx) => {
+			if (values.proxyEnabled) {
+				if (!values.proxyAddr.trim()) {
+					ctx.addIssue({
+						code: z.ZodIssueCode.custom,
+						path: ["proxyAddr"],
+						message: t("providers.proxyAddrRequired"),
+					});
+				} else if (!values.proxyAddr.trim().startsWith("http://")) {
+					ctx.addIssue({
+						code: z.ZodIssueCode.custom,
+						path: ["proxyAddr"],
+						message: t("providers.proxyAddrInvalid"),
+					});
+				}
+			}
+		});
 }
 
 type FormValues = z.infer<ReturnType<typeof makeFormSchema>>;
@@ -59,6 +82,8 @@ interface ProviderModelDetailDialogProps {
 	onOpenChange: (open: boolean) => void;
 	providerId: number;
 	providerName: string;
+	/** 所属供应商的代理地址（模型级关闭时用于展示继承来源）。 */
+	providerProxyAddr?: string;
 	model: ProviderModel | null;
 }
 
@@ -68,6 +93,7 @@ export function ProviderModelDetailDialog({
 	onOpenChange,
 	providerId,
 	providerName,
+	providerProxyAddr,
 	model,
 }: ProviderModelDetailDialogProps) {
 	const { t } = useTranslation();
@@ -90,6 +116,8 @@ export function ProviderModelDetailDialog({
 			toolUse: false,
 			imageUnderstand: false,
 			videoUnderstand: false,
+			proxyEnabled: false,
+			proxyAddr: "",
 		},
 	});
 
@@ -104,6 +132,8 @@ export function ProviderModelDetailDialog({
 			toolUse: model.toolUse,
 			imageUnderstand: model.imageUnderstand,
 			videoUnderstand: model.videoUnderstand,
+			proxyEnabled: model.proxyEnabled,
+			proxyAddr: model.proxyAddr,
 		});
 		setEditing(false);
 		setConfirmingDelete(false);
@@ -115,7 +145,12 @@ export function ProviderModelDetailDialog({
 		// 把未变更的值原样 PUT 并误报「更新成功」。
 		if (!model || !form.formState.isDirty) return;
 		updateModel.mutate(
-			{ modelId: model.modelId, ...values },
+			{
+				modelId: model.modelId,
+				...values,
+				// 关闭代理时地址清空（与供应商代理提交一致，避免残留旧地址）。
+				proxyAddr: values.proxyEnabled ? values.proxyAddr.trim() : "",
+			},
 			{
 				onSuccess: () => {
 					setEditing(false);
@@ -232,6 +267,9 @@ export function ProviderModelDetailDialog({
 										/>
 									))}
 								</div>
+
+								{/* 模型级网络代理：开关 + 条件显示地址输入（优先于供应商代理）。 */}
+								<ProxyConfigFields control={form.control} />
 							</form>
 						</Form>
 					) : (
@@ -277,6 +315,16 @@ export function ProviderModelDetailDialog({
 												: t("providerModels.notSupported")}
 										</span>
 									))}
+								</dd>
+							</div>
+							<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
+								<dt className="text-sm text-muted-foreground">{t("providers.proxyEnabled")}</dt>
+								<dd>
+									<ProviderProxyRow
+										enabled={model.proxyEnabled}
+										addr={model.proxyAddr}
+										inherited={providerProxyAddr}
+									/>
 								</dd>
 							</div>
 						</dl>

@@ -391,6 +391,25 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         changed |= ensure_migration(db, 18, &migration_18_statements).await?;
     }
 
+    // Migration 19: provider_model 模型级代理字段（proxy_enabled + proxy_addr）。
+    // 模型可单独开启网络代理，优先级高于供应商级代理；新库已由
+    // create_table_from_entity 建表带这两列，此处兜底历史库。
+    let mut migration_19_statements: Vec<&str> = Vec::new();
+    if !column_exists(db, "provider_model", "proxy_enabled").await? {
+        migration_19_statements.push(
+            "ALTER TABLE provider_model ADD COLUMN proxy_enabled boolean NOT NULL DEFAULT '0'",
+        );
+    }
+    if !column_exists(db, "provider_model", "proxy_addr").await? {
+        migration_19_statements
+            .push("ALTER TABLE provider_model ADD COLUMN proxy_addr varchar NOT NULL DEFAULT ''");
+    }
+    if migration_19_statements.is_empty() {
+        changed |= ensure_migration(db, 19, &["SELECT 1"]).await?;
+    } else {
+        changed |= ensure_migration(db, 19, &migration_19_statements).await?;
+    }
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)
@@ -621,6 +640,42 @@ mod tests {
         assert!(!changed_again, "重复执行不应再报告变更");
     }
 
+    /// 历史库迁移：provider_model 表缺模型级代理字段（旧版无代理列）——
+    /// migrate() 必须用 19 号段补齐两列；已补齐的库重复执行幂等（只记录版本号）。
+    #[tokio::test]
+    async fn migration_19_backfills_provider_model_proxy_columns() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        migrate(&db).await.unwrap();
+        // 模拟历史库：删掉两列 + 移除 version 19 记录。
+        db.execute_unprepared("ALTER TABLE provider_model DROP COLUMN proxy_addr")
+            .await
+            .unwrap();
+        db.execute_unprepared("ALTER TABLE provider_model DROP COLUMN proxy_enabled")
+            .await
+            .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 19")
+            .await
+            .unwrap();
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        assert!(
+            column_exists(&db, "provider_model", "proxy_enabled")
+                .await
+                .unwrap()
+        );
+        assert!(
+            column_exists(&db, "provider_model", "proxy_addr")
+                .await
+                .unwrap()
+        );
+
+        // 再次执行：列已补，只记录版本不报变更（幂等）。
+        let changed_again = migrate(&db).await.unwrap();
+        assert!(!changed_again, "重复执行不应再报告变更");
+    }
+
     /// 历史库迁移：schema_migrations 残留废弃号段版本记录（14/15）时，
     /// 新迁移 18 号段（13 之后 + 废弃 14/15 + 16/17 均已占用）不与其撞号，
     /// DROP status 仍会正常执行。
@@ -647,6 +702,43 @@ mod tests {
         assert!(
             !column_exists(&db, "provider", "status").await.unwrap(),
             "status 列应被删除（即使残留 14/15 号段）"
+        );
+    }
+
+    /// 历史库迁移：新迁移 19 号段在残留废弃号段版本记录（14/15）存在时，
+    /// 仍能正常补齐 provider_model 代理列（不与其撞号）。
+    #[tokio::test]
+    async fn migration_19_applies_despite_stale_versions() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        migrate(&db).await.unwrap();
+        // 模拟生产库：删列 + 注入废弃号段记录（14/15 为旧方案残留）+ 移除 19。
+        db.execute_unprepared("ALTER TABLE provider_model DROP COLUMN proxy_addr")
+            .await
+            .unwrap();
+        db.execute_unprepared("ALTER TABLE provider_model DROP COLUMN proxy_enabled")
+            .await
+            .unwrap();
+        db.execute_unprepared(
+            "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (14, datetime('now')), (15, datetime('now'))",
+        )
+        .await
+        .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 19")
+            .await
+            .unwrap();
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        assert!(
+            column_exists(&db, "provider_model", "proxy_enabled")
+                .await
+                .unwrap()
+        );
+        assert!(
+            column_exists(&db, "provider_model", "proxy_addr")
+                .await
+                .unwrap()
         );
     }
 }

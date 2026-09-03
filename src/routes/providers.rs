@@ -187,7 +187,8 @@ fn validate_fields(
 }
 
 /// 校验网络代理配置：开启时必须提供 http:// 代理地址（无认证）。
-fn validate_proxy(proxy_enabled: bool, proxy_addr: &str, lang: Lang) -> Option<String> {
+/// 供应商与供应商模型共用（provider_model 路由复用）。
+pub(crate) fn validate_proxy(proxy_enabled: bool, proxy_addr: &str, lang: Lang) -> Option<String> {
     let addr = proxy_addr.trim();
     if !proxy_enabled {
         // 未开启时不校验地址（允许留空）。
