@@ -984,7 +984,8 @@ pub const TEMPLATES: &[Template] = &[
         base_url: "https://token.sensenova.cn/v1",
         protocol_type: 0,
         billing_mode: 1,
-        extra: "{\"refresh_token\": \"\", \"usage\": true, \"usage_type\": 1}",
+        // refresh_token 为后端派生的隐藏凭据（登录/续期后写回）；username/password 供失效自愈登录。
+        extra: "{\"refresh_token\": \"\", \"username\": \"\", \"password\": \"\", \"usage\": true, \"usage_type\": 1}",
     },
     Template {
         name: "SiliconFlow",

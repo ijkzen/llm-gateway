@@ -26,6 +26,13 @@ pub struct Credentials<'a> {
     pub extra: &'a Map<String, Value>,
 }
 
+/// SenseNova fetcher 需要的最小上下文：登录/轮换写回 refresh_token 时要
+/// 重读 provider 行并加密更新，因此传入 db + provider_id。
+pub struct SensenovaContext<'a> {
+    pub db: &'a sea_orm::DatabaseConnection,
+    pub provider_id: i32,
+}
+
 impl Credentials<'_> {
     pub fn api_key_required(&self) -> Result<&str, UsageError> {
         let key = self.api_key.trim();

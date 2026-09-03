@@ -262,6 +262,8 @@ fn validate_extra(extra: &str, lang: Lang) -> Option<String> {
         .filter(|(key, val)| {
             key.as_str() != EXTRA_USAGE_KEY
                 && key.as_str() != "usage_type"
+                // refresh_token 是后端派生隐藏凭据（登录/续期后写回），允许为空。
+                && key.as_str() != "refresh_token"
                 && val.as_str().is_some_and(|s| s.trim().is_empty())
         })
         .map(|(key, _)| key.clone())

@@ -8,6 +8,7 @@ pub mod error;
 pub mod fetchers;
 pub mod http;
 pub mod persist;
+pub mod sensenova_login;
 pub mod types;
 pub mod volcengine_sign;
 
@@ -104,14 +105,18 @@ pub async fn query_provider_usage(
     } else {
         http::UsageHttp::new()
     };
-    let mut rotated_refresh_token = None;
-    let output = fetcher
-        .fetch(&http, &creds, &mut rotated_refresh_token)
-        .await?;
-    // 轮换出的新 refresh_token 立即写回；写回失败会作废凭据链，必须报错。
-    if let Some(token) = rotated_refresh_token {
-        write_back_refresh_token(db, provider_id, &token).await?;
-    }
+    let proxy = (model.proxy_enabled && !model.proxy_addr.trim().is_empty())
+        .then_some(model.proxy_addr.as_str());
+    let output = match &fetcher {
+        // SenseNova：登录/轮换都要回写 refresh_token（需要 db/provider_id 与
+        // 带 cookie/重定向的登录客户端），因此在这里单独处理。
+        Fetcher::Sensenova => {
+            let login = sensenova_login::SensenovaLogin::with_proxy(proxy);
+            let ctx = fetchers::SensenovaContext { db, provider_id };
+            fetchers::sensenova::fetch_sensenova(&http, &login, &creds, &ctx).await?
+        }
+        _ => fetcher.fetch(&http, &creds).await?,
+    };
     let data = match output {
         FetchOutput::Quota { plan, windows } => UsageData {
             provider_id,
@@ -134,11 +139,11 @@ pub async fn query_provider_usage(
     Ok(data)
 }
 
-/// 把轮换出的新 refresh_token 写回 provider extra（只改该键，其余保留）。
+/// 把新的 refresh_token 写回 provider extra（只改该键，其余保留）。
 /// 写回时重读最新行再合并，缩小与并发 extra 编辑之间的丢更新窗口。
 /// 存储值无法解密（如密钥变更）时返回 Err，避免在密文上解析失败后
 /// 只留下 refresh_token 而清空其余凭据。
-async fn write_back_refresh_token(
+pub(crate) async fn write_back_refresh_token(
     db: &DatabaseConnection,
     provider_id: i32,
     token: &str,
@@ -257,11 +262,9 @@ impl Fetcher {
         &self,
         http: &http::UsageHttp,
         creds: &Credentials<'_>,
-        rotated_refresh_token: &mut Option<String>,
     ) -> Result<FetchOutput, UsageError> {
         use fetchers::{
-            alibaba, api_key, balance, cloud_balance, copilot, sensenova, stepfun, volcengine,
-            xiaomi,
+            alibaba, api_key, balance, cloud_balance, copilot, stepfun, volcengine, xiaomi,
         };
         match self {
             Fetcher::OpenCodeGo => api_key::fetch_opencode_go(http, creds).await,
@@ -317,11 +320,8 @@ impl Fetcher {
             Fetcher::AlibabaToken { intl } => {
                 alibaba::fetch_alibaba_token(http, creds, *intl).await
             }
-            Fetcher::Sensenova => {
-                let (output, rotated) = sensenova::fetch_sensenova(http, creds).await?;
-                *rotated_refresh_token = rotated;
-                Ok(output)
-            }
+            // SenseNova 在 query_provider_usage 单独处理（需要 db/provider_id 回写登录/轮换凭据）。
+            Fetcher::Sensenova => Err(UsageError::Unsupported),
         }
     }
 }
