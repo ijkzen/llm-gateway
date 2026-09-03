@@ -85,6 +85,17 @@ pub fn client_usage_json(usage: &crate::proxy::metrics::Usage) -> Value {
     })
 }
 
+/// 客户端可见的带缓存命中 token 的 usage JSON。
+pub fn cached_client_usage_json(usage: &crate::proxy::metrics::Usage) -> Value {
+    let mut client_usage = client_usage_json(usage);
+    if usage.cache_tokens > 0 {
+        client_usage["prompt_tokens_details"] = json!({
+            "cached_tokens": usage.cache_tokens,
+        });
+    }
+    client_usage
+}
+
 /// 构造 OpenAI chat.completion.chunk。
 pub fn chunk_json(id: &str, model: &str, delta: Value, finish_reason: Option<&str>) -> Value {
     json!({
@@ -100,15 +111,15 @@ pub fn chunk_json(id: &str, model: &str, delta: Value, finish_reason: Option<&st
     })
 }
 
-/// 构造末尾携带 usage 的 chunk（仅在客户端请求 include_usage 时）。
-pub fn usage_chunk_json(id: &str, model: &str, usage: &crate::proxy::metrics::Usage) -> Value {
+/// 构造末尾携带指定 usage JSON 的 chunk（仅在客户端请求 include_usage 时）。
+pub fn usage_chunk_json(id: &str, model: &str, usage: Value) -> Value {
     json!({
         "id": id,
         "object": "chat.completion.chunk",
         "created": chrono::Utc::now().timestamp(),
         "model": model,
         "choices": [],
-        "usage": client_usage_json(usage),
+        "usage": usage,
     })
 }
 
@@ -296,5 +307,44 @@ mod tests {
         assert_eq!(reasoning_budget("high"), 4096);
         assert_eq!(reasoning_budget("max"), 16384);
         assert_eq!(reasoning_budget("minimal"), 128);
+    }
+
+    #[test]
+    fn cached_client_usage_includes_cached_tokens_when_present() {
+        let usage = crate::proxy::metrics::Usage {
+            input_tokens: Some(12),
+            cache_tokens: 5,
+            output_tokens: Some(6),
+        };
+
+        assert_eq!(
+            cached_client_usage_json(&usage),
+            json!({
+                "prompt_tokens": 12,
+                "prompt_tokens_details": {"cached_tokens": 5},
+                "completion_tokens": 6,
+                "total_tokens": 18,
+            })
+        );
+    }
+
+    #[test]
+    fn cached_client_usage_omits_cached_tokens_when_absent() {
+        let usage = crate::proxy::metrics::Usage {
+            input_tokens: Some(12),
+            cache_tokens: 0,
+            output_tokens: Some(6),
+        };
+
+        assert!(
+            cached_client_usage_json(&usage)
+                .get("prompt_tokens_details")
+                .is_none()
+        );
+        assert!(
+            client_usage_json(&usage)
+                .get("prompt_tokens_details")
+                .is_none()
+        );
     }
 }

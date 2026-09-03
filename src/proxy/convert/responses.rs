@@ -3,7 +3,7 @@
 //! 上游始终强制流式（`stream: true`，与 nyro/LiteLLM 一致：部分 Responses
 //! 后端仅支持 SSE）；客户端请求非流式时由管线把 chunk 聚合回单个 JSON。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -208,7 +208,9 @@ pub struct ResponsesStreamConverter {
     started: bool,
     output_to_openai_index: HashMap<i64, i64>,
     next_tool_index: i64,
-    streamed_args: HashSet<i64>,
+    streamed_text: HashMap<i64, String>,
+    streamed_reasoning: HashMap<i64, String>,
+    streamed_args: HashMap<i64, String>,
     finish_reason: Option<&'static str>,
     usage: Option<Usage>,
     finished: bool,
@@ -224,7 +226,9 @@ impl ResponsesStreamConverter {
             started: false,
             output_to_openai_index: HashMap::new(),
             next_tool_index: 0,
-            streamed_args: HashSet::new(),
+            streamed_text: HashMap::new(),
+            streamed_reasoning: HashMap::new(),
+            streamed_args: HashMap::new(),
             finish_reason: None,
             usage: None,
             finished: false,
@@ -280,6 +284,129 @@ impl ResponsesStreamConverter {
         ));
     }
 
+    fn emit_delta(&mut self, output_index: i64, text: &str, reasoning: bool, out: &mut Vec<Value>) {
+        if text.is_empty() {
+            return;
+        }
+        let emitted = if reasoning {
+            &mut self.streamed_reasoning
+        } else {
+            &mut self.streamed_text
+        };
+        emitted.entry(output_index).or_default().push_str(text);
+        self.ensure_started(out);
+        let delta = if reasoning {
+            json!({"reasoning_content": text})
+        } else {
+            json!({"content": text})
+        };
+        out.push(super::chunk_json(&self.id, &self.model, delta, None));
+    }
+
+    fn missing_suffix(emitted: &mut HashMap<i64, String>, output_index: i64, text: &str) -> String {
+        let previous = emitted.entry(output_index).or_default();
+        let missing = text
+            .strip_prefix(previous.as_str())
+            .map_or_else(|| text.to_string(), str::to_string);
+        *previous = text.to_string();
+        missing
+    }
+
+    fn emit_missing_text(&mut self, output_index: i64, text: &str, out: &mut Vec<Value>) {
+        let missing = Self::missing_suffix(&mut self.streamed_text, output_index, text);
+        if missing.is_empty() {
+            return;
+        }
+        self.ensure_started(out);
+        out.push(super::chunk_json(
+            &self.id,
+            &self.model,
+            json!({"content": missing}),
+            None,
+        ));
+    }
+
+    fn emit_missing_reasoning(&mut self, output_index: i64, text: &str, out: &mut Vec<Value>) {
+        let missing = Self::missing_suffix(&mut self.streamed_reasoning, output_index, text);
+        if missing.is_empty() {
+            return;
+        }
+        self.ensure_started(out);
+        out.push(super::chunk_json(
+            &self.id,
+            &self.model,
+            json!({"reasoning_content": missing}),
+            None,
+        ));
+    }
+
+    fn emit_missing_arguments(&mut self, output_index: i64, item: &Value, out: &mut Vec<Value>) {
+        let Some(arguments) = item.get("arguments").and_then(Value::as_str) else {
+            return;
+        };
+        let missing = Self::missing_suffix(&mut self.streamed_args, output_index, arguments);
+        if missing.is_empty() {
+            return;
+        }
+        self.ensure_started(out);
+        let index = self.openai_index(output_index);
+        out.push(super::chunk_json(
+            &self.id,
+            &self.model,
+            json!({"tool_calls": [{"index": index, "function": {"arguments": missing}}]}),
+            None,
+        ));
+    }
+
+    fn reasoning_summary(value: &Value) -> String {
+        value
+            .get("summary")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.get("text").and_then(Value::as_str))
+            .collect()
+    }
+
+    fn emit_final_item(&mut self, output_index: i64, item: &Value, out: &mut Vec<Value>) {
+        match item.get("type").and_then(Value::as_str) {
+            Some("function_call") => self.emit_missing_arguments(output_index, item, out),
+            Some("message") => {
+                let Some(content) = item.get("content").and_then(Value::as_array) else {
+                    return;
+                };
+                for part in content {
+                    match part.get("type").and_then(Value::as_str) {
+                        Some("output_text") => {
+                            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                self.emit_missing_text(output_index, text, out);
+                            }
+                        }
+                        Some("reasoning") => {
+                            let summary = Self::reasoning_summary(part);
+                            self.emit_missing_reasoning(output_index, &summary, out);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Some("reasoning") => {
+                let summary = Self::reasoning_summary(item);
+                self.emit_missing_reasoning(output_index, &summary, out);
+            }
+            _ => {}
+        }
+    }
+
+    fn emit_final_output(&mut self, response: &Value, out: &mut Vec<Value>) {
+        let Some(output) = response.get("output").and_then(Value::as_array) else {
+            return;
+        };
+        for (index, item) in output.iter().enumerate() {
+            self.emit_final_item(index as i64, item, out);
+        }
+    }
+
     pub fn convert_event(&mut self, data: &str) -> Result<Vec<Value>, String> {
         if data == "[DONE]" {
             self.finished = true;
@@ -299,29 +426,21 @@ impl ResponsesStreamConverter {
                 self.ensure_started(&mut out);
             }
             Some("response.output_text.delta") => {
+                let output_index = value
+                    .get("output_index")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
                 let text = value.get("delta").and_then(Value::as_str).unwrap_or("");
-                if !text.is_empty() {
-                    self.ensure_started(&mut out);
-                    out.push(super::chunk_json(
-                        &self.id,
-                        &self.model,
-                        json!({"content": text}),
-                        None,
-                    ));
-                }
+                self.emit_delta(output_index, text, false, &mut out);
             }
             Some("response.reasoning_text.delta")
             | Some("response.reasoning_summary_text.delta") => {
+                let output_index = value
+                    .get("output_index")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
                 let text = value.get("delta").and_then(Value::as_str).unwrap_or("");
-                if !text.is_empty() {
-                    self.ensure_started(&mut out);
-                    out.push(super::chunk_json(
-                        &self.id,
-                        &self.model,
-                        json!({"reasoning_content": text}),
-                        None,
-                    ));
-                }
+                self.emit_delta(output_index, text, true, &mut out);
             }
             Some("response.output_item.added") => {
                 let item = value.get("item").cloned().unwrap_or(json!({}));
@@ -345,8 +464,11 @@ impl ResponsesStreamConverter {
                     .unwrap_or(0);
                 let arguments = value.get("delta").and_then(Value::as_str).unwrap_or("");
                 if !arguments.is_empty() {
+                    self.streamed_args
+                        .entry(output_index)
+                        .or_default()
+                        .push_str(arguments);
                     self.ensure_started(&mut out);
-                    self.streamed_args.insert(output_index);
                     let index = self.openai_index(output_index);
                     out.push(super::chunk_json(
                         &self.id,
@@ -357,38 +479,25 @@ impl ResponsesStreamConverter {
                 }
             }
             Some("response.output_item.done") => {
+                let output_index = value
+                    .get("output_index")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
                 let item = value.get("item").cloned().unwrap_or(json!({}));
-                if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                    let output_index = value
-                        .get("output_index")
-                        .and_then(Value::as_i64)
-                        .unwrap_or(0);
-                    // 没有 delta 流式输出时补发完整 arguments。
-                    if !self.streamed_args.contains(&output_index)
-                        && let Some(arguments) = item.get("arguments").and_then(Value::as_str)
-                        && !arguments.is_empty()
-                    {
-                        self.ensure_started(&mut out);
-                        let index = self.openai_index(output_index);
-                        out.push(super::chunk_json(
-                            &self.id,
-                            &self.model,
-                            json!({"tool_calls": [{"index": index, "function": {"arguments": arguments}}]}),
-                            None,
-                        ));
-                    }
-                }
+                self.emit_final_item(output_index, &item, &mut out);
             }
             Some("response.completed") => {
-                if let Some(usage) = value.pointer("/response/usage") {
+                let response = value.get("response").cloned().unwrap_or(json!({}));
+                self.emit_final_output(&response, &mut out);
+                if let Some(usage) = response.get("usage") {
                     self.capture_usage(usage);
                 }
-                let status = value
-                    .pointer("/response/status")
+                let status = response
+                    .get("status")
                     .and_then(Value::as_str)
                     .unwrap_or("completed");
-                let incomplete_reason = value
-                    .pointer("/response/incomplete_details/reason")
+                let incomplete_reason = response
+                    .pointer("/incomplete_details/reason")
                     .and_then(Value::as_str);
                 self.ensure_started(&mut out);
                 self.finish_reason = Some(finish_from_status(status, incomplete_reason));
@@ -402,10 +511,12 @@ impl ResponsesStreamConverter {
                 self.finished = true;
             }
             Some("response.incomplete") => {
-                let incomplete_reason = value
-                    .pointer("/response/incomplete_details/reason")
+                let response = value.get("response").cloned().unwrap_or(json!({}));
+                self.emit_final_output(&response, &mut out);
+                let incomplete_reason = response
+                    .pointer("/incomplete_details/reason")
                     .and_then(Value::as_str);
-                if let Some(usage) = value.pointer("/response/usage") {
+                if let Some(usage) = response.get("usage") {
                     self.capture_usage(usage);
                 }
                 self.ensure_started(&mut out);
@@ -478,6 +589,10 @@ impl ResponsesStreamConverter {
 
     pub fn completion_id(&self) -> &str {
         &self.id
+    }
+
+    pub fn completion_model(&self) -> &str {
+        &self.model
     }
 }
 
@@ -565,6 +680,98 @@ mod tests {
         assert_eq!(usage.input_tokens, Some(12));
         assert_eq!(usage.cache_tokens, 6);
         assert_eq!(usage.output_tokens, Some(4));
+    }
+
+    #[test]
+    fn recovers_final_output_without_deltas() {
+        let mut converter = ResponsesStreamConverter::new("req-1", "vm-a");
+        let mut chunks = Vec::new();
+        for event in [
+            r#"{"type":"response.created","response":{"id":"resp_1","model":"gpt-5"}}"#,
+            r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"message","content":[{"type":"output_text","text":"你好"},{"type":"reasoning","summary":[{"type":"summary_text","text":"思考"}]}]}}"#,
+            r#"{"type":"response.output_item.done","output_index":1,"item":{"type":"function_call","arguments":"{\"a\":1}"}}"#,
+            r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"你好"},{"type":"reasoning","summary":[{"type":"summary_text","text":"思考"}]}]},{"type":"function_call","arguments":"{\"a\":1}"}]}}"#,
+        ] {
+            chunks.extend(converter.convert_event(event).unwrap());
+        }
+
+        let content: Vec<&Value> = chunks
+            .iter()
+            .filter(|chunk| chunk.pointer("/choices/0/delta/content").is_some())
+            .collect();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["choices"][0]["delta"]["content"], "你好");
+        let reasoning: Vec<&Value> = chunks
+            .iter()
+            .filter(|chunk| {
+                chunk
+                    .pointer("/choices/0/delta/reasoning_content")
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(reasoning.len(), 1);
+        assert_eq!(
+            reasoning[0]["choices"][0]["delta"]["reasoning_content"],
+            "思考"
+        );
+        let arguments: Vec<&Value> = chunks
+            .iter()
+            .filter(|chunk| {
+                chunk
+                    .pointer("/choices/0/delta/tool_calls/0/function/arguments")
+                    .is_some()
+            })
+            .collect();
+        assert_eq!(arguments.len(), 1);
+        assert_eq!(
+            arguments[0]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"],
+            "{\"a\":1}"
+        );
+    }
+
+    #[test]
+    fn final_output_only_emits_missing_argument_suffix() {
+        let mut converter = ResponsesStreamConverter::new("req-1", "vm-a");
+        let mut chunks = Vec::new();
+        for event in [
+            r#"{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"a\":"}"#,
+            r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","arguments":"{\"a\":1}"}}"#,
+        ] {
+            chunks.extend(converter.convert_event(event).unwrap());
+        }
+
+        let arguments: Vec<&str> = chunks
+            .iter()
+            .filter_map(|chunk| {
+                chunk
+                    .pointer("/choices/0/delta/tool_calls/0/function/arguments")
+                    .and_then(Value::as_str)
+            })
+            .collect();
+        assert_eq!(arguments, ["{\"a\":", "1}"]);
+    }
+
+    #[test]
+    fn final_output_only_emits_missing_delta_suffix() {
+        let mut converter = ResponsesStreamConverter::new("req-1", "vm-a");
+        let mut chunks = Vec::new();
+        for event in [
+            r#"{"type":"response.output_text.delta","output_index":0,"delta":"hel"}"#,
+            r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"message","content":[{"type":"output_text","text":"hello"}]}}"#,
+            r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]}]}}"#,
+        ] {
+            chunks.extend(converter.convert_event(event).unwrap());
+        }
+
+        let text: Vec<&str> = chunks
+            .iter()
+            .filter_map(|chunk| {
+                chunk
+                    .pointer("/choices/0/delta/content")
+                    .and_then(Value::as_str)
+            })
+            .collect();
+        assert_eq!(text, ["hel", "lo"]);
     }
 
     #[test]

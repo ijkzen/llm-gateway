@@ -512,7 +512,7 @@ pub fn convert_response(
             "message": Value::Object(message),
             "finish_reason": finish_reason,
         }],
-        "usage": super::client_usage_json(&usage),
+        "usage": super::cached_client_usage_json(&usage),
     });
     let _ = &mut tool_calls;
     Ok((completion, usage))
@@ -780,7 +780,7 @@ mod tests {
                 "candidates": [{
                     "content": {"parts": [{"text": "hi"}, {"text": "think", "thought": true}, {"functionCall": {"name": "f", "args": {"a": 1}}}]}
                 }],
-                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3, "thoughtsTokenCount": 2}
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3, "thoughtsTokenCount": 2, "cachedContentTokenCount": 4}
             }"#,
         )
         .unwrap();
@@ -795,6 +795,10 @@ mod tests {
             "f"
         );
         assert_eq!(completion["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(
+            completion["usage"]["prompt_tokens_details"]["cached_tokens"],
+            4
+        );
         assert_eq!(usage.output_tokens, Some(5));
     }
 }
