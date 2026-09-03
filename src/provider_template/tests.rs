@@ -209,12 +209,23 @@ fn test_host_of_extracts_domain() {
 // ── 模板首次插入时向同 host 既有 provider 回填 extra 缺失键 ──
 
 async fn insert_provider(db: &DatabaseConnection, name: &str, base_url: &str, extra: &str) {
+    insert_provider_with_billing(db, name, base_url, extra, 0).await;
+}
+
+async fn insert_provider_with_billing(
+    db: &DatabaseConnection,
+    name: &str,
+    base_url: &str,
+    extra: &str,
+    billing_mode: i32,
+) {
     use crate::entity::provider;
     let now = chrono::Utc::now();
     provider::ActiveModel {
         name: Set(name.to_string()),
         base_url: Set(base_url.to_string()),
         api_key: Set(String::new()),
+        billing_mode: Set(billing_mode),
         extra: Set(extra.to_string()),
         created_at: Set(now),
         updated_at: Set(now),
@@ -236,6 +247,103 @@ async fn provider_extra(db: &DatabaseConnection, name: &str) -> serde_json::Valu
         .unwrap();
     let plain = crypto::decrypt_or_passthrough(&row.extra);
     serde_json::from_str(&plain).unwrap()
+}
+
+#[tokio::test]
+async fn krill_seed_has_payg_and_subscription_templates() {
+    let db = setup_db().await.unwrap();
+    upsert_templates(&db).await.unwrap();
+
+    let templates = find_by_domain_all(&db, "api-slb.krill-ai.net")
+        .await
+        .unwrap();
+    assert_eq!(templates.len(), 2);
+    assert!(templates.iter().any(|t| {
+        t.name == "Krill（按量付费）"
+            && t.billing_mode == 0
+            && t.extra.contains("\"usage_type\": 0")
+    }));
+    assert!(templates.iter().any(|t| {
+        t.name == "Krill（订阅制）" && t.billing_mode == 1 && t.extra.contains("\"usage_type\": 1")
+    }));
+}
+
+#[tokio::test]
+async fn krill_history_backfill_is_idempotent_and_preserves_user_values() {
+    temp_env::async_with_vars(
+        [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
+        async {
+            let db = setup_db().await.unwrap();
+            insert_provider_with_billing(
+                &db,
+                "Krill-按量历史",
+                "https://api.krill-ai.net/v1",
+                r#"{"email":"saved@example.com","custom":"keep"}"#,
+                0,
+            )
+            .await;
+            insert_provider_with_billing(
+                &db,
+                "Krill-订阅历史",
+                "https://api.cdn-krill-ai.com/v1",
+                r#"{"usage":false,"usage_type":0,"password":"saved-password","jwt":"saved-jwt"}"#,
+                1,
+            )
+            .await;
+
+            upsert_templates(&db).await.unwrap();
+            upsert_templates(&db).await.unwrap();
+
+            let payg = provider_extra(&db, "Krill-按量历史").await;
+            assert_eq!(payg["email"], "saved@example.com");
+            assert_eq!(payg["password"], "");
+            assert_eq!(payg["jwt"], "");
+            assert_eq!(payg["usage"], true);
+            assert_eq!(payg["usage_type"], 0);
+            assert_eq!(payg["custom"], "keep");
+
+            let subscription = provider_extra(&db, "Krill-订阅历史").await;
+            assert_eq!(subscription["usage"], false);
+            assert_eq!(subscription["usage_type"], 1);
+            assert_eq!(subscription["email"], "");
+            assert_eq!(subscription["password"], "saved-password");
+            assert_eq!(subscription["jwt"], "saved-jwt");
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn krill_history_backfill_skips_invalid_extra_and_continues() {
+    let db = setup_db().await.unwrap();
+    insert_provider_with_billing(
+        &db,
+        "Krill-坏历史",
+        "https://api.krill-ai.net/v1",
+        "not-json",
+        0,
+    )
+    .await;
+    insert_provider_with_billing(
+        &db,
+        "Krill-好历史",
+        "https://api.cdn-krill-ai.com/v1",
+        r#"{}"#,
+        1,
+    )
+    .await;
+
+    upsert_templates(&db).await.unwrap();
+
+    assert_eq!(provider_extra(&db, "Krill-好历史").await["usage_type"], 1);
+    use crate::entity::provider;
+    let invalid = provider::Entity::find()
+        .filter(provider::Column::Name.eq("Krill-坏历史"))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(invalid.extra, "not-json");
 }
 
 #[tokio::test]

@@ -98,7 +98,8 @@ pub async fn query_provider_usage(
         extra: &extra,
     };
     let host = crate::provider_template::host_of(&model.base_url).ok_or(UsageError::Unsupported)?;
-    let fetcher = fetcher_for(&host, &path_of(&model.base_url)).ok_or(UsageError::Unsupported)?;
+    let path = path_of(&model.base_url);
+    let krill = crate::provider_template::is_krill_host(&host);
 
     let http = if model.proxy_enabled && !model.proxy_addr.trim().is_empty() {
         http::UsageHttp::with_proxy(Some(&model.proxy_addr))
@@ -107,15 +108,30 @@ pub async fn query_provider_usage(
     };
     let proxy = (model.proxy_enabled && !model.proxy_addr.trim().is_empty())
         .then_some(model.proxy_addr.as_str());
-    let output = match &fetcher {
-        // SenseNova：登录/轮换都要回写 refresh_token（需要 db/provider_id 与
-        // 带 cookie/重定向的登录客户端），因此在这里单独处理。
-        Fetcher::Sensenova => {
-            let login = sensenova_login::SensenovaLogin::with_proxy(proxy);
-            let ctx = fetchers::SensenovaContext { db, provider_id };
-            fetchers::sensenova::fetch_sensenova(&http, &login, &creds, &ctx).await?
+    let output = if krill {
+        // Krill 用账号密码登录换取 JWT，凭据本身（jwt）由模板动态签发。
+        let first_attempt = match creds.extra_str("jwt") {
+            Some(jwt) => fetchers::krill::fetch_subscription(&http, jwt, model.billing_mode).await,
+            None => Err(UsageError::Auth),
+        };
+        match first_attempt {
+            Ok(output) => output,
+            Err(UsageError::Auth) => {
+                let jwt = fetchers::krill::login(&http, &creds).await?;
+                write_back_extra_key(db, provider_id, "jwt", &jwt).await?;
+                fetchers::krill::fetch_subscription(&http, &jwt, model.billing_mode).await?
+            }
+            Err(error) => return Err(error),
         }
-        _ => fetcher.fetch(&http, &creds).await?,
+    } else if matches!(fetcher_for(&host, &path), Some(Fetcher::Sensenova)) {
+        // SenseNova：登录/轮换都要写回 refresh_token（需要 db/provider_id 与
+        // 带 cookie/重定向的登录客户端），因此在这里单独处理。
+        let login = sensenova_login::SensenovaLogin::with_proxy(proxy);
+        let ctx = fetchers::SensenovaContext { db, provider_id };
+        fetchers::sensenova::fetch_sensenova(&http, &login, &creds, &ctx).await?
+    } else {
+        let fetcher = fetcher_for(&host, &path).ok_or(UsageError::Unsupported)?;
+        fetcher.fetch(&http, &creds).await?
     };
     let data = match output {
         FetchOutput::Quota { plan, windows } => UsageData {
@@ -139,29 +155,31 @@ pub async fn query_provider_usage(
     Ok(data)
 }
 
-/// 把新的 refresh_token 写回 provider extra（只改该键，其余保留）。
+/// 把新的动态凭据写回 provider extra（只改该键，其余保留）。
 /// 写回时重读最新行再合并，缩小与并发 extra 编辑之间的丢更新窗口。
 /// 存储值无法解密（如密钥变更）时返回 Err，避免在密文上解析失败后
-/// 只留下 refresh_token 而清空其余凭据。
-pub(crate) async fn write_back_refresh_token(
+/// 只留下该键而清空其余凭据。
+pub(crate) async fn write_back_extra_key(
     db: &DatabaseConnection,
     provider_id: i32,
-    token: &str,
+    key: &str,
+    value: &str,
 ) -> Result<(), UsageError> {
     let latest = provider::Entity::find_by_id(provider_id)
         .one(db)
         .await
-        .map_err(|e| UsageError::Network(format!("写回 refresh_token 失败：{e}")))?
+        .map_err(|e| UsageError::Network(format!("写回 {key} 失败：{e}")))?
         .ok_or(UsageError::Auth)?;
     let extra_plain = crate::crypto::decrypt(&latest.extra).map_err(|_| UsageError::Auth)?;
     let mut map = match serde_json::from_str::<Value>(&extra_plain) {
         Ok(Value::Object(map)) => map,
-        _ => Default::default(),
+        _ => {
+            return Err(UsageError::Parse(
+                "写回动态凭据失败：provider extra 不是合法 JSON 对象".to_string(),
+            ));
+        }
     };
-    map.insert(
-        "refresh_token".to_string(),
-        Value::String(token.to_string()),
-    );
+    map.insert(key.to_string(), Value::String(value.to_string()));
     let am = provider::ActiveModel {
         id: Set(provider_id),
         extra: Set(crate::crypto::encrypt(&Value::Object(map).to_string())),
@@ -169,7 +187,7 @@ pub(crate) async fn write_back_refresh_token(
     };
     am.update(db)
         .await
-        .map_err(|e| UsageError::Network(format!("写回 refresh_token 失败：{e}")))?;
+        .map_err(|e| UsageError::Network(format!("写回 {key} 失败：{e}")))?;
     Ok(())
 }
 
@@ -230,6 +248,7 @@ fn fetcher_for(host: &str, path: &str) -> Option<Fetcher> {
             Fetcher::XiaomiTokenPlan
         }
         "token.sensenova.cn" | "platform.sensenova.cn" => Fetcher::Sensenova,
+        _ if crate::provider_template::is_krill_host(host) => Fetcher::Krill,
         _ => return None,
     })
 }
@@ -255,6 +274,7 @@ enum Fetcher {
     AlibabaCoding { intl: bool },
     AlibabaToken { intl: bool },
     Sensenova,
+    Krill,
 }
 
 impl Fetcher {
@@ -322,6 +342,8 @@ impl Fetcher {
             }
             // SenseNova 在 query_provider_usage 单独处理（需要 db/provider_id 回写登录/轮换凭据）。
             Fetcher::Sensenova => Err(UsageError::Unsupported),
+            // Krill 由 provider_template 模板覆盖、以 JWT 动态签发访问，无独立 fetcher。
+            Fetcher::Krill => Err(UsageError::Unsupported),
         }
     }
 }
@@ -427,7 +449,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn write_back_refresh_token_preserves_encryption() {
+    async fn write_back_extra_key_preserves_encryption() {
         temp_env::async_with_vars([(ENCRYPTION_KEY_ENV, Some("test-key"))], async {
             let db = crate::db::connect("sqlite::memory:").await.unwrap();
             let now = chrono::Utc::now();
@@ -449,7 +471,7 @@ mod tests {
             .await
             .unwrap();
 
-            write_back_refresh_token(&db, p.id, "new-token")
+            write_back_extra_key(&db, p.id, "refresh_token", "new-token")
                 .await
                 .unwrap();
 

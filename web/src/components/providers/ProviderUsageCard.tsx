@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 
 const WINDOW_LABEL_KEYS: Record<UsageWindow["window"], string> = {
 	five_hour: "providers.windowFiveHour",
+	daily: "providers.windowDaily",
 	weekly: "providers.windowWeekly",
 	monthly: "providers.windowMonthly",
 };

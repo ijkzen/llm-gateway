@@ -386,6 +386,12 @@ mod tests {
     }
 
     #[test]
+    fn subscription_usable_daily_exhausted_is_unusable() {
+        let windows = vec![window(WindowKind::Daily, 0.0)];
+        assert_eq!(quota_data(1, windows).subscription_usable(), Some(false));
+    }
+
+    #[test]
     fn subscription_usable_no_provided_window_is_none() {
         // 厂商未提供任何窗口数据 → 无法判定。
         assert_eq!(quota_data(1, empty_windows()).subscription_usable(), None);

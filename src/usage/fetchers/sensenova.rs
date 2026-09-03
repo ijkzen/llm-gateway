@@ -46,8 +46,13 @@ pub async fn fetch_sensenova(
             Ok((output, rotated)) => {
                 // 轮换出的新 token 立即写回（与旧值相同/缺失则跳过）。
                 if let Some(new_token) = rotated {
-                    super::super::write_back_refresh_token(ctx.db, ctx.provider_id, &new_token)
-                        .await?;
+                    super::super::write_back_extra_key(
+                        ctx.db,
+                        ctx.provider_id,
+                        "refresh_token",
+                        &new_token,
+                    )
+                    .await?;
                 }
                 return Ok(output);
             }
@@ -66,7 +71,13 @@ pub async fn fetch_sensenova(
     let password = creds.require("password")?;
     let tokens = login.login(username, password).await?;
     // 新 refresh_token 必须先回写（重读最新行、严格解密、只合并该键），失败不继续重试。
-    super::super::write_back_refresh_token(ctx.db, ctx.provider_id, &tokens.refresh_token).await?;
+    super::super::write_back_extra_key(
+        ctx.db,
+        ctx.provider_id,
+        "refresh_token",
+        &tokens.refresh_token,
+    )
+    .await?;
     let (output, _) = renew_and_query(http, &tokens.refresh_token).await?;
     Ok(output)
 }

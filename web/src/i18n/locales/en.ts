@@ -256,6 +256,7 @@ const en: Translation = {
 		usageCardTitle: "Usage info",
 		refreshUsage: "Refresh usage",
 		windowFiveHour: "5 hours",
+		windowDaily: "Today",
 		windowWeekly: "This week",
 		windowMonthly: "This month",
 		remainingPercent: "{{percent}}% remaining",

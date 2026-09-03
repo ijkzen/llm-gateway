@@ -77,6 +77,25 @@ describe("ProviderUsageCard", () => {
 		expect(screen.getByText(/重置/)).toBeInTheDocument();
 	});
 
+	it("quota：展示日额度窗口", () => {
+		mockQuery({
+			data: quotaUsage([
+				{
+					window: "daily",
+					available: true,
+					used: 2,
+					limit: 10,
+					remainingPercent: 80,
+					unit: "USD",
+				},
+			]),
+		});
+		render(<ProviderUsageCard providerId={1} />);
+		expect(screen.getByText("今日")).toBeInTheDocument();
+		expect(screen.getByText("剩余 80%")).toBeInTheDocument();
+		expect(screen.getByText("已用 2 / 10 USD")).toBeInTheDocument();
+	});
+
 	it("quota：全部窗口不可用时显示空态", () => {
 		mockQuery({
 			data: quotaUsage([

@@ -226,7 +226,7 @@ pub(crate) fn validate_proxy(proxy_enabled: bool, proxy_addr: &str, lang: Lang) 
 }
 
 /// extra 校验：必须是合法 JSON 对象；当 usage 开启时，模板中值为空的
-/// 推荐字段必须全部填写（允许 `usage`/`usage_type` 这类标记字段本身为空）。
+/// 推荐字段必须全部填写（允许 `usage`/`usage_type` 标记和后端派生的 `jwt` 为空）。
 fn validate_extra(extra: &str, lang: Lang) -> Option<String> {
     let parsed = match serde_json::from_str::<Value>(extra) {
         Ok(Value::Object(map)) => map,
@@ -262,8 +262,9 @@ fn validate_extra(extra: &str, lang: Lang) -> Option<String> {
         .filter(|(key, val)| {
             key.as_str() != EXTRA_USAGE_KEY
                 && key.as_str() != "usage_type"
-                // refresh_token 是后端派生隐藏凭据（登录/续期后写回），允许为空。
+                // 下列字段为后端派生/模板隐藏凭据（登录后写回、模板动态签发），允许为空。
                 && key.as_str() != "refresh_token"
+                && key.as_str() != "jwt"
                 && val.as_str().is_some_and(|s| s.trim().is_empty())
         })
         .map(|(key, _)| key.clone())

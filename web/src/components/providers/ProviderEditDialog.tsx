@@ -103,11 +103,11 @@ function isJsonObject(value: string): boolean {
 	}
 }
 
-/** 需要用户填写的 extra 字段：排除 usage/usage_type 标记与后端派生的 refresh_token。 */
+/** 需要用户填写的 extra 字段：排除标记字段与后端维护的派生凭据（refresh_token/jwt）。 */
 function editableExtraKeys(extra: string | undefined): string[] {
 	const map = parseExtra(extra);
 	return Object.keys(map).filter(
-		(k) => k !== "usage" && k !== "usage_type" && k !== "refresh_token",
+		(k) => k !== "usage" && k !== "usage_type" && k !== "refresh_token" && k !== "jwt",
 	);
 }
 
@@ -141,7 +141,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 
 	const [advancedOpen, setAdvancedOpen] = useState(false);
 	const [extraValues, setExtraValues] = useState<Record<string, string>>({});
-	// 模板 extra 中需要填写的字段清单（不含 usage/usage_type 标记）。
+	// 模板 extra 中需要填写的字段清单（不含标记与后端派生凭据）。
 	const [extraKeys, setExtraKeys] = useState<string[]>([]);
 
 	const form = useForm<FormValues>({

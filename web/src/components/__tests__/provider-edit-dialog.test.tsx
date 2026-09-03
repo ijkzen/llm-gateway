@@ -30,11 +30,10 @@ vi.mock("@/hooks/use-toast", () => ({
 	}),
 }));
 
-/** SenseNova 编辑场景：usage 开启、含后端派生 refresh_token 与用户维护的 username/password。 */
-function makeSensenovaProvider(): Provider {
+function makeProvider(overrides: Partial<Provider> = {}): Provider {
 	return {
 		id: 9,
-		name: "SenseNova",
+		name: "Test",
 		enable: true,
 		baseUrl: "https://token.sensenova.cn/v1",
 		apiKeyMasked: "sk-****test",
@@ -52,6 +51,7 @@ function makeSensenovaProvider(): Provider {
 		proxyAddr: "",
 		createdAt: "2026-08-30T12:00:00Z",
 		updatedAt: "2026-08-30T12:00:00Z",
+		...overrides,
 	};
 }
 
@@ -61,7 +61,7 @@ beforeEach(() => {
 
 describe("ProviderEditDialog：SenseNova 账号密码登录字段", () => {
 	it("编辑时隐藏后端派生的 refresh_token，只展示 username/password（password 掩码）", () => {
-		render(<ProviderEditDialog open onOpenChange={vi.fn()} provider={makeSensenovaProvider()} />);
+		render(<ProviderEditDialog open onOpenChange={vi.fn()} provider={makeProvider()} />);
 		// 展开高级设置（extra 字段区域）。
 		fireEvent.click(screen.getByRole("button", { name: "高级设置" }));
 
@@ -73,7 +73,7 @@ describe("ProviderEditDialog：SenseNova 账号密码登录字段", () => {
 	});
 
 	it("保存时保留隐藏的 refresh_token（由后端维护）", async () => {
-		render(<ProviderEditDialog open onOpenChange={vi.fn()} provider={makeSensenovaProvider()} />);
+		render(<ProviderEditDialog open onOpenChange={vi.fn()} provider={makeProvider()} />);
 		fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
 		await waitFor(() => expect(mocks.updateMutate).toHaveBeenCalledTimes(1));
@@ -86,5 +86,41 @@ describe("ProviderEditDialog：SenseNova 账号密码登录字段", () => {
 		expect(extra.username).toBe("ijkzen");
 		expect(extra.password).toBe("secret-pw");
 		expect(extra.usage).toBe(true);
+	});
+});
+
+describe("ProviderEditDialog Krill 凭据", () => {
+	const krillProvider = makeProvider({
+		id: 7,
+		name: "Krill（按量付费）",
+		baseUrl: "https://api-slb.krill-ai.net/v1",
+		billingMode: 0,
+		extra: JSON.stringify({
+			email: "user@example.com",
+			password: "secret",
+			jwt: "jwt-existing",
+			usage: true,
+			usage_type: 0,
+		}),
+	});
+
+	it("隐藏 JWT、密码使用密码框，并在保存时保留 JWT", async () => {
+		render(<ProviderEditDialog open onOpenChange={vi.fn()} provider={krillProvider} />);
+		fireEvent.click(screen.getByRole("button", { name: "高级设置" }));
+
+		expect(screen.getByLabelText("email")).toHaveValue("user@example.com");
+		expect(screen.getByLabelText("password")).toHaveAttribute("type", "password");
+		expect(screen.queryByLabelText("jwt")).not.toBeInTheDocument();
+
+		fireEvent.click(screen.getByRole("button", { name: "保存" }));
+		await waitFor(() => expect(mocks.updateMutate).toHaveBeenCalledOnce());
+		const payload = mocks.updateMutate.mock.calls[0]?.[0];
+		expect(JSON.parse(payload.extra)).toMatchObject({
+			email: "user@example.com",
+			password: "secret",
+			jwt: "jwt-existing",
+			usage: true,
+			usage_type: 0,
+		});
 	});
 });

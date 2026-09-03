@@ -255,6 +255,7 @@ const zhCN = {
 		usageCardTitle: "用量信息",
 		refreshUsage: "刷新用量",
 		windowFiveHour: "5 小时",
+		windowDaily: "今日",
 		windowWeekly: "本周",
 		windowMonthly: "本月",
 		remainingPercent: "剩余 {{percent}}%",

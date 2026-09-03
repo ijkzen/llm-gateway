@@ -17,6 +17,7 @@ pub fn cmp_quota_remaining(a: Option<&UsageData>, b: Option<&UsageData>) -> Orde
         (Some(x), Some(y)) => {
             for kind in [
                 WindowKind::FiveHour,
+                WindowKind::Daily,
                 WindowKind::Weekly,
                 WindowKind::Monthly,
             ] {
@@ -161,6 +162,28 @@ mod tests {
         assert_eq!(
             cmp_quota_remaining(low.as_ref(), high.as_ref()),
             Ordering::Less
+        );
+    }
+
+    #[test]
+    fn daily_window_decides_before_weekly() {
+        let daily_high = quota_from_windows(
+            1,
+            vec![
+                window(WindowKind::Daily, 80.0),
+                window(WindowKind::Weekly, 10.0),
+            ],
+        );
+        let daily_low = quota_from_windows(
+            2,
+            vec![
+                window(WindowKind::Daily, 20.0),
+                window(WindowKind::Weekly, 90.0),
+            ],
+        );
+        assert_eq!(
+            cmp_quota_remaining(daily_high.as_ref(), daily_low.as_ref()),
+            Ordering::Greater
         );
     }
 
