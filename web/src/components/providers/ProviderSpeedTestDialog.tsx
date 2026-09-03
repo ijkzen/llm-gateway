@@ -99,16 +99,17 @@ export function ProviderSpeedTestDialog({
 			<Dialog open={open} onOpenChange={onOpenChange}>
 				<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[520px]">
 					<DialogHeader className="space-y-3">
+						<DialogTitle
+							className="flex min-w-0 items-center gap-2 pr-8"
+							title={t("providers.speedTestTitle", { name: provider?.name ?? "" })}
+						>
+							<Gauge className="size-4 shrink-0" />
+							<span className="truncate">
+								{t("providers.speedTestTitle", { name: provider?.name ?? "" })}
+							</span>
+						</DialogTitle>
 						<div className="flex items-center justify-between gap-3">
-							<DialogTitle
-								className="flex min-w-0 items-center gap-2"
-								title={t("providers.speedTestTitle", { name: provider?.name ?? "" })}
-							>
-								<Gauge className="size-4 shrink-0" />
-								<span className="truncate">
-									{t("providers.speedTestTitle", { name: provider?.name ?? "" })}
-								</span>
-							</DialogTitle>
+							<DialogDescription>{t("providers.speedTestDesc")}</DialogDescription>
 							<Switch
 								checked={enabled}
 								disabled={updateProvider.isPending}
@@ -116,7 +117,6 @@ export function ProviderSpeedTestDialog({
 								onCheckedChange={toggleEnable}
 							/>
 						</div>
-						<DialogDescription>{t("providers.speedTestDesc")}</DialogDescription>
 					</DialogHeader>
 
 					{isLoading ? (
