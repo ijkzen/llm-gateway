@@ -69,22 +69,49 @@ impl SensenovaLogin {
         username: &str,
         password: &str,
     ) -> Result<SensenovaTokens, UsageError> {
+        tracing::info!(username, "SenseNova 登录开始");
         // 1. authorize（PKCE）→ login?login_challenge=（cookie 会话开启）
-        let challenge = self.start_challenge().await?;
+        let challenge = self.start_challenge().await.map_err(|e| {
+            tracing::warn!(error = %e, "登录步骤 1/6 authorize 失败");
+            e
+        })?;
+        tracing::info!("登录步骤 1/6 authorize 成功，拿到 login_challenge");
         // 2. JWKS 取 RSA 公钥
-        let pubkey = self.fetch_public_key().await?;
+        let pubkey = self.fetch_public_key().await.map_err(|e| {
+            tracing::warn!(error = %e, "登录步骤 2/6 获取 JWKS 公钥失败");
+            e
+        })?;
+        tracing::info!("登录步骤 2/6 JWKS 公钥获取成功");
         // 3. 密码 → 5 段 JWE
         let jwe = encrypt_password(&pubkey, password)?;
+        tracing::info!("登录步骤 3/6 密码已加密为 5 段 JWE");
         // 4. nova/login → redirect（带 login_verifier）
         let redirect = self
             .nova_login(username, &jwe, &challenge)
-            .await?
-            .ok_or(UsageError::Auth)?;
+            .await
+            .map_err(|e| {
+                tracing::warn!(error = %e, "登录步骤 4/6 nova/login 失败");
+                e
+            })?
+            .ok_or_else(|| {
+                tracing::warn!("登录步骤 4/6 nova/login 成功但无 redirect（视为 Auth）");
+                UsageError::Auth
+            })?;
+        tracing::info!("登录步骤 4/6 nova/login 成功，拿到 redirect");
         // 5. 跟随 redirect（consent 自动批准）→ ?code=（同 cookie 会话，自动重定向）
-        let code = self.follow_to_code(&redirect).await?;
+        let code = self.follow_to_code(&redirect).await.map_err(|e| {
+            tracing::warn!(error = %e, "登录步骤 5/6 跟随 redirect 拿 code 失败");
+            e
+        })?;
+        tracing::info!("登录步骤 5/6 跟随 redirect 成功，拿到 code");
         // 6. code → refresh_token
         let verifier = self.rand_b64u(32);
-        self.exchange_code(&code, &verifier).await
+        let tokens = self.exchange_code(&code, &verifier).await.map_err(|e| {
+            tracing::warn!(error = %e, "登录步骤 6/6 code 换 refresh_token 失败");
+            e
+        })?;
+        tracing::info!("登录步骤 6/6 换 refresh_token 成功");
+        Ok(tokens)
     }
 
     /// authorize 拿 login_challenge。用受限重定向跟随到登录页，再从 URL 取 challenge。
@@ -103,7 +130,9 @@ impl SensenovaLogin {
             .await
             .map_err(|e| UsageError::Network(format!("发起登录失败：{e}")))?;
         let final_url = resp.url().to_string();
-        parse_login_challenge(&final_url)
+        let challenge = parse_login_challenge(&final_url)?;
+        tracing::debug!("authorize 最终 URL 含 login_challenge");
+        Ok(challenge)
     }
 
     async fn fetch_public_key(&self) -> Result<rsa::RsaPublicKey, UsageError> {
@@ -119,6 +148,7 @@ impl SensenovaLogin {
             .text()
             .await
             .map_err(|e| UsageError::Network(e.to_string()))?;
+        tracing::debug!(status, "JWKS 获取返回");
         if status != 200 {
             return Err(UsageError::Upstream(status, snippet(&body)));
         }
@@ -154,19 +184,24 @@ impl SensenovaLogin {
             .text()
             .await
             .map_err(|e| UsageError::Network(e.to_string()))?;
+        tracing::debug!(status, "nova/login 返回");
         if status == 401 || status == 403 {
             // 账号锁定（forbidLoginForMoment）与凭据无效分开：锁定是临时限流，
             // 再试会刷新锁定窗口，应明确提示而非当作凭据错持续重试。
             if let Some(msg) = account_lock(&text) {
+                tracing::warn!(status, msg = %msg, "nova/login 账号被临时锁定");
                 return Err(UsageError::Upstream(status, msg));
             }
+            tracing::warn!(status, "nova/login 鉴权失败（凭据无效）");
             return Err(UsageError::Auth);
         }
         if status != 200 {
             // 400 + incorrectUsernameOrPassword → Auth；其余按上游错误。
             return if is_wrong_credentials(&text) {
+                tracing::warn!(status, "nova/login 账号或密码错误");
                 Err(UsageError::Auth)
             } else {
+                tracing::warn!(status, body = %snippet(&text), "nova/login 上游错误");
                 Err(UsageError::Upstream(status, snippet(&text)))
             };
         }
@@ -182,7 +217,11 @@ impl SensenovaLogin {
             .await
             .map_err(|e| UsageError::Network(format!("跟随登录跳转失败：{e}")))?;
         let final_url = resp.url().to_string();
-        parse_code(&final_url).ok_or(UsageError::Auth)
+        tracing::debug!(final_url = %final_url, "跟随 redirect 后最终 URL");
+        parse_code(&final_url).ok_or_else(|| {
+            tracing::warn!(final_url = %final_url, "跟随 redirect 后 URL 无 code（视为 Auth）");
+            UsageError::Auth
+        })
     }
 
     async fn exchange_code(
@@ -208,14 +247,20 @@ impl SensenovaLogin {
             .text()
             .await
             .map_err(|e| UsageError::Network(e.to_string()))?;
+        tracing::debug!(status, "code 换 token 返回");
         if status != 200 {
             return Err(if status == 401 || status == 403 {
+                tracing::warn!(status, "code 换 token 鉴权失败");
                 UsageError::Auth
             } else {
+                tracing::warn!(status, body = %snippet(&text), "code 换 token 上游错误");
                 UsageError::Upstream(status, snippet(&text))
             });
         }
-        let refresh_token = parse_token_response(&text).ok_or(UsageError::Auth)?;
+        let refresh_token = parse_token_response(&text).ok_or_else(|| {
+            tracing::warn!("code 换 token 200 但响应无 refresh_token（视为 Auth）");
+            UsageError::Auth
+        })?;
         Ok(SensenovaTokens { refresh_token })
     }
 

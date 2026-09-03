@@ -62,12 +62,23 @@ pub async fn fetch_sensenova(
     creds: &Credentials<'_>,
     ctx: &SensenovaContext<'_>,
 ) -> Result<FetchOutput, UsageError> {
+    let provider_id = ctx.provider_id;
+    let has_rt = creds.extra_str("refresh_token").is_some();
+    let has_creds = creds.extra_str("username").is_some() && creds.extra_str("password").is_some();
+    tracing::info!(
+        provider_id,
+        has_refresh_token = has_rt,
+        has_account_password = has_creds,
+        "SenseNova 用量抓取开始",
+    );
+
     // 有 refresh_token → 先走续期查询。
     if let Some(refresh_token) = creds.extra_str("refresh_token") {
         match renew_and_query(http, refresh_token).await {
             Ok((output, rotated)) => {
                 // 轮换出的新 token 立即写回（与旧值相同/缺失则跳过）。
                 if let Some(new_token) = rotated {
+                    tracing::info!(provider_id, "续期成功且轮换出新 refresh_token，写回",);
                     super::super::write_back_extra_key(
                         ctx.db,
                         ctx.provider_id,
@@ -75,47 +86,63 @@ pub async fn fetch_sensenova(
                         &new_token,
                     )
                     .await?;
+                } else {
+                    tracing::info!(provider_id, "续期成功，refresh_token 未轮换");
                 }
                 return Ok(output);
             }
             Err(UsageError::Auth) => {
                 // 明确失效：有账号密码 → 走登录重试；没有 → 保持原「凭据失效」语义
                 // （不能自愈，避免报误导性的「缺少 username」）。
+                tracing::warn!(provider_id, "续期明确鉴权失败（refresh_token 失效）");
                 if creds.extra_str("username").is_none() && creds.extra_str("password").is_none() {
+                    tracing::warn!(provider_id, "无 username/password，无法自愈，返回凭据失效",);
                     return Err(UsageError::Auth);
                 }
             }
-            Err(e) => return Err(e), // 网络/5xx/解析失败不登录
+            Err(e) => {
+                tracing::warn!(provider_id, error = %e, "续期失败（非鉴权类），不触发登录");
+                return Err(e); // 网络/5xx/解析失败不登录
+            }
         }
+    } else {
+        tracing::info!(provider_id, "无 refresh_token，直接走账号密码登录");
     }
     // 重新登录最多一次（refresh_token 缺失时同样先进来）。
     let username = creds.require("username")?;
     let password = creds.require("password")?;
 
     // 冷却期内不重试登录（账号已因连续失败被商汤临时锁定，再试会刷新锁定窗口）。
-    if let Some(failed_at) = login_failures()
-        .lock()
-        .unwrap()
-        .get(&ctx.provider_id)
-        .copied()
+    if let Some(failed_at) = login_failures().lock().unwrap().get(&provider_id).copied()
         && Utc::now().signed_duration_since(failed_at)
             < chrono::Duration::from_std(LOGIN_COOLDOWN).unwrap()
     {
+        let since_secs = Utc::now().signed_duration_since(failed_at).num_seconds();
+        tracing::warn!(
+            provider_id,
+            failed_secs_ago = since_secs,
+            "登录处于冷却期（上次失败后 15 分钟内），跳过登录",
+        );
         return Err(UsageError::Upstream(429, LOGIN_COOLDOWN_MSG.to_string()));
     }
 
+    tracing::info!(provider_id, "开始账号密码登录（换取新 refresh_token）");
     let tokens = login.login(username, password).await.map_err(|e| {
         // 凭据错 / 账号锁定才冷却（避免反复撞锁）；网络抖动不冷却，下次仍可重试。
         if matches!(e, UsageError::Auth | UsageError::Upstream(_, _)) {
+            tracing::warn!(provider_id, error = %e, "登录失败，进入冷却");
             login_failures()
                 .lock()
                 .unwrap()
-                .insert(ctx.provider_id, Utc::now());
+                .insert(provider_id, Utc::now());
+        } else {
+            tracing::warn!(provider_id, error = %e, "登录失败（网络类，不冷却）");
         }
         e
     })?;
     // 登录成功 → 清除冷却记录。
-    login_failures().lock().unwrap().remove(&ctx.provider_id);
+    login_failures().lock().unwrap().remove(&provider_id);
+    tracing::info!(provider_id, "登录成功，写回新 refresh_token");
     // 新 refresh_token 必须先回写（重读最新行、严格解密、只合并该键），失败不继续重试。
     super::super::write_back_extra_key(
         ctx.db,
@@ -124,6 +151,7 @@ pub async fn fetch_sensenova(
         &tokens.refresh_token,
     )
     .await?;
+    tracing::info!(provider_id, "refresh_token 已写回，用新 token 重试续期查询");
     let (output, _) = renew_and_query(http, &tokens.refresh_token).await?;
     Ok(output)
 }
@@ -140,13 +168,22 @@ async fn renew_and_query(
     // refresh_token 为 JWT/base64url 字符，均为 form 安全字符，直接内嵌。
     let form = format!("grant_type=refresh_token&client_id=nova&refresh_token={refresh_token}");
     let reply = http.post_form(TOKEN_URL, &[], &form).await?;
+    tracing::debug!(
+        status = reply.status,
+        "续期请求（grant_type=refresh_token）返回",
+    );
     ensure_not_auth_error(&reply)?;
     // 商汤 OAuth token 端点对失效 refresh_token 返回 HTTP 400 + `invalid_grant`
     // （非 401/403），同样视为明确鉴权失败以触发登录自愈。
     if reply.status == 400 && reply.body.to_lowercase().contains("\"invalid_grant\"") {
+        tracing::warn!(
+            status = reply.status,
+            "续期返回 400 invalid_grant → 判定 refresh_token 失效（Auth）",
+        );
         return Err(UsageError::Auth);
     }
     if reply.status != 200 {
+        tracing::warn!(status = reply.status, "续期返回非 200 → 上游错误",);
         return Err(UsageError::Upstream(reply.status, snippet(&reply.body)));
     }
     let token: Value = serde_json::from_str(&reply.body)
@@ -156,7 +193,10 @@ async fn renew_and_query(
         .get("access_token")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .ok_or(UsageError::Auth)?;
+        .ok_or_else(|| {
+            tracing::warn!("续期 200 但响应无 access_token（invalid_grant）→ Auth",);
+            UsageError::Auth
+        })?;
     let rotated = token
         .get("refresh_token")
         .and_then(Value::as_str)
@@ -175,9 +215,19 @@ async fn renew_and_query(
         .await?;
     ensure_not_auth_error(&reply)?;
     if reply.status != 200 {
+        tracing::warn!(
+            status = reply.status,
+            "pool-usage 查询返回非 200 → 上游错误",
+        );
         return Err(UsageError::Upstream(reply.status, snippet(&reply.body)));
     }
-    parse_pool_usage(&reply.body).map(|output| (output, rotated))
+    let output = parse_pool_usage(&reply.body)?;
+    let window_count = match &output {
+        FetchOutput::Quota { windows, .. } => windows.len(),
+        FetchOutput::Balance { .. } => 0,
+    };
+    tracing::info!(window_count, "pool-usage 查询成功");
+    Ok((output, rotated))
 }
 
 fn parse_pool_usage(body: &str) -> Result<FetchOutput, UsageError> {
