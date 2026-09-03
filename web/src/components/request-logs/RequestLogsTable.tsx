@@ -271,6 +271,23 @@ export function RequestLogsTable() {
 				),
 			},
 			{
+				// 供应商名称由后端 LEFT JOIN provider 补出；缺失（供应商已删）时兜底 #id。
+				accessorKey: "providerName",
+				meta: { title: t("requestLogs.provider") },
+				header: ({ column }) => (
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.provider")}
+						className={PLAIN_HEADER_CLASS}
+					/>
+				),
+				cell: ({ row }) => (
+					<span className="font-medium">
+						{row.original.providerName ?? `#${row.original.providerId}`}
+					</span>
+				),
+			},
+			{
 				accessorKey: "apiKeyName",
 				meta: { title: t("requestLogs.apiKey") },
 				header: ({ column }) => (
