@@ -422,12 +422,13 @@ pub fn encrypt_password(
     public_key: &rsa::RsaPublicKey,
     password: &str,
 ) -> Result<String, UsageError> {
-    use aes_gcm::aead::{Aead, KeyInit};
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
     use aes_gcm::{Aes256Gcm, Nonce};
     use rand::RngCore;
     use rsa::Oaep;
 
     let header = r#"{"alg":"RSA-OAEP","enc":"A256GCM"}"#;
+    // JWE 标准：AES-GCM 的附加认证数据（AAD）= base64url(header)，同时作为产物第 1 段。
     let aad = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header.as_bytes());
 
     // 32 字节 CEK（AES-256）+ 12 字节 IV。
@@ -436,12 +437,19 @@ pub fn encrypt_password(
     rand::thread_rng().fill_bytes(&mut cek);
     rand::thread_rng().fill_bytes(&mut iv);
 
-    // AES-256-GCM：密文（不含 tag）与 16 字节 tag。
+    // AES-256-GCM：密文（不含 tag）与 16 字节 tag。AAD 必须参与认证——
+    // 商汤服务端按 JWE 标准用 base64url(header) 做 AAD 解包，缺失会判「密码错误」。
     let cipher = Aes256Gcm::new_from_slice(&cek).map_err(|_| UsageError::Auth)?;
-    let ct_with_tag = cipher
-        .encrypt(&Nonce::from(iv), password.as_bytes())
+    let ct_and_tag = cipher
+        .encrypt(
+            &Nonce::from(iv),
+            Payload {
+                msg: password.as_bytes(),
+                aad: aad.as_bytes(),
+            },
+        )
         .map_err(|_| UsageError::Auth)?;
-    let (ct, tag) = ct_with_tag.split_at(ct_with_tag.len() - 16);
+    let (ct, tag) = ct_and_tag.split_at(ct_and_tag.len() - 16);
 
     // RSA-OAEP(SHA-1) 包裹 CEK。
     let encrypted_key = public_key
@@ -591,7 +599,8 @@ mod tests {
         );
 
         // 完整解包验证可还原密码（用私钥解 CEK → AES-GCM 解密）。
-        use aes_gcm::aead::{Aead, KeyInit};
+        // JWE 标准：AES-GCM 的 AAD = base64url(header)（即第 1 段），解密必须带它。
+        use aes_gcm::aead::{Aead, KeyInit, Payload};
         use aes_gcm::{Aes256Gcm, Nonce};
         use rsa::Oaep;
         let enc_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -614,9 +623,18 @@ mod tests {
         let cipher = Aes256Gcm::new_from_slice(&cek).unwrap();
         let mut iv_arr = [0u8; 12];
         iv_arr.copy_from_slice(&iv);
+        let aad = segs[0].as_bytes();
+        // 带 AAD 解密成功（服务端解包路径）。
         let plain = cipher
-            .decrypt(&Nonce::from(iv_arr), ct_tag.as_slice())
+            .decrypt(&Nonce::from(iv_arr), Payload { msg: &ct_tag, aad })
             .unwrap();
         assert_eq!(plain, b"hunter2pass");
+        // 不带 AAD 解密必须失败——证明 AAD 参与认证（缺失即「密码错误」的根因）。
+        assert!(
+            cipher
+                .decrypt(&Nonce::from(iv_arr), ct_tag.as_slice())
+                .is_err(),
+            "缺 AAD 应无法解密（商汤服务端解包会因此判密码错）"
+        );
     }
 }
