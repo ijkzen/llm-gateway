@@ -22,6 +22,7 @@ import {
 	Copy,
 	Eye,
 	EyeOff,
+	Gauge,
 	KeyRound,
 	MoreHorizontal,
 	Pencil,
@@ -34,6 +35,7 @@ interface ProviderDetailProps {
 	provider: Provider | undefined;
 	onEdit: (provider: Provider) => void;
 	onDelete: (provider: Provider) => void;
+	onSpeedTest: (provider: Provider) => void;
 }
 
 const PROTOCOL_LABELS: Record<number, string> = {
@@ -94,7 +96,7 @@ function CollapsibleSection({ title, children }: { title: string; children: Reac
 	);
 }
 
-export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailProps) {
+export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: ProviderDetailProps) {
 	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const updateProvider = useUpdateProvider();
@@ -275,6 +277,10 @@ export function ProviderDetail({ provider, onEdit, onDelete }: ProviderDetailPro
 							<DropdownMenuItem onClick={() => onEdit(provider)}>
 								<Pencil className="size-4" />
 								{t("providers.edit")}
+							</DropdownMenuItem>
+							<DropdownMenuItem onClick={() => onSpeedTest(provider)}>
+								<Gauge className="size-4" />
+								{t("providers.speedTest")}
 							</DropdownMenuItem>
 							<DropdownMenuSeparator />
 							<DropdownMenuItem variant="destructive" onClick={() => onDelete(provider)}>

@@ -1643,12 +1643,14 @@ const TEST_PROMPT: &str = "你好";
 /// 复用 `build_upstream_call`（四协议转换 + Responses 强制流式）与连接池
 /// （含代理）；成功/失败均写入 request 表（与正式流量同口径，计入数据面板）。
 /// 成功不要求模型产出文本：上游返回 2xx 即视为有效；失败返回人类可读原因。
+/// 成功返回 `duration_ms`：本次请求耗时（上游响应开始到读完，与 request 表
+/// `output_tokens_time` 同口径，排除 TTFT）。
 pub async fn test_model(
     state: &AppState,
     provider_row: &crate::entity::provider::Model,
     model: &crate::entity::provider_model::Model,
     api_key: &str,
-) -> Result<(), String> {
+) -> Result<i64, String> {
     let member = Member {
         provider_id: provider_row.id,
         model_id: model.provider_model_id.clone(),
@@ -1759,6 +1761,7 @@ pub async fn test_model(
         }
     };
     let end_time = now_ms();
+    let duration_ms = (end_time - reply.start_at_ms).max(0);
     RequestRecord {
         request_id: format!("test-{}", Uuid::new_v4()),
         virtual_model_id: TEST_VIRTUAL_MODEL_ID,
@@ -1766,7 +1769,7 @@ pub async fn test_model(
         model_id: member.model_id.clone(),
         stream: false,
         ttft: None,
-        output_tokens_time: Some((end_time - reply.start_at_ms).max(0)),
+        output_tokens_time: Some(duration_ms),
         ttft_start_ms: reply.start_at_ms,
         start_time,
         end_time,
@@ -1777,5 +1780,5 @@ pub async fn test_model(
     }
     .insert(&state.db);
 
-    Ok(())
+    Ok(duration_ms)
 }

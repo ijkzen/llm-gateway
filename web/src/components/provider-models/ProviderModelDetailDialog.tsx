@@ -1,5 +1,6 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CAPABILITIES } from "@/components/provider-models/CapabilityIcons";
+import { TestFailedDialog } from "@/components/provider-models/TestFailedDialog";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -346,23 +347,7 @@ export function ProviderModelDetailDialog({
 				handleConfirm={handleDelete}
 			/>
 
-			<ConfirmDialog
-				open={testError !== null}
-				onOpenChange={(open) => {
-					if (!open) setTestError(null);
-				}}
-				title={t("providerModels.testFailedTitle")}
-				desc={
-					<>
-						<p>{t("providerModels.testFailedDesc")}</p>
-						<p className="mt-2 rounded-lg bg-muted p-3 font-mono text-xs text-destructive break-all">
-							{testError}
-						</p>
-					</>
-				}
-				confirmText={t("providerModels.close")}
-				handleConfirm={() => setTestError(null)}
-			/>
+			<TestFailedDialog message={testError} onClose={() => setTestError(null)} />
 		</>
 	);
 }

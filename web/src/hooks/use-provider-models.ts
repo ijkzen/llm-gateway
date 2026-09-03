@@ -158,14 +158,15 @@ export function useRefreshProviderModels(providerId: number) {
 	});
 }
 
-/** 测试模型有效性：后端构建最小化请求发往上游；可能较慢（含建连/上游处理），单独放宽超时。 */
+/** 测试模型有效性：后端构建最小化请求发往上游；可能较慢（含建连/上游处理），单独放宽超时。成功返回本次请求耗时（ms）。 */
 export function useTestProviderModel(providerId: number) {
 	return useMutation({
-		mutationFn: async (modelId: number): Promise<void> => {
+		mutationFn: async (modelId: number): Promise<number> => {
 			const res = await api
 				.post(`providers/${providerId}/models/${modelId}/test`, { timeout: 60000 })
-				.json<ApiResponse<unknown>>();
-			unwrap(res);
+				.json<ApiResponse<{ duration_ms: number }>>();
+			const data = await unwrap(res);
+			return data.duration_ms;
 		},
 	});
 }

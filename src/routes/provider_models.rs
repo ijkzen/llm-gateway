@@ -644,11 +644,12 @@ async fn test_provider_model(
         }
     };
 
-    let _protocol = proxy::Protocol::from_i32(provider_row.protocol_type);
     match proxy::test_model(&state, &provider_row, &model, &api_key).await {
-        Ok(()) => (
+        Ok(duration_ms) => (
             StatusCode::OK,
-            Json(Response::success(json!({ "ok": true }))),
+            Json(Response::success(
+                json!({ "ok": true, "duration_ms": duration_ms }),
+            )),
         ),
         Err(message) => response::scheduler_error(StatusCode::BAD_GATEWAY, message),
     }
