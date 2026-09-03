@@ -482,6 +482,7 @@ fn build_upstream_call(
     client_stream: bool,
     api_key: &str,
     forwarded: &[(HeaderName, HeaderValue)],
+    request_id: &str,
 ) -> Result<(UpstreamCall, bool), String> {
     let (body, json_mode_tool, sub_path) = match member.protocol {
         Protocol::OpenAiCompat => {
@@ -513,8 +514,13 @@ fn build_upstream_call(
     let mut headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
     // 第 4 层：下游透传子集（调用方已过滤）。
     headers.extend_from_slice(forwarded);
-    // 第 3 层：provider custom_header（insert 覆盖透传层；保留名跳过）。
-    merge_custom_headers(&member.custom_header, &mut headers);
+    // 第 3 层：provider custom_header（insert 覆盖透传层；协议保留名跳过并告警）。
+    merge_custom_headers(
+        &member.custom_header,
+        member.protocol,
+        request_id,
+        &mut headers,
+    );
     // 第 2 层：协议鉴权/必需头（insert 覆盖 custom_header 与透传，D3）。
     apply_protocol_auth_headers(member.protocol, api_key, &mut headers);
 
@@ -623,11 +629,18 @@ pub fn select_forwardable_headers(
 }
 
 /// 把 `custom_header`（JSON 对象，字符串值）合并进出站表。
-/// - 剥离清单名（含框架头、协议保留名、凭据名）一律跳过（D3：默认禁覆盖协议鉴权头）。
+/// - 命中协议鉴权/必需头名（`protocol_auth_header_names`，D3）→ 跳过并 `warn!`
+///   （管理员误配同名协议头会静默失效，需告警；只记 request_id/协议/头名，不记值）。
+/// - 命中其余剥离清单名（框架头、凭据名等）→ 跳过。
 /// - 其余项 `insert` 覆盖低层同名（下游透传层）。
 ///
 /// JSON 非法 / 非对象 / 非字符串值：静默跳过（保持原语义）。
-fn merge_custom_headers(custom_header: &str, headers: &mut Vec<(HeaderName, HeaderValue)>) {
+fn merge_custom_headers(
+    custom_header: &str,
+    protocol: Protocol,
+    request_id: &str,
+    headers: &mut Vec<(HeaderName, HeaderValue)>,
+) {
     let Ok(value) = serde_json::from_str::<Value>(custom_header.trim()) else {
         return;
     };
@@ -640,12 +653,35 @@ fn merge_custom_headers(custom_header: &str, headers: &mut Vec<(HeaderName, Head
             HeaderName::from_bytes(name.as_bytes()),
             HeaderValue::from_str(header_value),
         ) {
+            if protocol_auth_header_names(protocol)
+                .iter()
+                .any(|reserved| name.as_str().eq_ignore_ascii_case(reserved))
+            {
+                tracing::warn!(
+                    request_id,
+                    protocol = ?protocol,
+                    header = %name.as_str(),
+                    "custom_header 试图覆盖协议鉴权/必需头，已忽略（D3）",
+                );
+                continue;
+            }
             if is_never_outbound(&name) {
                 continue;
             }
             headers.retain(|(existing, _)| existing != name);
             headers.push((name, value));
         }
+    }
+}
+
+/// 各协议在第 2 层写入的鉴权/必需头名（spec D3：custom_header 不得覆盖这些头，
+/// 冲突时跳过并记 warn）。供 `apply_protocol_auth_headers` 与 `merge_custom_headers`
+/// 共用，避免两处各自维护清单。
+fn protocol_auth_header_names(protocol: Protocol) -> &'static [&'static str] {
+    match protocol {
+        Protocol::OpenAiCompat | Protocol::OpenAiResponses => &["authorization"],
+        Protocol::Anthropic => &["x-api-key", "anthropic-version"],
+        Protocol::Gemini => &["x-goog-api-key"],
     }
 }
 
@@ -656,17 +692,13 @@ fn apply_protocol_auth_headers(
     api_key: &str,
     headers: &mut Vec<(HeaderName, HeaderValue)>,
 ) {
-    let auth_headers: Vec<(&str, String)> = match protocol {
-        Protocol::OpenAiCompat | Protocol::OpenAiResponses => {
-            vec![("authorization", format!("Bearer {api_key}"))]
-        }
-        Protocol::Anthropic => vec![
-            ("x-api-key", api_key.to_string()),
-            ("anthropic-version", "2023-06-01".to_string()),
-        ],
-        Protocol::Gemini => vec![("x-goog-api-key", api_key.to_string())],
-    };
-    for (name, value) in auth_headers {
+    for name in protocol_auth_header_names(protocol) {
+        let value = match *name {
+            "authorization" => format!("Bearer {api_key}"),
+            "x-api-key" | "x-goog-api-key" => api_key.to_string(),
+            "anthropic-version" => "2023-06-01".to_string(),
+            _ => continue, // protocol_auth_header_names 新增保留名时若缺值映射则跳过
+        };
         if let (Ok(name), Ok(value)) = (
             HeaderName::from_bytes(name.as_bytes()),
             HeaderValue::from_str(&value),
@@ -1066,6 +1098,7 @@ pub async fn forward_chat(
             client_stream,
             &decrypted_key,
             &forwarded,
+            &request_id,
         ) {
             Ok(result) => result,
             Err(message) => {
@@ -1809,7 +1842,9 @@ pub async fn test_model(
         "messages": [{"role": "user", "content": TEST_PROMPT}],
     });
     // test_model 无下游请求头（管理面手动触发）：透传子集为空。
-    let (call, _json_mode_tool) = build_upstream_call(&member, &chat, false, api_key, &[])?;
+    let request_id = format!("test-{}", Uuid::new_v4());
+    let (call, _json_mode_tool) =
+        build_upstream_call(&member, &chat, false, api_key, &[], &request_id)?;
 
     // Member 已由 resolve_proxy 归一：proxy_enabled 时地址必非空。
     let proxy = member.proxy_enabled.then_some(member.proxy_addr.as_str());
@@ -1820,7 +1855,7 @@ pub async fn test_model(
             let message = e.fail_reason();
             record_failure(
                 &state.db,
-                &format!("test-{}", Uuid::new_v4()),
+                &request_id,
                 TEST_VIRTUAL_MODEL_ID,
                 &member,
                 TEST_API_KEY_NAME,
@@ -1843,7 +1878,7 @@ pub async fn test_model(
         );
         record_failure(
             &state.db,
-            &format!("test-{}", Uuid::new_v4()),
+            &request_id,
             TEST_VIRTUAL_MODEL_ID,
             &member,
             TEST_API_KEY_NAME,
@@ -2110,7 +2145,7 @@ mod tests {
             r#"{"x-api-key":"custom","anthropic-version":"2099-01-01","authorization":"Bearer custom","content-type":"text/plain","X-A":"b"}"#,
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2138,7 +2173,7 @@ mod tests {
             r#"{"authorization":"Bearer stale","X-Tenant":"t1"}"#,
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2166,7 +2201,8 @@ mod tests {
             ),
             (HeaderName::from_static("x-trace-id"), hv("client-1")),
         ];
-        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &forwarded).unwrap();
+        let (call, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &forwarded, "test").unwrap();
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2183,7 +2219,7 @@ mod tests {
     fn gemini_auth_header_is_x_goog_api_key() {
         let m = member(Protocol::Gemini, r#"{"x-goog-api-key":"custom","X-A":"b"}"#);
         let chat = json!({"model":"m","contents":[{"role":"user","parts":[{"text":"hi"}]}]});
-        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2199,7 +2235,8 @@ mod tests {
         for raw in ["not-json", "[]", r#"{"x":123}"#, r#"{"x":"v","y":1}"#] {
             let m = member(Protocol::OpenAiCompat, raw);
             let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-            let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+            let (call, _) =
+                build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
             // 非对象 JSON / 非字符串值整体跳过：只剩协议鉴权头。
             let map: std::collections::HashMap<&str, &str> = call
                 .headers
@@ -2229,7 +2266,7 @@ mod tests {
             r#"{"connection":"keep-alive","host":"evil","x-custom":"ok"}"#,
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[]).unwrap();
+        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
         let joined = names(&call).join(",");
         assert!(
             !joined.contains("connection"),
