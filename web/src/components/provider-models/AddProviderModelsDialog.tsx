@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -131,6 +132,8 @@ export function AddProviderModelsDialog({
 	const [modelSearchDebounced, setModelSearchDebounced] = useState("");
 	// 已从目录选中的模型 ID：应用后隐藏下拉，直到用户重新输入。
 	const [appliedModelId, setAppliedModelId] = useState<string | null>(null);
+	// 尝试刷新失败时用弹窗展示完整错误详情（上游报错信息较长，toast 展示不完整）。
+	const [refreshError, setRefreshError] = useState<string | null>(null);
 	const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const { data: catalogHits } = useCatalogSearch(modelSearchDebounced);
@@ -212,7 +215,7 @@ export function AddProviderModelsDialog({
 				// 全部不预选，由用户自行勾选。
 				setSelected(new Set());
 			},
-			onError: (error) => toastError(t("providerModels.refreshFailed"), error),
+			onError: (error) => setRefreshError(error.message),
 		});
 	};
 
@@ -313,268 +316,290 @@ export function AddProviderModelsDialog({
 	const selectedCount = selected.size;
 
 	return (
-		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[760px]">
-				<DialogHeader className="space-y-3">
-					<DialogTitle>{t("providerModels.addTitle")}</DialogTitle>
-					<DialogDescription>
-						{t("providerModels.addDesc", { provider: provider.name })}
-					</DialogDescription>
-				</DialogHeader>
+		<>
+			<Dialog open={open} onOpenChange={onOpenChange}>
+				<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[760px]">
+					<DialogHeader className="space-y-3">
+						<DialogTitle>{t("providerModels.addTitle")}</DialogTitle>
+						<DialogDescription>
+							{t("providerModels.addDesc", { provider: provider.name })}
+						</DialogDescription>
+					</DialogHeader>
 
-				<div className="flex items-center justify-between gap-4">
-					<Button
-						type="button"
-						variant="outline"
-						size="sm"
-						onClick={handleRefresh}
-						disabled={refresh.isPending}
-					>
-						<RefreshCw className={refresh.isPending ? "mr-2 size-4 animate-spin" : "mr-2 size-4"} />
-						{t("providerModels.tryRefresh")}
-					</Button>
-					<span className="text-xs text-muted-foreground">{t("providerModels.refreshHint")}</span>
-				</div>
+					<div className="flex items-center justify-between gap-4">
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							onClick={handleRefresh}
+							disabled={refresh.isPending}
+						>
+							<RefreshCw
+								className={refresh.isPending ? "mr-2 size-4 animate-spin" : "mr-2 size-4"}
+							/>
+							{t("providerModels.tryRefresh")}
+						</Button>
+						<span className="text-xs text-muted-foreground">{t("providerModels.refreshHint")}</span>
+					</div>
 
-				{candidates === null ? (
-					<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-						{t("providerModels.notRefreshed")}
-					</div>
-				) : candidates.length === 0 ? (
-					<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-						{t("providerModels.refreshEmpty")}
-					</div>
-				) : (
-					<div className="space-y-3">
-						<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-							{candidates.map((candidate) => {
-								const edits = editsOf(candidate);
-								const selectable = isSelectable(candidate);
-								// manual 候选整卡可点：跳转手动添加表单并预填模型 ID。
-								const clickable = candidate.matchState === "manual";
-								return (
-									<div
-										key={candidate.providerModelId}
-										className={cn(
-											"rounded-lg border p-3",
-											clickable &&
-												"cursor-pointer transition-colors hover:border-primary/50 hover:bg-muted/40",
-										)}
-										role={clickable ? "button" : undefined}
-										tabIndex={clickable ? 0 : undefined}
-										onClick={clickable ? () => jumpToManual(candidate) : undefined}
-										onKeyDown={
-											clickable
-												? (e) => {
-														if (e.key === "Enter" || e.key === " ") {
-															e.preventDefault();
-															jumpToManual(candidate);
+					{candidates === null ? (
+						<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+							{t("providerModels.notRefreshed")}
+						</div>
+					) : candidates.length === 0 ? (
+						<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+							{t("providerModels.refreshEmpty")}
+						</div>
+					) : (
+						<div className="space-y-3">
+							<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+								{candidates.map((candidate) => {
+									const edits = editsOf(candidate);
+									const selectable = isSelectable(candidate);
+									// manual 候选整卡可点：跳转手动添加表单并预填模型 ID。
+									const clickable = candidate.matchState === "manual";
+									return (
+										<div
+											key={candidate.providerModelId}
+											className={cn(
+												"rounded-lg border p-3",
+												clickable &&
+													"cursor-pointer transition-colors hover:border-primary/50 hover:bg-muted/40",
+											)}
+											role={clickable ? "button" : undefined}
+											tabIndex={clickable ? 0 : undefined}
+											onClick={clickable ? () => jumpToManual(candidate) : undefined}
+											onKeyDown={
+												clickable
+													? (e) => {
+															if (e.key === "Enter" || e.key === " ") {
+																e.preventDefault();
+																jumpToManual(candidate);
+															}
 														}
-													}
-												: undefined
-										}
-									>
-										<div className="flex items-center gap-2.5">
-											<Checkbox
-												checked={selected.has(candidate.providerModelId)}
-												disabled={!selectable}
-												onCheckedChange={(checked) => toggleSelect(candidate, checked === true)}
-												aria-label={`${t("providerModels.selectModel")} ${candidate.providerModelId}`}
-											/>
-											<span
-												className="min-w-0 flex-1 truncate font-mono text-sm"
-												title={candidate.providerModelId}
-											>
-												{candidate.providerModelId}
-											</span>
-											<MatchStateLabel state={candidate.matchState} />
-										</div>
-										<div className="mt-2.5 grid grid-cols-2 gap-2">
-											<div className="space-y-1">
-												<Label className="text-xs text-muted-foreground">
-													{t("providerModels.contextLength")}
-												</Label>
-												<Input
-													type="number"
-													min={1}
-													className="h-8"
-													value={edits.contextLength}
-													placeholder={t("providerModels.required")}
-													onChange={(e) =>
-														setNumberEdits((prev) => ({
-															...prev,
-															[candidate.providerModelId]: {
-																...edits,
-																contextLength: e.target.value,
-															},
-														}))
-													}
+													: undefined
+											}
+										>
+											<div className="flex items-center gap-2.5">
+												<Checkbox
+													checked={selected.has(candidate.providerModelId)}
+													disabled={!selectable}
+													onCheckedChange={(checked) => toggleSelect(candidate, checked === true)}
+													aria-label={`${t("providerModels.selectModel")} ${candidate.providerModelId}`}
 												/>
+												<span
+													className="min-w-0 flex-1 truncate font-mono text-sm"
+													title={candidate.providerModelId}
+												>
+													{candidate.providerModelId}
+												</span>
+												<MatchStateLabel state={candidate.matchState} />
 											</div>
-											<div className="space-y-1">
-												<Label className="text-xs text-muted-foreground">
-													{t("providerModels.maxOutput")}
-												</Label>
-												<Input
-													type="number"
-													min={1}
-													className="h-8"
-													value={edits.maxOutputTokens}
-													placeholder={t("providerModels.required")}
-													onChange={(e) =>
-														setNumberEdits((prev) => ({
-															...prev,
-															[candidate.providerModelId]: {
-																...edits,
-																maxOutputTokens: e.target.value,
-															},
-														}))
-													}
-												/>
+											<div className="mt-2.5 grid grid-cols-2 gap-2">
+												<div className="space-y-1">
+													<Label className="text-xs text-muted-foreground">
+														{t("providerModels.contextLength")}
+													</Label>
+													<Input
+														type="number"
+														min={1}
+														className="h-8"
+														value={edits.contextLength}
+														placeholder={t("providerModels.required")}
+														onChange={(e) =>
+															setNumberEdits((prev) => ({
+																...prev,
+																[candidate.providerModelId]: {
+																	...edits,
+																	contextLength: e.target.value,
+																},
+															}))
+														}
+													/>
+												</div>
+												<div className="space-y-1">
+													<Label className="text-xs text-muted-foreground">
+														{t("providerModels.maxOutput")}
+													</Label>
+													<Input
+														type="number"
+														min={1}
+														className="h-8"
+														value={edits.maxOutputTokens}
+														placeholder={t("providerModels.required")}
+														onChange={(e) =>
+															setNumberEdits((prev) => ({
+																...prev,
+																[candidate.providerModelId]: {
+																	...edits,
+																	maxOutputTokens: e.target.value,
+																},
+															}))
+														}
+													/>
+												</div>
 											</div>
 										</div>
-									</div>
-								);
-							})}
-						</div>
-						<div className="flex items-center justify-between gap-4">
-							<span className="text-xs text-muted-foreground">
-								{t("providerModels.selectedOfTotal", {
-									selected: selectedCount,
-									total: candidates.length,
+									);
 								})}
-							</span>
-							<Button
-								type="button"
-								size="sm"
-								onClick={handleBatchAdd}
-								disabled={selectedCount === 0 || batchCreate.isPending}
-							>
-								{t("providerModels.addSelected")}
-							</Button>
+							</div>
+							<div className="flex items-center justify-between gap-4">
+								<span className="text-xs text-muted-foreground">
+									{t("providerModels.selectedOfTotal", {
+										selected: selectedCount,
+										total: candidates.length,
+									})}
+								</span>
+								<Button
+									type="button"
+									size="sm"
+									onClick={handleBatchAdd}
+									disabled={selectedCount === 0 || batchCreate.isPending}
+								>
+									{t("providerModels.addSelected")}
+								</Button>
+							</div>
 						</div>
-					</div>
-				)}
+					)}
 
-				<Separator />
+					<Separator />
 
-				{/* 手动添加：供应商未暴露 Models 接口或需要补录时使用。 */}
-				<Form {...form}>
-					<form
-						id="provider-model-manual-form"
-						ref={manualFormRef}
-						onSubmit={form.handleSubmit(handleManualAdd)}
-						className="space-y-4"
-					>
-						<h3 className="text-sm font-semibold">{t("providerModels.manualAdd")}</h3>
-						<FormField
-							control={form.control}
-							name="providerModelId"
-							render={({ field }) => (
-								<FormItem className="relative">
-									<FormLabel required>{t("providerModels.modelId")}</FormLabel>
-									<FormControl>
-										<Input
-											placeholder={t("providerModels.modelIdPlaceholder")}
-											{...field}
-											value={modelSearchQuery}
-											onChange={(e) => {
-												field.onChange(e);
-												handleModelIdChange(e.target.value);
-											}}
-										/>
-									</FormControl>
-									{/* 关键词搜索联想下拉：点击候选自动填充全部字段；应用后隐藏 */}
-									{(catalogHits?.length ?? 0) > 0 &&
-										modelSearchQuery.trim().length > 0 &&
-										!appliedModelId && (
-											<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
-												{catalogHits?.map((hit) => (
-													<button
-														key={hit.id}
-														type="button"
-														onClick={() => applyCatalogCandidate(hit)}
-														className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60"
-													>
-														<Sparkles className="size-4 shrink-0 text-success" />
-														<span className="min-w-0">
-															<span className="block truncate font-mono">{hit.id}</span>
-															<span className="block truncate text-xs text-muted-foreground">
-																{hit.name}
-																{hit.family ? ` · ${hit.family}` : ""}
+					{/* 手动添加：供应商未暴露 Models 接口或需要补录时使用。 */}
+					<Form {...form}>
+						<form
+							id="provider-model-manual-form"
+							ref={manualFormRef}
+							onSubmit={form.handleSubmit(handleManualAdd)}
+							className="space-y-4"
+						>
+							<h3 className="text-sm font-semibold">{t("providerModels.manualAdd")}</h3>
+							<FormField
+								control={form.control}
+								name="providerModelId"
+								render={({ field }) => (
+									<FormItem className="relative">
+										<FormLabel required>{t("providerModels.modelId")}</FormLabel>
+										<FormControl>
+											<Input
+												placeholder={t("providerModels.modelIdPlaceholder")}
+												{...field}
+												value={modelSearchQuery}
+												onChange={(e) => {
+													field.onChange(e);
+													handleModelIdChange(e.target.value);
+												}}
+											/>
+										</FormControl>
+										{/* 关键词搜索联想下拉：点击候选自动填充全部字段；应用后隐藏 */}
+										{(catalogHits?.length ?? 0) > 0 &&
+											modelSearchQuery.trim().length > 0 &&
+											!appliedModelId && (
+												<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
+													{catalogHits?.map((hit) => (
+														<button
+															key={hit.id}
+															type="button"
+															onClick={() => applyCatalogCandidate(hit)}
+															className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted/60"
+														>
+															<Sparkles className="size-4 shrink-0 text-success" />
+															<span className="min-w-0">
+																<span className="block truncate font-mono">{hit.id}</span>
+																<span className="block truncate text-xs text-muted-foreground">
+																	{hit.name}
+																	{hit.family ? ` · ${hit.family}` : ""}
+																</span>
 															</span>
-														</span>
-													</button>
-												))}
-											</div>
-										)}
-									<FormMessage />
-								</FormItem>
-							)}
-						/>
-						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-							<FormField
-								control={form.control}
-								name="contextLength"
-								render={({ field }) => (
-									<FormItem>
-										<FormLabel required>{t("providerModels.contextLength")}</FormLabel>
-										<FormControl>
-											<Input
-												type="number"
-												min={1}
-												placeholder={t("providerModels.contextPlaceholder")}
-												{...field}
-											/>
-										</FormControl>
+														</button>
+													))}
+												</div>
+											)}
 										<FormMessage />
 									</FormItem>
 								)}
 							/>
-							<FormField
-								control={form.control}
-								name="maxOutputTokens"
-								render={({ field }) => (
-									<FormItem>
-										<FormLabel required>{t("providerModels.maxOutput")}</FormLabel>
-										<FormControl>
-											<Input
-												type="number"
-												min={1}
-												placeholder={t("providerModels.maxOutputPlaceholder")}
-												{...field}
-											/>
-										</FormControl>
-										<FormMessage />
-									</FormItem>
-								)}
-							/>
-						</div>
-						<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-							{CAPABILITY_KEYS.map((key) => (
+							<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 								<FormField
-									key={key}
 									control={form.control}
-									name={key}
+									name="contextLength"
 									render={({ field }) => (
-										<FormItem className="flex items-center justify-between rounded-lg border p-3">
-											<FormLabel>{t(CAPABILITY_LABEL_KEYS[key])}</FormLabel>
+										<FormItem>
+											<FormLabel required>{t("providerModels.contextLength")}</FormLabel>
 											<FormControl>
-												<Switch checked={field.value} onCheckedChange={field.onChange} />
+												<Input
+													type="number"
+													min={1}
+													placeholder={t("providerModels.contextPlaceholder")}
+													{...field}
+												/>
 											</FormControl>
+											<FormMessage />
 										</FormItem>
 									)}
 								/>
-							))}
-						</div>
-						<div className="flex justify-end">
-							<Button type="submit" size="sm" disabled={createModel.isPending}>
-								{t("providerModels.manualAddButton")}
-							</Button>
-						</div>
-					</form>
-				</Form>
-			</DialogContent>
-		</Dialog>
+								<FormField
+									control={form.control}
+									name="maxOutputTokens"
+									render={({ field }) => (
+										<FormItem>
+											<FormLabel required>{t("providerModels.maxOutput")}</FormLabel>
+											<FormControl>
+												<Input
+													type="number"
+													min={1}
+													placeholder={t("providerModels.maxOutputPlaceholder")}
+													{...field}
+												/>
+											</FormControl>
+											<FormMessage />
+										</FormItem>
+									)}
+								/>
+							</div>
+							<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+								{CAPABILITY_KEYS.map((key) => (
+									<FormField
+										key={key}
+										control={form.control}
+										name={key}
+										render={({ field }) => (
+											<FormItem className="flex items-center justify-between rounded-lg border p-3">
+												<FormLabel>{t(CAPABILITY_LABEL_KEYS[key])}</FormLabel>
+												<FormControl>
+													<Switch checked={field.value} onCheckedChange={field.onChange} />
+												</FormControl>
+											</FormItem>
+										)}
+									/>
+								))}
+							</div>
+							<div className="flex justify-end">
+								<Button type="submit" size="sm" disabled={createModel.isPending}>
+									{t("providerModels.manualAddButton")}
+								</Button>
+							</div>
+						</form>
+					</Form>
+				</DialogContent>
+			</Dialog>
+
+			<ConfirmDialog
+				open={refreshError !== null}
+				onOpenChange={(open) => {
+					if (!open) setRefreshError(null);
+				}}
+				title={t("providerModels.refreshFailed")}
+				desc={
+					<>
+						<p>{t("providerModels.refreshFailedDesc")}</p>
+						<p className="mt-2 max-h-48 overflow-y-auto rounded-lg bg-muted p-3 font-mono text-xs text-destructive whitespace-pre-wrap break-all">
+							{refreshError}
+						</p>
+					</>
+				}
+				confirmText={t("providerModels.close")}
+				handleConfirm={() => setRefreshError(null)}
+			/>
+		</>
 	);
 }

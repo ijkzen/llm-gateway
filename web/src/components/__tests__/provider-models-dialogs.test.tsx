@@ -85,6 +85,13 @@ function required<T>(value: T | undefined | null): T {
 	return value;
 }
 
+/** 让刷新接口失败并传入给定的错误对象。 */
+function failRefresh(message: string) {
+	mocks.refreshMutate.mockImplementation((_args, opts) => {
+		required(opts).onError(new Error(message));
+	});
+}
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.testState.isPending = false;
@@ -119,6 +126,18 @@ describe("AddProviderModelsDialog 候选三态", () => {
 		expect((manualSwitch as HTMLButtonElement).disabled).toBe(true);
 		expect(smartSwitch.getAttribute("aria-checked")).toBe("false");
 		expect(manualSwitch.getAttribute("aria-checked")).toBe("false");
+	});
+
+	it("刷新失败时弹出错误详情弹窗，不再只弹 toast", () => {
+		failRefresh("供应商 Models 接口返回 403：<html>…Cloudflare 拦截…</html>");
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+
+		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
+
+		// 完整错误内容与引导文案都出现在弹窗中。
+		expect(screen.getByText("刷新失败，详情见下方：")).toBeTruthy();
+		expect(screen.getByText(/Cloudflare 拦截/)).toBeTruthy();
+		expect(mocks.toastError).not.toHaveBeenCalled();
 	});
 
 	it("partial 状态显示黄色提示，预填已有数字，缺失时禁选", () => {

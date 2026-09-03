@@ -296,6 +296,7 @@ const zhCN = {
 		refreshConfirm: "将从上游拉取模型列表，确定刷新？",
 		refreshSuccess: "刷新完成",
 		refreshFailed: "刷新失败",
+		refreshFailedDesc: "刷新失败，详情见下方：",
 		addManual: "手动添加模型",
 		addFromCatalog: "从目录添加",
 		catalogSearch: "搜索模型目录...",

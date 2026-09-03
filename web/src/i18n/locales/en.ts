@@ -297,6 +297,7 @@ const en: Translation = {
 		refreshConfirm: "Fetch the model list from upstream?",
 		refreshSuccess: "Refresh complete",
 		refreshFailed: "Refresh failed",
+		refreshFailedDesc: "The refresh failed. Details:",
 		addManual: "Add manually",
 		addFromCatalog: "Add from catalog",
 		catalogSearch: "Search model catalog...",
