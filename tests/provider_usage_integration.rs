@@ -895,10 +895,16 @@ async fn spawn_sensenova_login_mock() -> (String, SensenovaLoginMockState) {
     (format!("http://{addr}"), state)
 }
 
+/// 触发真实登录的测试共享 sensenova 模块级登录冷却静态，必须串行执行，
+/// 否则并行下失败用例的冷却会污染成功用例。
+static SENSENOVA_LOGIN_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// 场景 1：refresh_token 失效（invalid_grant）且有账号密码 → 自动登录 → 写回新
 /// refresh_token → 用新 token 续期查询成功。
 #[tokio::test]
 async fn sensenova_invalid_grant_self_heals_via_login_and_writes_back() {
+    let _guard = SENSENOVA_LOGIN_LOCK.lock().unwrap();
+    llm_gateway::usage::fetchers::sensenova::reset_login_failures();
     let (mock_base, mock) = spawn_sensenova_login_mock().await;
     temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
         let (app, db) = setup_app_with_db().await;
@@ -939,6 +945,8 @@ async fn sensenova_invalid_grant_self_heals_via_login_and_writes_back() {
 /// 场景 2：refresh_token 缺失、只有账号密码 → 直接登录引导写回并查询成功。
 #[tokio::test]
 async fn sensenova_missing_refresh_token_logs_in_with_credentials() {
+    let _guard = SENSENOVA_LOGIN_LOCK.lock().unwrap();
+    llm_gateway::usage::fetchers::sensenova::reset_login_failures();
     let (mock_base, mock) = spawn_sensenova_login_mock().await;
     temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
         let (app, db) = setup_app_with_db().await;
@@ -967,6 +975,8 @@ async fn sensenova_missing_refresh_token_logs_in_with_credentials() {
 /// 场景 3：登录失败（账号或密码错误）→ Auth → 400「用量查询凭据无效或已过期」。
 #[tokio::test]
 async fn sensenova_login_failure_maps_to_auth_error() {
+    let _guard = SENSENOVA_LOGIN_LOCK.lock().unwrap();
+    llm_gateway::usage::fetchers::sensenova::reset_login_failures();
     let (mock_base, mock) = spawn_sensenova_login_mock().await;
     temp_env::async_with_vars([(OVERRIDE_ENV, Some(mock_base.as_str()))], async {
         let app = setup_app().await;

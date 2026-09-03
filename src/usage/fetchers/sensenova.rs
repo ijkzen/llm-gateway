@@ -19,6 +19,8 @@
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 use super::{Credentials, SensenovaContext, num, snippet};
 use crate::usage::error::UsageError;
@@ -28,6 +30,26 @@ use crate::usage::types::{FetchOutput, QuotaWindow, WindowKind, ts_secs};
 
 const TOKEN_URL: &str = "https://platform.sensenova.cn/oauth2/token";
 const USAGE_URL: &str = "https://platform.sensenova.cn/lite/console/v1/tokenplan/pool-usage";
+/// 登录失败后的冷却时长：账号密码连续错误会触发商汤账号临时锁定
+/// （forbidLoginForMoment，约 10 分钟），冷却期内不再尝试登录，避免
+/// usage_refresh 每 5 分钟撞锁把锁定窗口无限刷新。
+const LOGIN_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+/// 冷却期内的错误文案（不再打登录接口，直接返回该语义）。
+const LOGIN_COOLDOWN_MSG: &str = "商汤账号登录失败次数过多，已临时冷却，请稍后重试";
+
+/// 每家 provider 最近一次登录失败时间（内存态；单实例部署足够，
+/// 重启后最多多撞一次锁）。
+fn login_failures() -> &'static Mutex<HashMap<i32, DateTime<Utc>>> {
+    static FAILURES: std::sync::OnceLock<Mutex<HashMap<i32, DateTime<Utc>>>> =
+        std::sync::OnceLock::new();
+    FAILURES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 清空登录失败冷却记录（测试隔离用：模块级静态在集成测试间共享，
+/// 失败用例会给后续用例留下冷却状态）。
+pub fn reset_login_failures() {
+    login_failures().lock().unwrap().clear();
+}
 
 /// 统一用量入口（由 `query_provider_usage` 对 SenseNova host 调用）：
 /// refresh_token 有效 → 续期查询；缺失或明确鉴权失败 → 登录一次 → 写回新 refresh_token →
@@ -69,7 +91,31 @@ pub async fn fetch_sensenova(
     // 重新登录最多一次（refresh_token 缺失时同样先进来）。
     let username = creds.require("username")?;
     let password = creds.require("password")?;
-    let tokens = login.login(username, password).await?;
+
+    // 冷却期内不重试登录（账号已因连续失败被商汤临时锁定，再试会刷新锁定窗口）。
+    if let Some(failed_at) = login_failures()
+        .lock()
+        .unwrap()
+        .get(&ctx.provider_id)
+        .copied()
+        && Utc::now().signed_duration_since(failed_at)
+            < chrono::Duration::from_std(LOGIN_COOLDOWN).unwrap()
+    {
+        return Err(UsageError::Upstream(429, LOGIN_COOLDOWN_MSG.to_string()));
+    }
+
+    let tokens = login.login(username, password).await.map_err(|e| {
+        // 凭据错 / 账号锁定才冷却（避免反复撞锁）；网络抖动不冷却，下次仍可重试。
+        if matches!(e, UsageError::Auth | UsageError::Upstream(_, _)) {
+            login_failures()
+                .lock()
+                .unwrap()
+                .insert(ctx.provider_id, Utc::now());
+        }
+        e
+    })?;
+    // 登录成功 → 清除冷却记录。
+    login_failures().lock().unwrap().remove(&ctx.provider_id);
     // 新 refresh_token 必须先回写（重读最新行、严格解密、只合并该键），失败不继续重试。
     super::super::write_back_extra_key(
         ctx.db,

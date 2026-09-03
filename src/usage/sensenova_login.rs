@@ -155,6 +155,11 @@ impl SensenovaLogin {
             .await
             .map_err(|e| UsageError::Network(e.to_string()))?;
         if status == 401 || status == 403 {
+            // 账号锁定（forbidLoginForMoment）与凭据无效分开：锁定是临时限流，
+            // 再试会刷新锁定窗口，应明确提示而非当作凭据错持续重试。
+            if let Some(msg) = account_lock(&text) {
+                return Err(UsageError::Upstream(status, msg));
+            }
             return Err(UsageError::Auth);
         }
         if status != 200 {
@@ -270,6 +275,36 @@ fn is_wrong_credentials(body: &str) -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+/// 商汤账号被临时锁定（连错多次触发，`forbidLoginForMoment`）。此时再试只会
+/// 刷新锁定窗口，应区别于「凭据无效」并避免反复撞锁。
+fn account_lock(body: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let locked = v
+        .get("details")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .any(|d| d.get("reason").and_then(Value::as_str) == Some("forbidLoginForMoment"))
+        })
+        .unwrap_or(false);
+    if !locked {
+        return None;
+    }
+    // 优先取 LocalizedMessage 里的人类可读提示（如「账号已被锁定，请 10 分钟后再试」）。
+    let msg = v
+        .get("details")
+        .and_then(Value::as_array)
+        .and_then(|arr| {
+            arr.iter().find_map(|d| {
+                d.get("message")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
+            })
+        })
+        .unwrap_or("账号已被临时锁定");
+    Some(msg.to_string())
 }
 
 /// 登录成功响应取 redirect（优先 redirect，其次 redirect_uri，无则空 → None）。
@@ -423,6 +458,21 @@ mod tests {
         assert!(!is_wrong_credentials(captcha));
         assert!(!is_wrong_credentials("not json"));
         assert!(!is_wrong_credentials("{}"));
+    }
+
+    #[test]
+    fn account_lock_detected_with_message() {
+        // forbidLoginForMoment（连续失败触发临时锁定）应识别并取可读提示。
+        let body = r#"{"code":7,"message":"PermissionDenied","details":[
+            {"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"forbidLoginForMoment","domain":"iam","metadata":{}},
+            {"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"zh-CN","message":"账号已锁定，请 10 分钟后再试"}
+        ]}"#;
+        let msg = account_lock(body).expect("应识别账号锁定");
+        assert!(msg.contains("10 分钟"), "应带可读提示：{msg}");
+        // 凭据错误不是锁定。
+        let wrong = r#"{"code":3,"details":[{"reason":"incorrectUsernameOrPassword"}]}"#;
+        assert!(account_lock(wrong).is_none());
+        assert!(account_lock("not json").is_none());
     }
 
     #[test]
