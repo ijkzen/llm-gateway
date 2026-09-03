@@ -164,12 +164,9 @@ pub async fn apply_usage_gate(
     p: &provider::Model,
     data: &UsageData,
 ) -> Result<(), DbErr> {
-    let usable = match p.billing_mode {
-        1 => data.subscription_usable(),
-        0 => data.balance_usable(),
-        _ => return Ok(()),
+    let Some(usable) = data.usable_for_billing_mode(p.billing_mode) else {
+        return Ok(());
     };
-    let Some(usable) = usable else { return Ok(()) };
     let (recovered_msg, exhausted_msg) = if p.billing_mode == 1 {
         (
             "订阅额度已恢复，自动启用供应商及其全部虚拟模型子模型",
@@ -181,7 +178,7 @@ pub async fn apply_usage_gate(
             "余额已耗尽，自动停用供应商及其全部虚拟模型子模型",
         )
     };
-    // 连续失败禁用（failure_disabled）只允许手动解除：额度恢复不自动放回。
+    // 连续失败禁用（failure_disabled）不能由普通用量刷新解除；由手动启用或自动恢复探测处理。
     if usable && !p.enable && !p.failure_disabled {
         crate::provider_repo::set_provider_enabled(db, p.id, true).await?;
         let items = crate::provider_repo::set_items_enabled(db, p.id, true).await?;

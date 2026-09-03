@@ -38,8 +38,8 @@ pub struct Model {
     /// HTTP 代理地址（如 `http://127.0.0.1:7890`，无认证）。
     #[sea_orm(default_value = "")]
     pub proxy_addr: String,
-    /// 连续失败禁用标记：由转发链路连续失败熔断设置；用量定时刷新不自动恢复，
-    /// 仅管理员手动启用时清除（与额度门控禁用的自动恢复路径区分）。
+    /// 连续失败禁用标记：由转发链路连续失败熔断设置；普通用量刷新不自动恢复，
+    /// 管理员手动启用或自动恢复探测成功时清除。
     #[sea_orm(default_value = "0")]
     pub failure_disabled: bool,
     pub created_at: DateTimeUtc,

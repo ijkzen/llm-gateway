@@ -7,6 +7,7 @@
 pub mod convert;
 pub mod failure_counter;
 pub mod failure_recheck;
+pub mod failure_recovery;
 pub mod metrics;
 pub mod pool;
 pub mod sse;
@@ -1833,7 +1834,7 @@ pub async fn test_model(
         }
     };
 
-    if reply.status.as_u16() >= 400 {
+    if !reply.status.is_success() {
         let body = upstream::read_body(reply.body).await.unwrap_or_default();
         let message = format!(
             "{} {}",
