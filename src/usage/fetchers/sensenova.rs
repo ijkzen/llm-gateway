@@ -85,8 +85,8 @@ pub async fn fetch_sensenova(
 /// 用 refresh_token 续期并查询 pool-usage。
 /// 返回 (用量数据, 轮换出的新 refresh_token；与旧值相同或缺失时为 None)。
 ///
-/// 鉴权失败（HTTP 401/403，或 200 但续期响应 `{"error":"invalid_grant"}` / 缺 access_token）
-/// → `UsageError::Auth`（触发调用方登录）。
+/// 鉴权失败（HTTP 401/403、HTTP 400 + `invalid_grant`，或 200 但续期响应
+/// `{"error":"invalid_grant"}` / 缺 access_token）→ `UsageError::Auth`（触发调用方登录）。
 async fn renew_and_query(
     http: &UsageHttp,
     refresh_token: &str,
@@ -95,6 +95,11 @@ async fn renew_and_query(
     let form = format!("grant_type=refresh_token&client_id=nova&refresh_token={refresh_token}");
     let reply = http.post_form(TOKEN_URL, &[], &form).await?;
     ensure_not_auth_error(&reply)?;
+    // 商汤 OAuth token 端点对失效 refresh_token 返回 HTTP 400 + `invalid_grant`
+    // （非 401/403），同样视为明确鉴权失败以触发登录自愈。
+    if reply.status == 400 && reply.body.to_lowercase().contains("\"invalid_grant\"") {
+        return Err(UsageError::Auth);
+    }
     if reply.status != 200 {
         return Err(UsageError::Upstream(reply.status, snippet(&reply.body)));
     }

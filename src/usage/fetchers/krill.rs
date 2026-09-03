@@ -1,8 +1,8 @@
 //! Krill（krill-code.com 控制台）用量查询。
 //!
-//! - 三条模型 API host（`api-slb.krill-ai.net` / `api.krill-ai.net` /
-//!   `api.cdn-krill-ai.com`）都分发到这里；控制台接口固定走 `https://www.krill-code.com`，
-//!   模型 Base URL 只用于识别 Krill Provider。
+//! - 模型 API host（`api-slb.krill-ai.net` / `api.krill-ai.net` /
+//!   `api.cdn-krill-ai.com` / `api-slb.krill-code.net`）都分发到这里；控制台接口固定走
+//!   `https://www.krill-code.com`，模型 Base URL 只用于识别 Krill Provider。
 //! - `GET /api/subscription` 返回统一账户总览（钱包/福利/套餐/计次配额）。
 //!   展示模式只由 `provider.billing_mode` 决定：0=按量（credit+welfare 合计为主余额，
 //!   另给钱包/福利明细），1=订阅（只处理 `status=active` 的套餐，逐份产出带套餐名

@@ -62,7 +62,11 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
 pub(crate) fn is_krill_host(host: &str) -> bool {
     matches!(
         host,
-        "api-slb.krill-ai.net" | "api.krill-ai.net" | "api.cdn-krill-ai.com"
+        // krill-code.net 与 krill-code.com 控制台同后端（生产在用）；krill-ai.net 为早期接入域。
+        "api-slb.krill-ai.net"
+            | "api.krill-ai.net"
+            | "api.cdn-krill-ai.com"
+            | "api-slb.krill-code.net"
     )
 }
 

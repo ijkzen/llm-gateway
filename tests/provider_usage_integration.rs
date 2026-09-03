@@ -839,25 +839,36 @@ async fn spawn_sensenova_login_mock() -> (String, SensenovaLoginMockState) {
                     async move {
                         st.token_hits.fetch_add(1, Ordering::SeqCst);
                         if body.contains("grant_type=authorization_code") {
-                            Json(serde_json::json!({
-                                "access_token": "at-login",
-                                "expires_in": 10799,
-                                "refresh_token": "rt-logged-in",
-                                "scope": "openid offline offline_access",
-                                "token_type": "bearer"
-                            }))
+                            (
+                                AxumStatus::OK,
+                                Json(serde_json::json!({
+                                    "access_token": "at-login",
+                                    "expires_in": 10799,
+                                    "refresh_token": "rt-logged-in",
+                                    "scope": "openid offline offline_access",
+                                    "token_type": "bearer"
+                                })),
+                            )
                         } else if body.contains("refresh_token=rt-dead") {
-                            Json(serde_json::json!({
-                                "error": "invalid_grant",
-                                "error_description": "The refresh token is invalid"
-                            }))
+                            // 生产实测：失效 refresh_token 返回 HTTP 400 + invalid_grant
+                            //（非 200/401/403），应同样触发登录自愈。
+                            (
+                                AxumStatus::BAD_REQUEST,
+                                Json(serde_json::json!({
+                                    "error": "invalid_grant",
+                                    "error_description": "The refresh token is invalid"
+                                })),
+                            )
                         } else {
-                            Json(serde_json::json!({
-                                "access_token": "at-renewed",
-                                "expires_in": 10799,
-                                "refresh_token": "rt-renewed-2",
-                                "token_type": "bearer"
-                            }))
+                            (
+                                AxumStatus::OK,
+                                Json(serde_json::json!({
+                                    "access_token": "at-renewed",
+                                    "expires_in": 10799,
+                                    "refresh_token": "rt-renewed-2",
+                                    "token_type": "bearer"
+                                })),
+                            )
                         }
                     }
                 }),

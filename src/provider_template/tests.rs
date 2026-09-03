@@ -399,6 +399,38 @@ async fn krill_history_backfill_skips_invalid_extra_and_continues() {
 }
 
 #[tokio::test]
+async fn krill_code_net_host_is_recognized_and_backfilled() {
+    // 生产在用 `api-slb.krill-code.net`（与 krill-code.com 控制台同后端），
+    // 早期只认 krill-ai.net 导致该 host 的 provider 不被识别、也不回填。
+    temp_env::async_with_vars(
+        [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
+        async {
+            let db = setup_db().await.unwrap();
+            assert!(super::is_krill_host("api-slb.krill-code.net"));
+
+            insert_provider_with_billing(
+                &db,
+                "Krill-生产域",
+                "https://api-slb.krill-code.net/codex/v1",
+                r#"{}"#,
+                0,
+            )
+            .await;
+
+            upsert_templates(&db).await.unwrap();
+
+            let extra = provider_extra(&db, "Krill-生产域").await;
+            assert_eq!(extra["email"], "");
+            assert_eq!(extra["password"], "");
+            assert_eq!(extra["jwt"], "");
+            assert_eq!(extra["usage"], true);
+            assert_eq!(extra["usage_type"], 0);
+        },
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn test_first_insert_backfills_matching_provider_extra() {
     temp_env::async_with_vars(
         [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
