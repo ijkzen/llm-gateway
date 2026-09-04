@@ -130,7 +130,7 @@ async fn init(State(state): State<AppState>, Json(req): Json<CredentialsRequest>
             Ok((token, expires_at)) => login_response(&model.username, &token, expires_at),
             Err(e) => response::internal_error::<()>(e.to_string()).into_response(),
         },
-        Err(e) if is_unique_violation(&e) => response::bad_request::<()>(
+        Err(e) if crate::db::is_unique_violation(&e) => response::bad_request::<()>(
             lang.tr("同名用户已存在", "a user with the same name already exists"),
         )
         .into_response(),
@@ -260,9 +260,4 @@ async fn change_password(
     revoke_other_sessions(&state.db, user_id, &token).await;
 
     (StatusCode::OK, Json(Response::success(()))).into_response()
-}
-
-/// SQLite 唯一约束冲突。
-fn is_unique_violation(err: &sea_orm::DbErr) -> bool {
-    err.to_string().contains("UNIQUE constraint failed")
 }

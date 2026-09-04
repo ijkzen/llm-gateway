@@ -15,7 +15,7 @@ use sha1::Sha1;
 
 use super::{Credentials, num, snippet};
 use crate::usage::error::UsageError;
-use crate::usage::http::{UsageHttp, parse_json};
+use crate::usage::http::{UsageHttp, ensure_not_auth_error, parse_json};
 use crate::usage::types::{BalanceItem, FetchOutput};
 use crate::usage::volcengine_sign;
 
@@ -62,9 +62,7 @@ pub async fn fetch_aliyun_bss(
     let reply = http
         .get(&url, &[("Accept", "application/json".to_string())])
         .await?;
-    if reply.status == 401 || reply.status == 403 {
-        return Err(UsageError::Auth);
-    }
+    ensure_not_auth_error(&reply)?;
     if reply.status != 200 {
         return Err(UsageError::Upstream(reply.status, snippet(&reply.body)));
     }
@@ -187,9 +185,7 @@ pub async fn fetch_volcengine_billing(
             ],
         )
         .await?;
-    if reply.status == 401 || reply.status == 403 {
-        return Err(UsageError::Auth);
-    }
+    ensure_not_auth_error(&reply)?;
     parse_volcengine_billing(reply.status, &reply.body)
 }
 

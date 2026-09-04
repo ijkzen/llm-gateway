@@ -53,10 +53,6 @@ pub struct SchedulerRuntime {
 }
 
 impl SchedulerRuntime {
-    pub async fn new(worker_tx: mpsc::Sender<JobInvocation>) -> Result<Self, SchedulerError> {
-        Self::new_with_settings(worker_tx, AppSettings::default()).await
-    }
-
     pub async fn new_with_settings(
         worker_tx: mpsc::Sender<JobInvocation>,
         settings: AppSettings,

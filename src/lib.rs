@@ -148,28 +148,9 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         lb_state: crate::proxy::LbState::default(),
         failure_counter: crate::proxy::failure_counter::FailureCounter::default(),
         recheck_gate: crate::proxy::failure_recheck::RecheckGate::default(),
-        usage_cache: crate::usage::UsageCache::default(),
         upstream_pool: crate::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
         settings: settings.clone(),
     };
-
-    // Register example handler; business handlers are added here.
-    scheduler
-        .register_handler(
-            "example",
-            Arc::new(|_ctx: JobContext| {
-                Box::pin(async move {
-                    tracing::info!("示例任务开始执行");
-                    for step in 1..=5 {
-                        tracing::info!("示例任务执行中：第 {step} 步");
-                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    }
-                    tracing::info!("示例任务执行完成");
-                    Ok(())
-                })
-            }),
-        )
-        .await;
 
     // 用量刷新 handler：刷新全部已开启用量展示的供应商用量并落库，
     // 同时执行订阅额度耗尽自动停用/恢复（见 src/usage/persist.rs）。

@@ -1,7 +1,9 @@
 //! Provider 用量查询：按 base_url host 分发到各厂商 fetcher，归一化输出。
 //!
-//! 入口 `query_provider_usage`：校验 provider 存在且 extra.usage 开启 → 查 60s
-//! 内存缓存（`?refresh=1` 绕过）→ 调对应 fetcher → 成功结果写缓存。
+//! 入口 `query_provider_usage`：校验 provider 存在且 extra.usage 开启 →
+//! 调对应 fetcher 真实抓取。结果缓存统一由 `persist` 模块的数据库缓存
+//! （provider_usage_cache，10 分钟新鲜度）承载，调用方经 `fetch_and_store`
+//! 抓取并落库，读接口/LB 排序直接读库。
 
 pub mod cookiecloud;
 pub mod error;
@@ -12,50 +14,14 @@ pub mod sensenova_login;
 pub mod types;
 pub mod volcengine_sign;
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use sea_orm::{ActiveModelTrait, DatabaseConnection, EntityTrait, Set};
 use serde_json::Value;
-use tokio::sync::Mutex;
 
 use crate::crypto;
 use crate::entity::provider;
 use error::UsageError;
 use fetchers::Credentials;
 use types::{FetchOutput, UsageData, UsageKind};
-
-/// 成功结果的缓存时长。
-const CACHE_TTL: Duration = Duration::from_secs(60);
-
-/// 用量查询结果缓存（按 provider id；仅缓存成功结果）。
-#[derive(Clone, Default)]
-pub struct UsageCache {
-    inner: Arc<Mutex<HashMap<i32, (Instant, UsageData)>>>,
-}
-
-impl UsageCache {
-    pub async fn get(&self, provider_id: i32) -> Option<UsageData> {
-        let guard = self.inner.lock().await;
-        match guard.get(&provider_id) {
-            Some((at, data)) if at.elapsed() < CACHE_TTL => Some(data.clone()),
-            _ => None,
-        }
-    }
-
-    pub async fn put(&self, provider_id: i32, data: UsageData) {
-        self.inner
-            .lock()
-            .await
-            .insert(provider_id, (Instant::now(), data));
-    }
-
-    /// provider 更新/删除后调用，避免旧凭据的缓存结果残留。
-    pub async fn invalidate(&self, provider_id: i32) {
-        self.inner.lock().await.remove(&provider_id);
-    }
-}
 
 /// provider 的 extra JSON 是否开启用量查询（`usage: true`）。
 pub fn usage_enabled(extra: &str) -> bool {
@@ -66,12 +32,10 @@ pub fn usage_enabled(extra: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 查询指定 provider 的用量。`force_refresh` 绕过 60s 缓存。
+/// 查询指定 provider 的用量（真实抓取，不做内存缓存；落库见 `persist`）。
 pub async fn query_provider_usage(
     db: &DatabaseConnection,
-    cache: &UsageCache,
     provider_id: i32,
-    force_refresh: bool,
 ) -> Result<UsageData, UsageError> {
     let model = provider::Entity::find_by_id(provider_id)
         .one(db)
@@ -86,10 +50,6 @@ pub async fn query_provider_usage(
     };
     if !usage_enabled(&extra_plain) {
         return Err(UsageError::NotEnabled);
-    }
-
-    if !force_refresh && let Some(cached) = cache.get(provider_id).await {
-        return Ok(cached);
     }
 
     let api_key = crypto::decrypt(&model.api_key).unwrap_or_default();
@@ -151,7 +111,6 @@ pub async fn query_provider_usage(
             balances: items,
         },
     };
-    cache.put(provider_id, data.clone()).await;
     Ok(data)
 }
 
@@ -413,24 +372,6 @@ mod tests {
             fetcher_for("api.stepfun.ai", "/v1"),
             Some(Fetcher::StepfunBalance { intl: true })
         ));
-    }
-
-    #[tokio::test]
-    async fn cache_ttl_and_invalidate() {
-        let cache = UsageCache::default();
-        assert!(cache.get(1).await.is_none());
-        let data = UsageData {
-            provider_id: 1,
-            fetched_at: chrono::Utc::now(),
-            kind: UsageKind::Balance,
-            plan: None,
-            windows: vec![],
-            balances: vec![],
-        };
-        cache.put(1, data).await;
-        assert!(cache.get(1).await.is_some());
-        cache.invalidate(1).await;
-        assert!(cache.get(1).await.is_none());
     }
 
     #[test]

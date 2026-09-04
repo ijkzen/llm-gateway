@@ -1,5 +1,6 @@
 import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { TrendLineChart } from "@/components/dashboard-charts";
+import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
 import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
@@ -9,15 +10,14 @@ import {
 	initialWindowFromUrl,
 	raceWindowBounds,
 } from "@/components/race-window-control";
-import { StatsCard } from "@/components/stats-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useModelMetrics } from "@/hooks/use-model-metrics";
 import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
-import { formatPercent, formatTokenCount } from "@/lib/utils";
-import { Coins, DatabaseZap, Gauge, ListChecks, Timer, TrendingUp } from "lucide-react";
+import { formatTokenCount } from "@/lib/utils";
+import { TrendingUp } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router-dom";
@@ -116,71 +116,17 @@ export default function ModelOverviewPage() {
 			<PageHeader icon={TrendingUp} title={title} />
 
 			{/* 单模型指标卡片：独立时间段（置顶，概览优先） */}
-			<Card>
-				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-					<div className="space-y-1">
-						<CardTitle>{t("dashboard.modelMetric")}</CardTitle>
-						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.metrics)}</p>
-					</div>
-					<RaceWindowControl
-						state={windows.metrics}
-						now={now}
-						onChange={(patch) =>
-							setWindows((prev) => ({ ...prev, metrics: { ...prev.metrics, ...patch } }))
-						}
-					/>
-				</CardHeader>
-				<CardContent>
-					{metrics.isLoading ? (
-						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-							{[0, 1, 2, 3, 4, 5].map((i) => (
-								<Skeleton key={i} className="h-24 w-full" />
-							))}
-						</div>
-					) : metrics.isError || !metrics.data ? (
-						<ErrorState onRetry={() => metrics.refetch()} />
-					) : (
-						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-							<StatsCard
-								icon={Coins}
-								label={t("race.totalTokens")}
-								value={formatTokenCount(metrics.data.totalTokens)}
-								subLabel={t("overview.inputPlusOutput")}
-							/>
-							<StatsCard
-								icon={ListChecks}
-								label={t("race.requests")}
-								value={metrics.data.requestCount.toLocaleString()}
-								subLabel={t("overview.successRequests")}
-							/>
-							<StatsCard
-								icon={Timer}
-								label={t("race.ttft")}
-								value={`${metrics.data.ttft.toFixed(1)} ms`}
-								subLabel={t("overview.streamFirstToken")}
-							/>
-							<StatsCard
-								icon={Gauge}
-								label={t("race.tps")}
-								value={metrics.data.tps.toFixed(2)}
-								subLabel={t("overview.weightedAverage")}
-							/>
-							<StatsCard
-								icon={Timer}
-								label={t("race.avgLatency")}
-								value={`${metrics.data.requestTime.toFixed(1)} ms`}
-								subLabel={t("overview.successRequests")}
-							/>
-							<StatsCard
-								icon={DatabaseZap}
-								label={t("race.cacheHitRate")}
-								value={formatPercent(metrics.data.cacheHitRate)}
-								subLabel={t("overview.cacheOverInputToken")}
-							/>
-						</div>
-					)}
-				</CardContent>
-			</Card>
+			<MetricsSummaryCard
+				data={metrics.data}
+				isLoading={metrics.isLoading}
+				windowState={windows.metrics}
+				now={now}
+				onWindowChange={(patch) =>
+					setWindows((prev) => ({ ...prev, metrics: { ...prev.metrics, ...patch } }))
+				}
+				subtitle={windowSubtitle(windows.metrics)}
+				title={t("dashboard.modelMetric")}
+			/>
 
 			{/* 调用分析折线（仅折线）：独立时间段 */}
 			<Card>

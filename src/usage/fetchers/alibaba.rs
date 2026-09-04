@@ -13,7 +13,7 @@ use serde_json::Value;
 use super::{Credentials, num, snippet};
 use crate::usage::cookiecloud::{self, Cookie};
 use crate::usage::error::UsageError;
-use crate::usage::http::UsageHttp;
+use crate::usage::http::{UsageHttp, ensure_not_auth_error};
 use crate::usage::types::{FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window, ts_ms};
 
 /// 各区域形态的控制台/API 宿主与商品码。
@@ -169,9 +169,7 @@ pub async fn fetch_alibaba_coding(
     let reply = http
         .post_json(&url, &[("Cookie", cookie), ("x-xsrf-token", xsrf)], &body)
         .await?;
-    if reply.status == 401 || reply.status == 403 {
-        return Err(UsageError::Auth);
-    }
+    ensure_not_auth_error(&reply)?;
     if reply.status != 200 {
         return Err(UsageError::Upstream(reply.status, snippet(&reply.body)));
     }
@@ -269,9 +267,7 @@ pub async fn fetch_alibaba_token(
     let reply = http
         .post_form(&url, &[("Cookie", cookie), ("x-xsrf-token", xsrf)], &form)
         .await?;
-    if reply.status == 401 || reply.status == 403 {
-        return Err(UsageError::Auth);
-    }
+    ensure_not_auth_error(&reply)?;
     if reply.status != 200 {
         return Err(UsageError::Upstream(reply.status, snippet(&reply.body)));
     }

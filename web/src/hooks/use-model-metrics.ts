@@ -1,6 +1,10 @@
 import { type ApiResponse, api, unwrap } from "@/lib/api";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
+import type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
+
+export type { RaceSort, RaceSortKey, RaceWindow };
+
 export interface ModelMetrics {
 	/** 供应商 ID。 */
 	providerId: number;
@@ -20,13 +24,6 @@ export interface ModelMetrics {
 	tps: number;
 	/** 缓存命中率（加权，0~1）。 */
 	cacheHitRate: number;
-}
-
-export interface RaceWindow {
-	/** 窗口起点（毫秒时间戳，含）。 */
-	startTime: number;
-	/** 窗口终点（毫秒时间戳，不含）。 */
-	endTime: number;
 }
 
 export const modelMetricsKeys = {

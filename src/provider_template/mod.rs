@@ -74,23 +74,36 @@ pub(crate) fn is_sensenova_host(host: &str) -> bool {
     matches!(host, "token.sensenova.cn" | "platform.sensenova.cn")
 }
 
-/// 每次启动幂等对齐历史 Krill Provider 的凭据结构与用量类型。
-async fn backfill_krill_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
+/// 遍历全部 provider，对 host 命中的：解密 extra → 解析为 JSON 对象 →
+/// 交给 `mutate` 就地补齐（返回是否有变更）→ 有变更则加密写回。
+///
+/// 解密失败/非 JSON 对象仅 warn 并跳过（不阻塞其余行）。三个历史回填
+/// （Krill / SenseNova / 模板首次插入）共用此管线，差异只在 host 谓词与
+/// 补齐逻辑。
+async fn backfill_host_extras(
+    db: &DatabaseConnection,
+    label: &str,
+    is_target: impl Fn(&str) -> bool,
+    mutate: impl Fn(
+        &mut serde_json::Map<String, serde_json::Value>,
+        &crate::entity::provider::Model,
+    ) -> bool,
+) -> Result<usize, DbErr> {
     let providers = crate::entity::provider::Entity::find().all(db).await?;
+    let mut changed = 0usize;
     for provider in providers {
         let Some(host) = host_of(&provider.base_url) else {
             continue;
         };
-        if !is_krill_host(&host) {
+        if !is_target(&host) {
             continue;
         }
-
         let plain = match crypto::decrypt(&provider.extra) {
             Ok(plain) => plain,
             Err(error) => {
                 tracing::warn!(
                     provider_id = provider.id,
-                    "回填 Krill provider extra 失败：存储值无法解密：{error}"
+                    "回填 {label} provider extra 失败：存储值无法解密：{error}"
                 );
                 continue;
             }
@@ -100,101 +113,63 @@ async fn backfill_krill_provider_extra(db: &DatabaseConnection) -> Result<(), Db
             Ok(_) => {
                 tracing::warn!(
                     provider_id = provider.id,
-                    "回填 Krill provider extra 失败：不是 JSON 对象"
+                    "回填 {label} provider extra 失败：不是 JSON 对象"
                 );
                 continue;
             }
             Err(error) => {
                 tracing::warn!(
                     provider_id = provider.id,
-                    "回填 Krill provider extra 失败：不是合法 JSON 对象：{error}"
+                    "回填 {label} provider extra 失败：不是合法 JSON 对象：{error}"
                 );
                 continue;
             }
         };
+        if !mutate(&mut extra, &provider) {
+            continue;
+        }
+        let mut active: crate::entity::provider::ActiveModel = provider.into();
+        active.extra = Set(crypto::encrypt(
+            &serde_json::Value::Object(extra).to_string(),
+        ));
+        active.update(db).await?;
+        changed += 1;
+    }
+    Ok(changed)
+}
+
+/// 每次启动幂等对齐历史 Krill Provider 的凭据结构与用量类型。
+async fn backfill_krill_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
+    backfill_host_extras(db, "Krill", is_krill_host, |extra, provider| {
         let before = extra.clone();
         for key in ["email", "password", "jwt"] {
             extra.entry(key.to_string()).or_insert_with(|| "".into());
         }
         extra.entry("usage".to_string()).or_insert(true.into());
         extra.insert("usage_type".to_string(), provider.billing_mode.into());
-        if extra == before {
-            continue;
-        }
-
-        let mut active: crate::entity::provider::ActiveModel = provider.into();
-        active.extra = Set(crypto::encrypt(
-            &serde_json::Value::Object(extra).to_string(),
-        ));
-        active.update(db).await?;
-    }
-    Ok(())
+        *extra != before
+    })
+    .await
+    .map(|_| ())
 }
 
 /// 每次启动幂等对齐历史 SenseNova Provider 的凭据结构。
 ///
 /// SenseNova 模板早已随早期版本 upsert 进库，新增 username/password 键后
-/// 走的是 update 分支（不触发 `backfill_provider_extra`），历史 provider 的
+/// 走的是 update 分支（不触发模板首次插入回填），历史 provider 的
 /// extra 不会补入缺失键；这里仿 Krill 每次启动无条件对齐。
 /// 只补缺、不覆盖：已有 refresh_token/username/password/usage 一律保留。
 async fn backfill_sensenova_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
-    let providers = crate::entity::provider::Entity::find().all(db).await?;
-    for provider in providers {
-        let provider_id = provider.id;
-        let Some(host) = host_of(&provider.base_url) else {
-            continue;
-        };
-        if !is_sensenova_host(&host) {
-            continue;
-        }
-
-        let plain = match crypto::decrypt(&provider.extra) {
-            Ok(plain) => plain,
-            Err(error) => {
-                tracing::warn!(
-                    provider_id = provider.id,
-                    "回填 SenseNova provider extra 失败：存储值无法解密：{error}"
-                );
-                continue;
-            }
-        };
-        let mut extra = match serde_json::from_str::<serde_json::Value>(&plain) {
-            Ok(serde_json::Value::Object(extra)) => extra,
-            Ok(_) => {
-                tracing::warn!(
-                    provider_id = provider.id,
-                    "回填 SenseNova provider extra 失败：不是 JSON 对象"
-                );
-                continue;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    provider_id = provider.id,
-                    "回填 SenseNova provider extra 失败：不是合法 JSON 对象：{error}"
-                );
-                continue;
-            }
-        };
+    backfill_host_extras(db, "SenseNova", is_sensenova_host, |extra, _provider| {
         let before = extra.clone();
         for key in ["refresh_token", "username", "password"] {
             extra.entry(key.to_string()).or_insert_with(|| "".into());
         }
         extra.entry("usage".to_string()).or_insert(true.into());
-        if extra == before {
-            continue;
-        }
-
-        let mut active: crate::entity::provider::ActiveModel = provider.into();
-        active.extra = Set(crypto::encrypt(
-            &serde_json::Value::Object(extra).to_string(),
-        ));
-        active.update(db).await?;
-        tracing::info!(
-            provider_id = provider_id,
-            "回填 SenseNova provider extra 缺失键（username/password/refresh_token）"
-        );
-    }
-    Ok(())
+        *extra != before
+    })
+    .await
+    .map(|_| ())
 }
 
 /// 模板首次插入时，向 base_url host 匹配的既有 provider 的 extra 补齐
@@ -216,36 +191,20 @@ async fn backfill_provider_extra(
         return Ok(());
     }
 
-    let providers = crate::entity::provider::Entity::find().all(db).await?;
-    for p in providers {
-        if host_of(&p.base_url).as_deref() != Some(host.as_str()) {
-            continue;
-        }
-        let Ok(plain) = crypto::decrypt(&p.extra) else {
-            tracing::warn!(
-                provider_id = p.id,
-                "回填 provider extra 失败：存储值无法解密"
-            );
-            continue;
-        };
-        let Ok(serde_json::Value::Object(mut map)) =
-            serde_json::from_str::<serde_json::Value>(&plain)
-        else {
-            continue;
-        };
-        let before = map.len();
-        for (key, value) in &template_extra {
-            map.entry(key.clone()).or_insert(value.clone());
-        }
-        if map.len() == before {
-            continue;
-        }
-        let mut am: crate::entity::provider::ActiveModel = p.into();
-        am.extra = Set(crypto::encrypt(&serde_json::Value::Object(map).to_string()));
-        am.update(db).await?;
-        tracing::info!(provider_template = tmpl.name, "回填 provider extra 缺失键");
-    }
-    Ok(())
+    backfill_host_extras(
+        db,
+        tmpl.name,
+        |h| h == host,
+        |extra, _provider| {
+            let before = extra.len();
+            for (key, value) in &template_extra {
+                extra.entry(key.clone()).or_insert(value.clone());
+            }
+            extra.len() != before
+        },
+    )
+    .await
+    .map(|_| ())
 }
 
 /// 从 base_url 中提取 host（去协议、路径、端口、`${VAR}` 占位符）。
@@ -285,15 +244,4 @@ pub async fn find_by_domain_all(
         .into_iter()
         .filter(|t| host_of(&t.base_url).as_deref() == Some(domain_host.as_str()))
         .collect())
-}
-
-/// 按域名匹配 provider 模板（返回第一条命中，兼容旧调用方）。
-///
-/// 按 base_url 的 host（忽略协议/路径/端口/大小写）匹配；无匹配返回 None。
-/// 含 `${VAR}` 占位符的 base_url 无法匹配，跳过。
-pub async fn find_by_domain(
-    db: &DatabaseConnection,
-    domain: &str,
-) -> Result<Option<provider_template::Model>, DbErr> {
-    Ok(find_by_domain_all(db, domain).await?.into_iter().next())
 }

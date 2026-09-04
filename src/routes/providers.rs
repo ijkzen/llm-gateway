@@ -381,7 +381,7 @@ async fn create_provider(
             let response = ProviderResponse::from_model(model);
             (StatusCode::CREATED, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => {
+        Err(e) if crate::db::is_unique_violation(&e) => {
             let msg = lang.tr(
                 "同名 Provider 已存在，名称需要唯一",
                 "a provider with the same name already exists; names must be unique",
@@ -490,15 +490,14 @@ async fn update_provider(
             {
                 tracing::warn!(provider_id = id, "级联更新虚拟模型子模型启用状态失败：{e}");
             }
-            // 凭据/字段可能变化，失效（内存 + 数据库）用量缓存避免展示旧结果。
-            state.usage_cache.invalidate(id).await;
+            // 凭据/字段可能变化，失效用量缓存（数据库）避免展示旧结果。
             if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {
                 tracing::warn!(provider_id = id, "用量缓存失效失败：{e}");
             }
             let response = ProviderResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => {
+        Err(e) if crate::db::is_unique_violation(&e) => {
             response::bad_request("同名 Provider 已存在，名称需要唯一")
         }
         Err(e) => response::db_error(e.to_string()),
@@ -634,7 +633,6 @@ async fn delete_provider(State(state): State<AppState>, Path(id): Path<i32>) -> 
                     deleted_item_count,
                     "删除供应商（级联删除名下模型与虚拟模型成员）"
                 );
-                state.usage_cache.invalidate(id).await;
                 if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {
                     tracing::warn!(provider_id = id, "用量缓存失效失败：{e}");
                 }
@@ -950,9 +948,4 @@ async fn get_provider_usage_estimate(
             estimatable,
         })),
     )
-}
-
-/// SQLite 唯一约束冲突（name UNIQUE）。
-fn is_unique_violation(err: &DbErr) -> bool {
-    err.to_string().contains("UNIQUE constraint failed")
 }

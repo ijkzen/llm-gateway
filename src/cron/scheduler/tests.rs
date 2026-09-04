@@ -15,10 +15,18 @@ use super::*;
 async fn test_scheduler_loads_from_db() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
 
     let executed = Arc::new(AtomicBool::new(false));
     let flag = executed.clone();
@@ -49,10 +57,18 @@ async fn test_scheduler_loads_from_db() {
 async fn test_load_from_db_skips_missed_cron_jobs() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
 
     let executed = Arc::new(AtomicBool::new(false));
     let flag = executed.clone();
@@ -105,7 +121,9 @@ async fn test_run_job_now_returns_worker_channel_closed_when_receiver_dropped() 
     let (tx, _rx) = tokio::sync::mpsc::channel::<JobInvocation>(1);
     drop(_rx);
 
-    let scheduler = SchedulerRuntime::new(tx).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(tx, AppSettings::default())
+        .await
+        .unwrap();
     scheduler
         .register_handler(
             "dropped_receiver_test",
@@ -130,10 +148,18 @@ async fn test_run_job_now_returns_worker_channel_closed_when_receiver_dropped() 
 async fn test_soft_delete_removes_from_scheduler_and_db() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     scheduler
         .register_handler(
             "soft_delete_test",
@@ -259,10 +285,18 @@ async fn test_add_job_rollbacks_scheduler_on_db_failure() {
     let db = setup_db().await;
     let inner = SeaOrmCronJobRepository::new(db.clone());
     let repo = FailingRepo::new(inner);
-    let worker = JobWorker::new(db, 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db,
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     scheduler
         .register_handler(
             "add_rollback",
@@ -290,10 +324,18 @@ async fn test_set_enabled_rollbacks_scheduler_on_db_failure() {
     let db = setup_db().await;
     let inner = SeaOrmCronJobRepository::new(db.clone());
     let repo = FailingRepo::new(inner);
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     scheduler
         .register_handler(
             "enabled_rollback",
@@ -323,10 +365,18 @@ async fn test_soft_delete_rollbacks_scheduler_on_db_failure() {
     let db = setup_db().await;
     let inner = SeaOrmCronJobRepository::new(db.clone());
     let repo = FailingRepo::new(inner);
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     scheduler
         .register_handler(
             "delete_rollback",
@@ -361,10 +411,18 @@ async fn test_soft_delete_rollbacks_scheduler_on_db_failure() {
 async fn test_modification_lock_serializes_concurrent_mutations() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     scheduler
         .register_handler(
             "concurrent_job",
@@ -425,10 +483,18 @@ async fn test_modification_lock_serializes_concurrent_mutations() {
 async fn test_update_job_in_memory_updates_metadata() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     scheduler
         .register_handler(
             "metadata_update_test",
@@ -467,10 +533,18 @@ async fn test_update_job_in_memory_updates_metadata() {
 async fn test_update_job_in_memory_updates_enabled() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     scheduler
         .register_handler(
             "enabled_update_test",
@@ -503,10 +577,18 @@ async fn test_update_job_in_memory_updates_enabled() {
 async fn test_update_job_in_memory_recreates_on_expression_change() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     scheduler
         .register_handler(
             "expression_update_test",
@@ -541,10 +623,18 @@ async fn test_update_job_in_memory_recreates_on_expression_change() {
 #[tokio::test]
 async fn test_update_job_in_memory_returns_not_found_for_missing_job() {
     let db = setup_db().await;
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
 
     let err = scheduler
         .update_job_in_memory("missing_job", &sample_job("missing_job"))
@@ -557,10 +647,18 @@ async fn test_update_job_in_memory_returns_not_found_for_missing_job() {
 async fn test_disabled_job_does_not_fire_until_enabled() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
 
     let counter = Arc::new(AtomicUsize::new(0));
     let c = counter.clone();
@@ -622,10 +720,18 @@ async fn test_disabled_job_does_not_fire_until_enabled() {
 async fn test_disabled_job_stays_listed_and_runnable_manually() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());
-    let worker = JobWorker::new(db.clone(), 2, 100, tokio::sync::broadcast::channel(64).0);
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
 
     let counter = Arc::new(AtomicUsize::new(0));
     let c = counter.clone();

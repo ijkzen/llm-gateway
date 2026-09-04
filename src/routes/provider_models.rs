@@ -321,7 +321,9 @@ async fn create_provider_model(
             let response = ProviderModelResponse::from_model(model);
             (StatusCode::CREATED, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => response::bad_request(duplicate_model_message(lang)),
+        Err(e) if crate::db::is_unique_violation(&e) => {
+            response::bad_request(duplicate_model_message(lang))
+        }
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -404,7 +406,7 @@ async fn batch_create_provider_models(
             Ok(model) => created.push(ProviderModelResponse::from_model(model)),
             Err(e) => {
                 let _ = txn.rollback().await;
-                if is_unique_violation(&e) {
+                if crate::db::is_unique_violation(&e) {
                     return response::bad_request(duplicate_model_message(lang));
                 }
                 return response::db_error(e.to_string());
@@ -481,7 +483,9 @@ async fn update_provider_model(
             let response = ProviderModelResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => response::bad_request(duplicate_model_message(lang)),
+        Err(e) if crate::db::is_unique_violation(&e) => {
+            response::bad_request(duplicate_model_message(lang))
+        }
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -711,11 +715,6 @@ fn tail_key(model_id: &str) -> String {
         .next()
         .unwrap_or("")
         .to_lowercase()
-}
-
-/// SQLite 唯一约束冲突（provider_model 的复合唯一索引）。
-fn is_unique_violation(err: &DbErr) -> bool {
-    err.to_string().contains("UNIQUE constraint failed")
 }
 
 fn not_found_provider<T>(lang: Lang, provider_id: i32) -> crate::response::ErrorResponse<T> {

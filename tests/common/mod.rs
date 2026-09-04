@@ -56,10 +56,13 @@ pub async fn setup_db_and_scheduler() -> (
         .unwrap();
 
     let (log_tx, _) = tokio::sync::broadcast::channel::<JobLogEvent>(64);
-    let worker = JobWorker::new(db.clone(), 2, 100, log_tx.clone());
+    let worker =
+        JobWorker::new_with_settings(db.clone(), 2, 100, log_tx.clone(), AppSettings::default());
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     (db, scheduler, log_tx)
 }
 
@@ -88,7 +91,6 @@ pub fn build_app_with_settings(
         lb_state: llm_gateway::proxy::LbState::default(),
         failure_counter: llm_gateway::proxy::failure_counter::FailureCounter::default(),
         recheck_gate: llm_gateway::proxy::failure_recheck::RecheckGate::default(),
-        usage_cache: llm_gateway::usage::UsageCache::default(),
         upstream_pool: llm_gateway::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(
             600,
         )),

@@ -83,6 +83,23 @@ static CATALOG: OnceLock<HashMap<String, CatalogEntry>> = OnceLock::new();
 /// 原始目录（搜索用）：key → 展示字段。懒加载。
 static RAW: OnceLock<Vec<(String, RawModelFull)>> = OnceLock::new();
 
+/// 从原始目录模型字段构造 CatalogEntry（catalog() 与 search() 共用同一映射）。
+fn entry_from(
+    limit: Option<&RawLimit>,
+    modalities: &[String],
+    reasoning: bool,
+    tool_call: bool,
+) -> CatalogEntry {
+    CatalogEntry {
+        context_length: limit.and_then(|l| l.context),
+        max_output_tokens: limit.and_then(|l| l.output),
+        reasoning,
+        tool_use: tool_call,
+        image_understand: modalities.iter().any(|s| s == "image"),
+        video_understand: modalities.iter().any(|s| s == "video"),
+    }
+}
+
 fn catalog() -> &'static HashMap<String, CatalogEntry> {
     CATALOG.get_or_init(|| {
         let raw: BTreeMap<String, RawModel> =
@@ -90,14 +107,12 @@ fn catalog() -> &'static HashMap<String, CatalogEntry> {
         let mut index = HashMap::with_capacity(raw.len());
         for (key, model) in raw {
             let modalities = model.modalities.map(|m| m.input).unwrap_or_default();
-            let entry = CatalogEntry {
-                context_length: model.limit.as_ref().and_then(|l| l.context),
-                max_output_tokens: model.limit.as_ref().and_then(|l| l.output),
-                reasoning: model.reasoning,
-                tool_use: model.tool_call,
-                image_understand: modalities.iter().any(|s| s == "image"),
-                video_understand: modalities.iter().any(|s| s == "video"),
-            };
+            let entry = entry_from(
+                model.limit.as_ref(),
+                &modalities,
+                model.reasoning,
+                model.tool_call,
+            );
             index
                 .entry(last_segment(&key).to_lowercase())
                 .or_insert(entry);
@@ -154,14 +169,12 @@ pub fn search(q: &str, limit: usize) -> Vec<CatalogCandidate> {
                     id,
                     name,
                     family,
-                    entry: CatalogEntry {
-                        context_length: model.limit.as_ref().and_then(|l| l.context),
-                        max_output_tokens: model.limit.as_ref().and_then(|l| l.output),
-                        reasoning: model.reasoning,
-                        tool_use: model.tool_call,
-                        image_understand: modalities.iter().any(|s| s == "image"),
-                        video_understand: modalities.iter().any(|s| s == "video"),
-                    },
+                    entry: entry_from(
+                        model.limit.as_ref(),
+                        &modalities,
+                        model.reasoning,
+                        model.tool_call,
+                    ),
                 },
             ))
         })

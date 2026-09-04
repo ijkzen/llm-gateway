@@ -423,13 +423,13 @@ async fn create_virtual_model(
     };
     let model = match active.insert(&txn).await {
         Ok(model) => model,
-        Err(e) if is_unique_violation(&e) => {
+        Err(e) if crate::db::is_unique_violation(&e) => {
             return response::bad_request(unique_conflict_message(&e, lang));
         }
         Err(e) => return response::db_error(e.to_string()),
     };
     if let Err(e) = insert_items(&txn, model.virtual_model_id, &items, now).await {
-        if is_unique_violation(&e) {
+        if crate::db::is_unique_violation(&e) {
             return response::bad_request(unique_conflict_message(&e, lang));
         }
         return response::db_error(e.to_string());
@@ -557,7 +557,7 @@ async fn update_virtual_model(
                 Some(_) => {}
                 None => {
                     if let Err(e) = insert_items(&txn, id, std::slice::from_ref(item), now).await {
-                        if is_unique_violation(&e) {
+                        if crate::db::is_unique_violation(&e) {
                             return response::bad_request::<()>(unique_conflict_message(&e, lang))
                                 .into_response();
                         }
@@ -597,7 +597,7 @@ async fn update_virtual_model(
                 Err(e) => response::db_error::<()>(e.to_string()).into_response(),
             }
         }
-        Err(e) if is_unique_violation(&e) => {
+        Err(e) if crate::db::is_unique_violation(&e) => {
             response::bad_request::<()>(unique_conflict_message(&e, lang)).into_response()
         }
         Err(e) => response::db_error::<()>(e.to_string()).into_response(),
@@ -644,11 +644,6 @@ async fn delete_virtual_model(
         Ok(_) => not_found_virtual_model(lang, id),
         Err(e) => response::db_error(e.to_string()),
     }
-}
-
-/// SQLite 唯一约束冲突（display_id 列约束或成员 model_id 唯一索引）。
-fn is_unique_violation(err: &DbErr) -> bool {
-    err.to_string().contains("UNIQUE constraint failed")
 }
 
 /// 区分 display_id 与成员 model_id 的唯一冲突，返回对应的提示。
