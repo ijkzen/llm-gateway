@@ -11,6 +11,7 @@ const OverviewPage = lazy(() => import("./pages/overview"));
 const ProviderOverviewPage = lazy(() => import("./pages/provider-overview"));
 const VirtualModelOverviewPage = lazy(() => import("./pages/virtual-model-overview"));
 const ModelOverviewPage = lazy(() => import("./pages/model-overview"));
+const ApiKeyOverviewPage = lazy(() => import("./pages/api-key-overview"));
 const CronJobsPage = lazy(() => import("./pages/cron-jobs"));
 const ProvidersPage = lazy(() => import("./pages/providers"));
 const ProviderModelsPage = lazy(() => import("./pages/provider-models"));
@@ -43,6 +44,7 @@ function App() {
 						element={<VirtualModelOverviewPage />}
 					/>
 					<Route path="/models/:providerId/:modelId/overview" element={<ModelOverviewPage />} />
+					<Route path="/api-keys/:id/overview" element={<ApiKeyOverviewPage />} />
 					<Route path="/cron-jobs" element={<CronJobsPage />} />
 					<Route path="/providers" element={<ProvidersPage />} />
 					<Route path="/provider-models" element={<ProviderModelsPage />} />

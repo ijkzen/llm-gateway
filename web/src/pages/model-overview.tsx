@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/page-header";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
+	initialWindowFromUrl,
 	raceWindowBounds,
 } from "@/components/race-window-control";
 import { StatsCard } from "@/components/stats-card";
@@ -14,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useModelMetrics } from "@/hooks/use-model-metrics";
-import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race-period";
+import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
 import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { Coins, DatabaseZap, Gauge, ListChecks, Timer, TrendingUp } from "lucide-react";
 import { useState } from "react";
@@ -27,22 +28,6 @@ interface ModelOverviewWindows {
 	token: RaceWindowState;
 	metrics: RaceWindowState;
 	insight: RaceWindowState;
-}
-
-/** 从 URL query 解析初始时间段（缺省当天）；入口赛马行点击时携带。 */
-function initialWindowFromUrl(searchParams: URLSearchParams): RaceWindowState {
-	const period = (searchParams.get("period") as RacePeriod | "custom" | null) ?? "day";
-	const offset = Number.parseInt(searchParams.get("offset") ?? "0", 10) || 0;
-	const now = Date.now();
-	const startTime = Number(searchParams.get("startTime")) || now - 3_600_000;
-	const endTime = Number(searchParams.get("endTime")) || now;
-	return {
-		period,
-		offset,
-		customStart: startTime,
-		customEnd: endTime,
-		appliedCustom: period === "custom" ? { startTime, endTime } : null,
-	};
 }
 
 /** 模型详情三级页：单模型指标卡片（置顶）+ 调用分析折线 + Token 折线，三块独立时间段。 */

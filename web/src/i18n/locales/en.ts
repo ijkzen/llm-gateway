@@ -452,6 +452,11 @@ const en: Translation = {
 		toggleStatus: "Toggle API Key",
 		toggleStatusSuffix: "status",
 		operate: "Actions",
+		viewOverview: "View the overview for {{key}}",
+		overviewLoadingTitle: "API Key Overview",
+		overviewNotFoundTitle: "API Key Overview Unavailable",
+		overviewNotFoundDesc: "This API key may have been deleted, or the link is incorrect.",
+		backToList: "Back to API Keys",
 		createDialogTitle: "Create API Key",
 		createDialogDesc:
 			"The gateway generates the key after you enter a name; click the eye to reveal it anytime.",

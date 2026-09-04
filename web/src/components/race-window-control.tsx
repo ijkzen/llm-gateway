@@ -39,6 +39,22 @@ export interface RaceWindowState {
 	appliedCustom: { startTime: number; endTime: number } | null;
 }
 
+/** 从 URL query 解析初始时间段（缺省当天）；列表页/赛马行跳转时携带。 */
+export function initialWindowFromUrl(searchParams: URLSearchParams): RaceWindowState {
+	const period = (searchParams.get("period") as RacePeriod | "custom" | null) ?? "day";
+	const offset = Number.parseInt(searchParams.get("offset") ?? "0", 10) || 0;
+	const now = Date.now();
+	const startTime = Number(searchParams.get("startTime")) || now - 3_600_000;
+	const endTime = Number(searchParams.get("endTime")) || now;
+	return {
+		period,
+		offset,
+		customStart: startTime,
+		customEnd: endTime,
+		appliedCustom: period === "custom" ? { startTime, endTime } : null,
+	};
+}
+
 interface RaceWindowControlProps {
 	state: RaceWindowState;
 	/** 固化 now（当前周期标题用）。 */

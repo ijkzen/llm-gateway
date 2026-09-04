@@ -84,3 +84,35 @@ export function useVirtualModelMetrics(
 		placeholderData: keepPreviousData,
 	});
 }
+
+/** API Key 级 6 指标（与 GET /api/stats/api-key-metrics 对齐；API Key 数据面板顶部指标卡）。 */
+export interface ApiKeyMetrics {
+	/** 调用方 API Key 名称。 */
+	apiKeyName: string;
+	requestCount: number;
+	totalTokens: number;
+	ttft: number;
+	requestTime: number;
+	tps: number;
+	cacheHitRate: number;
+}
+
+export function useApiKeyMetrics(apiKey: string | null, window: MetricsWindow, enabled = true) {
+	return useQuery<ApiKeyMetrics>({
+		queryKey: ["stats", "api-key-metrics", apiKey, window.startTime, window.endTime] as const,
+		queryFn: async () => {
+			const params = new URLSearchParams({
+				apiKey: apiKey as string,
+				startTime: String(window.startTime),
+				endTime: String(window.endTime),
+			});
+			const res = await api
+				.get(`stats/api-key-metrics?${params.toString()}`)
+				.json<ApiResponse<ApiKeyMetrics>>();
+			return unwrap(res);
+		},
+		enabled: enabled && apiKey !== null,
+		// 切换时间窗口期间保留上一窗口数据，避免指标卡片闪回骨架。
+		placeholderData: keepPreviousData,
+	});
+}

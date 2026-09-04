@@ -80,13 +80,22 @@ function modelLabel(item: Pick<ProviderModelRankItem, "providerName" | "modelId"
  * （总计 Token / 请求数 / TTFT / 平均耗时 / TPS / 缓存命中率），可点表头按
  * 任意指标升/降序；时间窗口天/周/月/年（左右箭头切换周期）+ 自定义（秒级）。
  * 卡片进入视口才发请求。
+ * 可选按调用方 API Key 过滤（API Key 数据面板「该 key 用到的模型」）。
  */
-export function ProviderModelRaceCard() {
+export function ProviderModelRaceCard({
+	apiKey,
+	initialWindow,
+}: {
+	apiKey?: string;
+	initialWindow?: RaceWindowState;
+}) {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	// 挂载时刻固化 now：保证「当前周期」的窗口终点稳定，不因渲染抖动重复请求。
 	const [now] = useState(() => Date.now());
-	const [windowState, setWindowState] = useState<RaceWindowState>(initialWindowState);
+	const [windowState, setWindowState] = useState<RaceWindowState>(
+		() => initialWindow ?? initialWindowState(),
+	);
 
 	// 排序：默认按总计 Token 降序；点击表头切换升/降。
 	const [sort, setSort] = useState<RaceSort>({ sortBy: "totalTokens", sortOrder: "desc" });
@@ -94,7 +103,7 @@ export function ProviderModelRaceCard() {
 	const window = raceWindowBounds(windowState, now);
 
 	const { ref, inView } = useInView();
-	const query = useProviderModelRace(window, sort, inView);
+	const query = useProviderModelRace(window, sort, inView, undefined, apiKey);
 
 	const handleSort = (key: RaceSortKey) => {
 		setSort((prev) => {

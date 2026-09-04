@@ -243,6 +243,7 @@ pub fn routes() -> Router<AppState> {
         .route("/virtual-model-member-rank", get(virtual_model_member_rank))
         .route("/api-key-rank", get(api_key_rank))
         .route("/model-metrics", get(model_metrics))
+        .route("/api-key-metrics", get(api_key_metrics))
         .route("/provider-metrics", get(provider_metrics))
         .route("/virtual-model-metrics", get(virtual_model_metrics))
         .route("/insight", get(insight))
@@ -405,6 +406,8 @@ struct ChartsQuery {
     virtual_model_id: Option<i32>,
     /// 按模型 ID 过滤（可选；供应商侧真实模型 ID）。
     model_id: Option<String>,
+    /// 按调用方 API Key 名称过滤（可选；request.api_key_name 精确匹配）。
+    api_key: Option<String>,
     /// 桶粒度（hour/day/month/year）。缺省按窗口长度回退推断。
     granularity: Option<String>,
     /// 客户端 UTC 偏移（分钟）。仅与显式 granularity 搭配使用。
@@ -455,6 +458,10 @@ async fn charts(
     if let Some(model_id) = query.model_id {
         where_sql.push_str(" AND r.model_id = ?");
         params.push(model_id.into());
+    }
+    if let Some(api_key) = query.api_key.as_deref() {
+        where_sql.push_str(" AND r.api_key_name = ?");
+        params.push(api_key.into());
     }
 
     // 月/年粒度：SQL 按本地日桶聚合，Rust 侧再归并自然月/年。
@@ -647,6 +654,10 @@ async fn insight(
     if let Some(model_id) = query.model_id {
         where_sql.push_str(" AND r.model_id = ?");
         params.push(model_id.into());
+    }
+    if let Some(api_key) = query.api_key.as_deref() {
+        where_sql.push_str(" AND r.api_key_name = ?");
+        params.push(api_key.into());
     }
 
     let db = &state.db;
@@ -1087,6 +1098,8 @@ struct RankQuery {
     virtual_model_id: Option<i32>,
     /// 按模型过滤（可选；api_key_rank 三级页使用，须与 provider_id 同传）。
     model_id: Option<String>,
+    /// 按调用方 API Key 名称过滤（可选；API Key 数据面板「该 key 用到的 X」排行）。
+    api_key: Option<String>,
 }
 
 /// 解析排序指标白名单；非法值返回 None（调用方转 400）。
@@ -1252,10 +1265,16 @@ async fn provider_rank(
     // 单查询聚合全部 6 个指标：仅成功请求 + start_time 半开窗口。
     // 按 r.provider_id 分组（id 才是真实聚合维度，name 仅展示）。
     let rank_sql = rank_metric_sql();
+    let mut where_sql = String::from("r.success = 1 AND r.start_time >= ? AND r.start_time < ?");
+    let mut params: Vec<sea_orm::Value> = vec![start.into(), end.into()];
+    if let Some(api_key) = query.api_key.as_deref() {
+        where_sql.push_str(" AND r.api_key_name = ?");
+        params.push(api_key.into());
+    }
     let sql = format!(
         "SELECT r.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name,{rank_sql} \
          FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
-         WHERE r.success = 1 AND r.start_time >= ? AND r.start_time < ? \
+         WHERE {where_sql} \
          GROUP BY r.provider_id"
     );
 
@@ -1263,7 +1282,7 @@ async fn provider_rank(
         .query_all_raw(Statement::from_sql_and_values(
             DbBackend::Sqlite,
             sql,
-            [start.into(), end.into()],
+            params,
         ))
         .await
     {
@@ -1353,11 +1372,17 @@ async fn virtual_model_rank(
 
     // 按 id 分组（同一 display_id 的虚拟模型也各自成行），JOIN 出 display_id。
     let rank_sql = rank_metric_sql();
+    let mut where_sql = String::from("r.success = 1 AND r.start_time >= ? AND r.start_time < ?");
+    let mut params: Vec<sea_orm::Value> = vec![start.into(), end.into()];
+    if let Some(api_key) = query.api_key.as_deref() {
+        where_sql.push_str(" AND r.api_key_name = ?");
+        params.push(api_key.into());
+    }
     let sql = format!(
         "SELECT r.virtual_model_id AS virtual_model_id, \
                 COALESCE(vm.display_id, '') AS virtual_model_display_id,{rank_sql} \
          FROM request r LEFT JOIN virtual_model vm ON vm.virtual_model_id = r.virtual_model_id \
-         WHERE r.success = 1 AND r.start_time >= ? AND r.start_time < ? \
+         WHERE {where_sql} \
          GROUP BY r.virtual_model_id"
     );
 
@@ -1365,7 +1390,7 @@ async fn virtual_model_rank(
         .query_all_raw(Statement::from_sql_and_values(
             DbBackend::Sqlite,
             sql,
-            [start.into(), end.into()],
+            params,
         ))
         .await
     {
@@ -1465,6 +1490,10 @@ async fn provider_model_rank(
     if let Some(provider_id) = query.provider_id {
         where_sql.push_str(" AND r.provider_id = ?");
         params.push(provider_id.into());
+    }
+    if let Some(api_key) = query.api_key.as_deref() {
+        where_sql.push_str(" AND r.api_key_name = ?");
+        params.push(api_key.into());
     }
 
     let rank_sql = rank_metric_sql();
@@ -1922,6 +1951,107 @@ async fn model_metrics(
             request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
             tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
             cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+        })),
+    )
+}
+
+/// API Key 指标查询参数：apiKey（调用方名称）+ 时间窗口。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiKeyMetricsQuery {
+    /// 调用方 API Key 名称（request.api_key_name，必填）。
+    api_key: Option<String>,
+    /// 窗口起点（毫秒时间戳，含）。
+    start_time: Option<i64>,
+    /// 窗口终点（毫秒时间戳，不含）。
+    end_time: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiKeyMetricsResponse {
+    /// 调用方 API Key 名称。
+    api_key_name: String,
+    /// 成功请求数。
+    request_count: i64,
+    /// 总计 token（成功请求的 total_tokens 合计）。
+    total_tokens: i64,
+    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
+    ttft: f64,
+    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
+    request_time: f64,
+    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
+    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
+    tps: f64,
+    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
+    cache_hit_rate: f64,
+}
+
+/// API Key 指标：按调用方 API Key 名称过滤聚合 6 指标，返回单行。
+/// 供 API Key 数据面板顶部指标卡使用；窗口内无该 key 请求时返回全 0（不报错）。
+async fn api_key_metrics(
+    State(state): State<AppState>,
+    Query(query): Query<ApiKeyMetricsQuery>,
+) -> impl IntoResponse {
+    let Some(api_key) = query.api_key.as_deref().filter(|s| !s.is_empty()) else {
+        return response::bad_request(
+            AppSettings::lang_sync().tr("缺少 apiKey 参数", "missing apiKey parameter"),
+        );
+    };
+    let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "缺少 startTime / endTime 参数",
+            "missing startTime / endTime parameters",
+        ));
+    };
+    if end <= start {
+        return response::bad_request(AppSettings::lang_sync().tr(
+            "endTime 必须大于 startTime",
+            "endTime must be greater than startTime",
+        ));
+    }
+    let db = &state.db;
+
+    // 单行聚合 6 指标（无 GROUP BY）：仅该 key 的成功请求。
+    let rank_sql = rank_metric_sql();
+    let sql = format!(
+        "SELECT {rank_sql} \
+         FROM request r \
+         WHERE r.success = 1 AND r.api_key_name = ? \
+           AND r.start_time >= ? AND r.start_time < ?"
+    );
+
+    // SQLite COUNT/SUM 无行时返回单行全 0/0.0；无请求窗口用聚合行归一，避免 db_error。
+    let (request_count, total_tokens, ttft, request_time, tps, cache_hit_rate) = match db
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            [api_key.into(), start.into(), end.into()],
+        ))
+        .await
+    {
+        Ok(Some(row)) => (
+            row.try_get::<i64>("", "request_count").unwrap_or(0),
+            row.try_get::<i64>("", "total_tokens").unwrap_or(0),
+            row.try_get::<f64>("", "ttft").unwrap_or(0.0),
+            row.try_get::<f64>("", "request_time").unwrap_or(0.0),
+            row.try_get::<f64>("", "tps").unwrap_or(0.0),
+            row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+        ),
+        Ok(None) => (0, 0, 0.0, 0.0, 0.0, 0.0),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+
+    (
+        StatusCode::OK,
+        Json(Response::success(ApiKeyMetricsResponse {
+            api_key_name: api_key.to_string(),
+            request_count,
+            total_tokens,
+            ttft,
+            request_time,
+            tps,
+            cache_hit_rate,
         })),
     )
 }

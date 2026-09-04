@@ -18,6 +18,15 @@ const mocks = vi.hoisted(() => {
 		toggleMutate: vi.fn(),
 		deleteMutate: vi.fn(),
 		writeText: vi.fn().mockResolvedValue(undefined),
+		navigate: vi.fn(),
+	};
+});
+
+vi.mock("react-router-dom", async () => {
+	const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+	return {
+		...actual,
+		useNavigate: () => mocks.navigate,
 	};
 });
 
@@ -101,6 +110,7 @@ describe("ApiKeysPage", () => {
 		mocks.toggleMutate.mockClear();
 		mocks.deleteMutate.mockClear();
 		mocks.writeText.mockClear();
+		mocks.navigate.mockClear();
 		Object.defineProperty(navigator, "clipboard", {
 			value: { writeText: mocks.writeText },
 			configurable: true,
@@ -198,5 +208,24 @@ describe("ApiKeysPage", () => {
 		fireEvent.keyDown(screen.getByRole("button", { name: "操作 my-key" }), { key: "Enter" });
 		fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
 		await waitFor(() => expect(mocks.deleteDialogOpen).toBe(true));
+	});
+
+	it("名称带方向键：点击跳转到该 key 的数据面板", () => {
+		mocks.apiKeys = [makeKey({ id: 7, name: "prod-key" })];
+		renderPage();
+
+		const nav = screen.getByRole("button", { name: "prod-key" });
+		expect(nav.querySelector("svg")).toBeTruthy();
+		fireEvent.click(nav);
+		expect(mocks.navigate).toHaveBeenCalledWith("/api-keys/7/overview");
+	});
+
+	it("点名称跳转不干扰同行启停开关", () => {
+		mocks.apiKeys = [makeKey({ id: 7, name: "prod-key" })];
+		renderPage();
+
+		fireEvent.click(screen.getByRole("switch", { name: "切换 API Key prod-key 状态" }));
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		expect(mocks.toggleMutate).toHaveBeenCalled();
 	});
 });

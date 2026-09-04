@@ -40,6 +40,8 @@ export interface ChartsParams {
 	virtualModelId?: number;
 	/** 按模型 ID 过滤（可选；供应商侧真实模型 ID）。 */
 	modelId?: string;
+	/** 按调用方 API Key 名称过滤（可选；API Key 数据面板用）。 */
+	apiKey?: string;
 	/** 桶粒度（hour/day/month/year）。缺省由后端按窗口长度回退推断。 */
 	granularity?: ChartGranularity;
 	/** 客户端 UTC 偏移（分钟，东八区 480）。与 granularity 搭配使用。 */
@@ -57,6 +59,7 @@ export const dashboardStatsKeys = {
 			params.providerId ?? null,
 			params.virtualModelId ?? null,
 			params.modelId ?? null,
+			params.apiKey ?? null,
 			params.granularity ?? null,
 			params.tzOffsetMinutes ?? null,
 		] as const,
@@ -75,7 +78,7 @@ export function useDashboardSummary() {
 	});
 }
 
-export function useDashboardCharts(params: ChartsParams = {}) {
+export function useDashboardCharts(params: ChartsParams = {}, enabled = true) {
 	return useQuery<DashboardCharts>({
 		queryKey: dashboardStatsKeys.charts(params),
 		queryFn: async () => {
@@ -87,6 +90,7 @@ export function useDashboardCharts(params: ChartsParams = {}) {
 				query.set("virtualModelId", String(params.virtualModelId));
 			}
 			if (params.modelId !== undefined) query.set("modelId", params.modelId);
+			if (params.apiKey !== undefined) query.set("apiKey", params.apiKey);
 			if (params.granularity !== undefined) query.set("granularity", params.granularity);
 			if (params.tzOffsetMinutes !== undefined) {
 				query.set("tzOffsetMinutes", String(params.tzOffsetMinutes));
@@ -95,6 +99,7 @@ export function useDashboardCharts(params: ChartsParams = {}) {
 			const res = await api.get(`stats/charts${suffix}`).json<ApiResponse<DashboardCharts>>();
 			return unwrap(res);
 		},
+		enabled,
 		// 切换时间窗口期间保留上一窗口数据，避免图表闪回骨架导致页面抖动。
 		placeholderData: keepPreviousData,
 	});

@@ -7,6 +7,7 @@ import { PageHeader } from "@/components/page-header";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
+	initialWindowFromUrl,
 	raceWindowBounds,
 } from "@/components/race-window-control";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +22,7 @@ import {
 	useVirtualModelMemberRank,
 } from "@/hooks/use-virtual-model-member-rank";
 import { useVirtualModelDetail } from "@/hooks/use-virtual-models";
-import { type RacePeriod, chartGranularity, formatPeriodLabel } from "@/lib/race-period";
+import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
 import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, Boxes } from "lucide-react";
 import { useState } from "react";
@@ -35,22 +36,6 @@ interface VirtualModelOverviewWindows {
 	token: RaceWindowState;
 	race: RaceWindowState;
 	insight: RaceWindowState;
-}
-
-/** 从 URL query 解析初始时间段（缺省当天）；首页赛马行点击时携带。 */
-function initialWindowFromUrl(searchParams: URLSearchParams): RaceWindowState {
-	const period = (searchParams.get("period") as RacePeriod | "custom" | null) ?? "day";
-	const offset = Number.parseInt(searchParams.get("offset") ?? "0", 10) || 0;
-	const now = Date.now();
-	const startTime = Number(searchParams.get("startTime")) || now - 3_600_000;
-	const endTime = Number(searchParams.get("endTime")) || now;
-	return {
-		period,
-		offset,
-		customStart: startTime,
-		customEnd: endTime,
-		appliedCustom: period === "custom" ? { startTime, endTime } : null,
-	};
 }
 
 /** 6 列指标定义（成员模型赛马表格）。 */

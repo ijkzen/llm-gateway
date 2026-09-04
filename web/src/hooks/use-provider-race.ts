@@ -48,7 +48,7 @@ export interface RaceSort {
 }
 
 export const providerRaceKeys = {
-	rank: (window: RaceWindow, sort: RaceSort) =>
+	rank: (window: RaceWindow, sort: RaceSort, apiKey?: string) =>
 		[
 			"stats",
 			"provider-rank",
@@ -56,18 +56,25 @@ export const providerRaceKeys = {
 			window.endTime,
 			sort.sortBy,
 			sort.sortOrder,
+			apiKey ?? null,
 		] as const,
 };
 
 /**
- * 供应商赛马排行查询（全部供应商 + 后端排序）。
+ * 供应商赛马排行查询（全部供应商 + 后端排序；可选按调用方 API Key 过滤）。
  * @param window 时间窗口
  * @param sort 排序指标与方向
  * @param enabled 是否启用（配合懒加载 useInView 使用，未进入视口不发请求）
+ * @param apiKey 可选：只统计该调用方 API Key 的请求（API Key 数据面板用）
  */
-export function useProviderRace(window: RaceWindow, sort: RaceSort, enabled: boolean) {
+export function useProviderRace(
+	window: RaceWindow,
+	sort: RaceSort,
+	enabled: boolean,
+	apiKey?: string,
+) {
 	return useQuery<ProviderRankResponse>({
-		queryKey: providerRaceKeys.rank(window, sort),
+		queryKey: providerRaceKeys.rank(window, sort, apiKey),
 		queryFn: async () => {
 			const params = new URLSearchParams({
 				sortBy: sort.sortBy,
@@ -75,6 +82,9 @@ export function useProviderRace(window: RaceWindow, sort: RaceSort, enabled: boo
 				startTime: String(window.startTime),
 				endTime: String(window.endTime),
 			});
+			if (apiKey !== undefined) {
+				params.set("apiKey", apiKey);
+			}
 			const res = await api
 				.get(`stats/provider-rank?${params.toString()}`)
 				.json<ApiResponse<ProviderRankResponse>>();

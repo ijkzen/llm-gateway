@@ -35,9 +35,10 @@ import {
 	getSortedRowModel,
 	useReactTable,
 } from "@tanstack/react-table";
-import { MoreHorizontal, Power, Trash2 } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Power, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 interface ApiKeysTableProps {
 	apiKeys: ApiKey[] | undefined;
@@ -48,6 +49,7 @@ const PLAIN_HEADER_CLASS = "text-xs font-medium uppercase tracking-wider text-mu
 
 export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 	const { t } = useTranslation();
+	const navigate = useNavigate();
 	const { toastSuccess, toastError } = useToastActions();
 	const toggleApiKey = useToggleApiKey();
 	const [sorting, setSorting] = useState<SortingState>([]);
@@ -76,7 +78,21 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 					className={PLAIN_HEADER_CLASS}
 				/>
 			),
-			cell: ({ row }) => <span className="font-medium">{row.getValue("name")}</span>,
+			cell: ({ row }) => {
+				const apiKey = row.original;
+				return (
+					<button
+						type="button"
+						data-nav
+						onClick={() => navigate(`/api-keys/${apiKey.id}/overview`)}
+						title={t("apiKeys.viewOverview", { key: apiKey.name })}
+						className="group flex max-w-full cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 text-left font-medium transition-colors hover:bg-muted/60"
+					>
+						<span className="truncate">{apiKey.name}</span>
+						<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+					</button>
+				);
+			},
 		},
 		{
 			accessorKey: "keyMasked",
