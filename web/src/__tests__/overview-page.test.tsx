@@ -218,12 +218,12 @@ describe("OverviewPage（数据面板）", () => {
 		const todayCall = calls.find((p) => p?.startTime !== undefined);
 		const allCall = calls.find((p) => p?.startTime === undefined);
 		expect(allCall?.endTime).toBeUndefined();
-		// 今日窗口：本地今日 0 点 → 当前时刻（页面渲染时的 now，允许毫秒误差）。
+		// 今日窗口：本地今日 0 点 → 当前时刻（endTime 在 render 时捕获，容差放宽防 CI 抖动）。
 		const now = Date.now();
 		const startOfToday = new Date(now);
 		startOfToday.setHours(0, 0, 0, 0);
 		expect(todayCall?.startTime).toBe(startOfToday.getTime());
-		expect(Number(todayCall?.endTime)).toBeCloseTo(now, -2);
+		expect(Number(todayCall?.endTime)).toBeCloseTo(now, -3);
 	});
 
 	it("默认展示两个折线图（调用趋势 + token 使用分布）", () => {
