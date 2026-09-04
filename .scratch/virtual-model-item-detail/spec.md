@@ -50,6 +50,6 @@ status: ready-for-agent
 
 ## Further Notes
 
-- 成员排序由后端 `sort_items` 决定（启用优先 → LB 策略分组 → 字母序），开关关闭后成员会沉到区块后方，属预期行为，测试中不断言位置。
+- 成员排序由后端 `sort_items` 决定（启用优先 → LB 策略分组 → 组内按用量排序：订阅制比剩余百分比、按量比主余额 → 无数据排后，平局按 `virtualModelItemId` 升序；策略 2/3 回退「启用 → id 升序」静态序），开关关闭后成员会沉到区块后方，属预期行为，测试中不断言位置。
 - 详情弹窗内容与供应商模型详情弹窗的差异点（无代理行、无测试/编辑/删除按钮）是基于条目自身字段边界与「仅只读」要求的主动裁剪。
 - 工作分支：worktree `/Users/ijkzen/Projects/RUST-Project/llm-gateway-virtual-model-item-detail`，分支 `fix/virtual-model-item-detail`。
