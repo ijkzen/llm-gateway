@@ -2,6 +2,7 @@ import { AddProviderModelsDialog } from "@/components/provider-models/AddProvide
 import { ProviderModelDetailDialog } from "@/components/provider-models/ProviderModelDetailDialog";
 import type { ProviderModel, RefreshCandidate } from "@/hooks/use-provider-models";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -414,29 +415,34 @@ describe("ProviderModelDetailDialog 测试按钮", () => {
 });
 
 describe("ProviderModelDetailDialog 编辑态", () => {
-	it("删除成功时先关闭确认弹窗，再关闭模型详情", () => {
+	it("删除成功后关闭嵌套弹窗并恢复页面交互", async () => {
 		mocks.deleteMutate.mockImplementation((_id, opts) => {
 			required(opts).onSuccess();
 		});
 		let confirmingDialogClosed = false;
-		const onOpenChange = (next: boolean) => {
-			if (!next) confirmingDialogClosed = screen.queryByRole("alertdialog") === null;
-		};
-		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={onOpenChange}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
-		);
+		function DialogHarness() {
+			const [open, setOpen] = useState(true);
+			return (
+				<ProviderModelDetailDialog
+					open={open}
+					onOpenChange={(next) => {
+						if (!next) confirmingDialogClosed = screen.queryByRole("alertdialog") === null;
+						setOpen(next);
+					}}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			);
+		}
+		render(<DialogHarness />);
 
 		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
 		fireEvent.click(screen.getByRole("button", { name: "删除" }));
 		fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
 		expect(confirmingDialogClosed).toBe(true);
+		await waitFor(() => expect(document.body.style.pointerEvents).toBe(""));
 	});
 
 	it("默认只读：只有编辑按钮，没有删除/更新", () => {
