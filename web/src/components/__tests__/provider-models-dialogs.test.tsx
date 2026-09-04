@@ -15,6 +15,17 @@ const mocks = vi.hoisted(() => {
 		toastSuccess: vi.fn(),
 		toastError: vi.fn(),
 		testState: { isPending: false },
+		catalogHits: [] as Array<{
+			id: string;
+			name: string;
+			family: string;
+			contextLength: number | null;
+			maxOutputTokens: number | null;
+			reasoning: boolean;
+			toolUse: boolean;
+			imageUnderstand: boolean;
+			videoUnderstand: boolean;
+		}>,
 	};
 });
 
@@ -33,7 +44,7 @@ vi.mock("@/hooks/use-provider-models", async () => {
 			mutate: mocks.testMutate,
 			isPending: mocks.testState.isPending,
 		}),
-		useCatalogSearch: () => ({ data: [] }),
+		useCatalogSearch: (query: string) => ({ data: query ? mocks.catalogHits : [] }),
 	};
 });
 
@@ -96,6 +107,7 @@ function failRefresh(message: string) {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.catalogHits = [];
 	mocks.testState.isPending = false;
 });
 
@@ -116,6 +128,7 @@ describe("AddProviderModelsDialog 候选三态", () => {
 		});
 
 		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
 		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
 
 		expect(screen.getByText("已智能填充")).toBeTruthy();
@@ -157,6 +170,7 @@ describe("AddProviderModelsDialog 候选三态", () => {
 		});
 
 		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
 		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
 
 		expect(screen.getByText("信息不完整")).toBeTruthy();
@@ -182,6 +196,7 @@ describe("AddProviderModelsDialog 候选三态", () => {
 		});
 
 		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
 		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
 
 		const checkbox = screen.getByRole("checkbox", { name: "选择 secret-embedding" });
@@ -193,7 +208,7 @@ describe("AddProviderModelsDialog 候选三态", () => {
 		expect((checkbox as HTMLButtonElement).disabled).toBe(false);
 
 		fireEvent.click(checkbox);
-		fireEvent.click(screen.getByRole("button", { name: "添加" }));
+		fireEvent.click(screen.getByRole("button", { name: "添加", hidden: true }));
 
 		expect(mocks.batchMutate).toHaveBeenCalledTimes(1);
 		const payload = required(mocks.batchMutate.mock.calls[0])[0];
@@ -232,20 +247,20 @@ describe("AddProviderModelsDialog 手动添加", () => {
 		Element.prototype.scrollIntoView = vi.fn();
 
 		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
 		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
-
-		const input = screen.getByPlaceholderText("如 gpt-4o") as HTMLInputElement;
-		expect(input.value).toBe("");
 
 		fireEvent.click(screen.getByText("manual/only-model"));
 
+		const input = screen.getByPlaceholderText("如 gpt-4o") as HTMLInputElement;
 		expect(input.value).toBe("manual/only-model");
-		expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+		await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
 		await waitFor(() => expect(document.activeElement).toBe(input));
 	});
 
 	it("填写完整后提交触发单条创建", async () => {
 		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "手动添加" }));
 
 		fireEvent.change(screen.getByPlaceholderText("如 gpt-4o"), {
 			target: { value: "my-model" },
@@ -264,6 +279,7 @@ describe("AddProviderModelsDialog 手动添加", () => {
 
 	it("模型 ID 为空时不提交", () => {
 		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "手动添加" }));
 
 		const numbers = screen.getAllByRole("spinbutton");
 		fireEvent.change(required(numbers[0]), { target: { value: "8192" } });
@@ -271,6 +287,49 @@ describe("AddProviderModelsDialog 手动添加", () => {
 		fireEvent.click(screen.getByRole("button", { name: "手动添加" }));
 
 		expect(mocks.createMutate).not.toHaveBeenCalled();
+	});
+});
+
+describe("AddProviderModelsDialog Tab 与目录候选", () => {
+	it("在自动添加与手动添加之间切换，并让内容区独立滚动", () => {
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+
+		expect(screen.getByRole("tab", { name: "自动添加" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.queryByPlaceholderText("如 gpt-4o")).toBeNull();
+		fireEvent.click(screen.getByRole("tab", { name: "手动添加" }));
+		expect(screen.getByRole("tab", { name: "手动添加" })).toHaveAttribute("aria-selected", "true");
+		expect(screen.getByPlaceholderText("如 gpt-4o")).toBeTruthy();
+		expect(screen.getByTestId("add-provider-models-scroll-area")).toBeTruthy();
+	});
+
+	it("目录候选在点选或点击候选区域外时收起", async () => {
+		mocks.catalogHits = [
+			{
+				id: "gpt-4o-mini",
+				name: "GPT-4o mini",
+				family: "gpt",
+				contextLength: 128000,
+				maxOutputTokens: 16384,
+				reasoning: false,
+				toolUse: true,
+				imageUnderstand: true,
+				videoUnderstand: false,
+			},
+		];
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "手动添加" }));
+
+		const input = screen.getByPlaceholderText("如 gpt-4o");
+		fireEvent.change(input, { target: { value: "gpt" } });
+		fireEvent.focus(input);
+		expect(screen.getByRole("button", { name: "gpt-4o-mini" })).toBeTruthy();
+		fireEvent.pointerDown(screen.getByRole("tab", { name: "手动添加" }));
+		expect(screen.queryByRole("button", { name: "gpt-4o-mini" })).toBeNull();
+
+		fireEvent.focus(input);
+		fireEvent.click(screen.getByRole("button", { name: "gpt-4o-mini" }));
+		expect((input as HTMLInputElement).value).toBe("gpt-4o-mini");
+		expect(screen.queryByRole("button", { name: "gpt-4o-mini" })).toBeNull();
 	});
 });
 

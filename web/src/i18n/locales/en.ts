@@ -307,6 +307,9 @@ const en: Translation = {
 		addManual: "Add manually",
 		addFromCatalog: "Add from catalog",
 		catalogSearch: "Search model catalog...",
+		search: "Search provider models",
+		toggleProvider: "Enable {{provider}}",
+		emptyProviderModels: 'No models yet. Click "Add" above to import one.',
 		searchNoResults: "No matching models",
 		selected: "Selected",
 		selectAtLeastOne: "Select at least one model",
@@ -324,6 +327,7 @@ const en: Translation = {
 		addDesc:
 			"Fetch the model list from {{provider}} and auto-fill it; add manually if the provider has no Models API.",
 		tryRefresh: "Try refresh",
+		autoAdd: "Auto add",
 		refreshHint: "Fetch the remote list and auto-complete from the model catalog",
 		notRefreshed: 'Not refreshed yet. Click "Try refresh" to fetch the remote model list',
 		refreshEmpty: "No models returned, or all models are already imported; use manual add below",

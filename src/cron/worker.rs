@@ -629,6 +629,32 @@ mod tests {
         assert!(!completed.load(Ordering::SeqCst));
     }
 
+    async fn wait_for_run(
+        repo: &SeaOrmCronJobLogRepository,
+        job_name: &str,
+        status: &str,
+        log_count: i32,
+    ) -> crate::cron::log_repository::RunRecord {
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+        loop {
+            let runs =
+                crate::cron::log_repository::CronJobLogRepository::list_runs(repo, job_name, 1)
+                    .await
+                    .unwrap();
+            if let Some(run) = runs.into_iter().next()
+                && run.status == status
+                && run.log_count == log_count
+            {
+                return run;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for {job_name} to finish as {status} with {log_count} logs"
+            );
+            tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
+        }
+    }
+
     /// 在 current_thread runtime 中注册捕获 subscriber：set_default 是
     /// thread-local 的，multi-thread runtime 下 handler 在 worker 线程执行，
     /// 事件会走该线程的（空）dispatcher 而丢失。
@@ -681,13 +707,8 @@ mod tests {
         };
         handle.tx.send(invocation).await.unwrap();
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-
-        let runs = log_repo.list_runs("log_worker_test", 10).await.unwrap();
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].status, "success");
-        assert_eq!(runs[0].log_count, 2);
-        let logs = log_repo.list_logs(&runs[0].run_id).await.unwrap();
+        let run = wait_for_run(&log_repo, "log_worker_test", "success", 2).await;
+        let logs = log_repo.list_logs(&run.run_id).await.unwrap();
         assert_eq!(logs.len(), 2);
         assert_eq!(logs[0].seq, 1);
         assert_eq!(logs[0].level, "INFO");
@@ -723,12 +744,8 @@ mod tests {
         };
         handle.tx.send(invocation).await.unwrap();
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-
-        let runs = log_repo.list_runs("fail_worker_test", 10).await.unwrap();
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].status, "failed");
-        let logs = log_repo.list_logs(&runs[0].run_id).await.unwrap();
+        let run = wait_for_run(&log_repo, "fail_worker_test", "failed", 1).await;
+        let logs = log_repo.list_logs(&run.run_id).await.unwrap();
         assert_eq!(logs.len(), 1);
         assert_eq!(logs[0].level, "ERROR");
         assert!(logs[0].message.contains("任务执行失败"));

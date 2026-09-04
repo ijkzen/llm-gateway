@@ -2,6 +2,9 @@
 //!
 //! 成功路径通过环境变量 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 将用量请求重定向到
 //! 本地 mock（DeepSeek 余额形态），并验证 60s 缓存与 ?refresh=1 绕过行为。
+//!
+//! SenseNova 登录测试有意用同步锁跨 await 串行化共享冷却状态。
+#![allow(clippy::await_holding_lock)]
 
 mod common;
 

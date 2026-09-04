@@ -1,7 +1,7 @@
 import type { ProviderModel } from "@/hooks/use-provider-models";
 import type { Provider } from "@/hooks/use-providers";
 import ProviderModelsPage from "@/pages/provider-models";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => {
 		providers: undefined as Provider[] | undefined,
 		models: undefined as ProviderModel[] | undefined,
 		isLoading: false,
+		updateProvider: vi.fn(),
+		updateError: null as Error | null,
 	};
 });
 
@@ -23,6 +25,19 @@ vi.mock("@/hooks/use-providers", async () => {
 			isLoading: mocks.isLoading,
 			isError: false,
 			refetch: vi.fn(),
+		}),
+		useUpdateProvider: () => ({
+			mutate: (
+				payload: unknown,
+				options: { onSuccess?: () => void; onError?: (error: Error) => void },
+			) => {
+				mocks.updateProvider(payload);
+				if (mocks.updateError) {
+					options.onError?.(mocks.updateError);
+					return;
+				}
+				options.onSuccess?.();
+			},
 		}),
 	};
 });
@@ -47,14 +62,15 @@ vi.mock("@/components/provider-models/AddProviderModelsDialog", () => ({
 }));
 
 vi.mock("@/components/provider-models/ProviderModelDetailDialog", () => ({
-	ProviderModelDetailDialog: () => null,
+	ProviderModelDetailDialog: ({ open, model }: { open: boolean; model: ProviderModel | null }) =>
+		open ? <dialog open>{model?.providerModelId}</dialog> : null,
 }));
 
-function makeProvider(id: number, name: string): Provider {
+function makeProvider(id: number, name: string, enable = true): Provider {
 	return {
 		id,
 		name,
-		enable: true,
+		enable,
 		baseUrl: "https://api.example.com/v1",
 		apiKeyMasked: "sk-****test",
 		protocolType: 0,
@@ -86,20 +102,26 @@ function makeModel(providerId: number, modelId: number, id: string): ProviderMod
 	};
 }
 
+function renderPage() {
+	return render(
+		<MemoryRouter>
+			<ProviderModelsPage />
+		</MemoryRouter>,
+	);
+}
+
 describe("ProviderModelsPage", () => {
 	beforeEach(() => {
 		mocks.providers = undefined;
 		mocks.models = undefined;
 		mocks.isLoading = false;
+		mocks.updateProvider.mockReset();
+		mocks.updateError = null;
 	});
 
 	it("没有供应商时展示空态引导", () => {
 		mocks.providers = [];
-		render(
-			<MemoryRouter>
-				<ProviderModelsPage />
-			</MemoryRouter>,
-		);
+		renderPage();
 
 		expect(screen.getByText(/还没有供应商/)).toBeTruthy();
 		expect(screen.getByRole("link", { name: "去创建供应商" })).toBeTruthy();
@@ -112,11 +134,7 @@ describe("ProviderModelsPage", () => {
 			makeModel(1, 12, "o3"),
 			makeModel(2, 21, "deepseek-chat"),
 		];
-		render(
-			<MemoryRouter>
-				<ProviderModelsPage />
-			</MemoryRouter>,
-		);
+		renderPage();
 
 		expect(screen.getByRole("heading", { name: "OpenAI" })).toBeTruthy();
 		expect(screen.getByRole("heading", { name: "DeepSeek" })).toBeTruthy();
@@ -127,14 +145,62 @@ describe("ProviderModelsPage", () => {
 		expect(screen.getByRole("button", { name: /deepseek-chat/ })).toBeTruthy();
 	});
 
+	it("按供应商模型 ID 搜索、按供应商分组，点击结果打开详情并保留结果", () => {
+		mocks.providers = [makeProvider(1, "OpenAI"), makeProvider(2, "DeepSeek", false)];
+		mocks.models = [
+			makeModel(1, 11, "gpt-4o"),
+			makeModel(1, 12, "gpt-4.1"),
+			makeModel(2, 21, "gpt-deepseek"),
+		];
+		renderPage();
+
+		fireEvent.change(screen.getByRole("searchbox", { name: "搜索供应商模型" }), {
+			target: { value: "gpt" },
+		});
+		expect(screen.getByTestId("provider-model-search-group-1")).toHaveTextContent("OpenAI");
+		expect(screen.getByTestId("provider-model-search-group-2")).toHaveTextContent("DeepSeek");
+		expect(screen.getByRole("button", { name: "gpt-deepseek" })).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "gpt-deepseek" }));
+		expect(screen.getByRole("dialog")).toHaveTextContent("gpt-deepseek");
+		expect(screen.getByRole("searchbox", { name: "搜索供应商模型" })).toHaveValue("gpt");
+	});
+
+	it("点击搜索结果外部会收起结果面板", () => {
+		mocks.providers = [makeProvider(1, "OpenAI")];
+		mocks.models = [makeModel(1, 11, "gpt-4o")];
+		renderPage();
+
+		fireEvent.change(screen.getByRole("searchbox", { name: "搜索供应商模型" }), {
+			target: { value: "gpt" },
+		});
+		expect(screen.getByRole("button", { name: "gpt-4o" })).toBeTruthy();
+
+		fireEvent.pointerDown(screen.getByRole("heading", { name: "供应商模型" }));
+		expect(screen.queryByRole("button", { name: "gpt-4o" })).toBeNull();
+	});
+
+	it("供应商开关立即更新，失败时回滚", () => {
+		mocks.providers = [makeProvider(1, "OpenAI")];
+		mocks.models = [];
+		renderPage();
+
+		const toggle = screen.getByRole("switch", { name: "启用 OpenAI" });
+		expect(toggle).toHaveAttribute("data-state", "checked");
+		fireEvent.click(toggle);
+		expect(mocks.updateProvider).toHaveBeenLastCalledWith({ id: 1, enable: false });
+		expect(toggle).toHaveAttribute("data-state", "unchecked");
+
+		mocks.updateError = new Error("更新失败");
+		fireEvent.click(toggle);
+		expect(mocks.updateProvider).toHaveBeenLastCalledWith({ id: 1, enable: true });
+		expect(toggle).toHaveAttribute("data-state", "checked");
+	});
+
 	it("供应商暂无模型时显示占位提示", () => {
 		mocks.providers = [makeProvider(1, "OpenAI")];
 		mocks.models = [];
-		render(
-			<MemoryRouter>
-				<ProviderModelsPage />
-			</MemoryRouter>,
-		);
+		renderPage();
 
 		expect(screen.getByText(/暂无模型/)).toBeTruthy();
 	});
