@@ -10,23 +10,32 @@ vi.mock("react-router-dom", () => ({
 
 const mocks = vi.hoisted(() => ({
 	summary: undefined as DashboardSummary | undefined,
+	todaySummary: undefined as DashboardSummary | undefined,
 	charts: undefined as DashboardCharts | undefined,
 	summaryLoading: false,
 	chartsLoading: false,
 	summaryError: false,
 	chartsError: false,
 	refetch: vi.fn(),
+	/** useDashboardSummary 每次调用参数（累计 + 今日各一次）。 */
+	summaryParamsList: [] as Record<string, unknown>[],
 	/** useDashboardCharts 每次调用参数（首页调用/token 两块各一次）。 */
 	chartsParamsList: [] as Record<string, unknown>[],
 }));
 
 vi.mock("@/hooks/use-dashboard-stats", () => ({
-	useDashboardSummary: () => ({
-		data: mocks.summary,
-		isLoading: mocks.summaryLoading,
-		isError: mocks.summaryError,
-		refetch: mocks.refetch,
-	}),
+	useDashboardSummary: (params?: unknown) => {
+		mocks.summaryParamsList.push(params as Record<string, unknown>);
+		// 今日（带时间窗口）与累计（不带）走不同分支返回。
+		const p = params as Record<string, unknown> | undefined;
+		const isToday = p?.startTime !== undefined || p?.endTime !== undefined;
+		return {
+			data: isToday ? mocks.todaySummary : mocks.summary,
+			isLoading: mocks.summaryLoading,
+			isError: mocks.summaryError,
+			refetch: mocks.refetch,
+		};
+	},
 	useDashboardCharts: (params?: unknown) => {
 		mocks.chartsParamsList.push(params as Record<string, unknown>);
 		return {
@@ -133,12 +142,14 @@ function makeCharts(overrides: Partial<DashboardCharts> = {}): DashboardCharts {
 describe("OverviewPage（数据面板）", () => {
 	beforeEach(() => {
 		mocks.summary = undefined;
+		mocks.todaySummary = undefined;
 		mocks.charts = undefined;
 		mocks.summaryLoading = false;
 		mocks.chartsLoading = false;
 		mocks.summaryError = false;
 		mocks.chartsError = false;
 		mocks.refetch.mockClear();
+		mocks.summaryParamsList = [];
 	});
 
 	it("加载中渲染骨架屏，不渲染图表卡片", () => {
@@ -158,9 +169,16 @@ describe("OverviewPage（数据面板）", () => {
 
 	it("顶部渲染四个累计指标（token 按亿缩写、比率按百分比）", () => {
 		mocks.summary = makeSummary();
+		mocks.todaySummary = makeSummary({
+			totalRequests: 1,
+			successRate: 0,
+			totalTokens: 1,
+			cacheHitRate: 0,
+		});
 		mocks.charts = makeCharts();
 		render(<OverviewPage />);
 
+		// 累计行（今日行数值已被差异化，不会撞文本）。
 		expect(screen.getByText("累计请求数")).toBeTruthy();
 		expect(screen.getByText("12,345")).toBeTruthy();
 		expect(screen.getByText("75.6%")).toBeTruthy();
@@ -168,8 +186,49 @@ describe("OverviewPage（数据面板）", () => {
 		expect(screen.getByText("30.4%")).toBeTruthy();
 	});
 
+	it("累计指标下方再渲染四个今日指标（副标题今日）", () => {
+		mocks.summary = makeSummary();
+		mocks.todaySummary = makeSummary({
+			totalRequests: 321,
+			successRate: 0.9,
+			totalTokens: 12_345,
+			cacheHitRate: 0.1,
+		});
+		mocks.charts = makeCharts();
+		render(<OverviewPage />);
+
+		// 今日请求数标签与今日副标题（今日行四张卡副标题均为「今日」）。
+		expect(screen.getByText("今日请求数")).toBeTruthy();
+		expect(screen.getAllByText("今日").length).toBe(4);
+		// 今日行的四个值（累计行已用默认值 12,345/75.6%/1.23 亿/30.4%，不会撞今日行文本）。
+		expect(screen.getByText("321")).toBeTruthy();
+		expect(screen.getByText("90%")).toBeTruthy();
+		expect(screen.getByText("1.2 万")).toBeTruthy();
+		expect(screen.getByText("10%")).toBeTruthy();
+	});
+
+	it("今日 summary 请求携带本地今日窗口，累计请求不带时间参数", () => {
+		mocks.summary = makeSummary();
+		mocks.todaySummary = makeSummary();
+		mocks.charts = makeCharts();
+		render(<OverviewPage />);
+
+		const calls = mocks.summaryParamsList;
+		expect(calls.length).toBe(2);
+		const todayCall = calls.find((p) => p?.startTime !== undefined);
+		const allCall = calls.find((p) => p?.startTime === undefined);
+		expect(allCall?.endTime).toBeUndefined();
+		// 今日窗口：本地今日 0 点 → 当前时刻（页面渲染时的 now，允许毫秒误差）。
+		const now = Date.now();
+		const startOfToday = new Date(now);
+		startOfToday.setHours(0, 0, 0, 0);
+		expect(todayCall?.startTime).toBe(startOfToday.getTime());
+		expect(Number(todayCall?.endTime)).toBeCloseTo(now, -2);
+	});
+
 	it("默认展示两个折线图（调用趋势 + token 使用分布）", () => {
 		mocks.summary = makeSummary();
+		mocks.todaySummary = makeSummary();
 		mocks.charts = makeCharts();
 		render(<OverviewPage />);
 
@@ -179,6 +238,7 @@ describe("OverviewPage（数据面板）", () => {
 
 	it("调用分析三态切换：分布 → 饼图，排行 → 条形图", () => {
 		mocks.summary = makeSummary();
+		mocks.todaySummary = makeSummary();
 		mocks.charts = makeCharts();
 		render(<OverviewPage />);
 
@@ -194,6 +254,7 @@ describe("OverviewPage（数据面板）", () => {
 
 	it("token 分析三态切换互不影响调用分析", () => {
 		mocks.summary = makeSummary();
+		mocks.todaySummary = makeSummary();
 		mocks.charts = makeCharts();
 		render(<OverviewPage />);
 
@@ -208,6 +269,7 @@ describe("OverviewPage（数据面板）", () => {
 
 	it("模型维度无数据时展示空态", () => {
 		mocks.summary = makeSummary();
+		mocks.todaySummary = makeSummary();
 		mocks.charts = makeCharts({ callByModel: [] });
 		render(<OverviewPage />);
 
@@ -224,7 +286,9 @@ describe("OverviewPage 时间组件（默认今天，调用/Token/可靠性三�
 
 	beforeEach(() => {
 		mocks.summary = makeSummary();
+		mocks.todaySummary = makeSummary();
 		mocks.charts = makeCharts();
+		mocks.summaryParamsList = [];
 		mocks.chartsParamsList = [];
 	});
 

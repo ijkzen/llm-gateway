@@ -48,8 +48,17 @@ export interface ChartsParams {
 	tzOffsetMinutes?: number;
 }
 
+/** 累计指标查询参数（可选时间窗口；缺省返回全历史累计）。 */
+export interface SummaryParams {
+	/** 窗口起点（毫秒时间戳，含）。 */
+	startTime?: number;
+	/** 窗口终点（毫秒时间戳，不含）。 */
+	endTime?: number;
+}
+
 export const dashboardStatsKeys = {
-	summary: ["stats", "summary"] as const,
+	summary: (params: SummaryParams = {}) =>
+		["stats", "summary", params.startTime ?? null, params.endTime ?? null] as const,
 	charts: (params: ChartsParams = {}) =>
 		[
 			"stats",
@@ -68,11 +77,15 @@ export const dashboardStatsKeys = {
 // 数据面板不做主动轮询刷新：一级/二级/三级页均依赖手动刷新或切窗触发
 // （refetchOnWindowFocus 等默认策略保持不变）。
 
-export function useDashboardSummary() {
+export function useDashboardSummary(params: SummaryParams = {}) {
 	return useQuery<DashboardSummary>({
-		queryKey: dashboardStatsKeys.summary,
+		queryKey: dashboardStatsKeys.summary(params),
 		queryFn: async () => {
-			const res = await api.get("stats/summary").json<ApiResponse<DashboardSummary>>();
+			const query = new URLSearchParams();
+			if (params.startTime !== undefined) query.set("startTime", String(params.startTime));
+			if (params.endTime !== undefined) query.set("endTime", String(params.endTime));
+			const suffix = query.size > 0 ? `?${query.toString()}` : "";
+			const res = await api.get(`stats/summary${suffix}`).json<ApiResponse<DashboardSummary>>();
 			return unwrap(res);
 		},
 	});

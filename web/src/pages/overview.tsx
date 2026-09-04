@@ -19,7 +19,7 @@ import { VirtualModelRaceSection } from "@/components/virtual-model-race/Virtual
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts, useDashboardSummary } from "@/hooks/use-dashboard-stats";
 import { OVERVIEW_PAGE } from "@/lib/pages";
-import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
+import { chartGranularity, formatPeriodLabel, periodBounds } from "@/lib/race-period";
 import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-react";
 import { useState } from "react";
@@ -53,10 +53,16 @@ function initialWindows(): OverviewWindows {
 
 export default function OverviewPage() {
 	const { t } = useTranslation();
+	const [now] = useState(() => Date.now());
+	// 今日窗口：本地今日 0 点 → 当前时刻（与图表区「天」周期同一语义）。
+	const todayWindow = periodBounds("day", 0, now);
 	const summaryQuery = useDashboardSummary();
+	const todaySummaryQuery = useDashboardSummary({
+		startTime: todayWindow.startTime,
+		endTime: todayWindow.endTime,
+	});
 	// 调用/Token/可靠性分析各自独立时间段（默认「今天」）。
 	const [windows, setWindows] = useState<OverviewWindows>(initialWindows);
-	const [now] = useState(() => Date.now());
 	const callWindow = raceWindowBounds(windows.call, now);
 	const tokenWindow = raceWindowBounds(windows.token, now);
 	const insightWindow = raceWindowBounds(windows.insight, now);
@@ -97,11 +103,13 @@ export default function OverviewPage() {
 
 	const isLoading =
 		summaryQuery.isLoading ||
+		todaySummaryQuery.isLoading ||
 		callChartsQuery.isLoading ||
 		tokenChartsQuery.isLoading ||
 		insightQuery.isLoading;
 	const isError =
 		summaryQuery.isError ||
+		todaySummaryQuery.isError ||
 		callChartsQuery.isError ||
 		tokenChartsQuery.isError ||
 		insightQuery.isError;
@@ -110,7 +118,7 @@ export default function OverviewPage() {
 		return (
 			<div className="space-y-6">
 				<PageHeaderSkeleton />
-				<StatsCardsSkeleton count={4} />
+				<StatsCardsSkeleton count={8} />
 				<Card>
 					<CardHeader>
 						<Skeleton className="h-5 w-24" />
@@ -126,6 +134,7 @@ export default function OverviewPage() {
 	if (
 		isError ||
 		!summaryQuery.data ||
+		!todaySummaryQuery.data ||
 		!callChartsQuery.data ||
 		!tokenChartsQuery.data ||
 		!insightQuery.data
@@ -137,6 +146,7 @@ export default function OverviewPage() {
 					description={t("overview.errorDescription")}
 					onRetry={() => {
 						summaryQuery.refetch();
+						todaySummaryQuery.refetch();
 						callChartsQuery.refetch();
 						tokenChartsQuery.refetch();
 						insightQuery.refetch();
@@ -147,6 +157,7 @@ export default function OverviewPage() {
 	}
 
 	const summary = summaryQuery.data;
+	const todaySummary = todaySummaryQuery.data;
 	const windowSubtitle = (windowState: RaceWindowState) =>
 		windowState.period === "custom"
 			? t("overview.customWindow")
@@ -182,6 +193,33 @@ export default function OverviewPage() {
 					label={t("overview.cacheHitRate")}
 					value={formatPercent(summary.cacheHitRate)}
 					subLabel={t("overview.cacheTokenOverInput")}
+				/>
+			</div>
+
+			<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+				<StatsCard
+					icon={ListChecks}
+					label={t("overview.todayRequests")}
+					value={todaySummary.totalRequests.toLocaleString()}
+					subLabel={t("overview.today")}
+				/>
+				<StatsCard
+					icon={CircleCheck}
+					label={t("overview.successRate")}
+					value={formatPercent(todaySummary.successRate)}
+					subLabel={t("overview.today")}
+				/>
+				<StatsCard
+					icon={Coins}
+					label={t("overview.totalTokens")}
+					value={formatTokenCount(todaySummary.totalTokens)}
+					subLabel={t("overview.today")}
+				/>
+				<StatsCard
+					icon={DatabaseZap}
+					label={t("overview.cacheHitRate")}
+					value={formatPercent(todaySummary.cacheHitRate)}
+					subLabel={t("overview.today")}
 				/>
 			</div>
 
