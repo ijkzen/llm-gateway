@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => {
 		refetch: vi.fn(),
 		editDialogOpen: false,
 		deleteDialogOpen: false,
+		detailDialogOpen: false,
+		detailItem: null as VirtualModelItem | null,
+		detailVirtualModel: null as VirtualModel | null,
 	};
 });
 
@@ -77,6 +80,19 @@ vi.mock("@/components/virtual-models/VirtualModelDeleteDialog", () => ({
 	},
 }));
 
+vi.mock("@/components/virtual-models/VirtualModelItemDetailDialog", () => ({
+	VirtualModelItemDetailDialog: (props: {
+		open: boolean;
+		item: VirtualModelItem | null;
+		virtualModel: VirtualModel | null;
+	}) => {
+		mocks.detailDialogOpen = props.open;
+		mocks.detailItem = props.item;
+		mocks.detailVirtualModel = props.virtualModel;
+		return null;
+	},
+}));
+
 function makeItem(overrides: Partial<VirtualModelItem> = {}): VirtualModelItem {
 	return {
 		virtualModelItemId: 1,
@@ -120,6 +136,9 @@ describe("VirtualModelsPage", () => {
 		mocks.isError = false;
 		mocks.editDialogOpen = false;
 		mocks.deleteDialogOpen = false;
+		mocks.detailDialogOpen = false;
+		mocks.detailItem = null;
+		mocks.detailVirtualModel = null;
 	});
 
 	it("加载中渲染骨架屏，不渲染内容", () => {
@@ -225,5 +244,72 @@ describe("VirtualModelsPage", () => {
 
 		fireEvent.click(await screen.findByRole("menuitem", { name: "删除" }));
 		await waitFor(() => expect(mocks.deleteDialogOpen).toBe(true));
+	});
+
+	it("点击成员卡片打开详情弹窗并传入目标成员；停用/随供应商禁用/虚拟模型停用均可点", () => {
+		const enabled = makeItem({
+			virtualModelItemId: 1,
+			modelId: 11,
+			providerModelId: "gpt-4o@openai",
+			enable: true,
+			providerEnable: true,
+		});
+		const disabledItem = makeItem({
+			virtualModelItemId: 2,
+			modelId: 12,
+			providerModelId: "o3@openai",
+			enable: false,
+			providerEnable: true,
+		});
+		const disabledWithProvider = makeItem({
+			virtualModelItemId: 3,
+			modelId: 13,
+			providerModelId: "o4@openai",
+			enable: true,
+			providerEnable: false,
+		});
+		mocks.virtualModels = [
+			makeVm({
+				virtualModelId: 1,
+				displayId: "gpt-4o",
+				enable: true,
+				items: [enabled, disabledItem, disabledWithProvider],
+			}),
+			makeVm({
+				virtualModelId: 2,
+				displayId: "claude",
+				enable: false,
+				items: [makeItem({ virtualModelItemId: 4, providerModelId: "claude-sonnet@anthropic" })],
+			}),
+		];
+		render(
+			<MemoryRouter>
+				<VirtualModelsPage />
+			</MemoryRouter>,
+		);
+
+		// 正常成员。
+		fireEvent.click(screen.getByRole("button", { name: /gpt-4o@openai/ }));
+		expect(mocks.detailDialogOpen).toBe(true);
+		expect(mocks.detailItem?.modelId).toBe(11);
+		expect(mocks.detailVirtualModel?.virtualModelId).toBe(1);
+
+		// 关闭复位后再点已停用成员。
+		mocks.detailDialogOpen = false;
+		fireEvent.click(screen.getByRole("button", { name: /o3@openai/ }));
+		expect(mocks.detailDialogOpen).toBe(true);
+		expect(mocks.detailItem?.modelId).toBe(12);
+
+		// 随供应商禁用成员。
+		mocks.detailDialogOpen = false;
+		fireEvent.click(screen.getByRole("button", { name: /o4@openai/ }));
+		expect(mocks.detailDialogOpen).toBe(true);
+		expect(mocks.detailItem?.modelId).toBe(13);
+
+		// 虚拟模型本身停用区块中的成员仍可点击打开详情。
+		mocks.detailDialogOpen = false;
+		fireEvent.click(screen.getByRole("button", { name: /claude-sonnet@anthropic/ }));
+		expect(mocks.detailDialogOpen).toBe(true);
+		expect(mocks.detailVirtualModel?.virtualModelId).toBe(2);
 	});
 });

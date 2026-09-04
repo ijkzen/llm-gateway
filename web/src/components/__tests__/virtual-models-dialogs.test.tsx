@@ -1,5 +1,6 @@
 import { VirtualModelDeleteDialog } from "@/components/virtual-models/VirtualModelDeleteDialog";
 import { VirtualModelEditDialog } from "@/components/virtual-models/VirtualModelEditDialog";
+import { VirtualModelItemDetailDialog } from "@/components/virtual-models/VirtualModelItemDetailDialog";
 import type { ProviderModel } from "@/hooks/use-provider-models";
 import type { Provider } from "@/hooks/use-providers";
 import type { VirtualModel, VirtualModelItem } from "@/hooks/use-virtual-models";
@@ -353,6 +354,133 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 		fireEvent.click(screen.getByRole("button", { name: "移除 gpt-4o" }));
 		const saveBtn = screen.getByRole("button", { name: "保存" }) as HTMLButtonElement;
 		expect(saveBtn.disabled).toBe(true);
+	});
+});
+
+describe("VirtualModelItemDetailDialog", () => {
+	it("只读展示条目详情与状态标记；无编辑/删除/测试按钮", () => {
+		render(
+			<VirtualModelItemDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				virtualModel={makeVm({
+					displayId: "gpt-4o",
+					items: [
+						makeItem({
+							enable: false,
+							providerEnable: false,
+							contextLength: 128000,
+							maxOutputTokens: 4096,
+						}),
+					],
+				})}
+				item={makeItem({
+					enable: false,
+					providerEnable: false,
+					contextLength: 128000,
+					maxOutputTokens: 4096,
+				})}
+			/>,
+		);
+
+		// 标题为远端模型 ID，描述含所属供应商。
+		expect(screen.getByRole("heading", { name: "gpt-4o" })).toBeTruthy();
+		expect(screen.getByText(/OpenAI/)).toBeTruthy();
+		// 上下文/最大输出用全量数字。
+		expect(screen.getByText("128,000")).toBeTruthy();
+		expect(screen.getByText("4,096")).toBeTruthy();
+		// 能力：推理已支持、工具调用不支持。
+		expect(screen.getByText(/推理/)).toBeTruthy();
+		expect(screen.getByText(/工具调用/)).toBeTruthy();
+		// 状态标记。
+		expect(screen.getByText(/已停用/)).toBeTruthy();
+		expect(screen.getByText(/随供应商禁用/)).toBeTruthy();
+		// 只读：无编辑/删除/测试按钮。
+		expect(screen.queryByRole("button", { name: /编辑/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /删除/ })).toBeNull();
+		expect(screen.queryByRole("button", { name: /测试/ })).toBeNull();
+	});
+
+	it("拨动启停开关：提交翻转后的完整成员集合，其余成员不变", async () => {
+		render(
+			<VirtualModelItemDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				virtualModel={makeVm({
+					virtualModelId: 3,
+					displayId: "gpt-4o",
+					loadBalancingStrategy: 0,
+					fallbackStrategy: 0,
+					items: [
+						makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" }),
+						makeItem({
+							virtualModelItemId: 2,
+							modelId: 12,
+							providerModelId: "o3",
+							enable: false,
+						}),
+					],
+				})}
+				item={makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })}
+			/>,
+		);
+
+		const toggle = screen.getByRole("switch", { name: /在虚拟模型中启用/ }) as HTMLButtonElement;
+		expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+		fireEvent.click(toggle);
+		await waitFor(() => expect(mocks.updateMutate).toHaveBeenCalledTimes(1));
+		const payload = required(mocks.updateMutate.mock.calls[0])[0];
+		expect(payload.id).toBe(3);
+		// 只翻转目标成员，其余成员原样保留。
+		expect(payload.items).toEqual([
+			{ modelId: 11, enable: false },
+			{ modelId: 12, enable: false },
+		]);
+	});
+
+	it("供应商停用时开关仍可操作：拨动仍提交翻转", async () => {
+		render(
+			<VirtualModelItemDetailDialog
+				open
+				onOpenChange={vi.fn()}
+				virtualModel={makeVm({
+					virtualModelId: 3,
+					displayId: "gpt-4o",
+					items: [makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })],
+				})}
+				item={makeItem({ providerEnable: false })}
+			/>,
+		);
+
+		const toggle = screen.getByRole("switch", { name: /在虚拟模型中启用/ }) as HTMLButtonElement;
+		expect(toggle.getAttribute("aria-checked")).toBe("true");
+		fireEvent.click(toggle);
+		await waitFor(() => expect(mocks.updateMutate).toHaveBeenCalledTimes(1));
+		const payload = required(mocks.updateMutate.mock.calls[0])[0];
+		expect(payload.items).toEqual([{ modelId: 11, enable: false }]);
+	});
+
+	it("开关成功后关闭弹窗（避免快照陈旧导致二次翻转错位）", async () => {
+		const onOpenChange = vi.fn();
+		mocks.updateMutate.mockImplementation((_payload, options) => {
+			required(options).onSuccess();
+		});
+		render(
+			<VirtualModelItemDetailDialog
+				open
+				onOpenChange={onOpenChange}
+				virtualModel={makeVm({
+					virtualModelId: 3,
+					displayId: "gpt-4o",
+					items: [makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })],
+				})}
+				item={makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("switch", { name: /在虚拟模型中启用/ }));
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
 	});
 });
 

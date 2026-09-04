@@ -403,6 +403,7 @@ const en: Translation = {
 		addCandidate: "Add",
 		keepAtLeastOne: "Keep at least one member model",
 		selectedMembers: "{{count}} member model(s) selected",
+		enableInVirtualModel: "Enable in virtual model",
 		deleteTitle: "Delete Virtual Model",
 		deleteDesc: "Delete virtual model",
 		deleteDescSuffix: "? Its members will be released. This cannot be undone.",
