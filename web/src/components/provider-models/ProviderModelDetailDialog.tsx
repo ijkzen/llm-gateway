@@ -32,6 +32,7 @@ import { useToastActions } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FlaskConical, Loader2, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { flushSync } from "react-dom";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import { z } from "zod";
@@ -165,6 +166,7 @@ export function ProviderModelDetailDialog({
 		if (!model) return;
 		deleteModel.mutate(model.modelId, {
 			onSuccess: () => {
+				flushSync(() => setConfirmingDelete(false));
 				onOpenChange(false);
 				toastSuccess(t("common.deleteSuccess"));
 			},
