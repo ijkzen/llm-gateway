@@ -13,6 +13,8 @@ export type RaceSortKey =
 export interface ApiKeyRankItem {
 	/** 调用方 API Key 名称（Key 已删除的历史行仍按原名聚合）。 */
 	apiKeyName: string;
+	/** 现存 API Key 的数字主键（后端 LEFT JOIN api_key 补出；Key 已删除时为 null）。 */
+	apiKeyId?: number | null;
 	/** 成功请求数。 */
 	requestCount: number;
 	/** 总计 token（成功请求的 total_tokens 合计）。 */

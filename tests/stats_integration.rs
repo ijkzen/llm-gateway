@@ -2314,3 +2314,93 @@ async fn test_api_key_metrics_endpoint() {
     let (status, _) = get_json(app, "/api/stats/api-key-metrics?apiKey=key-a").await;
     assert_eq!(status, 400);
 }
+
+/// api-key-rank：现存 Key 行 LEFT JOIN api_key 补出 apiKeyId；已删除 Key 行为 null。
+#[tokio::test]
+async fn test_api_key_rank_carries_existing_key_id() {
+    use llm_gateway::entity::api_key as api_key_entity;
+
+    let (app, db) = setup_app().await;
+    let t0 = (1_700_000_000_000i64 / HOUR_MS) * HOUR_MS;
+
+    // 现存 key：id=7 name=alive-key。
+    let now = chrono::Utc::now();
+    api_key_entity::ActiveModel {
+        id: Set(7),
+        name: Set("alive-key".to_string()),
+        key: Set("encrypted".to_string()),
+        key_hash: Set(None),
+        enable: Set(true),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    // alive-key 两笔 + 历史 key（无 api_key 行）一笔。
+    for row in [
+        ApiKeyRow {
+            request_id: "akid-1".into(),
+            virtual_model_id: 1,
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            api_key_name: "alive-key".into(),
+            success: true,
+            start_time: t0 + 1,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(100),
+        },
+        ApiKeyRow {
+            request_id: "akid-2".into(),
+            virtual_model_id: 1,
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "claude-sonnet".into(),
+            api_key_name: "alive-key".into(),
+            success: true,
+            start_time: t0 + 2,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(200),
+        },
+        ApiKeyRow {
+            request_id: "akid-3".into(),
+            virtual_model_id: 1,
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "deepseek-v3".into(),
+            api_key_name: "deleted-key".into(),
+            success: true,
+            start_time: t0 + 3,
+            input_tokens: Some(10),
+            input_cache_tokens: 0,
+            total_tokens: Some(300),
+        },
+    ] {
+        insert_ak_row(&db, row).await;
+    }
+
+    let (status, json) = get_json(
+        app,
+        &format!(
+            "/api/stats/api-key-rank?startTime={t0}&endTime={}",
+            t0 + 2 * HOUR_MS
+        ),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let items = json["data"]["items"].as_array().unwrap();
+
+    let alive = items
+        .iter()
+        .find(|i| i["apiKeyName"] == "alive-key")
+        .unwrap();
+    assert_eq!(alive["apiKeyId"], 7);
+    assert_eq!(alive["requestCount"], 2);
+
+    let deleted = items
+        .iter()
+        .find(|i| i["apiKeyName"] == "deleted-key")
+        .unwrap();
+    assert_eq!(deleted["apiKeyId"], serde_json::Value::Null);
+}

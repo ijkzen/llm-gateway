@@ -18,6 +18,7 @@ import { formatPercent, formatTokenCount } from "@/lib/utils";
 import { ArrowDown, ArrowUp, KeyRound } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 /** 6 列指标定义：key / 标题键 / 格式化 / 默认方向（true=降序，耗时类默认升序）。 */
 const COLUMNS: ReadonlyArray<{
@@ -73,7 +74,8 @@ function initialWindowState(): RaceWindowState {
  * API Key 赛马卡片：按调用方 API Key 聚合展示 6 个指标（总计 Token / 请求数 /
  * TTFT / 平均耗时 / TPS / 缓存命中率），可点表头按任意指标升/降序；时间窗口
  * 支持天/周/月/年（左右箭头切换周期）+ 自定义（秒级）。卡片进入视口才发请求。
- * 可选按供应商/虚拟模型/模型过滤（二级/三级页）；API Key 无二级页，行不可点击。
+ * 可选按供应商/虚拟模型/模型过滤（二级/三级页）。现存 Key 的行可点击进入其
+ * 数据面板（携带当前时间段参数）；已删除 Key 的历史聚合行无主键，不可点击。
  */
 export function ApiKeyRaceCard({
 	filter,
@@ -81,6 +83,7 @@ export function ApiKeyRaceCard({
 	/** 过滤维度：首页不传（全量），二级/三级页按需传。 */
 	filter?: ApiKeyRaceFilter;
 }) {
+	const navigate = useNavigate();
 	const { t } = useTranslation();
 	// 挂载时刻固化 now：保证「当前周期」的窗口终点稳定，不因渲染抖动重复请求。
 	const [now] = useState(() => Date.now());
@@ -102,6 +105,23 @@ export function ApiKeyRaceCard({
 			const column = COLUMNS.find((c) => c.key === key);
 			return { sortBy: key, sortOrder: column?.defaultDesc ? "desc" : "asc" };
 		});
+	};
+
+	const openApiKeyOverview = (item: ApiKeyRankItem) => {
+		if (item.apiKeyId === null || item.apiKeyId === undefined) {
+			return;
+		}
+		// 携带当前时间段参数（custom 时带起止，否则带 period/offset）。
+		const params = new URLSearchParams();
+		if (windowState.period === "custom") {
+			params.set("period", "custom");
+			params.set("startTime", String(window.startTime));
+			params.set("endTime", String(window.endTime));
+		} else {
+			params.set("period", windowState.period);
+			params.set("offset", String(windowState.offset));
+		}
+		navigate(`/api-keys/${item.apiKeyId}/overview?${params.toString()}`);
 	};
 
 	return (
@@ -150,21 +170,28 @@ export function ApiKeyRaceCard({
 					{t("race.noData")}
 				</div>
 			) : (
-				<RaceTable items={query.data.items} sort={sort} onSort={handleSort} />
+				<RaceTable
+					items={query.data.items}
+					sort={sort}
+					onSort={handleSort}
+					onRowClick={openApiKeyOverview}
+				/>
 			)}
 		</Card>
 	);
 }
 
-/** 可排序指标表格；API Key 无二级页，行不可点击。 */
+/** 可排序指标表格；现存 Key 行可点击进入数据面板，已删除 Key 行不可点击。 */
 function RaceTable({
 	items,
 	sort,
 	onSort,
+	onRowClick,
 }: {
 	items: ApiKeyRankItem[];
 	sort: RaceSort;
 	onSort: (key: RaceSortKey) => void;
+	onRowClick: (item: ApiKeyRankItem) => void;
 }) {
 	const { t } = useTranslation();
 	return (
@@ -205,24 +232,44 @@ function RaceTable({
 					</tr>
 				</thead>
 				<tbody>
-					{items.map((item, index) => (
-						<tr key={item.apiKeyName} className="border-b border-foreground/5 last:border-0">
-							<td className="px-2 py-2 text-left font-mono text-xs text-muted-foreground">
-								{index + 1}
-							</td>
-							<td className="px-2 py-2 text-left font-medium text-foreground">
-								{item.apiKeyName || t("race.unknownKey")}
-							</td>
-							{COLUMNS.map((column) => (
-								<td
-									key={column.key}
-									className="px-2 py-2 text-right font-mono text-xs tabular-nums text-foreground"
-								>
-									{column.format(item[column.key])}
+					{items.map((item, index) => {
+						const clickable = item.apiKeyId !== null && item.apiKeyId !== undefined;
+						return (
+							<tr
+								key={item.apiKeyName}
+								onClick={clickable ? () => onRowClick(item) : undefined}
+								onKeyDown={
+									clickable
+										? (e) => {
+												if (e.key === "Enter") {
+													onRowClick(item);
+												}
+											}
+										: undefined
+								}
+								tabIndex={clickable ? 0 : undefined}
+								title={clickable ? t("race.openApiKeyOverview") : undefined}
+								className={`border-b border-foreground/5 last:border-0 ${
+									clickable ? "cursor-pointer hover:bg-foreground/5" : ""
+								}`}
+							>
+								<td className="px-2 py-2 text-left font-mono text-xs text-muted-foreground">
+									{index + 1}
 								</td>
-							))}
-						</tr>
-					))}
+								<td className="px-2 py-2 text-left font-medium text-foreground">
+									{item.apiKeyName || t("race.unknownKey")}
+								</td>
+								{COLUMNS.map((column) => (
+									<td
+										key={column.key}
+										className="px-2 py-2 text-right font-mono text-xs tabular-nums text-foreground"
+									>
+										{column.format(item[column.key])}
+									</td>
+								))}
+							</tr>
+						);
+					})}
 				</tbody>
 			</table>
 		</div>

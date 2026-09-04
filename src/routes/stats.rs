@@ -1720,6 +1720,8 @@ async fn virtual_model_member_rank(
 struct ApiKeyRaceRankItem {
     /// 调用方 API Key 名称（request.api_key_name；Key 已删除的历史行仍按原名聚合）。
     api_key_name: String,
+    /// 现存 API Key 的数字主键（JOIN api_key 按 name 补出；Key 已删除时为 null，不可跳转数据面板）。
+    api_key_id: Option<i32>,
     /// 成功请求数。
     request_count: i64,
     /// 总计 token（成功请求的 total_tokens 合计）。
@@ -1792,8 +1794,9 @@ async fn api_key_rank(
 
     let rank_sql = rank_metric_sql();
     let sql = format!(
-        "SELECT r.api_key_name AS api_key_name,{rank_sql} \
+        "SELECT r.api_key_name AS api_key_name, k.id AS api_key_id,{rank_sql} \
          FROM request r \
+         LEFT JOIN api_key k ON k.name = r.api_key_name \
          WHERE {where_sql} \
          GROUP BY r.api_key_name"
     );
@@ -1814,6 +1817,7 @@ async fn api_key_rank(
         .iter()
         .map(|row| ApiKeyRaceRankItem {
             api_key_name: row.try_get("", "api_key_name").unwrap_or_default(),
+            api_key_id: row.try_get("", "api_key_id").ok(),
             request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
             total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
             ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
