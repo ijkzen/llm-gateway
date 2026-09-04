@@ -71,7 +71,7 @@ interface VirtualModelEditDialogProps {
 	mappedModelIds: Set<number>;
 }
 
-/** 供应商分组：成员（组内已按可用性 + LB 顺序排序）与可添加候选。 */
+/** 供应商分组：成员（组内按 enable 优先 + 后端 LB 序排序）与可添加候选。 */
 interface ProviderGroup {
 	provider: Provider;
 	rows: DraftMember[];
@@ -90,8 +90,8 @@ function onHeaderKeyDown(
 
 /**
  * 创建/编辑虚拟模型弹窗：标题栏与底部操作栏固定，中间内容区滚动；
- * 成员模型分「已使用 / 未使用」两个 Tab 按供应商分组展示——组内成员先按
- * 启用状态分组（可用在前），组内再按 LB 顺序（virtualModelItemId 升序）排序；
+ * 成员模型分「已使用 / 未使用」两个 Tab 按供应商分组展示——组内成员按
+ * 后端用量感知 LB 序排列（enable 优先 → 组内保持后端返回序），与主列表一致；
  * 分组头支持鼠标与方向键折叠/展开（与供应商启用状态无关）。
  */
 export function VirtualModelEditDialog({
@@ -147,9 +147,6 @@ export function VirtualModelEditDialog({
 	}, [open, virtualModel, form]);
 
 	const modelById = new Map(providerModels.map((model) => [model.modelId, model]));
-	const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-	const providerEnabledOf = (model: ProviderModel) =>
-		providerById.get(model.providerId)?.enable ?? false;
 
 	const addDraftItem = (modelId: number) => {
 		setDraftItems((prev) => [...prev, { virtualModelItemId: null, modelId, enable: true }]);
@@ -210,14 +207,14 @@ export function VirtualModelEditDialog({
 				!draftItems.some((draft) => draft.modelId === model.modelId),
 		);
 
-	/** 供应商分组：成员行（join 供应商模型并组内排序）+ 候选；组存在性由调用方过滤。 */
+	/** 供应商分组：成员行（join 供应商模型，组内按 enable 优先 + 后端 LB 序）+ 候选；组存在性由调用方过滤。 */
 	const groupOf = (provider: Provider): ProviderGroup => {
 		const rows = draftItems
 			.flatMap((draft) => {
 				const model = modelById.get(draft.modelId);
 				return model !== undefined && model.providerId === provider.id ? [{ draft, model }] : [];
 			})
-			.sort((a, b) => compareDraftMembers(a, b, providerEnabledOf));
+			.sort((a, b) => compareDraftMembers(a, b));
 		return { provider, rows, candidates: candidatesOf(provider.id) };
 	};
 

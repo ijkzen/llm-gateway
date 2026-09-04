@@ -550,8 +550,10 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 		expect(screen.getByRole("button", { name: "添加 o3" })).toBeTruthy();
 	});
 
-	it("已使用 Tab 组内成员：可用在前、停用在后，同状态按 virtualModelItemId 升序（LB 顺序）", () => {
-		// 后端 items 返回顺序刻意乱序；组内排序应回到可用优先 + id 升序。
+	it("已使用 Tab 组内成员：enable 优先，组内保持后端用量 LB 序（不按 id 重排）", () => {
+		// 后端 items 已按用量感知 LB 序返回（enable 优先 → 组内用量 → 平局 id）。
+		// mock 刻意让停用组内 gpt-4o(id 30) 排在 o3-mini(id 10) 前（用量/后端序），
+		// 弹窗应保持该后端相对顺序，而不是被前端按 virtualModelItemId 重排成 o3-mini 在前。
 		render(
 			<VirtualModelEditDialog
 				open
@@ -595,13 +597,13 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 			/>,
 		);
 
-		// 表单内虚拟模型「启用」开关无 aria-label，先过滤；成员行按组内排序渲染：
-		// OpenAI 组可用 o3 → 停用堆（o3-mini id 10 先于 gpt-4o id 30）→ DeepSeek 组 deepseek-chat。
+		// 成员行按组内 enable 优先 + 后端返回序渲染：
+		// OpenAI 组启用 o3 → 停用按后端序 gpt-4o → o3-mini → DeepSeek 组 deepseek-chat。
 		const switches = screen
 			.getAllByRole("switch")
 			.map((s) => s.getAttribute("aria-label"))
 			.filter((name): name is string => name !== null);
-		expect(switches).toEqual(["启停 o3", "启停 o3-mini", "启停 gpt-4o", "启停 deepseek-chat"]);
+		expect(switches).toEqual(["启停 o3", "启停 gpt-4o", "启停 o3-mini", "启停 deepseek-chat"]);
 	});
 
 	it("编辑模式默认「已使用」Tab；组头可点击折叠/展开整组", () => {
