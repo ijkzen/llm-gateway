@@ -6,9 +6,10 @@ import { Switch } from "@/components/ui/switch";
 import type { ProviderModel } from "@/hooks/use-provider-models";
 import { type Provider, useUpdateProvider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
-import { Plus } from "lucide-react";
+import { ArrowRight, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 interface ProviderModelSectionProps {
 	provider: Provider;
@@ -48,10 +49,17 @@ export function ProviderModelSection({
 	return (
 		<section>
 			<div className="flex items-center justify-between gap-4 py-3">
-				<h2 className="min-w-0 truncate text-base font-semibold" title={provider.name}>
-					{provider.name}
+				<h2 className="min-w-0 text-base font-semibold">
+					<Link
+						to={`/providers/${provider.id}/overview`}
+						className="group flex min-w-0 items-center gap-1 rounded-md transition-colors hover:text-foreground"
+						title={t("providerModels.viewProviderOverview", { provider: provider.name })}
+					>
+						<span className="min-w-0 truncate">{provider.name}</span>
+						<ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+					</Link>
 				</h2>
-				<div className="flex items-center gap-3">
+				<div className="flex shrink-0 items-center gap-3">
 					<Switch
 						checked={enabled}
 						onCheckedChange={toggleProvider}
