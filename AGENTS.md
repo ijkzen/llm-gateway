@@ -262,6 +262,7 @@ pnpm vitest run                    # 前端全量测试
 - Hooks 放在 `web/src/hooks/`，API 封装在 `web/src/lib/api.ts`（`ApiResponse<T>` 对应后端 `code/msg/data`，`code !== "0"` 抛 `ApiError`）。
 - 使用函数式组件与 Hooks，状态管理以 TanStack Query 为主，Zustand 用于主题等全局状态（`web/src/hooks/use-theme.ts`）。
 - UI 文案为中文（如“定时任务”、“设置”、“操作成功”）。
+- 弹窗内容可滚动时，标题栏与底部操作区必须固定高度、固定位置且不参与滚动；仅中间内容区负责滚动。
 
 ## 数据库与迁移
 
