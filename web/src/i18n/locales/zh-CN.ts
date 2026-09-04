@@ -399,6 +399,7 @@ const zhCN = {
 		addCandidate: "添加",
 		keepAtLeastOne: "至少保留一个成员模型",
 		selectedMembers: "已选 {{count}} 个成员模型",
+		enableInVirtualModel: "在虚拟模型中启用",
 		deleteTitle: "删除虚拟模型",
 		deleteDesc: "确定要删除虚拟模型",
 		deleteDescSuffix: "吗？其成员模型将被释放，此操作无法撤销。",
