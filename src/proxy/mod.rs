@@ -195,10 +195,12 @@ async fn load_members(
                 return None;
             }
             let (proxy_enabled, proxy_addr) = resolve_proxy(model, p);
+            // 协议优先级：模型单独指定（非空）→ 供应商协议。与代理同款覆盖语义。
+            let protocol_value = model.protocol_type.unwrap_or(p.protocol_type);
             Some(Member {
                 provider_id: p.id,
                 model_id: model.provider_model_id.clone(),
-                protocol: Protocol::from_i32(p.protocol_type),
+                protocol: Protocol::from_i32(protocol_value),
                 billing_mode: p.billing_mode,
                 base_url: p.base_url.clone(),
                 api_key_encrypted: p.api_key.clone(),
@@ -1823,10 +1825,12 @@ pub async fn test_model(
     api_key: &str,
 ) -> Result<i64, String> {
     let (proxy_enabled, proxy_addr) = resolve_proxy(model, provider_row);
+    // 协议优先级与转发一致：模型单独指定（非空）→ 供应商协议。
+    let protocol_value = model.protocol_type.unwrap_or(provider_row.protocol_type);
     let member = Member {
         provider_id: provider_row.id,
         model_id: model.provider_model_id.clone(),
-        protocol: Protocol::from_i32(provider_row.protocol_type),
+        protocol: Protocol::from_i32(protocol_value),
         billing_mode: provider_row.billing_mode,
         base_url: provider_row.base_url.clone(),
         api_key_encrypted: provider_row.api_key.clone(),
@@ -1992,6 +1996,7 @@ mod tests {
             tool_use: false,
             image_understand: false,
             video_understand: false,
+            protocol_type: None,
             proxy_enabled,
             proxy_addr: proxy_addr.to_string(),
             created_at: now,

@@ -207,6 +207,7 @@ export default function ProviderModelsPage() {
 				providerId={selectedModel?.provider.id ?? 0}
 				providerName={selectedModel?.provider.name ?? ""}
 				providerProxyAddr={selectedModel?.provider.proxyAddr}
+				providerProtocolType={selectedModel?.provider.protocolType ?? 0}
 				model={selectedModel?.model ?? null}
 			/>
 		</div>

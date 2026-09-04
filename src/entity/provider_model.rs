@@ -28,6 +28,10 @@ pub struct Model {
     /// 是否支持视频理解。
     #[sea_orm(default_value = "0")]
     pub video_understand: bool,
+    /// 模型单独选择的协议（`None` = 跟随供应商协议；`Some(0..=3)` = 显式覆盖，
+    /// 取值含义与 provider.protocol_type 一致：0=OpenAI Compatible、
+    /// 1=OpenAI Responses、2=Anthropic Messages、3=Gemini）。
+    pub protocol_type: Option<i32>,
     /// 是否经网络代理（HTTP 代理）转发该模型的上游请求。
     /// 关闭（false）时回落到供应商代理。
     #[sea_orm(default_value = "0")]

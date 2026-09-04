@@ -266,6 +266,7 @@ function makeModel(overrides: Partial<ProviderModel> = {}): ProviderModel {
 		videoUnderstand: false,
 		proxyEnabled: false,
 		proxyAddr: "",
+		protocolType: null,
 		createdAt: "2026-08-29T00:00:00Z",
 		updatedAt: "2026-08-29T00:00:00Z",
 		...overrides,

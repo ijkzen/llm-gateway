@@ -84,6 +84,7 @@ function makeModel(overrides: Partial<ProviderModel> = {}): ProviderModel {
 		videoUnderstand: false,
 		proxyEnabled: false,
 		proxyAddr: "",
+		protocolType: null,
 		createdAt: "2026-08-29T00:00:00Z",
 		updatedAt: "2026-08-29T00:00:00Z",
 		...overrides,
@@ -344,6 +345,7 @@ describe("ProviderModelDetailDialog 测试按钮", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -366,6 +368,7 @@ describe("ProviderModelDetailDialog 测试按钮", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -387,6 +390,7 @@ describe("ProviderModelDetailDialog 测试按钮", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -411,6 +415,7 @@ describe("ProviderModelDetailDialog 测试按钮", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -432,6 +437,7 @@ describe("ProviderModelDetailDialog 标题栏导航", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -450,6 +456,7 @@ describe("ProviderModelDetailDialog 标题栏导航", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel({ providerModelId: "deepseek/r1-v2" })}
 				/>
 			</MemoryRouter>,
@@ -477,6 +484,7 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 					}}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			);
@@ -503,6 +511,7 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -523,6 +532,7 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -543,6 +553,7 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -572,6 +583,7 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -599,6 +611,7 @@ describe("ProviderModelDetailDialog 模型级代理", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel({ proxyEnabled: true, proxyAddr: "http://127.0.0.1:7890" })}
 				/>
 			</MemoryRouter>,
@@ -616,6 +629,7 @@ describe("ProviderModelDetailDialog 模型级代理", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel({ proxyEnabled: false, proxyAddr: "" })}
 				/>
 			</MemoryRouter>,
@@ -631,6 +645,7 @@ describe("ProviderModelDetailDialog 模型级代理", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					providerProxyAddr="http://127.0.0.1:7891"
 					model={makeModel({ proxyEnabled: false, proxyAddr: "" })}
 				/>
@@ -651,6 +666,7 @@ describe("ProviderModelDetailDialog 模型级代理", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,
@@ -678,6 +694,7 @@ describe("ProviderModelDetailDialog 模型级代理", () => {
 					onOpenChange={vi.fn()}
 					providerId={7}
 					providerName="OpenAI"
+					providerProtocolType={0}
 					model={makeModel()}
 				/>
 			</MemoryRouter>,

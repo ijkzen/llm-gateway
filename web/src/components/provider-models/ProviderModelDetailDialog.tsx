@@ -1,6 +1,7 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CAPABILITIES } from "@/components/provider-models/CapabilityIcons";
 import { TestFailedDialog } from "@/components/provider-models/TestFailedDialog";
+import { PROTOCOL_TYPES, protocolLabel } from "@/components/providers/ProtocolIcon";
 import { ProviderProxyRow } from "@/components/providers/ProviderProxyRow";
 import { ProxyConfigFields } from "@/components/providers/ProxyConfigFields";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,13 @@ import {
 	FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
 	type ProviderModel,
@@ -54,6 +62,8 @@ function makeFormSchema(t: (key: string) => string) {
 			toolUse: z.boolean(),
 			imageUnderstand: z.boolean(),
 			videoUnderstand: z.boolean(),
+			// 模型单独选择的协议：null=跟随供应商；0..=3=覆盖（与供应商协议枚举一致）。
+			protocolType: z.number().int().nullable(),
 			// 模型级网络代理：开启时地址必填且需 http:// 开头（与供应商代理同规则）。
 			proxyEnabled: z.boolean(),
 			proxyAddr: z.string(),
@@ -86,6 +96,8 @@ interface ProviderModelDetailDialogProps {
 	providerName: string;
 	/** 所属供应商的代理地址（模型级关闭时用于展示继承来源）。 */
 	providerProxyAddr?: string;
+	/** 所属供应商的协议类型（模型跟随供应商时用于展示生效协议来源）。 */
+	providerProtocolType: number;
 	model: ProviderModel | null;
 }
 
@@ -96,6 +108,7 @@ export function ProviderModelDetailDialog({
 	providerId,
 	providerName,
 	providerProxyAddr,
+	providerProtocolType,
 	model,
 }: ProviderModelDetailDialogProps) {
 	const { t } = useTranslation();
@@ -118,6 +131,7 @@ export function ProviderModelDetailDialog({
 			toolUse: false,
 			imageUnderstand: false,
 			videoUnderstand: false,
+			protocolType: null,
 			proxyEnabled: false,
 			proxyAddr: "",
 		},
@@ -134,6 +148,7 @@ export function ProviderModelDetailDialog({
 			toolUse: model.toolUse,
 			imageUnderstand: model.imageUnderstand,
 			videoUnderstand: model.videoUnderstand,
+			protocolType: model.protocolType ?? null,
 			proxyEnabled: model.proxyEnabled,
 			proxyAddr: model.proxyAddr,
 		});
@@ -232,6 +247,34 @@ export function ProviderModelDetailDialog({
 										</FormItem>
 									)}
 								/>
+								<FormField
+									control={form.control}
+									name="protocolType"
+									render={({ field }) => (
+										<FormItem>
+											<FormLabel>{t("providerModels.protocolType")}</FormLabel>
+											<Select
+												value={field.value === null ? "null" : String(field.value)}
+												onValueChange={(v) => field.onChange(v === "null" ? null : Number(v))}
+											>
+												<FormControl>
+													<SelectTrigger>
+														<SelectValue placeholder={t("providerModels.selectProtocol")} />
+													</SelectTrigger>
+												</FormControl>
+												<SelectContent>
+													<SelectItem value="null">{t("providerModels.followProvider")}</SelectItem>
+													{PROTOCOL_TYPES.map((p) => (
+														<SelectItem key={p.value} value={String(p.value)}>
+															{t(p.labelKey)}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+											<FormMessage />
+										</FormItem>
+									)}
+								/>
 								<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 									<FormField
 										control={form.control}
@@ -325,6 +368,20 @@ export function ProviderModelDetailDialog({
 												: t("providerModels.notSupported")}
 										</span>
 									))}
+								</dd>
+							</div>
+							<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
+								<dt className="text-sm text-muted-foreground">
+									{t("providerModels.protocolType")}
+								</dt>
+								<dd className="text-sm font-medium">
+									{model.protocolType !== null
+										? // 模型单独指定了协议：直接显示该协议名。
+											protocolLabel(model.protocolType)
+										: // 跟随供应商：显示「跟随供应商（供应商协议名）」。
+											t("providerModels.followProviderWith", {
+												protocol: protocolLabel(providerProtocolType),
+											})}
 								</dd>
 							</div>
 							<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">

@@ -361,6 +361,10 @@ const zhCN = {
 		testFailedDesc: "测试请求未能通过，详见下方失败原因：",
 		viewProviderOverview: "查看 {{provider}} 的数据面板",
 		viewModelOverview: "查看 {{model}} 的数据面板",
+		protocolType: "协议",
+		followProvider: "跟随供应商",
+		followProviderWith: "跟随供应商（{{protocol}}）",
+		selectProtocol: "选择协议",
 		close: "关闭",
 	},
 	virtualModels: {

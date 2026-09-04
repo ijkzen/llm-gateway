@@ -364,6 +364,10 @@ const en: Translation = {
 		testFailedDesc: "The test request failed. Failure details:",
 		viewProviderOverview: "View {{provider}} overview",
 		viewModelOverview: "View {{model}} overview",
+		protocolType: "Protocol",
+		followProvider: "Follow provider",
+		followProviderWith: "Follow provider ({{protocol}})",
+		selectProtocol: "Select protocol",
 		close: "Close",
 	},
 	virtualModels: {

@@ -106,6 +106,7 @@ function makeModel(providerId: number, modelId: number, id: string): ProviderMod
 		videoUnderstand: false,
 		proxyEnabled: false,
 		proxyAddr: "",
+		protocolType: null,
 		createdAt: "",
 		updatedAt: "",
 	};

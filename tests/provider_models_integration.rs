@@ -2,6 +2,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::Request;
+use axum::response::IntoResponse;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter, Set};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -901,6 +902,51 @@ async fn spawn_chat_mock() -> String {
     format!("http://{addr}")
 }
 
+/// OpenAI Responses 目标 mock（非流式 SSE 200）——用于测速走 Responses 协议时判定。
+async fn spawn_responses_mock() -> String {
+    let app = axum::Router::new().route(
+        "/v1/responses",
+        axum::routing::post(|| async {
+            let payload = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"m\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\ndata: [DONE]\n\n";
+            (
+                axum::http::StatusCode::OK,
+                [("content-type", "text/event-stream")],
+                payload,
+            )
+                .into_response()
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
+/// Anthropic Messages 目标 mock（非流式 200）——用于测速回落供应商协议时判定。
+async fn spawn_messages_mock() -> String {
+    let app = axum::Router::new().route(
+        "/v1/messages",
+        axum::routing::post(|| async {
+            axum::Json(json!({
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
 /// 直插一个 provider + provider_model（模型级代理两字段可自定义）。
 async fn seed_provider_and_model(
     db: &sea_orm::DatabaseConnection,
@@ -940,6 +986,99 @@ async fn seed_provider_and_model(
     };
     let model_id = model.insert(db).await.unwrap().model_id;
     (provider_id, model_id)
+}
+
+/// 直插 provider + provider_model（供应商/模型协议可指定，模型 None=跟随供应商）。
+async fn seed_provider_and_model_with_protocol(
+    db: &sea_orm::DatabaseConnection,
+    name: &str,
+    target: &str,
+    provider_protocol: i32,
+    model_protocol: Option<i32>,
+) -> (i32, i32) {
+    let active = provider::ActiveModel {
+        name: Set(name.to_string()),
+        enable: Set(true),
+        base_url: Set(format!("{target}/v1")),
+        api_key: Set(crypto::encrypt("sk-test")),
+        custom_header: Set("{}".to_string()),
+        protocol_type: Set(provider_protocol),
+        billing_mode: Set(0),
+        extra: Set("{}".to_string()),
+        proxy_enabled: Set(false),
+        proxy_addr: Set("".to_string()),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    let provider_id = active.insert(db).await.unwrap().id;
+
+    let now = chrono::Utc::now();
+    let model = provider_model::ActiveModel {
+        provider_id: Set(provider_id),
+        provider_model_id: Set("protocol-model".to_string()),
+        context_length: Set(128_000),
+        max_output_tokens: Set(4_096),
+        protocol_type: Set(model_protocol),
+        proxy_enabled: Set(false),
+        proxy_addr: Set("".to_string()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    let model_id = model.insert(db).await.unwrap().model_id;
+    (provider_id, model_id)
+}
+
+/// 测速按模型协议：供应商=Anthropic(2) + 模型覆盖=Responses(1) → 测试请求打到
+/// /v1/responses（Responses mock 返回 200 说明走对协议；若回落 Anthropic 会打
+/// /v1/messages 而 404 失败）。
+#[tokio::test]
+async fn test_model_test_uses_model_protocol_override() {
+    let target = spawn_responses_mock().await;
+    let (app, db) = setup_app().await;
+    let (provider_id, model_id) = seed_provider_and_model_with_protocol(
+        &db,
+        &format!("tp-{}", chrono::Utc::now().timestamp_millis()),
+        &target,
+        2,       // 供应商协议 = Anthropic
+        Some(1), // 模型覆盖 = OpenAI Responses
+    )
+    .await;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/{model_id}/test"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "测速应按模型覆盖协议（Responses）成功：{body}");
+}
+
+/// 测速回落供应商协议：模型未覆盖协议（None）→ 测试请求按供应商协议走
+/// （供应商=Anthropic 时打 /v1/messages，成功说明回落正确）。
+#[tokio::test]
+async fn test_model_test_falls_back_to_provider_protocol() {
+    let target = spawn_messages_mock().await;
+    let (app, db) = setup_app().await;
+    let (provider_id, model_id) = seed_provider_and_model_with_protocol(
+        &db,
+        &format!("tb-{}", chrono::Utc::now().timestamp_millis()),
+        &target,
+        2,    // 供应商协议 = Anthropic
+        None, // 模型未覆盖 → 跟随供应商
+    )
+    .await;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/{model_id}/test"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "测速应回落供应商协议（Anthropic）成功：{body}");
 }
 
 /// 模型开了代理（供应商也开了另一个）→ 测试请求走模型代理。
@@ -1055,4 +1194,184 @@ async fn test_refresh_ignores_model_proxy() {
         0,
         "刷新模型列表只认供应商代理，不应走模型级代理"
     );
+}
+
+// ─── 模型单独选择协议：CRUD 与校验 ────────────────────────────────────────
+
+/// 创建/更新/批量创建支持模型级协议字段（protocolType：null=跟随供应商 / 0..=3=覆盖），
+/// 列表响应回显；缺省为 null。
+#[tokio::test]
+async fn test_model_protocol_crud_roundtrip() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p-protocol-crud").await;
+
+    // 创建带协议覆盖 → 响应回显。
+    let mut payload = model_payload("protocol-model");
+    payload["protocolType"] = json!(1); // OpenAI Responses
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        payload,
+    )
+    .await;
+    assert_eq!(status, 201, "创建失败：{body}");
+    assert_eq!(body["data"]["protocolType"], 1);
+    let model_id = body["data"]["modelId"].as_i64().unwrap();
+
+    // 未传 protocolType → 默认 null（跟随供应商）。
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        model_payload("follow-model"),
+    )
+    .await;
+    assert_eq!(status, 201, "创建失败：{body}");
+    assert_eq!(body["data"]["protocolType"], Value::Null);
+    let follow_id = body["data"]["modelId"].as_i64().unwrap();
+
+    // GET 列表能取回两值。
+    let (status, body) = send_json(
+        app.clone(),
+        "GET",
+        &format!("/api/providers/{provider_id}/models"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200);
+    let listed = body["data"].as_array().unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .find(|m| m["modelId"].as_i64() == Some(model_id))
+            .unwrap()["protocolType"],
+        1
+    );
+    assert_eq!(
+        listed
+            .iter()
+            .find(|m| m["modelId"].as_i64() == Some(follow_id))
+            .unwrap()["protocolType"],
+        Value::Null
+    );
+
+    // 更新协议值。
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{provider_id}/models/{model_id}"),
+        json!({
+            "providerModelId": "protocol-model",
+            "contextLength": 128000,
+            "maxOutputTokens": 4096,
+            "protocolType": 3, // Gemini
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "更新失败：{body}");
+    assert_eq!(body["data"]["protocolType"], 3);
+
+    // 更新回 null（改回跟随供应商）。
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{provider_id}/models/{model_id}"),
+        json!({
+            "providerModelId": "protocol-model",
+            "contextLength": 128000,
+            "maxOutputTokens": 4096,
+            "protocolType": null,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "更新失败：{body}");
+    assert_eq!(body["data"]["protocolType"], Value::Null);
+
+    // 批量创建：一个带协议覆盖、一个缺省。
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models/batch"),
+        json!({
+            "models": [
+                {
+                    "providerModelId": "batch-a",
+                    "contextLength": 32000,
+                    "maxOutputTokens": 2048,
+                    "protocolType": 2,
+                },
+                {
+                    "providerModelId": "batch-b",
+                    "contextLength": 32000,
+                    "maxOutputTokens": 2048,
+                },
+            ],
+        }),
+    )
+    .await;
+    assert_eq!(status, 201, "批量创建失败：{body}");
+    let created = body["data"].as_array().unwrap();
+    assert_eq!(created.len(), 2);
+    assert_eq!(created[0]["protocolType"], 2);
+    assert_eq!(
+        created[1]["protocolType"],
+        Value::Null,
+        "未传协议默认跟随供应商"
+    );
+}
+
+/// 模型级协议校验：非空值必须落在 0..=3，越界 → 400。
+#[tokio::test]
+async fn test_model_protocol_validation_errors() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p-protocol-validate").await;
+
+    // 非法协议值（超出枚举范围）。
+    let mut invalid = model_payload("m-bad");
+    invalid["protocolType"] = json!(4);
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        invalid,
+    )
+    .await;
+    assert_eq!(status, 400, "越界协议值应被拒绝：{body}");
+    assert!(body["msg"].as_str().unwrap().contains("协议"));
+
+    let mut negative = model_payload("m-neg");
+    negative["protocolType"] = json!(-1);
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        negative,
+    )
+    .await;
+    assert_eq!(status, 400, "负数协议值应被拒绝");
+
+    // 更新时非法协议值同样拒绝。
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        model_payload("ok-model"),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let model_id = body["data"]["modelId"].as_i64().unwrap();
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{provider_id}/models/{model_id}"),
+        json!({
+            "providerModelId": "ok-model",
+            "contextLength": 128000,
+            "maxOutputTokens": 4096,
+            "protocolType": 4,
+        }),
+    )
+    .await;
+    assert_eq!(status, 400, "更新时越界协议值应被拒绝：{body}");
 }

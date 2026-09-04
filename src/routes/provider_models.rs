@@ -42,6 +42,8 @@ struct ProviderModelResponse {
     video_understand: bool,
     proxy_enabled: bool,
     proxy_addr: String,
+    /// 模型单独选择的协议：null=跟随供应商，0..=3=覆盖（含义同 provider.protocol_type）。
+    protocol_type: Option<i32>,
     created_at: String,
     updated_at: String,
 }
@@ -60,6 +62,7 @@ impl ProviderModelResponse {
             video_understand: model.video_understand,
             proxy_enabled: model.proxy_enabled,
             proxy_addr: model.proxy_addr,
+            protocol_type: model.protocol_type,
             created_at: rfc3339(model.created_at),
             updated_at: rfc3339(model.updated_at),
         }
@@ -84,6 +87,8 @@ struct UpsertProviderModelRequest {
     proxy_enabled: bool,
     #[serde(default)]
     proxy_addr: String,
+    #[serde(default)]
+    protocol_type: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -156,6 +161,13 @@ fn validate_fields(req: &UpsertProviderModelRequest, lang: Lang) -> Option<Strin
         crate::routes::providers::validate_proxy(req.proxy_enabled, &req.proxy_addr, lang)
     {
         return Some(msg);
+    }
+    // 模型级协议：非空时须落在合法枚举范围（0=OpenAI Compatible … 3=Gemini）。
+    if req.protocol_type.is_some_and(|v| !(0..=3).contains(&v)) {
+        return Some(
+            lang.tr("协议类型不合法", "invalid protocol type")
+                .to_string(),
+        );
     }
     None
 }
@@ -283,6 +295,7 @@ async fn create_provider_model(
         video_understand: Set(req.video_understand),
         proxy_enabled: Set(req.proxy_enabled),
         proxy_addr: Set(req.proxy_addr.trim().to_string()),
+        protocol_type: Set(req.protocol_type),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
@@ -302,6 +315,7 @@ async fn create_provider_model(
                 video_understand = model.video_understand,
                 proxy_enabled = model.proxy_enabled,
                 proxy_addr = %model.proxy_addr,
+                protocol_type = ?model.protocol_type,
                 "创建供应商模型",
             );
             let response = ProviderModelResponse::from_model(model);
@@ -381,6 +395,7 @@ async fn batch_create_provider_models(
             video_understand: Set(item.video_understand),
             proxy_enabled: Set(item.proxy_enabled),
             proxy_addr: Set(item.proxy_addr.trim().to_string()),
+            protocol_type: Set(item.protocol_type),
             created_at: Set(now),
             updated_at: Set(now),
             ..Default::default()
@@ -443,6 +458,7 @@ async fn update_provider_model(
     active.video_understand = Set(req.video_understand);
     active.proxy_enabled = Set(req.proxy_enabled);
     active.proxy_addr = Set(req.proxy_addr.trim().to_string());
+    active.protocol_type = Set(req.protocol_type);
     active.updated_at = Set(chrono::Utc::now());
 
     match active.update(&state.db).await {
@@ -459,6 +475,7 @@ async fn update_provider_model(
                 video_understand = model.video_understand,
                 proxy_enabled = model.proxy_enabled,
                 proxy_addr = %model.proxy_addr,
+                protocol_type = ?model.protocol_type,
                 "更新供应商模型",
             );
             let response = ProviderModelResponse::from_model(model);

@@ -252,6 +252,15 @@ async fn seed_provider_model(
     provider_id: i32,
     remote_id: &str,
 ) -> i32 {
+    seed_provider_model_with_protocol(db, provider_id, remote_id, None).await
+}
+
+async fn seed_provider_model_with_protocol(
+    db: &sea_orm::DatabaseConnection,
+    provider_id: i32,
+    remote_id: &str,
+    protocol_type: Option<i32>,
+) -> i32 {
     let active = provider_model::ActiveModel {
         provider_id: Set(provider_id),
         provider_model_id: Set(remote_id.to_string()),
@@ -261,6 +270,7 @@ async fn seed_provider_model(
         tool_use: Set(true),
         image_understand: Set(false),
         video_understand: Set(false),
+        protocol_type: Set(protocol_type),
         created_at: Set(chrono::Utc::now()),
         updated_at: Set(chrono::Utc::now()),
         ..Default::default()
@@ -818,6 +828,83 @@ async fn common_setup_with_member(
     .await
     .unwrap();
     (app, db)
+}
+
+/// 组合助手：供应商 + 模型 + 虚拟模型（模型可单独指定协议，None=跟随供应商）。
+async fn common_setup_with_model_protocol(
+    base_url: &str,
+    provider_protocol: i32,
+    model_protocol: Option<i32>,
+) -> (axum::Router, sea_orm::DatabaseConnection) {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+    let provider_id = seed_provider(&db, "p-1", base_url, provider_protocol, 0).await;
+    let model_id = seed_provider_model_with_protocol(&db, provider_id, "m-1", model_protocol).await;
+    let vm = virtual_model::ActiveModel {
+        display_id: Set("vm-x".to_string()),
+        enable: Set(true),
+        load_balancing_strategy: Set(0),
+        fallback_strategy: Set(1),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    let vm = vm.insert(&db).await.unwrap();
+    virtual_model_item::ActiveModel {
+        virtual_model_id: Set(vm.virtual_model_id),
+        model_id: Set(model_id),
+        enable: Set(true),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+    (app, db)
+}
+
+#[tokio::test]
+async fn model_protocol_override_beats_provider_protocol() {
+    // 供应商协议 = Anthropic(2)，但模型单独覆盖为 OpenAI Responses(1)：
+    // 出站请求必须按 Responses 形状（/v1/responses + max_output_tokens），而非 Anthropic。
+    // 协议判别以 body 形状为准（Responses 有 max_output_tokens 无 messages，Anthropic 反之，
+    // 互斥可判别）；URL 路径由 mock 路由隐含验证——协议取错会打到不存在的路径而 404 失败。
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, db) = common_setup_with_model_protocol(&base, 2, Some(1)).await;
+
+    let (status, text) = send_chat(&app, chat_body("vm-x", false)).await;
+    assert_eq!(status, 200, "{text}");
+    let body: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(body["choices"][0]["message"]["content"], "你好");
+
+    let upstream_bodies = captured.lock().unwrap();
+    assert!(!upstream_bodies.is_empty(), "上游应收到请求");
+    // Responses 形状：max_output_tokens 而非 Anthropic 的 max_tokens/messages。
+    assert_eq!(upstream_bodies[0]["max_output_tokens"], 128);
+    assert!(upstream_bodies[0].get("messages").is_none());
+
+    let rows = wait_for_records(&db, 1).await;
+    assert_eq!(rows[0].input_tokens, Some(12));
+}
+
+#[tokio::test]
+async fn model_protocol_null_falls_back_to_provider_protocol() {
+    // 模型未覆盖协议（None）→ 沿用供应商协议：供应商为 Anthropic(2) 时
+    // 出站请求按 Anthropic 形状（/v1/messages + max_tokens），行为与现状一致。
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, _db) = common_setup_with_model_protocol(&base, 2, None).await;
+
+    let (status, text) = send_chat(&app, chat_body("vm-x", false)).await;
+    assert_eq!(status, 200, "{text}");
+
+    let upstream_bodies = captured.lock().unwrap();
+    assert!(!upstream_bodies.is_empty(), "上游应收到请求");
+    assert_eq!(upstream_bodies[0]["max_tokens"], 128);
+    assert_eq!(upstream_bodies[0]["messages"][0]["role"], "user");
 }
 
 #[tokio::test]

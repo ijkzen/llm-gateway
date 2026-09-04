@@ -410,6 +410,20 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         changed |= ensure_migration(db, 19, &migration_19_statements).await?;
     }
 
+    // Migration 20: provider_model 模型级协议覆盖字段（protocol_type，可空）。
+    // 模型可单独指定上游协议（0..=3，含义与 provider.protocol_type 一致），
+    // 为空时回落供应商协议；新库已由 create_table_from_entity 建表带该列，
+    // 此处兜底历史库。
+    let mut migration_20_statements: Vec<&str> = Vec::new();
+    if !column_exists(db, "provider_model", "protocol_type").await? {
+        migration_20_statements.push("ALTER TABLE provider_model ADD COLUMN protocol_type integer");
+    }
+    if migration_20_statements.is_empty() {
+        changed |= ensure_migration(db, 20, &["SELECT 1"]).await?;
+    } else {
+        changed |= ensure_migration(db, 20, &migration_20_statements).await?;
+    }
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)
