@@ -97,8 +97,8 @@ export function ProviderSpeedTestDialog({
 	return (
 		<>
 			<Dialog open={open} onOpenChange={onOpenChange}>
-				<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[520px]">
-					<DialogHeader className="space-y-3">
+				<DialogContent className="flex h-[min(720px,85vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[520px]">
+					<DialogHeader className="shrink-0 space-y-3 px-6 pb-4 pt-6">
 						<DialogTitle
 							className="flex min-w-0 items-center gap-2 pr-8"
 							title={t("providers.speedTestTitle", { name: provider?.name ?? "" })}
@@ -119,63 +119,65 @@ export function ProviderSpeedTestDialog({
 						</div>
 					</DialogHeader>
 
-					{isLoading ? (
-						<div className="space-y-2">
-							<Skeleton className="h-10 w-full" />
-							<Skeleton className="h-10 w-full" />
-						</div>
-					) : providerModels.length === 0 ? (
-						<EmptyState
-							title={t("providers.speedTestNoModels")}
-							description={t("providers.speedTestNoModelsHint")}
-						/>
-					) : (
-						<ul className="space-y-2">
-							{providerModels.map((model) => {
-								const result = results[model.modelId];
-								const isTesting = testingId === model.modelId;
-								return (
-									<li
-										key={model.modelId}
-										className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5"
-									>
-										<span
-											className="min-w-0 truncate font-mono text-sm"
-											title={model.providerModelId}
+					<div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">
+						{isLoading ? (
+							<div className="space-y-2">
+								<Skeleton className="h-10 w-full" />
+								<Skeleton className="h-10 w-full" />
+							</div>
+						) : providerModels.length === 0 ? (
+							<EmptyState
+								title={t("providers.speedTestNoModels")}
+								description={t("providers.speedTestNoModelsHint")}
+							/>
+						) : (
+							<ul className="space-y-2">
+								{providerModels.map((model) => {
+									const result = results[model.modelId];
+									const isTesting = testingId === model.modelId;
+									return (
+										<li
+											key={model.modelId}
+											className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5"
 										>
-											{model.providerModelId}
-										</span>
-										<span className="flex shrink-0 items-center gap-2">
-											{typeof result === "number" && (
-												<span className="text-sm text-muted-foreground tabular-nums">
-													{t("providers.speedTestResult", { duration: result })}
-												</span>
-											)}
-											{result === "failed" && (
-												<span className="text-sm text-destructive">
-													{t("providerModels.testFailedTitle")}
-												</span>
-											)}
-											<Button
-												type="button"
-												variant="outline"
-												size="sm"
-												disabled={testModel.isPending}
-												onClick={() => runTest(model)}
+											<span
+												className="min-w-0 truncate font-mono text-sm"
+												title={model.providerModelId}
 											>
-												{isTesting ? (
-													<Loader2 className="mr-1.5 size-3.5 animate-spin" />
-												) : (
-													<Gauge className="mr-1.5 size-3.5" />
+												{model.providerModelId}
+											</span>
+											<span className="flex shrink-0 items-center gap-2">
+												{typeof result === "number" && (
+													<span className="text-sm text-muted-foreground tabular-nums">
+														{t("providers.speedTestResult", { duration: result })}
+													</span>
 												)}
-												{t("providerModels.test")}
-											</Button>
-										</span>
-									</li>
-								);
-							})}
-						</ul>
-					)}
+												{result === "failed" && (
+													<span className="text-sm text-destructive">
+														{t("providerModels.testFailedTitle")}
+													</span>
+												)}
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													disabled={testModel.isPending}
+													onClick={() => runTest(model)}
+												>
+													{isTesting ? (
+														<Loader2 className="mr-1.5 size-3.5 animate-spin" />
+													) : (
+														<Gauge className="mr-1.5 size-3.5" />
+													)}
+													{t("providerModels.test")}
+												</Button>
+											</span>
+										</li>
+									);
+								})}
+							</ul>
+						)}
+					</div>
 				</DialogContent>
 			</Dialog>
 

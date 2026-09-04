@@ -283,8 +283,8 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[560px]">
-				<DialogHeader className="space-y-3">
+			<DialogContent className="flex h-[min(720px,85vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[560px]">
+				<DialogHeader className="shrink-0 space-y-3 px-6 pb-4 pt-6">
 					<DialogTitle>
 						{isEdit ? t("providers.editTitle") : t("providers.createTitle")}
 					</DialogTitle>
@@ -293,218 +293,220 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 					</DialogDescription>
 				</DialogHeader>
 				<Form {...form}>
-					<form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-						<FormField
-							control={form.control}
-							name="baseUrl"
-							render={({ field }) => (
-								<FormItem className="relative">
-									<FormLabel required>Base URL</FormLabel>
-									<FormControl>
-										<Input placeholder="https://api.deepseek.com" {...field} />
-									</FormControl>
-									{/* 搜索框联想下拉：匹配到模板后，输入框下方浮出候选列表，点击某项即应用 */}
-									{!isEdit && !appliedTemplate && (matchedTemplates?.length ?? 0) > 0 && (
-										<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
-											{matchedTemplates?.map((template) => (
-												<button
-													key={template.name}
-													type="button"
-													onClick={() => applyTemplate(template)}
-													className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/60"
-												>
-													<Sparkles className="size-4 shrink-0 text-success" />
-													<span className="truncate">
-														{t("providers.applyTemplate")}{" "}
-														<span className="font-medium">{template.name}</span>{" "}
-														{t("providers.templateSuffix")}
-													</span>
-												</button>
-											))}
-										</div>
-									)}
-									<FormMessage />
-								</FormItem>
-							)}
-						/>
-						<FormField
-							control={form.control}
-							name="name"
-							render={({ field }) => (
-								<FormItem>
-									<FormLabel required>{t("providers.name")}</FormLabel>
-									<FormControl>
-										<Input placeholder={t("providers.namePlaceholder")} {...field} />
-									</FormControl>
-									<FormMessage />
-								</FormItem>
-							)}
-						/>
-						<FormField
-							control={form.control}
-							name="apiKey"
-							render={({ field }) => (
-								<FormItem>
-									<FormLabel required>{t("providers.apiKey")}</FormLabel>
-									<FormControl>
-										<Input
-											type="password"
-											placeholder={isEdit ? t("providers.leaveEmptyHint") : "sk-..."}
-											autoComplete="off"
-											{...field}
-										/>
-									</FormControl>
-									<FormMessage />
-								</FormItem>
-							)}
-						/>
-						<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+					<form onSubmit={form.handleSubmit(onSubmit)} className="flex min-h-0 flex-1 flex-col">
+						<div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
 							<FormField
 								control={form.control}
-								name="protocolType"
+								name="baseUrl"
 								render={({ field }) => (
-									<FormItem>
-										<FormLabel>{t("providers.protocolType")}</FormLabel>
-										<Select
-											value={String(field.value)}
-											onValueChange={(v) => field.onChange(Number(v))}
-										>
-											<FormControl>
-												<SelectTrigger>
-													<SelectValue placeholder={t("providers.selectProtocol")} />
-												</SelectTrigger>
-											</FormControl>
-											<SelectContent>
-												{PROTOCOL_TYPES.map((p) => (
-													<SelectItem key={p.value} value={String(p.value)}>
-														{t(p.labelKey)}
-													</SelectItem>
+									<FormItem className="relative">
+										<FormLabel required>Base URL</FormLabel>
+										<FormControl>
+											<Input placeholder="https://api.deepseek.com" {...field} />
+										</FormControl>
+										{/* 搜索框联想下拉：匹配到模板后，输入框下方浮出候选列表，点击某项即应用 */}
+										{!isEdit && !appliedTemplate && (matchedTemplates?.length ?? 0) > 0 && (
+											<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
+												{matchedTemplates?.map((template) => (
+													<button
+														key={template.name}
+														type="button"
+														onClick={() => applyTemplate(template)}
+														className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/60"
+													>
+														<Sparkles className="size-4 shrink-0 text-success" />
+														<span className="truncate">
+															{t("providers.applyTemplate")}{" "}
+															<span className="font-medium">{template.name}</span>{" "}
+															{t("providers.templateSuffix")}
+														</span>
+													</button>
 												))}
-											</SelectContent>
-										</Select>
-										<FormMessage />
-									</FormItem>
-								)}
-							/>
-							<FormField
-								control={form.control}
-								name="billingMode"
-								render={({ field }) => (
-									<FormItem>
-										<FormLabel>{t("providers.billingMode")}</FormLabel>
-										<Select
-											value={String(field.value)}
-											onValueChange={(v) => field.onChange(Number(v))}
-										>
-											<FormControl>
-												<SelectTrigger>
-													<SelectValue placeholder={t("providers.selectBilling")} />
-												</SelectTrigger>
-											</FormControl>
-											<SelectContent>
-												{BILLING_MODES.map((b) => (
-													<SelectItem key={b.value} value={String(b.value)}>
-														{t(b.labelKey)}
-													</SelectItem>
-												))}
-											</SelectContent>
-										</Select>
-										<FormMessage />
-									</FormItem>
-								)}
-							/>
-						</div>
-						<FormField
-							control={form.control}
-							name="enable"
-							render={({ field }) => (
-								<FormItem className="flex items-center justify-between rounded-lg border p-3">
-									<FormLabel>{t("providers.enable")}</FormLabel>
-									<FormControl>
-										<Switch checked={field.value} onCheckedChange={field.onChange} />
-									</FormControl>
-								</FormItem>
-							)}
-						/>
-
-						{/* 网络代理：仅当启用时显示地址输入。 */}
-						<ProxyConfigFields control={form.control} withHint />
-
-						{/* 高级设置：常驻展示，默认折叠。 */}
-						<div className="overflow-hidden rounded-lg border">
-							<button
-								type="button"
-								onClick={() => setAdvancedOpen((v) => !v)}
-								className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium transition-colors hover:bg-foreground/5"
-							>
-								<span>{t("providers.advanced")}</span>
-								{advancedOpen ? (
-									<ChevronDown className="size-4 text-muted-foreground" />
-								) : (
-									<ChevronRight className="size-4 text-muted-foreground" />
-								)}
-							</button>
-							{advancedOpen && (
-								<div className="space-y-4 border-t px-4 py-4">
-									{/* 自定义请求头置于高级设置最上方 */}
-									<div className="space-y-1.5">
-										<Label htmlFor="custom-header">{t("providers.customHeaderJson")}</Label>
-										<FormField
-											control={form.control}
-											name="customHeader"
-											render={({ field }) => (
-												<FormItem>
-													<FormControl>
-														<textarea
-															id="custom-header"
-															rows={2}
-															className="flex w-full rounded-lg border border-input bg-white/70 px-3 py-2 font-mono text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/12 dark:bg-white/5 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
-															placeholder='{"X-Api-Key": "..."}'
-															{...field}
-														/>
-													</FormControl>
-													<FormMessage />
-												</FormItem>
-											)}
-										/>
-									</div>
-									{/* 用量展示开关：仅模板支持用量查询时展示 */}
-									{templateExtra && usageFlag(templateExtra) && (
-										<FormField
-											control={form.control}
-											name="usageEnabled"
-											render={({ field }) => (
-												<FormItem className="flex items-center justify-between rounded-lg border p-3">
-													<FormLabel>{t("providers.usageDisplay")}</FormLabel>
-													<FormControl>
-														<Switch checked={field.value} onCheckedChange={field.onChange} />
-													</FormControl>
-												</FormItem>
-											)}
-										/>
-									)}
-									{/* Extra 字段：仅用量展示开关开启时展示 */}
-									{usageEnabled &&
-										extraKeys.map((key) => (
-											<div key={key} className="space-y-1.5">
-												<Label htmlFor={`extra-${key}`}>{key}</Label>
-												<Input
-													id={`extra-${key}`}
-													type={key === "password" ? "password" : "text"}
-													autoComplete="off"
-													value={extraValues[key] ?? ""}
-													onChange={(e) =>
-														setExtraValues((prev) => ({ ...prev, [key]: e.target.value }))
-													}
-													placeholder={`${t("providers.templateField")} ${key}`}
-												/>
 											</div>
-										))}
-								</div>
-							)}
+										)}
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+							<FormField
+								control={form.control}
+								name="name"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel required>{t("providers.name")}</FormLabel>
+										<FormControl>
+											<Input placeholder={t("providers.namePlaceholder")} {...field} />
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+							<FormField
+								control={form.control}
+								name="apiKey"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel required>{t("providers.apiKey")}</FormLabel>
+										<FormControl>
+											<Input
+												type="password"
+												placeholder={isEdit ? t("providers.leaveEmptyHint") : "sk-..."}
+												autoComplete="off"
+												{...field}
+											/>
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+							<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+								<FormField
+									control={form.control}
+									name="protocolType"
+									render={({ field }) => (
+										<FormItem>
+											<FormLabel>{t("providers.protocolType")}</FormLabel>
+											<Select
+												value={String(field.value)}
+												onValueChange={(v) => field.onChange(Number(v))}
+											>
+												<FormControl>
+													<SelectTrigger>
+														<SelectValue placeholder={t("providers.selectProtocol")} />
+													</SelectTrigger>
+												</FormControl>
+												<SelectContent>
+													{PROTOCOL_TYPES.map((p) => (
+														<SelectItem key={p.value} value={String(p.value)}>
+															{t(p.labelKey)}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+											<FormMessage />
+										</FormItem>
+									)}
+								/>
+								<FormField
+									control={form.control}
+									name="billingMode"
+									render={({ field }) => (
+										<FormItem>
+											<FormLabel>{t("providers.billingMode")}</FormLabel>
+											<Select
+												value={String(field.value)}
+												onValueChange={(v) => field.onChange(Number(v))}
+											>
+												<FormControl>
+													<SelectTrigger>
+														<SelectValue placeholder={t("providers.selectBilling")} />
+													</SelectTrigger>
+												</FormControl>
+												<SelectContent>
+													{BILLING_MODES.map((b) => (
+														<SelectItem key={b.value} value={String(b.value)}>
+															{t(b.labelKey)}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+											<FormMessage />
+										</FormItem>
+									)}
+								/>
+							</div>
+							<FormField
+								control={form.control}
+								name="enable"
+								render={({ field }) => (
+									<FormItem className="flex items-center justify-between rounded-lg border p-3">
+										<FormLabel>{t("providers.enable")}</FormLabel>
+										<FormControl>
+											<Switch checked={field.value} onCheckedChange={field.onChange} />
+										</FormControl>
+									</FormItem>
+								)}
+							/>
+
+							{/* 网络代理：仅当启用时显示地址输入。 */}
+							<ProxyConfigFields control={form.control} withHint />
+
+							{/* 高级设置：常驻展示，默认折叠。 */}
+							<div className="overflow-hidden rounded-lg border">
+								<button
+									type="button"
+									onClick={() => setAdvancedOpen((v) => !v)}
+									className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium transition-colors hover:bg-foreground/5"
+								>
+									<span>{t("providers.advanced")}</span>
+									{advancedOpen ? (
+										<ChevronDown className="size-4 text-muted-foreground" />
+									) : (
+										<ChevronRight className="size-4 text-muted-foreground" />
+									)}
+								</button>
+								{advancedOpen && (
+									<div className="space-y-4 border-t px-4 py-4">
+										{/* 自定义请求头置于高级设置最上方 */}
+										<div className="space-y-1.5">
+											<Label htmlFor="custom-header">{t("providers.customHeaderJson")}</Label>
+											<FormField
+												control={form.control}
+												name="customHeader"
+												render={({ field }) => (
+													<FormItem>
+														<FormControl>
+															<textarea
+																id="custom-header"
+																rows={2}
+																className="flex w-full rounded-lg border border-input bg-white/70 px-3 py-2 font-mono text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/12 dark:bg-white/5 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+																placeholder='{"X-Api-Key": "..."}'
+																{...field}
+															/>
+														</FormControl>
+														<FormMessage />
+													</FormItem>
+												)}
+											/>
+										</div>
+										{/* 用量展示开关：仅模板支持用量查询时展示 */}
+										{templateExtra && usageFlag(templateExtra) && (
+											<FormField
+												control={form.control}
+												name="usageEnabled"
+												render={({ field }) => (
+													<FormItem className="flex items-center justify-between rounded-lg border p-3">
+														<FormLabel>{t("providers.usageDisplay")}</FormLabel>
+														<FormControl>
+															<Switch checked={field.value} onCheckedChange={field.onChange} />
+														</FormControl>
+													</FormItem>
+												)}
+											/>
+										)}
+										{/* Extra 字段：仅用量展示开关开启时展示 */}
+										{usageEnabled &&
+											extraKeys.map((key) => (
+												<div key={key} className="space-y-1.5">
+													<Label htmlFor={`extra-${key}`}>{key}</Label>
+													<Input
+														id={`extra-${key}`}
+														type={key === "password" ? "password" : "text"}
+														autoComplete="off"
+														value={extraValues[key] ?? ""}
+														onChange={(e) =>
+															setExtraValues((prev) => ({ ...prev, [key]: e.target.value }))
+														}
+														placeholder={`${t("providers.templateField")} ${key}`}
+													/>
+												</div>
+											))}
+									</div>
+								)}
+							</div>
 						</div>
 
-						<DialogFooter className="gap-2 pt-2">
+						<DialogFooter className="shrink-0 gap-2 border-t px-6 py-4">
 							<Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
 								{t("common.cancel")}
 							</Button>

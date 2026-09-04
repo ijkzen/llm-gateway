@@ -54,15 +54,15 @@ export function RequestLogDetailDialog({ row, onOpenChange }: RequestLogDetailDi
 
 	return (
 		<Dialog open={row !== null} onOpenChange={onOpenChange}>
-			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[640px]">
-				<DialogHeader className="space-y-3">
+			<DialogContent className="flex h-[min(720px,85vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[640px]">
+				<DialogHeader className="shrink-0 space-y-3 px-6 pb-4 pt-6">
 					<DialogTitle className="font-mono text-sm">
 						{t("requestLogs.requestTitle")} {row?.requestId}
 					</DialogTitle>
 					<DialogDescription>{t("requestLogs.fullFieldsHint")}</DialogDescription>
 				</DialogHeader>
 				{row && (
-					<div className="space-y-5">
+					<div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 pb-6">
 						{/* 概览徽章 */}
 						<div className="flex flex-wrap items-center gap-2">
 							<Badge variant={row.success ? "default" : "destructive"}>
