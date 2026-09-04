@@ -53,10 +53,10 @@
 
 | # | 条目 | 风险点 | 位置 | 状态 |
 |---|------|--------|------|------|
-| H1 | 删 `usage::UsageCache` 内存层 + `AppState.usage_cache` + routes 两处 invalidate | invalidate 时机影响用量新鲜度，读写两侧语义需核实 | src/usage/mod.rs, state.rs, routes/providers.rs | ⬜ |
-| H2 | 删 `UsageData.kind`/`UsageKind` 枚举 | usage_json 落 DB 缓存，若 kind 被序列化则存量行反序列化可能失败 | src/usage/types.rs:11-32 | ⬜ |
-| H3 | db.rs 迁移 13/16/17/19/20 样板收敛 | 碰启动迁移路径；生产有 schema_migrations 号段坑前科 | src/db.rs:328-425 | ⬜ |
-| H4 | 删 `lib.rs` 注册的 `example` handler（无种子行） | AGENTS.md 记载其「演示实时日志」用途，需确认 | src/lib.rs:156-172 | ⬜ |
+| H1 | 删 `usage::UsageCache` 内存层 + `AppState.usage_cache` + routes 两处 invalidate | 调研确认：内存缓存只写不读（唯一生产调用方传空缓存+force_refresh=true），读侧全走 DB 缓存；连带删 UsageCache 测试 | src/usage/mod.rs, persist.rs, state.rs, lib.rs, routes/providers.rs | ✅ |
+| H2 | ~~删 `UsageData.kind`/`UsageKind` 枚举~~ | ⏭️ 跳过：`kind` 是公开 API 响应字段且**前端 ProviderUsageCard 依赖 `data.kind==="balance"` 分支渲染**（审计漏查该消费方），删除=破坏性跨端契约变更+存量 DB 缓存兼容，省~30行不抵成本 |
+| H3 | db.rs 迁移 13/16/17/19/20 样板收敛为 `ensure_columns` | 迁移回归测试（残留号段/缺列历史库）11 个全绿；18 为 DROP 形态未动 | src/db.rs | ✅ |
+| H4 | 删 `lib.rs` 注册的 `example` handler | 调研：纯演示代码，无种子行/无测试依赖；开发库仅 usage_refresh 种子任务，无 example 任务实例 | src/lib.rs | ✅ |
 
 ## 明确不做
 
