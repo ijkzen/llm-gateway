@@ -362,6 +362,9 @@ const en: Translation = {
 		testSuccess: "Model test passed",
 		testFailedTitle: "Model test failed",
 		testFailedDesc: "The test request failed. Failure details:",
+		viewProviderOverview: "View {{provider}} overview",
+		viewModelOverview: "View {{model}} overview",
+		viewDetails: "View model details",
 		close: "Close",
 	},
 	virtualModels: {

@@ -136,13 +136,31 @@ describe("ProviderModelsPage", () => {
 		];
 		renderPage();
 
-		expect(screen.getByRole("heading", { name: "OpenAI" })).toBeTruthy();
-		expect(screen.getByRole("heading", { name: "DeepSeek" })).toBeTruthy();
+		expect(screen.getByRole("heading", { name: /OpenAI/ })).toBeTruthy();
+		expect(screen.getByRole("heading", { name: /DeepSeek/ })).toBeTruthy();
 		expect(screen.getAllByRole("button", { name: "添加" })).toHaveLength(2);
 
-		expect(screen.getByRole("button", { name: /gpt-4o/ })).toBeTruthy();
-		expect(screen.getByRole("button", { name: /o3/ })).toBeTruthy();
-		expect(screen.getByRole("button", { name: /deepseek-chat/ })).toBeTruthy();
+		expect(screen.getByRole("link", { name: /gpt-4o/ })).toBeTruthy();
+		expect(screen.getByRole("link", { name: /o3/ })).toBeTruthy();
+		expect(screen.getByRole("link", { name: /deepseek-chat/ })).toBeTruthy();
+	});
+
+	it("供应商名称与模型名称右侧带方向键，分别链接到数据面板", () => {
+		mocks.providers = [makeProvider(1, "OpenAI")];
+		mocks.models = [makeModel(1, 11, "gpt-4o")];
+		renderPage();
+
+		const providerLink = screen.getByRole("link", { name: /OpenAI/ }) as HTMLAnchorElement;
+		expect(providerLink.getAttribute("href")).toBe("/providers/1/overview");
+		expect(providerLink.querySelector("svg")).toBeTruthy();
+
+		const modelLink = screen.getByRole("link", { name: /gpt-4o/ }) as HTMLAnchorElement;
+		expect(modelLink.getAttribute("href")).toBe("/models/1/gpt-4o/overview");
+		expect(modelLink.querySelector("svg")).toBeTruthy();
+
+		// 详情弹窗改由独立的「查看模型详情」按钮打开。
+		fireEvent.click(screen.getByRole("button", { name: "查看模型详情" }));
+		expect(screen.getByRole("dialog")).toHaveTextContent("gpt-4o");
 	});
 
 	it("按供应商模型 ID 搜索、按供应商分组，点击结果打开详情并保留结果", () => {

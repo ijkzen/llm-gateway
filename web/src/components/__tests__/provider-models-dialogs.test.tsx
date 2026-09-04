@@ -3,6 +3,7 @@ import { ProviderModelDetailDialog } from "@/components/provider-models/Provider
 import type { ProviderModel, RefreshCandidate } from "@/hooks/use-provider-models";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -337,13 +338,15 @@ describe("AddProviderModelsDialog Tab 与目录候选", () => {
 describe("ProviderModelDetailDialog 测试按钮", () => {
 	it("只读态左下角有测试按钮，点击触发测试并传入 modelId", () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		const testBtn = screen.getByRole("button", { name: "测试" });
@@ -357,13 +360,15 @@ describe("ProviderModelDetailDialog 测试按钮", () => {
 
 	it("测试成功弹出成功 toast", () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		mocks.testMutate.mockImplementation((_id, opts) => {
@@ -376,13 +381,15 @@ describe("ProviderModelDetailDialog 测试按钮", () => {
 
 	it("测试失败弹出失败弹窗并展示错误信息", () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		mocks.testMutate.mockImplementation((_id, opts) => {
@@ -398,19 +405,58 @@ describe("ProviderModelDetailDialog 测试按钮", () => {
 		// isPending 为 true 时按钮禁用。
 		mocks.testState.isPending = true;
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		const testBtn = screen.getByRole("button", { name: "测试中..." });
 		expect((testBtn as HTMLButtonElement).disabled).toBe(true);
 		fireEvent.click(testBtn);
 		expect(mocks.testMutate).not.toHaveBeenCalled();
+	});
+});
+
+describe("ProviderModelDetailDialog 标题栏导航", () => {
+	it("模型 ID 标题带方向键并链接到该模型的数据面板", () => {
+		render(
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
+		);
+
+		const titleLink = screen.getByRole("link", { name: /gpt-4o/ }) as HTMLAnchorElement;
+		expect(titleLink.getAttribute("href")).toBe("/models/7/gpt-4o/overview");
+		expect(titleLink.querySelector("svg")).toBeTruthy();
+	});
+
+	it("模型 ID 含需转义字符时链接正确编码", () => {
+		render(
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel({ providerModelId: "deepseek/r1-v2" })}
+				/>
+			</MemoryRouter>,
+		);
+
+		const titleLink = screen.getByRole("link", { name: /deepseek\/r1-v2/ }) as HTMLAnchorElement;
+		expect(titleLink.getAttribute("href")).toBe("/models/7/deepseek%2Fr1-v2/overview");
 	});
 });
 
@@ -435,7 +481,11 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 				/>
 			);
 		}
-		render(<DialogHarness />);
+		render(
+			<MemoryRouter>
+				<DialogHarness />
+			</MemoryRouter>,
+		);
 
 		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
 		fireEvent.click(screen.getByRole("button", { name: "删除" }));
@@ -447,13 +497,15 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 
 	it("默认只读：只有编辑按钮，没有删除/更新", () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		expect(screen.getByRole("button", { name: "编辑" })).toBeTruthy();
@@ -465,13 +517,15 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 
 	it("点击编辑后右上角变为删除与更新，编辑消失", () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
@@ -483,13 +537,15 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 
 	it("进入编辑态但未改动任何值时，更新按钮禁用且不触发提交（双击编辑不会立即更新成功）", async () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		// 真实浏览器按坐标命中：双击「编辑」的第二击落在同一槽位换上来的「更新」提交按钮上。
@@ -510,13 +566,15 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 
 	it("更新提交后调用更新接口", async () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
@@ -535,13 +593,15 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 describe("ProviderModelDetailDialog 模型级代理", () => {
 	it("只读态展示网络代理：开启显示徽标与地址，关闭显示未开启", () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel({ proxyEnabled: true, proxyAddr: "http://127.0.0.1:7890" })}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel({ proxyEnabled: true, proxyAddr: "http://127.0.0.1:7890" })}
+				/>
+			</MemoryRouter>,
 		);
 
 		expect(screen.getByText("使用网络代理")).toBeTruthy();
@@ -550,27 +610,31 @@ describe("ProviderModelDetailDialog 模型级代理", () => {
 
 		// 关闭代理的模型：只显示「未开启」，不显示地址。
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel({ proxyEnabled: false, proxyAddr: "" })}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel({ proxyEnabled: false, proxyAddr: "" })}
+				/>
+			</MemoryRouter>,
 		);
 		expect(screen.getAllByText("未开启").length).toBeGreaterThan(0);
 	});
 
 	it("模型级关闭但供应商开启时展示「继承供应商代理」，避免误判为直连", () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				providerProxyAddr="http://127.0.0.1:7891"
-				model={makeModel({ proxyEnabled: false, proxyAddr: "" })}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					providerProxyAddr="http://127.0.0.1:7891"
+					model={makeModel({ proxyEnabled: false, proxyAddr: "" })}
+				/>
+			</MemoryRouter>,
 		);
 
 		expect(screen.getAllByText("未开启").length).toBeGreaterThan(0);
@@ -581,13 +645,15 @@ describe("ProviderModelDetailDialog 模型级代理", () => {
 
 	it("编辑态开启代理并填地址后提交，payload 携带代理字段", async () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
@@ -606,13 +672,15 @@ describe("ProviderModelDetailDialog 模型级代理", () => {
 
 	it("开启代理但地址为空时不提交（校验错误）", async () => {
 		render(
-			<ProviderModelDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				providerId={7}
-				providerName="OpenAI"
-				model={makeModel()}
-			/>,
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: "编辑" }));

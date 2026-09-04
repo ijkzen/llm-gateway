@@ -30,11 +30,12 @@ import {
 } from "@/hooks/use-provider-models";
 import { useToastActions } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { FlaskConical, Loader2, Pencil, Trash2 } from "lucide-react";
+import { ArrowRight, FlaskConical, Loader2, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 import { z } from "zod";
 
 function makeFormSchema(t: (key: string) => string) {
@@ -195,8 +196,15 @@ export function ProviderModelDetailDialog({
 			>
 				<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[520px]">
 					<DialogHeader className="space-y-3">
-						<DialogTitle className="truncate" title={model.providerModelId}>
-							{model.providerModelId}
+						<DialogTitle className="min-w-0">
+							<Link
+								to={`/models/${providerId}/${encodeURIComponent(model.providerModelId)}/overview`}
+								className="group flex min-w-0 items-center justify-center gap-1.5 rounded-md transition-colors hover:text-foreground sm:justify-start"
+								title={t("providerModels.viewModelOverview", { model: model.providerModelId })}
+							>
+								<span className="min-w-0 truncate">{model.providerModelId}</span>
+								<ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+							</Link>
 						</DialogTitle>
 						<DialogDescription>
 							{t("providerModels.belongsToProvider")}
