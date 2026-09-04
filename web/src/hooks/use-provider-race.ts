@@ -1,14 +1,9 @@
 import { type ApiResponse, api, unwrap } from "@/lib/api";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
-/** 赛马排序指标。 */
-export type RaceSortKey =
-	| "totalTokens"
-	| "requestCount"
-	| "ttft"
-	| "requestTime"
-	| "tps"
-	| "cacheHitRate";
+import type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
+
+export type { RaceSort, RaceSortKey, RaceWindow };
 
 export interface ProviderRankItem {
 	/** 实际服务的供应商 ID。 */
@@ -33,18 +28,6 @@ export interface ProviderRankResponse {
 	startTime: number;
 	endTime: number;
 	items: ProviderRankItem[];
-}
-
-export interface RaceWindow {
-	/** 窗口起点（毫秒时间戳，含）。 */
-	startTime: number;
-	/** 窗口终点（毫秒时间戳，不含）。 */
-	endTime: number;
-}
-
-export interface RaceSort {
-	sortBy: RaceSortKey;
-	sortOrder: "asc" | "desc";
 }
 
 export const providerRaceKeys = {

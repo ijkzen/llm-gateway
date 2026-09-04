@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use super::{Credentials, num, reset_ts_of, snippet};
 use crate::usage::error::UsageError;
-use crate::usage::http::{HttpReply, UsageHttp, parse_json};
+use crate::usage::http::{HttpReply, UsageHttp, ensure_not_auth_error, parse_json};
 use crate::usage::types::{FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window};
 use crate::usage::volcengine_sign;
 
@@ -69,9 +69,7 @@ async fn call_action(
 
 /// 鉴权类错误判定：HTTP 401/403，或错误码/消息含 auth/signature/denied。
 fn auth_error(reply: &HttpReply) -> Result<(), UsageError> {
-    if reply.status == 401 || reply.status == 403 {
-        return Err(UsageError::Auth);
-    }
+    ensure_not_auth_error(reply)?;
     if let Ok(v) = parse_json(reply)
         && let Some(err) = v.get("ResponseMetadata").and_then(|m| m.get("Error"))
     {

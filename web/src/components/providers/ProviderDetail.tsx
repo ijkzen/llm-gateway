@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { type Provider, fetchProviderApiKey, useUpdateProvider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import {
 	ChevronRight,
 	Copy,
@@ -49,13 +49,6 @@ const BILLING_LABELS: Record<number, string> = {
 	0: "providers.payAsYouGo",
 	1: "providers.subscription",
 };
-
-function formatDate(dateStr: string) {
-	if (!dateStr) return "—";
-	const ts = new Date(dateStr).getTime();
-	if (Number.isNaN(ts) || ts <= 0) return "—";
-	return new Date(dateStr).toLocaleString("zh-CN");
-}
 
 /** 详情字段网格中的一行。 */
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -222,8 +215,12 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 					<DetailRow label={t("providers.proxyEnabled")}>
 						<ProviderProxyRow enabled={provider.proxyEnabled} addr={provider.proxyAddr} />
 					</DetailRow>
-					<DetailRow label={t("providers.createdAt")}>{formatDate(provider.createdAt)}</DetailRow>
-					<DetailRow label={t("providers.updatedAt")}>{formatDate(provider.updatedAt)}</DetailRow>
+					<DetailRow label={t("providers.createdAt")}>
+						{formatDateTime(provider.createdAt)}
+					</DetailRow>
+					<DetailRow label={t("providers.updatedAt")}>
+						{formatDateTime(provider.updatedAt)}
+					</DetailRow>
 				</div>
 
 				{usageEnabled(provider.extra) && <ProviderUsageCard providerId={provider.id} />}

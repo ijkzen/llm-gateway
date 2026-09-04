@@ -381,7 +381,7 @@ async fn create_provider(
             let response = ProviderResponse::from_model(model);
             (StatusCode::CREATED, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => {
+        Err(e) if crate::db::is_unique_violation(&e) => {
             let msg = lang.tr(
                 "同名 Provider 已存在，名称需要唯一",
                 "a provider with the same name already exists; names must be unique",
@@ -498,7 +498,7 @@ async fn update_provider(
             let response = ProviderResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => {
+        Err(e) if crate::db::is_unique_violation(&e) => {
             response::bad_request("同名 Provider 已存在，名称需要唯一")
         }
         Err(e) => response::db_error(e.to_string()),
@@ -950,9 +950,4 @@ async fn get_provider_usage_estimate(
             estimatable,
         })),
     )
-}
-
-/// SQLite 唯一约束冲突（name UNIQUE）。
-fn is_unique_violation(err: &DbErr) -> bool {
-    err.to_string().contains("UNIQUE constraint failed")
 }

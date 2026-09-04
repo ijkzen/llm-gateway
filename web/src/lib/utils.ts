@@ -1,10 +1,44 @@
-import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
 import i18n from "@/i18n";
 
+/** clsx 的 ClassValue 类型（cn 的入参）。 */
+export type ClassValue =
+	| string
+	| number
+	| null
+	| undefined
+	| false
+	| ClassValue[]
+	| Record<string, boolean>;
+
+/** 类名合并（等价 clsx：过滤假值、拼接字符串、展开对象与数组）。 */
+function classNames(...inputs: ClassValue[]): string {
+	const parts: string[] = [];
+	for (const input of inputs) {
+		if (!input) {
+			continue;
+		}
+		if (typeof input === "string" || typeof input === "number") {
+			parts.push(String(input));
+		} else if (Array.isArray(input)) {
+			const nested = classNames(...input);
+			if (nested) {
+				parts.push(nested);
+			}
+		} else {
+			for (const [key, value] of Object.entries(input)) {
+				if (value) {
+					parts.push(key);
+				}
+			}
+		}
+	}
+	return parts.join(" ");
+}
+
 export function cn(...inputs: ClassValue[]) {
-	return twMerge(clsx(inputs));
+	return twMerge(classNames(...inputs));
 }
 
 function trimTrailingZeros(text: string): string {
@@ -93,6 +127,14 @@ export function formatContextLength(value: number): string {
 		return `${trimTrailingZeros((value / 1_000).toFixed(1))}K`;
 	}
 	return String(value);
+}
+
+/** ISO 时间串 → 本地化展示；空串/非法/零值返回占位符「—」。 */
+export function formatDateTime(dateStr: string): string {
+	if (!dateStr) return "—";
+	const ts = new Date(dateStr).getTime();
+	if (Number.isNaN(ts) || ts <= 0) return "—";
+	return new Date(dateStr).toLocaleString("zh-CN");
 }
 
 /** 按 value 降序取前 limit 名，其余合并为 other（value 求和）。 */

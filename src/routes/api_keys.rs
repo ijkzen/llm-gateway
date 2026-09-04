@@ -125,7 +125,7 @@ async fn create_api_key(
             let response = ApiKeyResponse::from_model(model);
             (StatusCode::CREATED, Json(Response::success(response)))
         }
-        Err(e) if is_unique_violation(&e) => {
+        Err(e) if crate::db::is_unique_violation(&e) => {
             let msg = lang.tr(
                 "同名 API Key 已存在，名称需要唯一",
                 "an API key with the same name already exists; names must be unique",
@@ -201,9 +201,4 @@ async fn delete_api_key(State(state): State<AppState>, Path(id): Path<i32>) -> i
         Ok(_) => not_found_api_key(lang, id),
         Err(e) => response::db_error(e.to_string()),
     }
-}
-
-/// SQLite 唯一约束冲突（name UNIQUE）。
-fn is_unique_violation(err: &DbErr) -> bool {
-    err.to_string().contains("UNIQUE constraint failed")
 }

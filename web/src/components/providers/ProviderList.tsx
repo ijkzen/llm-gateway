@@ -14,7 +14,6 @@ import {
 } from "@dnd-kit/core";
 import {
 	SortableContext,
-	type Transform,
 	arrayMove,
 	sortableKeyboardCoordinates,
 	useSortable,
@@ -24,7 +23,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import { GripVertical } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-/** dnd-kit 拖拽位移转 CSS transform 字符串（等价 @dnd-kit/utilities 的 CSS.Transform.toString）。 */
+/** dnd-kit useSortable 返回的位移（等价 @dnd-kit/utilities 的 Transform 类型）。 */
+interface Transform {
+	x: number;
+	y: number;
+	scaleX: number;
+	scaleY: number;
+}
+
+/** 拖拽位移转 CSS transform 字符串（等价 @dnd-kit/utilities 的 CSS.Transform.toString）。 */
 function transformToString(transform: Transform | null): string | undefined {
 	if (!transform) {
 		return undefined;

@@ -4,6 +4,11 @@ use std::time::Duration;
 
 const SLOW_QUERY_THRESHOLD_MS: u64 = 100;
 
+/// SQLite 唯一约束冲突。
+pub fn is_unique_violation(err: &DbErr) -> bool {
+    err.to_string().contains("UNIQUE constraint failed")
+}
+
 /// Extracts the filesystem path from a SQLite URL for directory creation.
 ///
 /// sqlx URL conventions: `sqlite::memory:` (no file), `sqlite://rel/path.db`

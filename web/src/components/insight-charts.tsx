@@ -1,3 +1,4 @@
+import { formatBucketLabel, inferGranularity } from "@/components/dashboard-charts";
 import {
 	ChartContainer,
 	ChartLegend,
@@ -32,34 +33,13 @@ function TooltipLabelRow({
 	);
 }
 
-/** 按桶粒度格式化 X 轴标签（与 dashboard-charts 的 formatBucketLabel 同语义）。 */
-function formatBucketLabel(bucketStart: number, granularity: ChartGranularity): string {
-	const date = new Date(bucketStart);
-	const zh = i18n.language.startsWith("zh");
-	switch (granularity) {
-		case "hour":
-			return `${date.getHours().toString().padStart(2, "0")}:00`;
-		case "day":
-			return zh
-				? `${date.getMonth() + 1}月${date.getDate()}日`
-				: date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-		case "month":
-			return zh
-				? `${date.getFullYear()}年${date.getMonth() + 1}月`
-				: date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
-		case "year":
-			return zh ? `${date.getFullYear()}年` : `${date.getFullYear()}`;
-	}
-}
-
 /** 时间桶标签（复用 dashboard-charts 的格式化与粒度推断）。 */
 function bucketLabelData(
 	data: Array<{ bucketStart: number }>,
 	granularity?: ChartGranularity,
 ): string[] {
-	const gap = data.length > 1 ? (data[1]?.bucketStart ?? 0) - (data[0]?.bucketStart ?? 0) : 0;
 	const resolved: ChartGranularity =
-		granularity ?? (gap <= 3_600_000 ? "hour" : gap <= 24 * 3_600_000 ? "day" : "month");
+		granularity ?? inferGranularity(data.map((p) => p.bucketStart));
 	return data.map((p) => formatBucketLabel(p.bucketStart, resolved));
 }
 
