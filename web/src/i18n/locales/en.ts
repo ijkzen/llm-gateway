@@ -368,6 +368,8 @@ const en: Translation = {
 	},
 	virtualModels: {
 		title: "Virtual Models",
+		search: "Search virtual model members",
+		searchNoResults: "No matching models",
 		displayId: "Virtual Model ID",
 		loadBalancing: "Load balancing",
 		fallback: "Fallback",

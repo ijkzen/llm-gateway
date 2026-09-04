@@ -365,6 +365,8 @@ const zhCN = {
 	},
 	virtualModels: {
 		title: "虚拟模型",
+		search: "搜索虚拟模型成员",
+		searchNoResults: "未找到匹配模型",
 		displayId: "虚拟模型 ID",
 		loadBalancing: "负载均衡策略",
 		fallback: "降级策略",

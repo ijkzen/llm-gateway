@@ -2,7 +2,7 @@ import type { ProviderModel } from "@/hooks/use-provider-models";
 import type { Provider } from "@/hooks/use-providers";
 import type { VirtualModel, VirtualModelItem } from "@/hooks/use-virtual-models";
 import VirtualModelsPage from "@/pages/virtual-models";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -102,9 +102,11 @@ vi.mock("@/components/virtual-models/VirtualModelItemDetailDialog", () => ({
 	},
 }));
 
+let nextItemId = 1;
+
 function makeItem(overrides: Partial<VirtualModelItem> = {}): VirtualModelItem {
 	return {
-		virtualModelItemId: 1,
+		virtualModelItemId: nextItemId++,
 		modelId: 11,
 		enable: true,
 		providerId: 7,
@@ -136,8 +138,17 @@ function makeVm(overrides: Partial<VirtualModel> = {}): VirtualModel {
 	};
 }
 
+function renderPage() {
+	return render(
+		<MemoryRouter>
+			<VirtualModelsPage />
+		</MemoryRouter>,
+	);
+}
+
 describe("VirtualModelsPage", () => {
 	beforeEach(() => {
+		nextItemId = 1;
 		mocks.virtualModels = undefined;
 		mocks.providers = undefined;
 		mocks.providerModels = undefined;
@@ -348,5 +359,103 @@ describe("VirtualModelsPage", () => {
 		fireEvent.click(screen.getByRole("button", { name: /claude-sonnet@anthropic/ }));
 		expect(mocks.detailDialogOpen).toBe(true);
 		expect(mocks.detailVirtualModel?.virtualModelId).toBe(2);
+	});
+
+	it("按成员 providerModelId 搜索，结果按所属虚拟模型分组（含停用虚拟模型与停用成员）", () => {
+		mocks.virtualModels = [
+			makeVm({
+				virtualModelId: 1,
+				displayId: "gpt-4o",
+				items: [makeItem({ modelId: 11, providerModelId: "gpt-deepseek" })],
+			}),
+			makeVm({
+				virtualModelId: 2,
+				displayId: "deepseek",
+				enable: false,
+				items: [
+					makeItem({ modelId: 12, providerModelId: "deepseek-chat" }),
+					makeItem({
+						modelId: 13,
+						providerModelId: "deepseek-reasoner",
+						enable: false,
+						providerEnable: false,
+					}),
+				],
+			}),
+			makeVm({
+				virtualModelId: 3,
+				displayId: "claude",
+				items: [makeItem({ modelId: 14, providerModelId: "claude-sonnet@anthropic" })],
+			}),
+		];
+		renderPage();
+
+		fireEvent.change(screen.getByRole("searchbox", { name: "搜索虚拟模型成员" }), {
+			target: { value: "DeepSeek" },
+		});
+		// 匹配不区分大小写：混合大小写关键词命中小写成员 ID。
+		const group1 = screen.getByTestId("virtual-model-search-group-1");
+		const group2 = screen.getByTestId("virtual-model-search-group-2");
+		expect(group1).toHaveTextContent("gpt-4o");
+		expect(group2).toHaveTextContent("deepseek");
+		// 未命中（无 deepseek 成员）的虚拟模型不出现。
+		expect(screen.queryByTestId("virtual-model-search-group-3")).toBeNull();
+		// 组内仅列命中成员：停用的虚拟模型与随供应商禁用+已停用的成员也可见。
+		const gptDeepseek = within(group1).getByRole("button", { name: /gpt-deepseek/ });
+		expect(gptDeepseek).toHaveTextContent("OpenAI");
+		expect(within(group2).getByRole("button", { name: /deepseek-chat/ })).toBeTruthy();
+		expect(within(group2).getByRole("button", { name: /deepseek-reasoner/ })).toBeTruthy();
+	});
+
+	it("点击搜索结果打开成员详情弹窗并保留搜索；无命中展示提示", () => {
+		mocks.virtualModels = [
+			makeVm({
+				virtualModelId: 1,
+				displayId: "gpt-4o",
+				items: [
+					makeItem({ modelId: 11, providerModelId: "gpt-4o@openai" }),
+					makeItem({ modelId: 12, providerModelId: "o3@openai" }),
+				],
+			}),
+		];
+		renderPage();
+
+		const searchbox = screen.getByRole("searchbox", { name: "搜索虚拟模型成员" });
+		fireEvent.change(searchbox, { target: { value: "o3" } });
+		const group = screen.getByTestId("virtual-model-search-group-1");
+		fireEvent.click(within(group).getByRole("button", { name: /o3@openai/ }));
+		// 详情弹窗打开并传入命中成员与其所属虚拟模型。
+		expect(mocks.detailDialogOpen).toBe(true);
+		expect(mocks.detailItem?.modelId).toBe(12);
+		expect(mocks.detailVirtualModel?.virtualModelId).toBe(1);
+
+		// 详情弹窗关闭（mock 记录 open=false）后，关键词与结果面板保留。
+		mocks.detailDialogOpen = false;
+		expect(searchbox).toHaveValue("o3");
+		expect(screen.getByTestId("virtual-model-search-group-1")).toBeTruthy();
+
+		// 无命中时展示无结果文案。
+		fireEvent.change(searchbox, { target: { value: "不存在的模型" } });
+		expect(screen.queryByTestId("virtual-model-search-group-1")).toBeNull();
+		expect(screen.getByText(/未找到匹配/)).toBeTruthy();
+	});
+
+	it("点击搜索结果区域外收起结果面板", () => {
+		mocks.virtualModels = [
+			makeVm({
+				virtualModelId: 1,
+				displayId: "gpt-4o",
+				items: [makeItem({ modelId: 11, providerModelId: "gpt-4o@openai" })],
+			}),
+		];
+		renderPage();
+
+		fireEvent.change(screen.getByRole("searchbox", { name: "搜索虚拟模型成员" }), {
+			target: { value: "gpt" },
+		});
+		expect(screen.getByTestId("virtual-model-search-results")).toBeTruthy();
+
+		fireEvent.pointerDown(screen.getByRole("heading", { name: "虚拟模型" }));
+		expect(screen.queryByTestId("virtual-model-search-results")).toBeNull();
 	});
 });
