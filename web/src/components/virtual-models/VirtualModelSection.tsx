@@ -20,29 +20,37 @@ interface VirtualModelSectionProps {
 	virtualModel: VirtualModel;
 	onEdit: (virtualModel: VirtualModel) => void;
 	onDelete: (virtualModel: VirtualModel) => void;
+	/** 点击成员卡片打开只读详情弹窗（无论成员是否停用/随供应商禁用）。 */
+	onOpenItem: (virtualModel: VirtualModel, item: VirtualModelItem) => void;
 }
 
-/** 成员卡片（纯展示）：模型 ID + 供应商名 + 能力图标；停用/随供应商禁用带标记。 */
-function MemberCard({ item }: { item: VirtualModelItem }) {
+/** 成员卡片：模型 ID + 供应商名 + 能力图标；停用/随供应商禁用带标记；点击打开只读详情。 */
+function MemberCard({
+	item,
+	onOpen,
+}: {
+	item: VirtualModelItem;
+	onOpen: (item: VirtualModelItem) => void;
+}) {
 	const { t } = useTranslation();
 	const providerDisabled = !item.providerEnable;
 	return (
-		<div
+		<button
+			type="button"
+			onClick={() => onOpen(item)}
+			title={item.providerModelId}
 			className={cn(
-				"rounded-xl border bg-card p-4 shadow-sm",
+				"flex w-full cursor-pointer flex-col gap-1.5 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
 				(item.enable === false || providerDisabled) && "opacity-60",
 			)}
 		>
 			<div className="flex items-center justify-between gap-3">
-				<span
-					className="min-w-0 truncate font-mono text-sm font-medium"
-					title={item.providerModelId}
-				>
+				<span className="min-w-0 truncate font-mono text-sm font-medium">
 					{item.providerModelId}
 				</span>
 				<ItemCapabilityIcons item={item} className="shrink-0" />
 			</div>
-			<p className="mt-1.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+			<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
 				<span className="truncate">{item.providerName}</span>
 				{providerDisabled && (
 					<span className="shrink-0 text-warning">{t("virtualModels.disabledWithProvider")}</span>
@@ -51,12 +59,17 @@ function MemberCard({ item }: { item: VirtualModelItem }) {
 					<span className="shrink-0">{t("virtualModels.disabledMark")}</span>
 				)}
 			</p>
-		</div>
+		</button>
 	);
 }
 
 /** 单个虚拟模型区块：顶行左名称右菜单（编辑/删除），分割线下方平铺成员卡片。 */
-export function VirtualModelSection({ virtualModel, onEdit, onDelete }: VirtualModelSectionProps) {
+export function VirtualModelSection({
+	virtualModel,
+	onEdit,
+	onDelete,
+	onOpenItem,
+}: VirtualModelSectionProps) {
 	const { t } = useTranslation();
 	return (
 		<section>
@@ -111,7 +124,11 @@ export function VirtualModelSection({ virtualModel, onEdit, onDelete }: VirtualM
 			) : (
 				<div className="mt-4 grid grid-cols-1 gap-3 pb-6 sm:grid-cols-2 xl:grid-cols-3">
 					{virtualModel.items.map((item) => (
-						<MemberCard key={item.virtualModelItemId} item={item} />
+						<MemberCard
+							key={item.virtualModelItemId}
+							item={item}
+							onOpen={(selected) => onOpenItem(virtualModel, selected)}
+						/>
 					))}
 				</div>
 			)}

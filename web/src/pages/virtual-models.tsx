@@ -6,10 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualModelDeleteDialog } from "@/components/virtual-models/VirtualModelDeleteDialog";
 import { VirtualModelEditDialog } from "@/components/virtual-models/VirtualModelEditDialog";
+import { VirtualModelItemDetailDialog } from "@/components/virtual-models/VirtualModelItemDetailDialog";
 import { VirtualModelSection } from "@/components/virtual-models/VirtualModelSection";
 import { useProviderModels } from "@/hooks/use-provider-models";
 import { useProviders } from "@/hooks/use-providers";
-import { type VirtualModel, useVirtualModels } from "@/hooks/use-virtual-models";
+import {
+	type VirtualModel,
+	type VirtualModelItem,
+	useVirtualModels,
+} from "@/hooks/use-virtual-models";
 import { VIRTUAL_MODELS_PAGE } from "@/lib/pages";
 import { Plus, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -20,6 +25,11 @@ export default function VirtualModelsPage() {
 	const [creating, setCreating] = useState(false);
 	const [editing, setEditing] = useState<VirtualModel | null>(null);
 	const [deleting, setDeleting] = useState<VirtualModel | null>(null);
+	/** 详情弹窗选中态：被点击成员与其所属虚拟模型。 */
+	const [detail, setDetail] = useState<{
+		virtualModel: VirtualModel;
+		item: VirtualModelItem;
+	} | null>(null);
 
 	const { data: virtualModels, isLoading, isError, refetch } = useVirtualModels();
 	const {
@@ -107,6 +117,7 @@ export default function VirtualModelsPage() {
 							virtualModel={vm}
 							onEdit={setEditing}
 							onDelete={setDeleting}
+							onOpenItem={(virtualModel, item) => setDetail({ virtualModel, item })}
 						/>
 					))}
 				</div>
@@ -132,6 +143,15 @@ export default function VirtualModelsPage() {
 					if (!open) setDeleting(null);
 				}}
 				virtualModel={deleting}
+			/>
+
+			<VirtualModelItemDetailDialog
+				open={detail !== null}
+				onOpenChange={(open) => {
+					if (!open) setDetail(null);
+				}}
+				virtualModel={detail?.virtualModel ?? null}
+				item={detail?.item ?? null}
 			/>
 		</div>
 	);
