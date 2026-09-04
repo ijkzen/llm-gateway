@@ -8,8 +8,8 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait,
-    QueryFilter, QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr,
+    EntityTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 
@@ -252,12 +252,19 @@ async fn load_item_responses<C: ConnectionTrait>(
     Ok(grouped)
 }
 
-/// 成员排序：启用优先 → 按虚拟模型负载均衡策略分组 → 组内远端模型 ID 字母升序。
+/// 成员排序：启用优先 → 按虚拟模型负载均衡策略分组 → 组内按用量排序
+/// （订阅制按剩余百分比 5h→周→月、按量付费按主余额），平局按
+/// virtual_model_item_id 升序；无用量数据的成员排在有数据成员之后。
 ///
 /// 策略 0（订阅制优先）：订阅制成员在前、按量付费在后；策略 1（按量付费优先）
-/// 反之；策略 2/3（轮转/随机）不按付费模式分组。启用/停用两个大组内部都
-/// 先做策略分组，再按 provider_model_id 字母升序。
-fn sort_items(items: &mut [VirtualModelItemResponse], load_balancing_strategy: i32) {
+/// 反之。策略 2/3（轮转/随机）运行时与用量无关且带随机性，展示端回退为
+/// 「启用优先 → virtual_model_item_id 升序」静态序。展示端不剔除耗尽成员
+/// （额度用尽由用量门控级联停用供应商），也不做随机化（列表保持稳定）。
+fn sort_items(
+    items: &mut [VirtualModelItemResponse],
+    load_balancing_strategy: i32,
+    usage: &HashMap<i32, Option<crate::usage::types::UsageData>>,
+) {
     let subscription_first = load_balancing_strategy == 0;
     let payg_first = load_balancing_strategy == 1;
     items.sort_by(|a, b| {
@@ -277,16 +284,48 @@ fn sort_items(items: &mut [VirtualModelItemResponse], load_balancing_strategy: i
                     a_sub.cmp(&b_sub)
                 }
             })
-            // 第三层：字母升序。
-            .then_with(|| a.provider_model_id.cmp(&b.provider_model_id))
+            // 第三层：组内按用量排序（订阅比剩余百分比、按量比主余额）。
+            // 仅策略 0/1 且同付费模式（跨组由第二层定序）；无数据/不可比时
+            // 由比较器排到有数据成员之后，同为无数据则继续落到第四层 id。
+            .then_with(|| {
+                if !(subscription_first || payg_first) || a.billing_mode != b.billing_mode {
+                    return std::cmp::Ordering::Equal;
+                }
+                let a_usage = usage.get(&a.provider_id).and_then(Option::as_ref);
+                let b_usage = usage.get(&b.provider_id).and_then(Option::as_ref);
+                if a.billing_mode == 1 {
+                    crate::proxy::usage_rank::cmp_quota_remaining(b_usage, a_usage)
+                } else {
+                    crate::proxy::usage_rank::cmp_balance(b_usage, a_usage)
+                }
+            })
+            // 第四层：virtual_model_item_id 升序——用量平局/无数据/策略 2/3 的确定性兜底。
+            .then_with(|| a.virtual_model_item_id.cmp(&b.virtual_model_item_id))
     });
+}
+
+/// 只读加载一批供应商的用量数据（10 分钟数据库缓存）；缺失/过期/读失败按
+/// 无数据处理（展示接口不因此阻塞，也不触发真实抓取）。
+async fn load_usage_map(
+    db: &DatabaseConnection,
+    provider_ids: &[i32],
+) -> HashMap<i32, Option<crate::usage::types::UsageData>> {
+    let mut usage = HashMap::with_capacity(provider_ids.len());
+    for id in provider_ids {
+        let data = crate::usage::persist::read_usage_cache(db, *id)
+            .await
+            .unwrap_or(None);
+        usage.insert(*id, data);
+    }
+    usage
 }
 
 fn virtual_model_response(
     model: virtual_model::Model,
     mut items: Vec<VirtualModelItemResponse>,
+    usage: &HashMap<i32, Option<crate::usage::types::UsageData>>,
 ) -> VirtualModelResponse {
-    sort_items(&mut items, model.load_balancing_strategy);
+    sort_items(&mut items, model.load_balancing_strategy, usage);
     VirtualModelResponse {
         virtual_model_id: model.virtual_model_id,
         display_id: model.display_id,
@@ -300,16 +339,23 @@ fn virtual_model_response(
 }
 
 async fn load_virtual_model_response(
-    db: &impl ConnectionTrait,
+    db: &DatabaseConnection,
     model: virtual_model::Model,
 ) -> Result<VirtualModelResponse, DbErr> {
     let mut grouped = load_item_responses(db, Some(model.virtual_model_id)).await?;
     let items = grouped.remove(&model.virtual_model_id).unwrap_or_default();
-    Ok(virtual_model_response(model, items))
+    let provider_ids: Vec<i32> = items
+        .iter()
+        .map(|i| i.provider_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let usage = load_usage_map(db, &provider_ids).await;
+    Ok(virtual_model_response(model, items, &usage))
 }
 
 async fn load_virtual_model_list(
-    db: &impl ConnectionTrait,
+    db: &DatabaseConnection,
 ) -> Result<Vec<VirtualModelResponse>, DbErr> {
     let models = Entity::find()
         .order_by_asc(virtual_model::Column::VirtualModelId)
@@ -319,6 +365,15 @@ async fn load_virtual_model_list(
         return Ok(Vec::new());
     }
     let grouped = load_item_responses(db, None).await?;
+    // 一次加载全部虚拟模型成员涉及的去重供应商集，避免每个模型重复读缓存。
+    let provider_ids: Vec<i32> = grouped
+        .values()
+        .flatten()
+        .map(|item| item.provider_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let usage = load_usage_map(db, &provider_ids).await;
     Ok(models
         .into_iter()
         .map(|model| {
@@ -326,7 +381,7 @@ async fn load_virtual_model_list(
                 .get(&model.virtual_model_id)
                 .cloned()
                 .unwrap_or_default();
-            virtual_model_response(model, items)
+            virtual_model_response(model, items, &usage)
         })
         .collect())
 }
