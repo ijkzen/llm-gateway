@@ -127,7 +127,19 @@ function required<T>(value: T | undefined | null): T {
 	return value;
 }
 
-/** 展开某供应商分组的候选区。 */
+/** 供应商分组头（可折叠/方向键操作的整行按钮）。 */
+function groupHeader(providerName: string) {
+	return screen.getByRole("button", {
+		name: (name) => name.trim().startsWith(providerName),
+	});
+}
+
+/** 切换成员模型的 Tab（已使用/未使用）。 */
+function switchTab(tabName: string) {
+	fireEvent.click(screen.getByRole("tab", { name: tabName }));
+}
+
+/** 展开某供应商分组的候选区（已使用 Tab 内继续添加时先点「继续添加模型」）。 */
 function openAddGroup(providerName: string) {
 	fireEvent.click(screen.getByRole("button", { name: `在 ${providerName} 中添加模型` }));
 }
@@ -154,7 +166,7 @@ describe("VirtualModelEditDialog 创建模式", () => {
 		expect(screen.getByText("至少保留一个成员模型")).toBeTruthy();
 	});
 
-	it("展开供应商分组 → 点「添加」加入暂存 → 填模型 ID → 创建 payload 正确", async () => {
+	it("默认落在「未使用」Tab；点候选「添加」加入暂存 → 填模型 ID → 创建 payload 正确", async () => {
 		render(
 			<VirtualModelEditDialog
 				open
@@ -170,9 +182,10 @@ describe("VirtualModelEditDialog 创建模式", () => {
 			/>,
 		);
 
-		// 已被其他虚拟模型占用的 o3 不出现在候选区。
-		openAddGroup("OpenAI");
+		// 创建模式无成员 → 默认「未使用」Tab：候选按供应商分组直接展示。
+		expect(screen.getByRole("tab", { name: "未使用" }).getAttribute("aria-selected")).toBe("true");
 		expect(screen.getByRole("button", { name: "添加 gpt-4o" })).toBeTruthy();
+		// 已被其他虚拟模型占用的 o3 不出现。
 		expect(screen.queryByRole("button", { name: "添加 o3" })).toBeNull();
 
 		fireEvent.click(screen.getByRole("button", { name: "添加 gpt-4o" }));
@@ -192,7 +205,7 @@ describe("VirtualModelEditDialog 创建模式", () => {
 		expect(payload.items).toEqual([{ modelId: 11, enable: true }]);
 	});
 
-	it("从两个供应商分别添加成员，payload 汇总两组", async () => {
+	it("从两个供应商分别添加成员（未使用 Tab 平铺候选）→ payload 汇总两组", async () => {
 		render(
 			<VirtualModelEditDialog
 				open
@@ -207,14 +220,16 @@ describe("VirtualModelEditDialog 创建模式", () => {
 			/>,
 		);
 
-		openAddGroup("OpenAI");
 		fireEvent.click(screen.getByRole("button", { name: "添加 gpt-4o" }));
-		openAddGroup("DeepSeek");
 		fireEvent.click(screen.getByRole("button", { name: "添加 deepseek-chat" }));
-
-		expect(screen.getByText("OpenAI")).toBeTruthy();
-		expect(screen.getByText("DeepSeek")).toBeTruthy();
 		expect(screen.getByText("已选 2 个成员模型")).toBeTruthy();
+
+		// 添加后两组都迁到「已使用」Tab。
+		switchTab("已使用");
+		expect(groupHeader("OpenAI")).toBeTruthy();
+		expect(groupHeader("DeepSeek")).toBeTruthy();
+		expect(screen.getByText("gpt-4o")).toBeTruthy();
+		expect(screen.getByText("deepseek-chat")).toBeTruthy();
 
 		fireEvent.change(screen.getByPlaceholderText("如 gpt-4o"), { target: { value: "gpt-4o" } });
 		fireEvent.click(screen.getByRole("button", { name: "创建" }));
@@ -239,7 +254,6 @@ describe("VirtualModelEditDialog 创建模式", () => {
 			/>,
 		);
 
-		openAddGroup("OpenAI");
 		fireEvent.click(screen.getByRole("button", { name: "添加 gpt-4o" }));
 		fireEvent.click(screen.getByRole("button", { name: "创建" }));
 
@@ -279,6 +293,9 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 			/>,
 		);
 
+		// 编辑模式有成员 → 默认落在「已使用」Tab。
+		expect(screen.getByRole("tab", { name: "已使用" }).getAttribute("aria-selected")).toBe("true");
+
 		const displayInput = screen.getByPlaceholderText("如 gpt-4o") as HTMLInputElement;
 		expect(displayInput.value).toBe("gpt-4o");
 
@@ -295,7 +312,7 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 		).toBe("false");
 		expect(screen.getByText(/已停用/)).toBeTruthy();
 
-		// 暂存操作：启停 gpt-4o、移除 o3、添加 o3-mini。
+		// 暂存操作：启停 gpt-4o、移除 o3、继续添加 o3-mini。
 		fireEvent.click(screen.getByRole("switch", { name: "启停 gpt-4o" }));
 		fireEvent.click(screen.getByRole("button", { name: "移除 o3" }));
 		openAddGroup("OpenAI");
@@ -353,6 +370,155 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 		fireEvent.click(screen.getByRole("button", { name: "移除 gpt-4o" }));
 		const saveBtn = screen.getByRole("button", { name: "保存" }) as HTMLButtonElement;
 		expect(saveBtn.disabled).toBe(true);
+	});
+});
+
+describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
+	it("有成员的供应商进「已使用」，其余供应商进「未使用」；两者都按 providers 顺序", () => {
+		// providers 顺序故意与 model id 顺序错开：OpenAI(7) 在 DeepSeek(8) 前。
+		render(
+			<VirtualModelEditDialog
+				open
+				onOpenChange={vi.fn()}
+				virtualModel={makeVm({
+					items: [makeItem({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" })],
+				})}
+				providers={providers}
+				providerModels={[
+					makeModel({ modelId: 11, providerId: 7, providerModelId: "gpt-4o" }),
+					makeModel({ modelId: 12, providerId: 7, providerModelId: "o3" }),
+					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
+				]}
+				mappedModelIds={new Set()}
+			/>,
+		);
+
+		// 已使用：DeepSeek 有成员 → 出现；组头下只有 deepseek-chat。
+		const used = screen.getByRole("tab", { name: "已使用" });
+		fireEvent.click(used);
+		expect(groupHeader("DeepSeek")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "添加 gpt-4o" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "添加 o3" })).toBeNull();
+		expect(screen.getByText("deepseek-chat")).toBeTruthy();
+
+		// 未使用：OpenAI 无成员但有候选 → 出现，候选按 providers 顺序展示。
+		switchTab("未使用");
+		expect(groupHeader("OpenAI")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "添加 gpt-4o" })).toBeTruthy();
+		expect(screen.getByRole("button", { name: "添加 o3" })).toBeTruthy();
+	});
+
+	it("已使用 Tab 组内成员：可用在前、停用在后，同状态按 virtualModelItemId 升序（LB 顺序）", () => {
+		// 后端 items 返回顺序刻意乱序；组内排序应回到可用优先 + id 升序。
+		render(
+			<VirtualModelEditDialog
+				open
+				onOpenChange={vi.fn()}
+				virtualModel={makeVm({
+					items: [
+						makeItem({
+							virtualModelItemId: 40,
+							modelId: 21,
+							providerModelId: "deepseek-chat",
+							enable: true,
+						}),
+						makeItem({
+							virtualModelItemId: 30,
+							modelId: 11,
+							providerModelId: "gpt-4o",
+							enable: false,
+						}),
+						makeItem({
+							virtualModelItemId: 20,
+							modelId: 12,
+							providerModelId: "o3",
+							enable: true,
+						}),
+						makeItem({
+							virtualModelItemId: 10,
+							modelId: 13,
+							providerModelId: "o3-mini",
+							enable: false,
+						}),
+					],
+				})}
+				providers={providers}
+				providerModels={[
+					makeModel({ modelId: 11, providerModelId: "gpt-4o" }),
+					makeModel({ modelId: 12, providerModelId: "o3" }),
+					makeModel({ modelId: 13, providerModelId: "o3-mini" }),
+					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
+				]}
+				mappedModelIds={new Set()}
+			/>,
+		);
+
+		// 表单内虚拟模型「启用」开关无 aria-label，先过滤；成员行按组内排序渲染：
+		// OpenAI 组可用 o3 → 停用堆（o3-mini id 10 先于 gpt-4o id 30）→ DeepSeek 组 deepseek-chat。
+		const switches = screen
+			.getAllByRole("switch")
+			.map((s) => s.getAttribute("aria-label"))
+			.filter((name): name is string => name !== null);
+		expect(switches).toEqual(["启停 o3", "启停 o3-mini", "启停 gpt-4o", "启停 deepseek-chat"]);
+	});
+
+	it("编辑模式默认「已使用」Tab；组头可点击折叠/展开整组", () => {
+		render(
+			<VirtualModelEditDialog
+				open
+				onOpenChange={vi.fn()}
+				virtualModel={makeVm({
+					items: [makeItem({ modelId: 11 })],
+				})}
+				providers={providers}
+				providerModels={[
+					makeModel(),
+					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
+				]}
+				mappedModelIds={new Set()}
+			/>,
+		);
+
+		expect(screen.getByRole("tab", { name: "已使用" }).getAttribute("aria-selected")).toBe("true");
+		const header = groupHeader("OpenAI");
+		expect(header.getAttribute("aria-expanded")).toBe("true");
+		expect(screen.getByText("gpt-4o")).toBeTruthy();
+
+		// 点击折叠：成员隐藏；再点展开恢复。
+		fireEvent.click(header);
+		expect(header.getAttribute("aria-expanded")).toBe("false");
+		expect(screen.queryByText("gpt-4o")).toBeNull();
+		fireEvent.click(header);
+		expect(screen.getByText("gpt-4o")).toBeTruthy();
+	});
+
+	it("方向键折叠/展开：← 折叠、→ 展开（禁用供应商同样可操作）", () => {
+		const openai = required(providers[0]);
+		const deepseek = required(providers[1]);
+		const disabledProviders: Provider[] = [
+			{ ...openai, enable: false },
+			{ ...deepseek, enable: true },
+		];
+		render(
+			<VirtualModelEditDialog
+				open
+				onOpenChange={vi.fn()}
+				virtualModel={makeVm({
+					items: [makeItem({ modelId: 11 })],
+				})}
+				providers={disabledProviders}
+				providerModels={[makeModel()]}
+				mappedModelIds={new Set()}
+			/>,
+		);
+
+		// OpenAI 供应商禁用，但组头仍可折叠（不被 disabled）。
+		const header = groupHeader("OpenAI");
+		expect(header.getAttribute("aria-expanded")).toBe("true");
+		fireEvent.keyDown(header, { key: "ArrowLeft" });
+		expect(header.getAttribute("aria-expanded")).toBe("false");
+		fireEvent.keyDown(header, { key: "ArrowRight" });
+		expect(header.getAttribute("aria-expanded")).toBe("true");
 	});
 });
 

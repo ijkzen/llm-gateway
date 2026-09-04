@@ -390,9 +390,15 @@ const en: Translation = {
 		createTitle: "Add Virtual Model",
 		editDesc:
 			'Manage mapped models per provider: add, remove and toggle members; changes are staged until you click "Save".',
+		usedTab: "In use",
+		unusedTab: "Not in use",
+		addMore: "Add more models",
+		usedEmptyHint:
+			'No provider model has been added yet. Switch to the "Not in use" tab to add member models.',
+		unusedEmptyHint:
+			"No providers to add: every candidate model is already added or used by another virtual model.",
 		selectStrategy: "Select strategy",
 		disableHint: "When disabled, this virtual model will not appear in /v1/models",
-		noMembers: "No members to manage. Models already used by other virtual models are excluded.",
 		providerDisabled: "Provider disabled",
 		addInProvider: "Add model in {{provider}}",
 		disabledWithProvider: "· disabled with provider",
