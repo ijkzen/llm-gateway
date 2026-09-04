@@ -600,6 +600,7 @@ const zhCN = {
 		openProviderOverview: "点击查看该供应商数据面板",
 		openVirtualModelOverview: "点击查看该虚拟模型数据面板",
 		openModelDetail: "点击查看该模型详情",
+		openApiKeyOverview: "点击查看该 API Key 数据面板",
 		unknownProvider: "未知供应商",
 		unknownVirtualModel: "未知模型",
 		unknownKey: "未知 API Key",

@@ -608,6 +608,7 @@ const en: Translation = {
 		openProviderOverview: "Click to view this provider's dashboard",
 		openVirtualModelOverview: "Click to view this virtual model's dashboard",
 		openModelDetail: "Click to view this model's details",
+		openApiKeyOverview: "Click to view this API key's dashboard",
 		unknownProvider: "Unknown provider",
 		unknownVirtualModel: "Unknown model",
 		unknownKey: "Unknown API Key",

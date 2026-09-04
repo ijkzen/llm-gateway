@@ -8,7 +8,16 @@ const mocks = vi.hoisted(() => ({
 	isLoading: false,
 	isError: false,
 	refetch: vi.fn(),
+	navigate: vi.fn(),
 }));
+
+vi.mock("react-router-dom", async () => {
+	const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+	return {
+		...actual,
+		useNavigate: () => mocks.navigate,
+	};
+});
 
 vi.mock("@/hooks/use-api-key-race", () => ({
 	useApiKeyRace: () => ({
@@ -27,6 +36,7 @@ vi.mock("@/hooks/use-in-view", () => ({
 function makeItem(overrides: Partial<ApiKeyRankItem> = {}): ApiKeyRankItem {
 	return {
 		apiKeyName: "key-a",
+		apiKeyId: 7,
 		requestCount: 10,
 		totalTokens: 1_000_000,
 		ttft: 120.5,
@@ -47,6 +57,7 @@ describe("ApiKeyRaceCard（API Key 赛马）", () => {
 		mocks.isLoading = false;
 		mocks.isError = false;
 		mocks.refetch.mockClear();
+		mocks.navigate.mockClear();
 	});
 
 	it("渲染卡片标题、6 个指标列头与 API Key 数据行", () => {
@@ -90,15 +101,34 @@ describe("ApiKeyRaceCard（API Key 赛马）", () => {
 		expect(screen.queryByTestId("sort-totalTokens")).toBeNull();
 	});
 
-	it("行不可点击（无 cursor-pointer 与跳转标题）", () => {
+	it("现存 Key 行可点击：点击跳转到该 key 的数据面板（携带窗口）", () => {
 		mocks.data = { startTime: 0, endTime: 0, items: [makeItem()] };
 		renderCard();
 
 		const row = screen.getByText("key-a").closest("tr");
 		expect(row).toBeTruthy();
-		// 与供应商赛马不同：API Key 无二级页，行不带可点击样式与 title。
+		// 与供应商赛马一致：带可点击样式与跳转标题。
+		expect(row?.className).toContain("cursor-pointer");
+		expect(row?.getAttribute("title")).toBe("点击查看该 API Key 数据面板");
+
+		fireEvent.click(row as HTMLTableRowElement);
+		// 默认窗口为「天」：携带 period=day&offset=0。
+		expect(mocks.navigate).toHaveBeenCalledWith("/api-keys/7/overview?period=day&offset=0");
+	});
+
+	it("已删除 Key 的历史行不可点击（无 apiKeyId）", () => {
+		mocks.data = {
+			startTime: 0,
+			endTime: 0,
+			items: [makeItem({ apiKeyName: "gone-key", apiKeyId: null })],
+		};
+		renderCard();
+
+		const row = screen.getByText("gone-key").closest("tr");
+		expect(row).toBeTruthy();
 		expect(row?.className).not.toContain("cursor-pointer");
 		expect(row?.getAttribute("title")).toBeNull();
+		expect(row?.getAttribute("tabindex")).toBeNull();
 	});
 
 	it("时间窗口控制：天/周/月/年/自定义切换", () => {
