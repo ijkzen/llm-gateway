@@ -333,20 +333,23 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     // 注意：所有缺失列的 ALTER 必须合并进**单次** ensure_migration 调用——
     // 该函数按版本号去重（同版本第二次调用直接跳过），若分开调用，
     // 第一个调用写入 version 13 后，第二个会被版本守卫吞掉导致列漏加。
-    let mut migration_13_statements: Vec<&str> = Vec::new();
-    if !column_exists(db, "provider", "proxy_enabled").await? {
-        migration_13_statements
-            .push("ALTER TABLE provider ADD COLUMN proxy_enabled boolean NOT NULL DEFAULT '0'");
-    }
-    if !column_exists(db, "provider", "proxy_addr").await? {
-        migration_13_statements
-            .push("ALTER TABLE provider ADD COLUMN proxy_addr varchar NOT NULL DEFAULT ''");
-    }
-    if migration_13_statements.is_empty() {
-        changed |= ensure_migration(db, 13, &["SELECT 1"]).await?;
-    } else {
-        changed |= ensure_migration(db, 13, &migration_13_statements).await?;
-    }
+    changed |= ensure_columns(
+        db,
+        13,
+        &[
+            (
+                "provider",
+                "proxy_enabled",
+                "ALTER TABLE provider ADD COLUMN proxy_enabled boolean NOT NULL DEFAULT '0'",
+            ),
+            (
+                "provider",
+                "proxy_addr",
+                "ALTER TABLE provider ADD COLUMN proxy_addr varchar NOT NULL DEFAULT ''",
+            ),
+        ],
+    )
+    .await?;
 
     // Migration 16: virtual_model_item.cascade_disabled —— 区分「用户手动关闭」与
     // 「被供应商级联停用」。级联恢复（供应商重新启用/额度恢复）只恢复带该标记的条目，
@@ -354,32 +357,31 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     // 此处兜底历史库。
     // 注意：版本号 14/15 已被生产库残留的旧 lg-proxy 方案迁移记录占用（该方案已删除），
     // 新迁移必须从 16 起编，否则 ALTER 会被 ensure_migration 的版本守卫静默吞掉。
-    let mut migration_16_statements: Vec<&str> = Vec::new();
-    if !column_exists(db, "virtual_model_item", "cascade_disabled").await? {
-        migration_16_statements.push(
+    changed |= ensure_columns(
+        db,
+        16,
+        &[(
+            "virtual_model_item",
+            "cascade_disabled",
             "ALTER TABLE virtual_model_item ADD COLUMN cascade_disabled boolean NOT NULL DEFAULT '0'",
-        );
-    }
-    if migration_16_statements.is_empty() {
-        changed |= ensure_migration(db, 16, &["SELECT 1"]).await?;
-    } else {
-        changed |= ensure_migration(db, 16, &migration_16_statements).await?;
-    }
+        )],
+    )
+    .await?;
 
     // Migration 17: provider.failure_disabled —— 标记「连续失败禁用」来源。
     // 额度门控禁用会在额度恢复后自动重新启用，连续失败禁用只能手动启用解除；
     // 用量定时刷新的恢复分支依据该标记跳过。新库已由建表带该列，此处兜底历史库
     // （含生产残留的 14/15 废弃号段，沿用 column_exists 逐列检测）。
-    let mut migration_17_statements: Vec<&str> = Vec::new();
-    if !column_exists(db, "provider", "failure_disabled").await? {
-        migration_17_statements
-            .push("ALTER TABLE provider ADD COLUMN failure_disabled boolean NOT NULL DEFAULT '0'");
-    }
-    if migration_17_statements.is_empty() {
-        changed |= ensure_migration(db, 17, &["SELECT 1"]).await?;
-    } else {
-        changed |= ensure_migration(db, 17, &migration_17_statements).await?;
-    }
+    changed |= ensure_columns(
+        db,
+        17,
+        &[(
+            "provider",
+            "failure_disabled",
+            "ALTER TABLE provider ADD COLUMN failure_disabled boolean NOT NULL DEFAULT '0'",
+        )],
+    )
+    .await?;
 
     // Migration 18: 移除 provider.status 死字段。该字段自旧 lg-proxy 方案遗留，
     // 全库没有任何写入为 1（不可用）的路径，恒为 0（可用），真实启停语义由
@@ -399,35 +401,38 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     // Migration 19: provider_model 模型级代理字段（proxy_enabled + proxy_addr）。
     // 模型可单独开启网络代理，优先级高于供应商级代理；新库已由
     // create_table_from_entity 建表带这两列，此处兜底历史库。
-    let mut migration_19_statements: Vec<&str> = Vec::new();
-    if !column_exists(db, "provider_model", "proxy_enabled").await? {
-        migration_19_statements.push(
-            "ALTER TABLE provider_model ADD COLUMN proxy_enabled boolean NOT NULL DEFAULT '0'",
-        );
-    }
-    if !column_exists(db, "provider_model", "proxy_addr").await? {
-        migration_19_statements
-            .push("ALTER TABLE provider_model ADD COLUMN proxy_addr varchar NOT NULL DEFAULT ''");
-    }
-    if migration_19_statements.is_empty() {
-        changed |= ensure_migration(db, 19, &["SELECT 1"]).await?;
-    } else {
-        changed |= ensure_migration(db, 19, &migration_19_statements).await?;
-    }
+    changed |= ensure_columns(
+        db,
+        19,
+        &[
+            (
+                "provider_model",
+                "proxy_enabled",
+                "ALTER TABLE provider_model ADD COLUMN proxy_enabled boolean NOT NULL DEFAULT '0'",
+            ),
+            (
+                "provider_model",
+                "proxy_addr",
+                "ALTER TABLE provider_model ADD COLUMN proxy_addr varchar NOT NULL DEFAULT ''",
+            ),
+        ],
+    )
+    .await?;
 
     // Migration 20: provider_model 模型级协议覆盖字段（protocol_type，可空）。
     // 模型可单独指定上游协议（0..=3，含义与 provider.protocol_type 一致），
     // 为空时回落供应商协议；新库已由 create_table_from_entity 建表带该列，
     // 此处兜底历史库。
-    let mut migration_20_statements: Vec<&str> = Vec::new();
-    if !column_exists(db, "provider_model", "protocol_type").await? {
-        migration_20_statements.push("ALTER TABLE provider_model ADD COLUMN protocol_type integer");
-    }
-    if migration_20_statements.is_empty() {
-        changed |= ensure_migration(db, 20, &["SELECT 1"]).await?;
-    } else {
-        changed |= ensure_migration(db, 20, &migration_20_statements).await?;
-    }
+    changed |= ensure_columns(
+        db,
+        20,
+        &[(
+            "provider_model",
+            "protocol_type",
+            "ALTER TABLE provider_model ADD COLUMN protocol_type integer",
+        )],
+    )
+    .await?;
 
     tracing::info!("Database tables migrated");
 
@@ -456,6 +461,28 @@ async fn column_exists(db: &DatabaseConnection, table: &str, column: &str) -> Re
 // Non-idempotent ALTER TABLE statements are acceptable here because the
 // in-transaction migration guard prevents concurrent execution, and the
 // schema_migrations table is created before any versioned migration runs.
+
+/// 缺失则补列的迁移样板：对 `(table, column)` 逐列检查，缺列时收集其 ADD 语句，
+/// 最后以单次 `ensure_migration(version, stmts)` 执行（版本守卫保证同一版本只跑一次）。
+/// 无缺列时仍写入版本记录（`SELECT 1`），幂等且不吞后续迁移。
+async fn ensure_columns(
+    db: &DatabaseConnection,
+    version: i32,
+    columns: &[(&str, &str, &str)],
+) -> Result<bool, DbErr> {
+    let mut statements: Vec<&str> = Vec::new();
+    for (table, column, add_ddl) in columns {
+        if !column_exists(db, table, column).await? {
+            statements.push(add_ddl);
+        }
+    }
+    if statements.is_empty() {
+        ensure_migration(db, version, &["SELECT 1"]).await
+    } else {
+        ensure_migration(db, version, &statements).await
+    }
+}
+
 async fn ensure_migration(
     db: &DatabaseConnection,
     version: i32,
