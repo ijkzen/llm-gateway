@@ -13,8 +13,9 @@ import { ItemCapabilityIcons } from "@/components/virtual-models/ItemCapabilityI
 import type { VirtualModel, VirtualModelItem } from "@/hooks/use-virtual-models";
 import { fallbackLabel, loadBalancingLabel } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { ChevronRight, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Link, useNavigate } from "react-router-dom";
 
 interface VirtualModelSectionProps {
 	virtualModel: VirtualModel;
@@ -24,7 +25,7 @@ interface VirtualModelSectionProps {
 	onOpenItem: (virtualModel: VirtualModel, item: VirtualModelItem) => void;
 }
 
-/** 成员卡片：模型 ID + 供应商名 + 能力图标；停用/随供应商禁用带标记；点击打开只读详情。 */
+/** 成员卡片：模型 ID + 供应商名 + 能力图标；停用/随供应商禁用带标记；点击空白弹详情。 */
 function MemberCard({
 	item,
 	onOpen,
@@ -33,11 +34,23 @@ function MemberCard({
 	onOpen: (item: VirtualModelItem) => void;
 }) {
 	const { t } = useTranslation();
+	const navigate = useNavigate();
 	const providerDisabled = !item.providerEnable;
 	return (
 		<button
 			type="button"
-			onClick={() => onOpen(item)}
+			data-testid={`virtual-model-member-${item.virtualModelItemId}`}
+			onClick={(event) => {
+				const target = event.target as HTMLElement;
+				if (target.closest("[data-nav]")) {
+					navigate(
+						`/models/${item.providerId}/${encodeURIComponent(item.providerModelId)}/overview`,
+					);
+					return;
+				}
+				if (target.closest("[data-static]")) return;
+				onOpen(item);
+			}}
 			title={item.providerModelId}
 			className={cn(
 				"flex w-full cursor-pointer flex-col gap-1.5 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
@@ -45,10 +58,19 @@ function MemberCard({
 			)}
 		>
 			<div className="flex items-center justify-between gap-3">
-				<span className="min-w-0 truncate font-mono text-sm font-medium">
-					{item.providerModelId}
+				<span
+					data-nav
+					className="group flex min-w-0 cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
+					title={t("providerModels.viewModelOverview", { model: item.providerModelId })}
+				>
+					<span className="min-w-0 max-w-full truncate font-mono text-sm font-medium">
+						{item.providerModelId}
+					</span>
+					<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 				</span>
-				<ItemCapabilityIcons item={item} className="shrink-0" />
+				<span data-static className="flex shrink-0 items-center">
+					<ItemCapabilityIcons item={item} className="shrink-0" />
+				</span>
 			</div>
 			<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
 				<span className="truncate">{item.providerName}</span>
@@ -75,8 +97,17 @@ export function VirtualModelSection({
 		<section>
 			<div className="flex items-center justify-between gap-4 py-3">
 				<div className="flex min-w-0 items-center gap-2">
-					<h2 className="min-w-0 shrink-0 text-base font-semibold" title={virtualModel.displayId}>
-						{virtualModel.displayId}
+					<h2 className="min-w-0 shrink-0 text-base font-semibold">
+						<Link
+							to={`/virtual-models/${virtualModel.virtualModelId}/overview`}
+							className="group flex min-w-0 items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
+							title={t("virtualModels.viewVirtualModelOverview", {
+								model: virtualModel.displayId,
+							})}
+						>
+							<span className="min-w-0 truncate">{virtualModel.displayId}</span>
+							<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+						</Link>
 					</h2>
 					{!virtualModel.enable && (
 						<Badge variant="outline" className="shrink-0 text-muted-foreground">

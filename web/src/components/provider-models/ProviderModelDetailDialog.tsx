@@ -30,7 +30,7 @@ import {
 } from "@/hooks/use-provider-models";
 import { useToastActions } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowRight, FlaskConical, Loader2, Pencil, Trash2 } from "lucide-react";
+import { ChevronRight, FlaskConical, Loader2, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { flushSync } from "react-dom";
 import { useForm } from "react-hook-form";
@@ -199,11 +199,11 @@ export function ProviderModelDetailDialog({
 						<DialogTitle className="min-w-0">
 							<Link
 								to={`/models/${providerId}/${encodeURIComponent(model.providerModelId)}/overview`}
-								className="group flex min-w-0 items-center justify-center gap-1.5 rounded-md transition-colors hover:text-foreground sm:justify-start"
+								className="group flex min-w-0 items-center justify-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60 sm:justify-start"
 								title={t("providerModels.viewModelOverview", { model: model.providerModelId })}
 							>
 								<span className="min-w-0 truncate">{model.providerModelId}</span>
-								<ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+								<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 							</Link>
 						</DialogTitle>
 						<DialogDescription>

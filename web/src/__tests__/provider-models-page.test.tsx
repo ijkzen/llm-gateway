@@ -12,6 +12,15 @@ const mocks = vi.hoisted(() => {
 		isLoading: false,
 		updateProvider: vi.fn(),
 		updateError: null as Error | null,
+		navigate: vi.fn(),
+	};
+});
+
+vi.mock("react-router-dom", async () => {
+	const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+	return {
+		...actual,
+		useNavigate: () => mocks.navigate,
 	};
 });
 
@@ -140,26 +149,28 @@ describe("ProviderModelsPage", () => {
 		expect(screen.getByRole("heading", { name: /DeepSeek/ })).toBeTruthy();
 		expect(screen.getAllByRole("button", { name: "添加" })).toHaveLength(2);
 
-		expect(screen.getByRole("link", { name: /gpt-4o/ })).toBeTruthy();
-		expect(screen.getByRole("link", { name: /o3/ })).toBeTruthy();
-		expect(screen.getByRole("link", { name: /deepseek-chat/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /gpt-4o/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /o3/ })).toBeTruthy();
+		expect(screen.getByRole("button", { name: /deepseek-chat/ })).toBeTruthy();
 	});
 
-	it("供应商名称与模型名称右侧带方向键，分别链接到数据面板", () => {
+	it("供应商名称链接到数据面板；模型名称+方向键触发编程跳转；点卡片空白打开详情", () => {
 		mocks.providers = [makeProvider(1, "OpenAI")];
 		mocks.models = [makeModel(1, 11, "gpt-4o")];
 		renderPage();
+		mocks.navigate.mockClear();
 
+		// 供应商区块标题仍是真实链接。
 		const providerLink = screen.getByRole("link", { name: /OpenAI/ }) as HTMLAnchorElement;
 		expect(providerLink.getAttribute("href")).toBe("/providers/1/overview");
 		expect(providerLink.querySelector("svg")).toBeTruthy();
 
-		const modelLink = screen.getByRole("link", { name: /gpt-4o/ }) as HTMLAnchorElement;
-		expect(modelLink.getAttribute("href")).toBe("/models/1/gpt-4o/overview");
-		expect(modelLink.querySelector("svg")).toBeTruthy();
+		// 模型名称 + 箭头：点击触发编程跳转到模型数据面板（卡片内无 <a>）。
+		fireEvent.click(screen.getByText("gpt-4o"));
+		expect(mocks.navigate).toHaveBeenCalledWith("/models/1/gpt-4o/overview");
 
-		// 详情弹窗改由独立的「查看模型详情」按钮打开。
-		fireEvent.click(screen.getByRole("button", { name: "查看模型详情" }));
+		// 点击卡片空白区域（button 本体）打开详情弹窗。
+		fireEvent.click(screen.getByTestId("provider-model-card-11"));
 		expect(screen.getByRole("dialog")).toHaveTextContent("gpt-4o");
 	});
 

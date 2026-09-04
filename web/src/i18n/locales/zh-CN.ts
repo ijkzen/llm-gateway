@@ -361,7 +361,6 @@ const zhCN = {
 		testFailedDesc: "测试请求未能通过，详见下方失败原因：",
 		viewProviderOverview: "查看 {{provider}} 的数据面板",
 		viewModelOverview: "查看 {{model}} 的数据面板",
-		viewDetails: "查看模型详情",
 		close: "关闭",
 	},
 	virtualModels: {
@@ -407,6 +406,7 @@ const zhCN = {
 		keepAtLeastOne: "至少保留一个成员模型",
 		selectedMembers: "已选 {{count}} 个成员模型",
 		enableInVirtualModel: "在虚拟模型中启用",
+		viewVirtualModelOverview: "查看 {{model}} 的数据面板",
 		deleteTitle: "删除虚拟模型",
 		deleteDesc: "确定要删除虚拟模型",
 		deleteDescSuffix: "吗？其成员模型将被释放，此操作无法撤销。",

@@ -5,6 +5,7 @@ import type { ProviderModel } from "@/hooks/use-provider-models";
 import type { Provider } from "@/hooks/use-providers";
 import type { VirtualModel, VirtualModelItem } from "@/hooks/use-virtual-models";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -377,27 +378,30 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 describe("VirtualModelItemDetailDialog", () => {
 	it("只读展示条目详情与状态标记；无编辑/删除/测试按钮", () => {
 		render(
-			<VirtualModelItemDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				virtualModel={makeVm({
-					displayId: "gpt-4o",
-					items: [
-						makeItem({
-							enable: false,
-							providerEnable: false,
-							contextLength: 128000,
-							maxOutputTokens: 4096,
-						}),
-					],
-				})}
-				item={makeItem({
-					enable: false,
-					providerEnable: false,
-					contextLength: 128000,
-					maxOutputTokens: 4096,
-				})}
-			/>,
+			<MemoryRouter>
+				<VirtualModelItemDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					virtualModel={makeVm({
+						displayId: "gpt-4o",
+						items: [
+							makeItem({
+								enable: false,
+								providerEnable: false,
+								contextLength: 128000,
+								maxOutputTokens: 4096,
+							}),
+						],
+					})}
+					item={makeItem({
+						enable: false,
+						providerEnable: false,
+						contextLength: 128000,
+						maxOutputTokens: 4096,
+					})}
+				/>
+				,
+			</MemoryRouter>,
 		);
 
 		// 标题为远端模型 ID，描述含所属供应商。
@@ -420,26 +424,29 @@ describe("VirtualModelItemDetailDialog", () => {
 
 	it("拨动启停开关：提交翻转后的完整成员集合，其余成员不变", async () => {
 		render(
-			<VirtualModelItemDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				virtualModel={makeVm({
-					virtualModelId: 3,
-					displayId: "gpt-4o",
-					loadBalancingStrategy: 0,
-					fallbackStrategy: 0,
-					items: [
-						makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" }),
-						makeItem({
-							virtualModelItemId: 2,
-							modelId: 12,
-							providerModelId: "o3",
-							enable: false,
-						}),
-					],
-				})}
-				item={makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })}
-			/>,
+			<MemoryRouter>
+				<VirtualModelItemDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					virtualModel={makeVm({
+						virtualModelId: 3,
+						displayId: "gpt-4o",
+						loadBalancingStrategy: 0,
+						fallbackStrategy: 0,
+						items: [
+							makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" }),
+							makeItem({
+								virtualModelItemId: 2,
+								modelId: 12,
+								providerModelId: "o3",
+								enable: false,
+							}),
+						],
+					})}
+					item={makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })}
+				/>
+				,
+			</MemoryRouter>,
 		);
 
 		const toggle = screen.getByRole("switch", { name: /在虚拟模型中启用/ }) as HTMLButtonElement;
@@ -458,16 +465,19 @@ describe("VirtualModelItemDetailDialog", () => {
 
 	it("供应商停用时开关仍可操作：拨动仍提交翻转", async () => {
 		render(
-			<VirtualModelItemDetailDialog
-				open
-				onOpenChange={vi.fn()}
-				virtualModel={makeVm({
-					virtualModelId: 3,
-					displayId: "gpt-4o",
-					items: [makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })],
-				})}
-				item={makeItem({ providerEnable: false })}
-			/>,
+			<MemoryRouter>
+				<VirtualModelItemDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					virtualModel={makeVm({
+						virtualModelId: 3,
+						displayId: "gpt-4o",
+						items: [makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })],
+					})}
+					item={makeItem({ providerEnable: false })}
+				/>
+				,
+			</MemoryRouter>,
 		);
 
 		const toggle = screen.getByRole("switch", { name: /在虚拟模型中启用/ }) as HTMLButtonElement;
@@ -484,16 +494,19 @@ describe("VirtualModelItemDetailDialog", () => {
 			required(options).onSuccess();
 		});
 		render(
-			<VirtualModelItemDetailDialog
-				open
-				onOpenChange={onOpenChange}
-				virtualModel={makeVm({
-					virtualModelId: 3,
-					displayId: "gpt-4o",
-					items: [makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })],
-				})}
-				item={makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })}
-			/>,
+			<MemoryRouter>
+				<VirtualModelItemDetailDialog
+					open
+					onOpenChange={onOpenChange}
+					virtualModel={makeVm({
+						virtualModelId: 3,
+						displayId: "gpt-4o",
+						items: [makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })],
+					})}
+					item={makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" })}
+				/>
+				,
+			</MemoryRouter>,
 		);
 
 		fireEvent.click(screen.getByRole("switch", { name: /在虚拟模型中启用/ }));

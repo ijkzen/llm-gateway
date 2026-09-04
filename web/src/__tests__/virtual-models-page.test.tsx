@@ -19,6 +19,15 @@ const mocks = vi.hoisted(() => {
 		detailDialogOpen: false,
 		detailItem: null as VirtualModelItem | null,
 		detailVirtualModel: null as VirtualModel | null,
+		navigate: vi.fn(),
+	};
+});
+
+vi.mock("react-router-dom", async () => {
+	const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+	return {
+		...actual,
+		useNavigate: () => mocks.navigate,
 	};
 });
 
@@ -211,6 +220,34 @@ describe("VirtualModelsPage", () => {
 		expect(screen.getByText(/已停用/)).toBeTruthy();
 		// 无成员的虚拟模型区块显示占位提示。
 		expect(screen.getByText(/暂无成员模型/)).toBeTruthy();
+	});
+
+	it("区块标题与成员 ID 带方向键：标题链接到虚拟模型数据面板，成员 ID 编程跳转模型数据面板", () => {
+		mocks.virtualModels = [
+			makeVm({
+				virtualModelId: 1,
+				displayId: "gpt-4o",
+				items: [makeItem({ virtualModelItemId: 1, providerModelId: "gpt-4o@openai" })],
+			}),
+		];
+		render(
+			<MemoryRouter>
+				<VirtualModelsPage />
+			</MemoryRouter>,
+		);
+
+		// 区块标题 displayId → 虚拟模型数据面板（真实链接）。
+		const vmLink = screen.getByRole("link", { name: /gpt-4o/ }) as HTMLAnchorElement;
+		expect(vmLink.getAttribute("href")).toBe("/virtual-models/1/overview");
+		expect(vmLink.querySelector("svg")).toBeTruthy();
+
+		// 成员 ID 区 → 编程跳转模型数据面板（卡片无 <a> 内嵌）。
+		fireEvent.click(screen.getByText("gpt-4o@openai"));
+		expect(mocks.navigate).toHaveBeenCalledWith("/models/7/gpt-4o%40openai/overview");
+
+		// 点击成员卡片空白仍打开详情弹窗。
+		fireEvent.click(screen.getByTestId("virtual-model-member-1"));
+		expect(mocks.detailDialogOpen).toBe(true);
 	});
 
 	it("区块菜单：点「编辑」打开编辑弹窗", async () => {

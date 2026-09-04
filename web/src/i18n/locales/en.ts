@@ -364,7 +364,6 @@ const en: Translation = {
 		testFailedDesc: "The test request failed. Failure details:",
 		viewProviderOverview: "View {{provider}} overview",
 		viewModelOverview: "View {{model}} overview",
-		viewDetails: "View model details",
 		close: "Close",
 	},
 	virtualModels: {
@@ -413,6 +412,7 @@ const en: Translation = {
 		keepAtLeastOne: "Keep at least one member model",
 		selectedMembers: "{{count}} member model(s) selected",
 		enableInVirtualModel: "Enable in virtual model",
+		viewVirtualModelOverview: "View {{model}} overview",
 		deleteTitle: "Delete Virtual Model",
 		deleteDesc: "Delete virtual model",
 		deleteDescSuffix: "? Its members will be released. This cannot be undone.",

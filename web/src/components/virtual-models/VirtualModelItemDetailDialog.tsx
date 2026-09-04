@@ -13,7 +13,9 @@ import {
 	type VirtualModelItem,
 	useUpdateVirtualModel,
 } from "@/hooks/use-virtual-models";
+import { ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 interface VirtualModelItemDetailDialogProps {
 	open: boolean;
@@ -68,8 +70,17 @@ export function VirtualModelItemDetailDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[520px]">
 				<DialogHeader className="space-y-3">
-					<DialogTitle className="truncate" title={currentItem.providerModelId}>
-						{currentItem.providerModelId}
+					<DialogTitle className="min-w-0">
+						<Link
+							to={`/models/${currentItem.providerId}/${encodeURIComponent(currentItem.providerModelId)}/overview`}
+							className="group flex min-w-0 items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
+							title={t("providerModels.viewModelOverview", {
+								model: currentItem.providerModelId,
+							})}
+						>
+							<span className="min-w-0 truncate">{currentItem.providerModelId}</span>
+							<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+						</Link>
 					</DialogTitle>
 					<DialogDescription>
 						{t("providerModels.belongsToProvider")}

@@ -6,7 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import type { ProviderModel } from "@/hooks/use-provider-models";
 import { type Provider, useUpdateProvider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
-import { ArrowRight, Plus } from "lucide-react";
+import { ChevronRight, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
@@ -52,11 +52,11 @@ export function ProviderModelSection({
 				<h2 className="min-w-0 text-base font-semibold">
 					<Link
 						to={`/providers/${provider.id}/overview`}
-						className="group flex min-w-0 items-center gap-1 rounded-md transition-colors hover:text-foreground"
+						className="group flex min-w-0 items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
 						title={t("providerModels.viewProviderOverview", { provider: provider.name })}
 					>
 						<span className="min-w-0 truncate">{provider.name}</span>
-						<ArrowRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+						<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 					</Link>
 				</h2>
 				<div className="flex shrink-0 items-center gap-3">
