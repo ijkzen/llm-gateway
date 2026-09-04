@@ -8,7 +8,6 @@ use crate::proxy::LbState;
 use crate::proxy::failure_counter::FailureCounter;
 use crate::proxy::failure_recheck::RecheckGate;
 use crate::proxy::pool::UpstreamPool;
-use crate::usage::UsageCache;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -22,8 +21,6 @@ pub struct AppState {
     pub failure_counter: FailureCounter,
     /// 失败复查节流（60s 时间窗，provider 粒度）。
     pub recheck_gate: RecheckGate,
-    /// 供应商用量查询结果缓存（60s TTL，仅缓存成功结果）。
-    pub usage_cache: UsageCache,
     /// /v1 上游连接池（按 host 隔离，空闲 10 分钟释放）。
     pub upstream_pool: UpstreamPool,
     /// 语言/时区设置缓存（设置页更新后热刷新）。

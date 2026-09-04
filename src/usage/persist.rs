@@ -15,8 +15,8 @@ use sea_orm::{
 };
 
 use crate::entity::{provider, usage_cache};
+use crate::usage::UsageError;
 use crate::usage::types::UsageData;
-use crate::usage::{UsageCache, UsageError};
 
 /// 数据库缓存新鲜时长：10 分钟内直出缓存，过期则重新抓取。
 pub const DB_USAGE_CACHE_TTL: Duration = Duration::from_secs(600);
@@ -92,10 +92,8 @@ pub async fn fetch_and_store(
     db: &DatabaseConnection,
     provider_id: i32,
 ) -> Result<UsageData, UsageError> {
-    // force_refresh=true 绕过 60s 内存缓存，确保是真请求；落库后读接口与
-    // LB 排序可直接命中 10 分钟数据库缓存。
-    let data =
-        crate::usage::query_provider_usage(db, &UsageCache::default(), provider_id, true).await?;
+    // 真实抓取（无内存缓存）；落库后读接口与 LB 排序命中 10 分钟数据库缓存。
+    let data = crate::usage::query_provider_usage(db, provider_id).await?;
     if let Err(e) = write_usage_cache(db, &data).await {
         tracing::warn!(provider_id, "用量缓存落库失败：{e}");
     }
