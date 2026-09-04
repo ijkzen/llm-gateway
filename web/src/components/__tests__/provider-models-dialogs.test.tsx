@@ -414,6 +414,31 @@ describe("ProviderModelDetailDialog 测试按钮", () => {
 });
 
 describe("ProviderModelDetailDialog 编辑态", () => {
+	it("删除成功时先关闭确认弹窗，再关闭模型详情", () => {
+		mocks.deleteMutate.mockImplementation((_id, opts) => {
+			required(opts).onSuccess();
+		});
+		let confirmingDialogClosed = false;
+		const onOpenChange = (next: boolean) => {
+			if (!next) confirmingDialogClosed = screen.queryByRole("alertdialog") === null;
+		};
+		render(
+			<ProviderModelDetailDialog
+				open
+				onOpenChange={onOpenChange}
+				providerId={7}
+				providerName="OpenAI"
+				model={makeModel()}
+			/>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+		fireEvent.click(screen.getByRole("button", { name: "删除" }));
+		fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
+		expect(confirmingDialogClosed).toBe(true);
+	});
+
 	it("默认只读：只有编辑按钮，没有删除/更新", () => {
 		render(
 			<ProviderModelDetailDialog
