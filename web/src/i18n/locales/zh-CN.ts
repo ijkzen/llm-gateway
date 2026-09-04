@@ -545,6 +545,7 @@ const zhCN = {
 	},
 	overview: {
 		totalRequests: "累计请求数",
+		todayRequests: "今日请求数",
 		successRate: "请求成功率",
 		totalTokens: "总计 Token",
 		cacheHitRate: "缓存命中率",
@@ -558,6 +559,7 @@ const zhCN = {
 		errorDescription: "无法获取数据面板数据，请检查网络或稍后重试。",
 		customWindow: "自定义时间范围",
 		allHistory: "全部历史",
+		today: "今日",
 		inputPlusOutput: "输入 + 输出",
 		cacheTokenOverInput: "缓存 token / 输入 token",
 		successRequests: "成功请求",

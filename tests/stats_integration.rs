@@ -210,6 +210,89 @@ async fn test_charts_returns_24_zero_filled_buckets() {
 }
 
 #[tokio::test]
+async fn test_summary_with_window_filters_to_range() {
+    let (app, db) = setup_app().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    // 窗口 [now, now+1h) 内两条、窗口外两条（更早 + 恰在终点）。
+    for row in [
+        SeedRow {
+            request_id: "win1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: true,
+            start_time: now,
+            input_tokens: Some(100),
+            input_cache_tokens: 40,
+            total_tokens: Some(150),
+        },
+        SeedRow {
+            request_id: "win2".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            success: false,
+            start_time: now + 10,
+            input_tokens: Some(100),
+            input_cache_tokens: 0,
+            total_tokens: Some(200),
+        },
+        // 早于窗口起点：不计入。
+        SeedRow {
+            request_id: "before".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "claude-sonnet".into(),
+            success: true,
+            start_time: now - HOUR_MS,
+            input_tokens: Some(1000),
+            input_cache_tokens: 500,
+            total_tokens: Some(2000),
+        },
+        // 恰在窗口终点（endTime）：半开区间不含 → 不计入。
+        SeedRow {
+            request_id: "at-end".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gemini-pro".into(),
+            success: true,
+            start_time: now + HOUR_MS,
+            input_tokens: Some(1000),
+            input_cache_tokens: 500,
+            total_tokens: Some(2000),
+        },
+    ]
+    .into_iter()
+    {
+        insert_request(&db, row).await;
+    }
+
+    let uri = format!(
+        "/api/stats/summary?startTime={}&endTime={}",
+        now,
+        now + HOUR_MS
+    );
+    let (status, json) = get_json(app, &uri).await;
+    assert_eq!(status, 200);
+
+    let data = &json["data"];
+    assert_eq!(data["totalRequests"], 2);
+    assert_eq!(data["successRate"], 0.5);
+    assert_eq!(data["totalTokens"], 350);
+    // 加权缓存命中率：(40+0) / (100+100) = 0.2
+    assert_eq!(data["cacheHitRate"], 0.2);
+}
+
+#[tokio::test]
+async fn test_summary_with_invalid_window_returns_400() {
+    let (app, _db) = setup_app().await;
+
+    // 只传一端：参数不完整。
+    let (status, _json) = get_json(app.clone(), "/api/stats/summary?startTime=1000").await;
+    assert_eq!(status, 400);
+
+    // 终点不晚于起点：窗口非法。
+    let (status, _json) = get_json(app, "/api/stats/summary?startTime=2000&endTime=2000").await;
+    assert_eq!(status, 400);
+}
+
+#[tokio::test]
 async fn test_charts_aggregates_by_hour_and_model() {
     let (app, db) = setup_app().await;
     let now = chrono::Utc::now().timestamp_millis();

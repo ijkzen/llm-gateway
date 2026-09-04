@@ -553,6 +553,7 @@ const en: Translation = {
 	},
 	overview: {
 		totalRequests: "Total Requests",
+		todayRequests: "Today's Requests",
 		successRate: "Success Rate",
 		totalTokens: "Total Tokens",
 		cacheHitRate: "Cache Hit Rate",
@@ -566,6 +567,7 @@ const en: Translation = {
 		errorDescription: "Failed to load dashboard data. Check your network and try again.",
 		customWindow: "Custom time range",
 		allHistory: "All history",
+		today: "Today",
 		inputPlusOutput: "Input + output",
 		cacheTokenOverInput: "Cache tokens / input tokens",
 		successRequests: "Successful requests",

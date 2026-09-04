@@ -348,9 +348,23 @@ struct InsightResponse {
     stream_ratio_trend: Vec<FloatTrendPoint>,
 }
 
-/// 全量历史累计：累计请求数、成功率、总计 token、加权缓存命中率。
-async fn summary(State(state): State<AppState>) -> impl IntoResponse {
-    let sql = r#"
+/// summary 可选时间窗口参数（均为可选；要么都缺省、要么都提供）。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SummaryQuery {
+    /// 窗口起点（毫秒时间戳，含）。
+    start_time: Option<i64>,
+    /// 窗口终点（毫秒时间戳，不含）。
+    end_time: Option<i64>,
+}
+
+/// 全量历史累计（可选时间窗口过滤）：累计请求数、成功率、总计 token、加权缓存命中率。
+/// 不带 startTime/endTime 时保持全量聚合；两者同时提供时按 [start, end) 半开区间过滤。
+async fn summary(
+    State(state): State<AppState>,
+    Query(query): Query<SummaryQuery>,
+) -> impl IntoResponse {
+    let base_sql = r#"
         SELECT COUNT(*) AS total_requests,
                COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END), 0) AS success_count,
                COALESCE(SUM(total_tokens), 0) AS total_tokens,
@@ -358,9 +372,26 @@ async fn summary(State(state): State<AppState>) -> impl IntoResponse {
                COALESCE(SUM(input_cache_tokens), 0) AS cache_tokens
         FROM request
     "#;
+    let (sql, params): (String, Vec<sea_orm::Value>) = match (query.start_time, query.end_time) {
+        (None, None) => (base_sql.to_string(), Vec::new()),
+        (Some(start), Some(end)) if end > start => (
+            format!("{base_sql} WHERE start_time >= ? AND start_time < ?"),
+            vec![start.into(), end.into()],
+        ),
+        _ => {
+            return response::bad_request(AppSettings::lang_sync().tr(
+                "startTime 与 endTime 必须同时提供且 endTime 晚于 startTime",
+                "startTime and endTime must both be provided with endTime after startTime",
+            ));
+        }
+    };
     let row = match state
         .db
-        .query_one_raw(Statement::from_string(DbBackend::Sqlite, sql))
+        .query_one_raw(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            params,
+        ))
         .await
     {
         Ok(Some(row)) => row,
