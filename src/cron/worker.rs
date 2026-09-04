@@ -72,22 +72,6 @@ impl JobWorker {
     /// `log_tx` is the broadcast channel used to capture handler logs; the
     /// worker subscribes per run to persist them and publish run lifecycle
     /// events for the SSE stream.
-    pub fn new(
-        db: DatabaseConnection,
-        max_concurrent: usize,
-        queue_size: usize,
-        log_tx: broadcast::Sender<JobLogEvent>,
-    ) -> Self {
-        Self::new_with_settings(
-            db,
-            max_concurrent,
-            queue_size,
-            log_tx,
-            AppSettings::default(),
-        )
-    }
-
-    /// 与 [`JobWorker::new`] 相同，但指定语言/时区设置缓存。
     pub fn new_with_settings(
         db: DatabaseConnection,
         max_concurrent: usize,
@@ -393,7 +377,13 @@ mod tests {
         let job = sample_job("worker_test");
         repo.insert(&job, None).await.unwrap();
 
-        let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
+        let worker = JobWorker::new_with_settings(
+            db.clone(),
+            2,
+            100,
+            broadcast::channel(64).0,
+            AppSettings::default(),
+        );
         let handle = worker.start();
 
         let executed = Arc::new(AtomicBool::new(false));
@@ -431,7 +421,13 @@ mod tests {
         job.expression = "@every 5m".to_string();
         repo.insert(&job, None).await.unwrap();
 
-        let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
+        let worker = JobWorker::new_with_settings(
+            db.clone(),
+            2,
+            100,
+            broadcast::channel(64).0,
+            AppSettings::default(),
+        );
         let handle = worker.start();
 
         let handler: JobHandler = Arc::new(|_ctx: JobContext| Box::pin(async move { Ok(()) }));
@@ -464,7 +460,13 @@ mod tests {
         let job = sample_job("failing_handler_test");
         repo.insert(&job, None).await.unwrap();
 
-        let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
+        let worker = JobWorker::new_with_settings(
+            db.clone(),
+            2,
+            100,
+            broadcast::channel(64).0,
+            AppSettings::default(),
+        );
         let handle = worker.start();
 
         let handler: JobHandler =
@@ -497,7 +499,13 @@ mod tests {
         let job = sample_job("panicking_handler_test");
         repo.insert(&job, None).await.unwrap();
 
-        let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
+        let worker = JobWorker::new_with_settings(
+            db.clone(),
+            2,
+            100,
+            broadcast::channel(64).0,
+            AppSettings::default(),
+        );
         let handle = worker.start();
 
         let handler: JobHandler =
@@ -531,7 +539,13 @@ mod tests {
         job.expression = "@every 1s".to_string();
         repo.insert(&job, None).await.unwrap();
 
-        let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
+        let worker = JobWorker::new_with_settings(
+            db.clone(),
+            2,
+            100,
+            broadcast::channel(64).0,
+            AppSettings::default(),
+        );
         let handle = worker.start();
 
         let handler: JobHandler = Arc::new(|_ctx: JobContext| Box::pin(async move { Ok(()) }));
@@ -559,7 +573,13 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_waits_for_inflight_job() {
         let db = setup_db().await;
-        let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
+        let worker = JobWorker::new_with_settings(
+            db.clone(),
+            2,
+            100,
+            broadcast::channel(64).0,
+            AppSettings::default(),
+        );
         let handle = worker.start();
 
         let completed = Arc::new(AtomicBool::new(false));
@@ -594,7 +614,13 @@ mod tests {
     #[tokio::test]
     async fn test_shutdown_times_out_for_long_job() {
         let db = setup_db().await;
-        let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(64).0);
+        let worker = JobWorker::new_with_settings(
+            db.clone(),
+            2,
+            100,
+            broadcast::channel(64).0,
+            AppSettings::default(),
+        );
         let handle = worker.start();
 
         let completed = Arc::new(AtomicBool::new(false));
@@ -689,7 +715,8 @@ mod tests {
 
         let db = setup_db().await;
         let log_repo = SeaOrmCronJobLogRepository::new(db.clone());
-        let worker = JobWorker::new(db.clone(), 2, 100, log_tx);
+        let worker =
+            JobWorker::new_with_settings(db.clone(), 2, 100, log_tx, AppSettings::default());
         let handle = worker.start();
 
         let handler: JobHandler = Arc::new(|_ctx: JobContext| {
@@ -731,7 +758,8 @@ mod tests {
 
         let db = setup_db().await;
         let log_repo = SeaOrmCronJobLogRepository::new(db.clone());
-        let worker = JobWorker::new(db.clone(), 2, 100, log_tx);
+        let worker =
+            JobWorker::new_with_settings(db.clone(), 2, 100, log_tx, AppSettings::default());
         let handle = worker.start();
 
         let handler: JobHandler =
@@ -758,7 +786,13 @@ mod tests {
 
         let db = setup_db().await;
         let log_repo = SeaOrmCronJobLogRepository::new(db.clone());
-        let worker = JobWorker::new(db.clone(), 2, 100, broadcast::channel(8192).0);
+        let worker = JobWorker::new_with_settings(
+            db.clone(),
+            2,
+            100,
+            broadcast::channel(8192).0,
+            AppSettings::default(),
+        );
         let handle = worker.start();
 
         let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));

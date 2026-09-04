@@ -53,7 +53,6 @@ vi.mock("@/hooks/use-dashboard-insight", () => ({
 			callTrend: [],
 			failureTrend: [],
 			failureRateTrend: [],
-			failureReasons: [],
 			ttftPercentiles: [],
 			latencyPercentiles: [],
 			inputTokenTrend: [],

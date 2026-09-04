@@ -286,14 +286,3 @@ pub async fn find_by_domain_all(
         .filter(|t| host_of(&t.base_url).as_deref() == Some(domain_host.as_str()))
         .collect())
 }
-
-/// 按域名匹配 provider 模板（返回第一条命中，兼容旧调用方）。
-///
-/// 按 base_url 的 host（忽略协议/路径/端口/大小写）匹配；无匹配返回 None。
-/// 含 `${VAR}` 占位符的 base_url 无法匹配，跳过。
-pub async fn find_by_domain(
-    db: &DatabaseConnection,
-    domain: &str,
-) -> Result<Option<provider_template::Model>, DbErr> {
-    Ok(find_by_domain_all(db, domain).await?.into_iter().next())
-}

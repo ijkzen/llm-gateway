@@ -1,7 +1,5 @@
 //! request 表记录与流式指标追踪。
 
-use std::time::Instant;
-
 use sea_orm::{ActiveModelTrait, DatabaseConnection, Set};
 
 use crate::entity::request::ActiveModel;
@@ -46,11 +44,6 @@ impl StreamMetrics {
             self.first_token_at = Some(now);
         }
         self.last_token_at = Some(now);
-    }
-
-    /// 上游响应头到达时刻到现在的耗时（非流式的输出阶段耗时口径）。
-    pub fn non_stream_output_ms(&self, headers_at_ms: i64, body_done_ms: i64) -> i64 {
-        (body_done_ms - headers_at_ms).max(0)
     }
 
     /// 首 token 耗时（ttft，毫秒）：TTFT 起点 → 首个内容 token。
@@ -169,30 +162,6 @@ impl RequestRecord {
                 tracing::warn!("Failed to insert request record: {e}");
             }
         });
-    }
-}
-
-/// 上游请求发起时刻的计时起点（Instant，用于流式统计）。
-#[derive(Debug, Clone)]
-pub struct Stopwatch {
-    started: Instant,
-}
-
-impl Default for Stopwatch {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Stopwatch {
-    pub fn new() -> Self {
-        Self {
-            started: Instant::now(),
-        }
-    }
-
-    pub fn elapsed_ms(&self) -> i64 {
-        i64::try_from(self.started.elapsed().as_millis()).unwrap_or(0)
     }
 }
 

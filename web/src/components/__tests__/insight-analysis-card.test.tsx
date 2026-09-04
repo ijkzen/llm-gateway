@@ -28,7 +28,6 @@ function makeInsight(overrides: Partial<InsightData> = {}): InsightData {
 		callTrend: [{ bucketStart: 1_700_000_000_000, value: 10 }],
 		failureTrend: [{ bucketStart: 1_700_000_000_000, value: 2 }],
 		failureRateTrend: [{ bucketStart: 1_700_000_000_000, value: 0.2 }],
-		failureReasons: [{ reason: "上游 429", count: 1 }],
 		ttftPercentiles: [{ bucketStart: 1_700_000_000_000, p50: 100, p90: 300, p95: 400, p99: 600 }],
 		latencyPercentiles: [
 			{ bucketStart: 1_700_000_000_000, p50: 500, p90: 900, p95: 1200, p99: 2000 },

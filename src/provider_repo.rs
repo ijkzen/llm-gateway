@@ -28,7 +28,7 @@ fn mask_stored_key(stored: &str) -> String {
 /// （与 api_key 的明文降级行为一致），配置密钥后下次启动自动完成。
 /// 单行迁移失败仅记录 warn 并继续，不阻塞其余行与启动。
 pub async fn backfill_extra_encryption(db: &DatabaseConnection) -> Result<usize, DbErr> {
-    if !crypto::encryption_enabled() {
+    if std::env::var(crypto::ENCRYPTION_KEY_ENV).map_or(true, |k| k.trim().is_empty()) {
         tracing::info!(
             "{} 未配置，provider extra 保持明文存储，跳过加密迁移",
             crypto::ENCRYPTION_KEY_ENV

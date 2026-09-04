@@ -14,15 +14,24 @@ import {
 } from "@dnd-kit/core";
 import {
 	SortableContext,
+	type Transform,
 	arrayMove,
 	sortableKeyboardCoordinates,
 	useSortable,
 	verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
 import { useQueryClient } from "@tanstack/react-query";
 import { GripVertical } from "lucide-react";
 import { useTranslation } from "react-i18next";
+
+/** dnd-kit 拖拽位移转 CSS transform 字符串（等价 @dnd-kit/utilities 的 CSS.Transform.toString）。 */
+function transformToString(transform: Transform | null): string | undefined {
+	if (!transform) {
+		return undefined;
+	}
+	const { x, y, scaleX, scaleY } = transform;
+	return `translate3d(${x ? Math.round(x) : 0}px, ${y ? Math.round(y) : 0}px, 0) scaleX(${scaleX}) scaleY(${scaleY})`;
+}
 
 interface ProviderListProps {
 	providers: Provider[] | undefined;
@@ -42,7 +51,7 @@ function SortableProviderRow({ provider, selected, onSelect }: SortableProviderR
 		id: provider.id,
 	});
 	const style = {
-		transform: CSS.Transform.toString(transform),
+		transform: transformToString(transform),
 		transition,
 	};
 

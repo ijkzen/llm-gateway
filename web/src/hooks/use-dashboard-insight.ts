@@ -23,12 +23,6 @@ export interface PercentilePoint {
 	p99: number;
 }
 
-/** 失败原因分布条目（reason 为空串表示「无原因」）。 */
-export interface FailureReasonItem {
-	reason: string;
-	count: number;
-}
-
 /** 按 API Key 聚合的调用量条目。 */
 export interface ApiKeyRankItem {
 	apiKeyName: string;
@@ -41,7 +35,6 @@ export interface InsightData {
 	callTrend: TrendPoint[];
 	failureTrend: TrendPoint[];
 	failureRateTrend: FloatTrendPoint[];
-	failureReasons: FailureReasonItem[];
 	ttftPercentiles: PercentilePoint[];
 	latencyPercentiles: PercentilePoint[];
 	inputTokenTrend: TrendPoint[];

@@ -18,13 +18,6 @@ pub const ENCRYPTION_KEY_ENV: &str = "API_KEY_ENCRYPTION_KEY";
 /// 密文前缀,用于区分"已加密"与"明文(未配置密钥时)"。
 const CIPHER_PREFIX: &str = "enc:v1:";
 
-/// 加密后是否真的发生了加密(区分"配置了密钥"与"退化明文")。
-pub fn encryption_enabled() -> bool {
-    std::env::var(ENCRYPTION_KEY_ENV)
-        .map(|k| !k.trim().is_empty())
-        .unwrap_or(false)
-}
-
 /// 判断存储值是否已是密文（带 `enc:v1:` 前缀）。
 pub fn is_encrypted(stored: &str) -> bool {
     stored.starts_with(CIPHER_PREFIX)

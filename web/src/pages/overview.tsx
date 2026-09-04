@@ -1,11 +1,11 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
-import { ApiKeyRaceSection } from "@/components/api-key-race/ApiKeyRaceSection";
+import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
-import { ProviderModelRaceSection } from "@/components/provider-model-race/ProviderModelRaceSection";
-import { ProviderRaceSection } from "@/components/provider-race/ProviderRaceSection";
+import { ProviderModelRaceCard } from "@/components/provider-model-race/ProviderModelRaceCard";
+import { ProviderRaceCard } from "@/components/provider-race/ProviderRaceCard";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
@@ -15,7 +15,7 @@ import { StatsCard } from "@/components/stats-card";
 import { StatsCardsSkeleton } from "@/components/stats-cards-skeleton";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { VirtualModelRaceSection } from "@/components/virtual-model-race/VirtualModelRaceSection";
+import { VirtualModelRaceCard } from "@/components/virtual-model-race/VirtualModelRaceCard";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts, useDashboardSummary } from "@/hooks/use-dashboard-stats";
 import { OVERVIEW_PAGE } from "@/lib/pages";
@@ -270,10 +270,10 @@ export default function OverviewPage() {
 					granularity={insightGranularity}
 				/>
 			</div>
-			<ApiKeyRaceSection />
-			<ProviderRaceSection />
-			<VirtualModelRaceSection />
-			<ProviderModelRaceSection />
+			<ApiKeyRaceCard />
+			<ProviderRaceCard />
+			<VirtualModelRaceCard />
+			<ProviderModelRaceCard />
 		</div>
 	);
 }

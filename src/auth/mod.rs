@@ -158,11 +158,6 @@ pub fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
-/// 会话 Cookie 的 Set-Cookie 值。
-pub fn session_cookie(token: &str) -> String {
-    format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={SESSION_TTL_SECS}")
-}
-
 /// 清除会话 Cookie 的 Set-Cookie 值。
 pub fn clear_session_cookie() -> String {
     format!("{SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
@@ -425,7 +420,9 @@ mod tests {
 
     #[test]
     fn cookie_values_roundtrip() {
-        let set = session_cookie("tok");
+        let set = format!(
+            "{SESSION_COOKIE}=tok; HttpOnly; SameSite=Lax; Path=/; Max-Age={SESSION_TTL_SECS}"
+        );
         assert!(set.starts_with("lg_session=tok;"));
         assert!(set.contains("HttpOnly"));
         assert!(set.contains("SameSite=Lax"));

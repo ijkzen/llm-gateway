@@ -3,8 +3,16 @@ use sea_orm::{
     QueryFilter, Set,
 };
 
-use super::{find_by_domain, find_by_domain_all, seed, upsert_templates};
+use super::{find_by_domain_all, seed, upsert_templates};
 use crate::entity::provider_template::{self, Entity};
+
+/// find_by_domain 已删（无生产调用），测试内联等价实现。
+async fn find_by_domain(
+    db: &DatabaseConnection,
+    domain: &str,
+) -> Result<Option<provider_template::Model>, sea_orm::DbErr> {
+    Ok(find_by_domain_all(db, domain).await?.into_iter().next())
+}
 
 /// 建一个内存 SQLite 连接（表由 migrate 建好）。
 async fn setup_db() -> Result<DatabaseConnection, DbErr> {

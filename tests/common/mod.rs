@@ -56,10 +56,13 @@ pub async fn setup_db_and_scheduler() -> (
         .unwrap();
 
     let (log_tx, _) = tokio::sync::broadcast::channel::<JobLogEvent>(64);
-    let worker = JobWorker::new(db.clone(), 2, 100, log_tx.clone());
+    let worker =
+        JobWorker::new_with_settings(db.clone(), 2, 100, log_tx.clone(), AppSettings::default());
     let handle = worker.start();
 
-    let scheduler = SchedulerRuntime::new(handle.tx.clone()).await.unwrap();
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
     (db, scheduler, log_tx)
 }
 

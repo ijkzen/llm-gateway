@@ -3,7 +3,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 export type Theme = "light" | "dark" | "system";
-export type ResolvedTheme = Exclude<Theme, "system">;
+type ResolvedTheme = Exclude<Theme, "system">;
 
 function resolveTheme(theme: Theme): ResolvedTheme {
 	if (theme === "system") {

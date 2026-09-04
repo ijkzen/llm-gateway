@@ -99,23 +99,11 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
     Ok(Duration::from_secs(total_secs))
 }
 
-pub fn compute_next_run(expression: &str) -> Result<chrono::DateTime<chrono::Utc>, SchedulerError> {
-    compute_next_run_tz(expression, None)
-}
-
-/// 按指定时区（`None` = 服务器本地时区）计算下次运行时间。
 pub fn compute_next_run_tz(
     expression: &str,
     tz: Option<chrono_tz::Tz>,
 ) -> Result<chrono::DateTime<chrono::Utc>, SchedulerError> {
     compute_next_run_from_scheduled_at_tz(expression, chrono::Utc::now(), tz)
-}
-
-pub fn compute_next_run_from_scheduled_at(
-    expression: &str,
-    scheduled_at: chrono::DateTime<chrono::Utc>,
-) -> Result<chrono::DateTime<chrono::Utc>, SchedulerError> {
-    compute_next_run_from_scheduled_at_tz(expression, scheduled_at, None)
 }
 
 pub fn compute_next_run_from_scheduled_at_tz(
@@ -162,10 +150,6 @@ pub fn compute_next_run_from_scheduled_at_tz(
             })
         }
     }
-}
-
-pub fn compute_frequency_secs(expression: &str) -> i64 {
-    compute_frequency_secs_tz(expression, None)
 }
 
 /// 按指定时区（`None` = 服务器本地时区）估算执行频率。
@@ -231,19 +215,19 @@ mod tests {
 
     #[test]
     fn test_compute_frequency_secs_every() {
-        assert_eq!(compute_frequency_secs("@every 5m"), 300);
-        assert_eq!(compute_frequency_secs("@every 1h"), 3600);
-        assert_eq!(compute_frequency_secs("@every 24h"), 86400);
-        assert_eq!(compute_frequency_secs("@every 90m"), 5400);
+        assert_eq!(compute_frequency_secs_tz("@every 5m", None), 300);
+        assert_eq!(compute_frequency_secs_tz("@every 1h", None), 3600);
+        assert_eq!(compute_frequency_secs_tz("@every 24h", None), 86400);
+        assert_eq!(compute_frequency_secs_tz("@every 90m", None), 5400);
     }
 
     #[test]
     fn test_compute_frequency_secs_shorthands() {
-        assert_eq!(compute_frequency_secs("@hourly"), 3600);
-        assert_eq!(compute_frequency_secs("@daily"), 86400);
-        assert_eq!(compute_frequency_secs("@weekly"), 604800);
+        assert_eq!(compute_frequency_secs_tz("@hourly", None), 3600);
+        assert_eq!(compute_frequency_secs_tz("@daily", None), 86400);
+        assert_eq!(compute_frequency_secs_tz("@weekly", None), 604800);
         // Monthly intervals vary between 28 and 31 days.
-        let monthly = compute_frequency_secs("@monthly");
+        let monthly = compute_frequency_secs_tz("@monthly", None);
         assert!(
             (28 * 86400..=31 * 86400).contains(&monthly),
             "monthly estimate out of range: {monthly}"
@@ -252,21 +236,21 @@ mod tests {
 
     #[test]
     fn test_compute_frequency_secs_cron() {
-        assert_eq!(compute_frequency_secs("0 0 */6 * * *"), 6 * 3600);
-        assert_eq!(compute_frequency_secs("0 */10 * * * *"), 600);
-        assert_eq!(compute_frequency_secs("0 0 * * * *"), 3600);
+        assert_eq!(compute_frequency_secs_tz("0 0 */6 * * *", None), 6 * 3600);
+        assert_eq!(compute_frequency_secs_tz("0 */10 * * * *", None), 600);
+        assert_eq!(compute_frequency_secs_tz("0 0 * * * *", None), 3600);
     }
 
     #[test]
     fn test_compute_frequency_secs_monthly_and_weekly_cron() {
         // Regression: day-of-month / day-of-week constrained expressions used
         // to be estimated as 1 day, off by 7x-30x.
-        let monthly = compute_frequency_secs("0 0 0 15 * *");
+        let monthly = compute_frequency_secs_tz("0 0 0 15 * *", None);
         assert!(
             (28 * 86400..=31 * 86400).contains(&monthly),
             "monthly-on-15th estimate out of range: {monthly}"
         );
-        assert_eq!(compute_frequency_secs("0 0 0 * * 1"), 604800);
+        assert_eq!(compute_frequency_secs_tz("0 0 0 * * 1", None), 604800);
     }
 
     #[test]
@@ -278,7 +262,7 @@ mod tests {
         let base = chrono::DateTime::parse_from_rfc3339("2026-01-15T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let next = compute_next_run_from_scheduled_at("0 0 8 * * *", base).unwrap();
+        let next = compute_next_run_from_scheduled_at_tz("0 0 8 * * *", base, None).unwrap();
         let local = next.with_timezone(&chrono::Local);
         assert_eq!(local.hour(), 8);
         assert_eq!(local.minute(), 0);
@@ -320,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_compute_frequency_secs_invalid() {
-        assert_eq!(compute_frequency_secs("invalid"), i64::MAX);
+        assert_eq!(compute_frequency_secs_tz("invalid", None), i64::MAX);
     }
 
     #[test]
@@ -339,7 +323,7 @@ mod tests {
     #[test]
     fn test_compute_next_run_rejects_duration_above_i64_max() {
         // u64::MAX seconds is larger than i64::MAX, so compute_next_run should fail.
-        let result = compute_next_run("@every 18446744073709551615s");
+        let result = compute_next_run_tz("@every 18446744073709551615s", None);
         assert!(
             matches!(result, Err(SchedulerError::ComputeNextRun(_))),
             "expected ComputeNextRun error, got: {:?}",
@@ -351,7 +335,7 @@ mod tests {
     fn test_compute_frequency_secs_every_above_i64_max() {
         // u64::MAX seconds should not wrap to negative; it should saturate to i64::MAX.
         assert_eq!(
-            compute_frequency_secs("@every 18446744073709551615s"),
+            compute_frequency_secs_tz("@every 18446744073709551615s", None),
             i64::MAX
         );
     }

@@ -9,7 +9,6 @@ pub mod responses;
 
 use serde_json::{Value, json};
 
-use crate::entity::provider_model;
 use crate::provider_model::refresh::PROTOCOL_GEMINI;
 
 /// Anthropic `max_tokens` 缺省值（Anthropic 必填该字段）。
@@ -220,11 +219,6 @@ pub fn collect_tool_call_names(chat: &Value) -> std::collections::HashMap<String
         }
     }
     names
-}
-
-/// provider_model 上的真实模型 ID（发给上游的 model）。
-pub fn actual_model_id(model: &provider_model::Model) -> String {
-    model.provider_model_id.clone()
 }
 
 #[cfg(test)]
