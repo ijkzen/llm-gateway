@@ -137,12 +137,14 @@ async fn test_create_and_get_virtual_models() {
     assert_eq!(body["data"]["items"].as_array().unwrap().len(), 2);
 }
 
-/// 成员排序：启用成员在前、组内按远端模型 ID 字母升序。
+/// 成员排序：启用成员在前、组内无用量数据时按 virtualModelItemId 升序
+/// （LB 静态基础序，与「无数据排后 + id 决平局」一致）。
 #[tokio::test]
 async fn test_member_sort_enabled_first_then_alphabetical() {
     let (app, db) = setup_app().await;
     let p1 = seed_provider(&db, "p1").await;
     // 故意乱序创建：z 开头停用、a 开头启用、m 开头停用、b 开头启用。
+    // virtualModelItemId 按创建顺序递增：z(id1)、a(id2)、m(id3)、b(id4)。
     let z = seed_provider_model(&db, p1, "z-model").await;
     let a = seed_provider_model(&db, p1, "a-model").await;
     let m = seed_provider_model(&db, p1, "m-model").await;
@@ -167,11 +169,11 @@ async fn test_member_sort_enabled_first_then_alphabetical() {
         .iter()
         .map(|it| it["providerModelId"].as_str().unwrap())
         .collect();
-    // 启用在前且按字母序：a-model、b-model，然后停用按字母序：m-model、z-model。
+    // 启用在前且按 id 升序：a(id2)、b(id4)；停用按 id 升序：z(id1)、m(id3)。
     assert_eq!(
         remote_ids,
-        vec!["a-model", "b-model", "m-model", "z-model"],
-        "成员应启用优先 + 字母升序：{remote_ids:?}"
+        vec!["a-model", "b-model", "z-model", "m-model"],
+        "成员应启用优先 + 无用量时按 id 升序：{remote_ids:?}"
     );
 }
 
@@ -269,6 +271,143 @@ async fn test_member_sort_payg_first_grouping() {
         remote_ids,
         vec!["z-payg", "m-sub", "a-payg", "b-sub"],
         "按量付费优先策略下应按 按量→订阅 分组：{remote_ids:?}"
+    );
+}
+
+/// 用量感知排序：策略 0 下订阅制组内按剩余百分比（5h→周→月）降序，
+/// 无用量数据的成员排在有数据成员之后；耗尽成员不剔除（展示端展示全部）。
+#[tokio::test]
+async fn test_member_sort_usage_aware_within_subscription() {
+    let (app, db) = setup_app().await;
+    let p1 = seed_provider(&db, "p1").await;
+    let p2 = seed_provider(&db, "p2").await;
+    let p3 = seed_provider(&db, "p3").await;
+    provider::ActiveModel {
+        id: Set(p1),
+        billing_mode: Set(1),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    provider::ActiveModel {
+        id: Set(p2),
+        billing_mode: Set(1),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    // 全部启用。p1 剩余 5h=95%、p2 剩余 5h=90%、p3 无用量数据。
+    let m1 = seed_provider_model(&db, p1, "m1").await;
+    let m2 = seed_provider_model(&db, p2, "m2").await;
+    let m3 = seed_provider_model(&db, p3, "m3").await;
+
+    // 写入 p1/p2 的订阅用量缓存（剩余百分比 95 vs 90，5h 决胜）。p3 无缓存。
+    let quota = |provider_id: i32, five_hour: f64| llm_gateway::usage::types::UsageData {
+        provider_id,
+        fetched_at: chrono::Utc::now(),
+        kind: llm_gateway::usage::types::UsageKind::Quota,
+        plan: None,
+        windows: vec![
+            llm_gateway::usage::types::QuotaWindow::from_remaining_percent(
+                llm_gateway::usage::types::WindowKind::FiveHour,
+                five_hour,
+                None,
+            ),
+        ],
+        balances: vec![],
+    };
+    llm_gateway::usage::persist::write_usage_cache(&db, &quota(p1, 95.0))
+        .await
+        .unwrap();
+    llm_gateway::usage::persist::write_usage_cache(&db, &quota(p2, 90.0))
+        .await
+        .unwrap();
+
+    let payload = json!({
+        "displayId": "usage-sorted-sub",
+        "loadBalancingStrategy": 0,
+        "fallbackStrategy": 0,
+        "items": [
+            {"modelId": m1, "enable": true},
+            {"modelId": m2, "enable": true},
+            {"modelId": m3, "enable": true},
+        ],
+    });
+    let (status, body) = send_json(app.clone(), "POST", "/api/virtual-models", payload).await;
+    assert_eq!(status, 201);
+
+    let items = body["data"]["items"].as_array().unwrap();
+    let remote_ids: Vec<&str> = items
+        .iter()
+        .map(|it| it["providerModelId"].as_str().unwrap())
+        .collect();
+    // 订阅组：p1(95%) 在 p2(90%) 前；无数据的 p3 排最末。
+    assert_eq!(
+        remote_ids,
+        vec!["m1", "m2", "m3"],
+        "订阅制组内应按剩余百分比降序、无数据排后：{remote_ids:?}"
+    );
+}
+
+/// 用量感知排序：按量组内按主余额降序；无用量数据排后。
+#[tokio::test]
+async fn test_member_sort_usage_aware_within_payg() {
+    let (app, db) = setup_app().await;
+    let p1 = seed_provider(&db, "p1").await;
+    let p2 = seed_provider(&db, "p2").await;
+    let p3 = seed_provider(&db, "p3").await;
+
+    let m1 = seed_provider_model(&db, p1, "m1").await;
+    let m2 = seed_provider_model(&db, p2, "m2").await;
+    let m3 = seed_provider_model(&db, p3, "m3").await;
+
+    // p1 主余额 100、p2 主余额 50、p3 无余额数据。
+    let balance = |provider_id: i32, amount: f64| llm_gateway::usage::types::UsageData {
+        provider_id,
+        fetched_at: chrono::Utc::now(),
+        kind: llm_gateway::usage::types::UsageKind::Balance,
+        plan: None,
+        windows: vec![],
+        balances: vec![llm_gateway::usage::types::BalanceItem {
+            label: "余额".to_string(),
+            amount,
+            currency: None,
+            primary: true,
+        }],
+    };
+    llm_gateway::usage::persist::write_usage_cache(&db, &balance(p1, 100.0))
+        .await
+        .unwrap();
+    llm_gateway::usage::persist::write_usage_cache(&db, &balance(p2, 50.0))
+        .await
+        .unwrap();
+
+    let payload = json!({
+        "displayId": "usage-sorted-payg",
+        "loadBalancingStrategy": 0,
+        "fallbackStrategy": 0,
+        "items": [
+            {"modelId": m1, "enable": true},
+            {"modelId": m2, "enable": true},
+            {"modelId": m3, "enable": true},
+        ],
+    });
+    let (status, body) = send_json(app.clone(), "POST", "/api/virtual-models", payload).await;
+    assert_eq!(status, 201);
+
+    let items = body["data"]["items"].as_array().unwrap();
+    let remote_ids: Vec<&str> = items
+        .iter()
+        .map(|it| it["providerModelId"].as_str().unwrap())
+        .collect();
+    // 按量组：p1(100) 在 p2(50) 前；无余额数据的 p3 排最末。
+    assert_eq!(
+        remote_ids,
+        vec!["m1", "m2", "m3"],
+        "按量组内应按主余额降序、无数据排后：{remote_ids:?}"
     );
 }
 
