@@ -128,7 +128,19 @@ function required<T>(value: T | undefined | null): T {
 	return value;
 }
 
-/** 展开某供应商分组的候选区。 */
+/** 供应商分组头（可折叠/方向键操作的整行按钮）。 */
+function groupHeader(providerName: string) {
+	return screen.getByRole("button", {
+		name: (name) => name.trim().startsWith(providerName),
+	});
+}
+
+/** 切换成员模型的 Tab（已使用/未使用）。 */
+function switchTab(tabName: string) {
+	fireEvent.click(screen.getByRole("tab", { name: tabName }));
+}
+
+/** 展开某供应商分组的候选区（已使用 Tab 内继续添加时先点「继续添加模型」）。 */
 function openAddGroup(providerName: string) {
 	fireEvent.click(screen.getByRole("button", { name: `在 ${providerName} 中添加模型` }));
 }
@@ -155,7 +167,7 @@ describe("VirtualModelEditDialog 创建模式", () => {
 		expect(screen.getByText("至少保留一个成员模型")).toBeTruthy();
 	});
 
-	it("展开供应商分组 → 点「添加」加入暂存 → 填模型 ID → 创建 payload 正确", async () => {
+	it("默认落在「未使用」Tab；点候选「添加」加入暂存 → 填模型 ID → 创建 payload 正确", async () => {
 		render(
 			<VirtualModelEditDialog
 				open
@@ -171,9 +183,10 @@ describe("VirtualModelEditDialog 创建模式", () => {
 			/>,
 		);
 
-		// 已被其他虚拟模型占用的 o3 不出现在候选区。
-		openAddGroup("OpenAI");
+		// 创建模式无成员 → 默认「未使用」Tab：候选按供应商分组直接展示。
+		expect(screen.getByRole("tab", { name: "未使用" }).getAttribute("aria-selected")).toBe("true");
 		expect(screen.getByRole("button", { name: "添加 gpt-4o" })).toBeTruthy();
+		// 已被其他虚拟模型占用的 o3 不出现。
 		expect(screen.queryByRole("button", { name: "添加 o3" })).toBeNull();
 
 		fireEvent.click(screen.getByRole("button", { name: "添加 gpt-4o" }));
@@ -193,7 +206,7 @@ describe("VirtualModelEditDialog 创建模式", () => {
 		expect(payload.items).toEqual([{ modelId: 11, enable: true }]);
 	});
 
-	it("从两个供应商分别添加成员，payload 汇总两组", async () => {
+	it("从两个供应商分别添加成员（未使用 Tab 平铺候选）→ payload 汇总两组", async () => {
 		render(
 			<VirtualModelEditDialog
 				open
@@ -208,14 +221,16 @@ describe("VirtualModelEditDialog 创建模式", () => {
 			/>,
 		);
 
-		openAddGroup("OpenAI");
 		fireEvent.click(screen.getByRole("button", { name: "添加 gpt-4o" }));
-		openAddGroup("DeepSeek");
 		fireEvent.click(screen.getByRole("button", { name: "添加 deepseek-chat" }));
-
-		expect(screen.getByText("OpenAI")).toBeTruthy();
-		expect(screen.getByText("DeepSeek")).toBeTruthy();
 		expect(screen.getByText("已选 2 个成员模型")).toBeTruthy();
+
+		// 添加后两组都迁到「已使用」Tab。
+		switchTab("已使用");
+		expect(groupHeader("OpenAI")).toBeTruthy();
+		expect(groupHeader("DeepSeek")).toBeTruthy();
+		expect(screen.getByText("gpt-4o")).toBeTruthy();
+		expect(screen.getByText("deepseek-chat")).toBeTruthy();
 
 		fireEvent.change(screen.getByPlaceholderText("如 gpt-4o"), { target: { value: "gpt-4o" } });
 		fireEvent.click(screen.getByRole("button", { name: "创建" }));
@@ -240,7 +255,6 @@ describe("VirtualModelEditDialog 创建模式", () => {
 			/>,
 		);
 
-		openAddGroup("OpenAI");
 		fireEvent.click(screen.getByRole("button", { name: "添加 gpt-4o" }));
 		fireEvent.click(screen.getByRole("button", { name: "创建" }));
 
@@ -280,6 +294,9 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 			/>,
 		);
 
+		// 编辑模式有成员 → 默认落在「已使用」Tab。
+		expect(screen.getByRole("tab", { name: "已使用" }).getAttribute("aria-selected")).toBe("true");
+
 		const displayInput = screen.getByPlaceholderText("如 gpt-4o") as HTMLInputElement;
 		expect(displayInput.value).toBe("gpt-4o");
 
@@ -296,7 +313,7 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 		).toBe("false");
 		expect(screen.getByText(/已停用/)).toBeTruthy();
 
-		// 暂存操作：启停 gpt-4o、移除 o3、添加 o3-mini。
+		// 暂存操作：启停 gpt-4o、移除 o3、继续添加 o3-mini。
 		fireEvent.click(screen.getByRole("switch", { name: "启停 gpt-4o" }));
 		fireEvent.click(screen.getByRole("button", { name: "移除 o3" }));
 		openAddGroup("OpenAI");
@@ -484,7 +501,6 @@ describe("VirtualModelItemDetailDialog", () => {
 	});
 });
 
-
 describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 	it("有成员的供应商进「已使用」，其余供应商进「未使用」；两者都按 providers 顺序", () => {
 		// providers 顺序故意与 model id 顺序错开：OpenAI(7) 在 DeepSeek(8) 前。
@@ -633,7 +649,6 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 		expect(header.getAttribute("aria-expanded")).toBe("true");
 	});
 });
-
 
 describe("VirtualModelDeleteDialog", () => {
 	it("二次确认后调用删除接口", async () => {
