@@ -34,20 +34,20 @@
 
 | # | 条目 | 位置 | 状态 |
 |---|------|------|------|
-| M1 | 4 个 race 查询 hook + 重复 Race 类型统一为泛型 hook | web/src/hooks/use-{provider,virtual-model,api-key,provider-model}-race.ts | ⬜ |
-| M2 | provider_extra 回填三套实现并成参数化一个 | src/provider_template/mod.rs:78-249 | ⬜ |
-| M3 | stats 4 个排行榜 handler 收敛为参数化函数 | src/routes/stats.rs:1286-1918 | ⬜ |
-| M4 | `dispatch_success` 4 份手写 RequestRecord insert 收敛 | src/proxy/mod.rs:1321-1689 | ⬜ |
-| M5 | `is_unique_violation` 五处同体复制收成共享 util | src/routes/{auth,api_keys,providers,provider_models,virtual_models}.rs | ⬜ |
-| M6 | fetcher 重复「401/403→Auth」判定 + 重复 `snippet` 统一 | src/usage/fetchers/*.rs, sensenova_login.rs | ⬜ |
-| M7 | `catalog()`/`search()` 重复 RawModel→CatalogEntry 转换抽共享 | src/provider_model/catalog.rs:86-166 | ⬜ |
-| M8 | `useToastActions` 包装层删除，调用方直用 sonner | web/src/hooks/use-toast.ts + 22 处调用 | ⬜ |
-| M9 | `insight-charts` 与 `dashboard-charts` 重复的 formatBucketLabel 等提共享 | web/src/components/{insight,dashboard}-charts.tsx | ⬜ |
-| M10 | model-overview 手写指标卡改用 `MetricsSummaryCard` | web/src/pages/model-overview.tsx:119-183 | ⬜ |
-| M11 | 小合并包：ProviderDetail/CronJobDetail 重复 formatDate + skeleton grid 泛化 + login 双 schema 合并 | web/src 多处 | ⬜ |
-| M12 | sea-orm 关 default-features 裁 rust_decimal | Cargo.toml | ⬜ |
-| M13 | 分页 useEffect 复位改数据 key 驱动（行为微变：消除跳页闪烁） | web/src/components/{settings/SettingsTable,api-keys/ApiKeysTable}.tsx | ⬜ |
-| M14 | 删 `clsx`，`cn()` 内部改原生 join | web/src/lib/utils.ts | ⬜ |
+| M1 | 6 处重复的 RaceSortKey/RaceWindow/RaceSort 类型收敛到 lib/race-types.ts（re-export 保持调用方不变） | web/src/lib/race-types.ts + 6 hooks | ✅ |
+| M2 | provider_extra 回填抽共享 `backfill_host_extras` 管线（Krill/SenseNova/模板首插共用，-约100行） | src/provider_template/mod.rs | ✅ |
+| M3 | ~~stats 4 排行榜 handler 收敛~~ | ⏭️ 跳过：member_rank 为左表反查本质不同构，前 3 者亦各有 SELECT/响应差异，收敛需引入 trait/泛型排序，净收益低于估计 |
+| M4 | ~~`dispatch_success` 4 份手写 RequestRecord insert 收敛~~ | ⏭️ 跳过：4 构造点分属 4 协议/异步上下文，差异字段无法收敛，14 参数构造器反而损失字段名可读性 |
+| M5 | `is_unique_violation` 五处同体复制收成共享 util | src/routes/{auth,api_keys,providers,provider_models,virtual_models}.rs | ✅ |
+| M6 | fetcher 重复「401/403→Auth」判定统一到 `ensure_not_auth_error`（alibaba×2/cloud_balance×2/volcengine 复用） | src/usage/fetchers/{alibaba,cloud_balance,volcengine}.rs | ✅ |
+| M7 | `catalog()`/`search()` 重复 RawModel→CatalogEntry 转换抽共享 `entry_from` | src/provider_model/catalog.rs | ✅ |
+| M8 | ~~删 `useToastActions`，调用方直用 sonner~~ | ⏭️ 跳过：`toastError` 是有效两参封装（自动带 error.message），29 调用文件 + 测试 mock 改造成本远大于删 13 行收益，属真实价值抽象非 yagni |
+| M9 | `insight-charts` 删本地重复 `formatBucketLabel`、改复用 `dashboard-charts` 导出（含 `inferGranularity`） | web/src/components/{insight,dashboard}-charts.tsx | ✅ |
+| M10 | model-overview 手写指标卡改复用 `MetricsSummaryCard`（-约60行，与三级页统一） | web/src/pages/model-overview.tsx | ✅ |
+| M11 | 小合并包：ProviderDetail/CronJobDetail 重复 formatDate 抽到 lib/utils.formatDateTime（⚠️ skeleton 泛化/schema 合并子项评估跳过：skeleton 网格列数不同、login/init 验证强度本不同） | web/src/{lib/utils.ts,components/providers/ProviderDetail.tsx,components/cron-jobs/CronJobDetail.tsx} | ✅（部分） |
+| M12 | sea-orm 关 default-features 裁 rust_decimal（已验证依赖树移除） | Cargo.toml | ✅ |
+| M13 | ~~分页 useEffect 复位改数据 key 驱动~~ | ⏭️ 跳过：react-table 受控分页无法派生替代，该 effect 是有意的「搜索后回第一页」UX 保护（官方 autoResetPageIndex 等价），移除有行为回归风险 |
+| M14 | 删 `clsx`，`cn()` 内部改原生 classNames（等价实现） | web/src/lib/utils.ts | ✅ |
 
 ## 🔴 高风险（碰运行时语义/存量数据，逐项核实后单独提交）
 
