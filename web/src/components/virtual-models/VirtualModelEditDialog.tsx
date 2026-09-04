@@ -398,33 +398,6 @@ export function VirtualModelEditDialog({
 					<DialogDescription>{t("virtualModels.editDesc")}</DialogDescription>
 				</DialogHeader>
 
-				<div
-					role="tablist"
-					aria-label={t("virtualModels.members")}
-					className="flex shrink-0 gap-1 border-b px-6"
-				>
-					<Button
-						type="button"
-						role="tab"
-						variant="ghost"
-						size="sm"
-						aria-selected={activeTab === "used"}
-						onClick={() => setActiveTab("used")}
-					>
-						{t("virtualModels.usedTab")}
-					</Button>
-					<Button
-						type="button"
-						role="tab"
-						variant="ghost"
-						size="sm"
-						aria-selected={activeTab === "unused"}
-						onClick={() => setActiveTab("unused")}
-					>
-						{t("virtualModels.unusedTab")}
-					</Button>
-				</div>
-
 				<div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
 					<Form {...form}>
 						<form
@@ -518,6 +491,28 @@ export function VirtualModelEditDialog({
 									</FormItem>
 								)}
 							/>
+							<div role="tablist" aria-label={t("virtualModels.members")} className="flex gap-1">
+								<Button
+									type="button"
+									role="tab"
+									variant="ghost"
+									size="sm"
+									aria-selected={activeTab === "used"}
+									onClick={() => setActiveTab("used")}
+								>
+									{t("virtualModels.usedTab")}
+								</Button>
+								<Button
+									type="button"
+									role="tab"
+									variant="ghost"
+									size="sm"
+									aria-selected={activeTab === "unused"}
+									onClick={() => setActiveTab("unused")}
+								>
+									{t("virtualModels.unusedTab")}
+								</Button>
+							</div>
 						</form>
 					</Form>
 
