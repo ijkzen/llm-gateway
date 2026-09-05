@@ -51,7 +51,9 @@ describe("JsonSettingEditDialog", () => {
 		expect(screen.getByDisplayValue("user-agent")).toBeInTheDocument();
 
 		// 删除第一行（traceparent），保存。
-		fireEvent.click(screen.getAllByRole("button", { name: "删除" })[0]);
+		const deleteButton = screen.getAllByRole("button", { name: "删除" })[0];
+		if (!deleteButton) throw new Error("删除按钮不存在");
+		fireEvent.click(deleteButton);
 		fireEvent.click(screen.getByRole("button", { name: "保存" }));
 		expect(mocks.updateMutate).toHaveBeenCalledWith(
 			{ key: "downstream_request_header_allow_list", value: '["user-agent"]' },
@@ -69,7 +71,9 @@ describe("JsonSettingEditDialog", () => {
 		);
 		fireEvent.click(screen.getByRole("button", { name: /新增/ }));
 		const inputs = screen.getAllByPlaceholderText("值");
-		fireEvent.change(inputs[inputs.length - 1], {
+		const addedInput = inputs[inputs.length - 1];
+		if (!addedInput) throw new Error("新增行输入框不存在");
+		fireEvent.change(addedInput, {
 			target: { value: "x-new-header" },
 		});
 		fireEvent.click(screen.getByRole("button", { name: "保存" }));
