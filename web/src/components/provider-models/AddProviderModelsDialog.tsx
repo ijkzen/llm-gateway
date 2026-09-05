@@ -36,7 +36,7 @@ import type { Provider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { RefreshCw, Sparkles } from "lucide-react";
+import { RefreshCw, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
@@ -150,6 +150,13 @@ export function AddProviderModelsDialog({
 		suggestions: CatalogSuggestion[];
 	} | null>(null);
 	const [activeSuggestIndex, setActiveSuggestIndex] = useState(0);
+	// 自动添加候选搜索：关键词 + 下拉开合 + 定位高亮（点击结果滚动到候选卡）。
+	const [candidateQuery, setCandidateQuery] = useState("");
+	const [candidateSearchOpen, setCandidateSearchOpen] = useState(false);
+	const [highlightId, setHighlightId] = useState<string | null>(null);
+	const candidateSearchRef = useRef<HTMLDivElement>(null);
+	const scrollAreaRef = useRef<HTMLDivElement>(null);
+	const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// 尝试刷新失败时用弹窗展示完整错误详情（上游报错信息较长，toast 展示不完整）。
 	const [refreshError, setRefreshError] = useState<string | null>(null);
 
@@ -163,6 +170,23 @@ export function AddProviderModelsDialog({
 		return () => document.removeEventListener("pointerdown", closeCatalog);
 	}, []);
 
+	useEffect(() => {
+		const closeCandidateSearch = (event: PointerEvent) => {
+			if (!candidateSearchRef.current?.contains(event.target as Node)) {
+				setCandidateSearchOpen(false);
+			}
+		};
+		document.addEventListener("pointerdown", closeCandidateSearch);
+		return () => document.removeEventListener("pointerdown", closeCandidateSearch);
+	}, []);
+
+	useEffect(
+		() => () => {
+			if (highlightTimer.current) clearTimeout(highlightTimer.current);
+		},
+		[],
+	);
+
 	// 弹窗打开时清空联想与待确认预填。
 	useEffect(() => {
 		if (!open) return;
@@ -170,6 +194,8 @@ export function AddProviderModelsDialog({
 		setModelSearchDebounced("");
 		setAppliedModelId(null);
 		setPendingSuggest(null);
+		setCandidateQuery("");
+		setCandidateSearchOpen(false);
 		setActiveTab("auto");
 		setCatalogOpen(false);
 	}, [open]);
@@ -218,6 +244,7 @@ export function AddProviderModelsDialog({
 		setNumberEdits({});
 		setSelected(new Set());
 		setPendingSuggest(null);
+		setHighlightId(null);
 		form.reset({
 			providerModelId: "",
 			contextLength: 0,
@@ -242,11 +269,35 @@ export function AddProviderModelsDialog({
 					};
 				}
 				setNumberEdits(edits);
-				// 全部不预选，由用户自行勾选。
+				// 全部不预选，由用户自行勾选；候选全量更新后作废旧搜索。
 				setSelected(new Set());
+				setCandidateQuery("");
+				setCandidateSearchOpen(false);
+				setHighlightId(null);
 			},
 			onError: (error) => setRefreshError(error.message),
 		});
+	};
+
+	// 候选搜索结果：对已刷新候选按模型 ID 小写子串匹配，取前 8 条。
+	const candidateHits = useMemo(() => {
+		const query = candidateQuery.trim().toLowerCase();
+		if (!query) return [];
+		return (candidates ?? [])
+			.filter((candidate) => candidate.providerModelId.toLowerCase().includes(query))
+			.slice(0, 8);
+	}, [candidates, candidateQuery]);
+
+	/** 点击搜索结果：滚动定位到候选卡并短暂高亮。 */
+	const locateCandidate = (modelId: string) => {
+		setCandidateSearchOpen(false);
+		const card = scrollAreaRef.current?.querySelector<HTMLElement>(
+			`[data-model-id="${CSS.escape(modelId)}"]`,
+		);
+		card?.scrollIntoView({ behavior: "smooth", block: "center" });
+		if (highlightTimer.current) clearTimeout(highlightTimer.current);
+		setHighlightId(modelId);
+		highlightTimer.current = setTimeout(() => setHighlightId(null), 1800);
 	};
 
 	const editsOf = (candidate: RefreshCandidate): NumberEdits =>
@@ -434,6 +485,7 @@ export function AddProviderModelsDialog({
 					</div>
 
 					<div
+						ref={scrollAreaRef}
 						data-testid="add-provider-models-scroll-area"
 						className="min-h-0 flex-1 overflow-y-auto px-6 py-4"
 					>
@@ -452,9 +504,46 @@ export function AddProviderModelsDialog({
 										/>
 										{t("providerModels.tryRefresh")}
 									</Button>
-									<span className="text-xs text-muted-foreground">
-										{t("providerModels.refreshHint")}
-									</span>
+									<div ref={candidateSearchRef} className="relative w-full sm:w-72">
+										<Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+										<Input
+											type="search"
+											value={candidateQuery}
+											onChange={(event) => {
+												setCandidateQuery(event.target.value);
+												setCandidateSearchOpen(true);
+											}}
+											onFocus={() => setCandidateSearchOpen(true)}
+											placeholder={t("providerModels.candidateSearch")}
+											aria-label={t("providerModels.candidateSearch")}
+											className="pl-9"
+										/>
+										{candidateSearchOpen && candidateQuery.trim() && (
+											<div className="absolute right-0 top-full z-20 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border bg-popover p-2 shadow-lg">
+												{candidateHits.length === 0 ? (
+													<p className="px-3 py-2 text-sm text-muted-foreground">
+														{t("providerModels.searchNoResults")}
+													</p>
+												) : (
+													<div data-testid="candidate-search-results">
+														{candidateHits.map((hit) => (
+															<button
+																key={hit.providerModelId}
+																type="button"
+																onClick={() => locateCandidate(hit.providerModelId)}
+																className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+															>
+																<span className="min-w-0 truncate font-mono">
+																	{hit.providerModelId}
+																</span>
+																<MatchStateLabel state={hit.matchState} />
+															</button>
+														))}
+													</div>
+												)}
+											</div>
+										)}
+									</div>
 								</div>
 
 								{candidates === null ? (
@@ -481,10 +570,13 @@ export function AddProviderModelsDialog({
 												return (
 													<div
 														key={candidate.providerModelId}
+														data-model-id={candidate.providerModelId}
 														className={cn(
-															"rounded-lg border p-3",
+															"rounded-lg border p-3 transition-colors",
 															clickable &&
-																"cursor-pointer transition-colors hover:border-primary/50 hover:bg-muted/40",
+																"cursor-pointer hover:border-primary/50 hover:bg-muted/40",
+															candidate.providerModelId === highlightId &&
+																"border-primary ring-2 ring-primary/40",
 														)}
 														role={clickable ? "button" : undefined}
 														tabIndex={clickable ? 0 : undefined}

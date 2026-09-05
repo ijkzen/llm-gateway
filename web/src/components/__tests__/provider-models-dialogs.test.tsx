@@ -1,7 +1,7 @@
 import { AddProviderModelsDialog } from "@/components/provider-models/AddProviderModelsDialog";
 import { ProviderModelDetailDialog } from "@/components/provider-models/ProviderModelDetailDialog";
 import type { ProviderModel, RefreshCandidate } from "@/hooks/use-provider-models";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -230,6 +230,55 @@ describe("AddProviderModelsDialog 候选三态", () => {
 				proxyAddr: "",
 			},
 		]);
+	});
+});
+
+describe("AddProviderModelsDialog 候选搜索", () => {
+	function renderWithCandidates() {
+		mocks.refreshMutate.mockImplementation((_args, opts) => {
+			opts.onSuccess([
+				makeCandidate(),
+				makeCandidate({
+					providerModelId: "vendor/deep-r1",
+					matchState: "manual",
+					contextLength: null,
+					maxOutputTokens: null,
+					reasoning: false,
+					toolUse: false,
+				}),
+			]);
+		});
+		Element.prototype.scrollIntoView = vi.fn();
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
+		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
+	}
+
+	it("自动添加页签提供候选搜索框，不再展示刷新提示文本", () => {
+		renderWithCandidates();
+		expect(screen.getByRole("searchbox", { name: "搜索候选模型…" })).toBeTruthy();
+		expect(screen.queryByText("拉取远端列表，按模型目录自动补全")).toBeNull();
+	});
+
+	it("点击搜索结果定位并高亮对应候选卡", () => {
+		renderWithCandidates();
+		const input = screen.getByRole("searchbox", { name: "搜索候选模型…" });
+		fireEvent.change(input, { target: { value: "deep" } });
+		const results = screen.getByTestId("candidate-search-results");
+		fireEvent.click(within(results).getByRole("button", { name: /vendor\/deep-r1/ }));
+
+		const card = document.querySelector('[data-model-id="vendor/deep-r1"]') as HTMLElement;
+		expect(card).toBeTruthy();
+		expect(card.className).toContain("ring-2");
+		expect(screen.queryByTestId("candidate-search-results")).toBeNull();
+		expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+	});
+
+	it("搜索无匹配时显示未找到提示", () => {
+		renderWithCandidates();
+		const input = screen.getByRole("searchbox", { name: "搜索候选模型…" });
+		fireEvent.change(input, { target: { value: "nothing" } });
+		expect(screen.getByText("未找到匹配模型")).toBeTruthy();
 	});
 });
 

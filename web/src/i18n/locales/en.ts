@@ -328,7 +328,7 @@ const en: Translation = {
 			"Fetch the model list from {{provider}} and auto-fill it; add manually if the provider has no Models API.",
 		tryRefresh: "Try refresh",
 		autoAdd: "Auto add",
-		refreshHint: "Fetch the remote list and auto-complete from the model catalog",
+		candidateSearch: "Search candidates…",
 		notRefreshed: 'Not refreshed yet. Click "Try refresh" to fetch the remote model list',
 		refreshEmpty: "No models returned, or all models are already imported; use manual add below",
 		smartFilled: "Auto-filled",
