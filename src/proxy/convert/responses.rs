@@ -73,16 +73,15 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
     let mut body = json!({
         "model": actual_model,
         "input": Value::Array(input),
-        "instructions": if instructions.is_empty() {
-            json!("You are a helpful assistant.")
-        } else {
-            json!(instructions.join("\n\n"))
-        },
         // Responses 后端普遍只支持 SSE；客户端非流式时由管线聚合。
         "stream": true,
         "store": false,
     });
     let object = body.as_object_mut().expect("object body");
+    // instructions 可选：客户端没写 system 时不应注入默认值（LiteLLM 同款）。
+    if !instructions.is_empty() {
+        object.insert("instructions".to_string(), json!(instructions.join("\n\n")));
+    }
 
     if let Some(max_tokens) = chat_max_tokens(chat) {
         object.insert("max_output_tokens".to_string(), json!(max_tokens));
@@ -382,6 +381,11 @@ impl ResponsesStreamConverter {
                                 self.emit_missing_text(output_index, text, out);
                             }
                         }
+                        Some("refusal") => {
+                            if let Some(text) = part.get("refusal").and_then(Value::as_str) {
+                                self.emit_missing_text(output_index, text, out);
+                            }
+                        }
                         Some("reasoning") => {
                             let summary = Self::reasoning_summary(part);
                             self.emit_missing_reasoning(output_index, &summary, out);
@@ -420,9 +424,8 @@ impl ResponsesStreamConverter {
                 if let Some(id) = value.pointer("/response/id").and_then(Value::as_str) {
                     self.id = format!("chatcmpl-{id}");
                 }
-                if let Some(model) = value.pointer("/response/model").and_then(Value::as_str) {
-                    self.model = model.to_string();
-                }
+                // model 保持客户端请求的别名，不跟随上游实际模型名
+                // （与 Anthropic/Gemini 路径口径一致）。
                 self.ensure_started(&mut out);
             }
             Some("response.output_text.delta") => {
@@ -432,6 +435,22 @@ impl ResponsesStreamConverter {
                     .unwrap_or(0);
                 let text = value.get("delta").and_then(Value::as_str).unwrap_or("");
                 self.emit_delta(output_index, text, false, &mut out);
+            }
+            Some("response.refusal.delta") => {
+                let output_index = value
+                    .get("output_index")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let text = value.get("delta").and_then(Value::as_str).unwrap_or("");
+                self.emit_delta(output_index, text, false, &mut out);
+            }
+            Some("response.refusal.done") => {
+                let output_index = value
+                    .get("output_index")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
+                let text = value.get("refusal").and_then(Value::as_str).unwrap_or("");
+                self.emit_missing_text(output_index, text, &mut out);
             }
             Some("response.reasoning_text.delta")
             | Some("response.reasoning_summary_text.delta") => {
@@ -652,6 +671,38 @@ mod tests {
     }
 
     #[test]
+    fn no_system_message_omits_instructions() {
+        // instructions 可选：客户端没写 system 时不得凭空注入默认系统提示。
+        let chat = from_str::<Value>(r#"{"model":"m","messages":[{"role":"user","content":"x"}]}"#)
+            .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert!(body.get("instructions").is_none());
+    }
+
+    #[test]
+    fn refusal_deltas_become_content_without_replay_duplication() {
+        let mut converter = ResponsesStreamConverter::new("req-1", "vm-a");
+        let mut chunks = Vec::new();
+        for event in [
+            r#"{"type":"response.created","response":{"id":"resp_1"}}"#,
+            r#"{"type":"response.refusal.delta","output_index":0,"delta":"抱歉"}"#,
+            r#"{"type":"response.refusal.done","output_index":0,"refusal":"抱歉，不行"}"#,
+            r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"抱歉，不行"}]}]}}"#,
+        ] {
+            chunks.extend(converter.convert_event(event).unwrap());
+        }
+        let content: Vec<&str> = chunks
+            .iter()
+            .filter_map(|c| {
+                c.pointer("/choices/0/delta/content")
+                    .and_then(Value::as_str)
+            })
+            .collect();
+        // delta 与 done 只补差额；completed 回放不再重复。
+        assert_eq!(content, ["抱歉", "，不行"]);
+    }
+
+    #[test]
     fn converts_stream_events() {
         let mut converter = ResponsesStreamConverter::new("req-1", "vm-a");
         let mut chunks = Vec::new();
@@ -665,6 +716,8 @@ mod tests {
             chunks.extend(converter.convert_event(event).unwrap());
         }
         assert!(converter.is_finished());
+        // chunk 的 model 保持客户端请求的虚拟模型别名，与 Anthropic/Gemini 路径一致。
+        assert_eq!(chunks[0]["model"], "vm-a");
         assert_eq!(chunks[0]["choices"][0]["delta"]["role"], "assistant");
         assert_eq!(chunks[1]["choices"][0]["delta"]["content"], "hi");
         assert_eq!(

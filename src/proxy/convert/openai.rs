@@ -84,6 +84,19 @@ pub fn error_message(body: &str) -> String {
     super::extract_error_message(body)
 }
 
+/// 判定是否为 usage-only 尾块（include_usage 注入产生：choices 为空数组 +
+/// usage 对象）。客户端未请求 include_usage 时应从直通流中过滤。
+pub fn is_usage_only_chunk(event: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(event) else {
+        return false;
+    };
+    value.get("usage").is_some_and(Value::is_object)
+        && value
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_some_and(|choices| choices.is_empty())
+}
+
 /// OpenAI 兼容流式旁路扫描器：统计 usage 与内容 token 时刻，不改变转发字节。
 #[derive(Debug, Default)]
 pub struct OpenAiStreamScanner {
@@ -95,41 +108,45 @@ pub struct OpenAiStreamScanner {
 impl OpenAiStreamScanner {
     pub fn feed(&mut self, text: &str) {
         for event in self.splitter.feed(text) {
-            if event == "[DONE]" {
-                continue;
+            self.feed_event(&event);
+        }
+    }
+
+    pub fn feed_event(&mut self, event: &str) {
+        if event == "[DONE]" {
+            return;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(event) else {
+            return;
+        };
+        if let Some(usage_value) = value.get("usage")
+            && usage_value.is_object()
+            && (usage_value.get("prompt_tokens").is_some()
+                || usage_value.get("input_tokens").is_some())
+        {
+            let usage = extract_usage(usage_value);
+            if usage.input_tokens.is_some() || usage.output_tokens.is_some() {
+                self.usage = Some(usage);
             }
-            let Ok(value) = serde_json::from_str::<Value>(&event) else {
-                continue;
-            };
-            if let Some(usage_value) = value.get("usage")
-                && usage_value.is_object()
-                && (usage_value.get("prompt_tokens").is_some()
-                    || usage_value.get("input_tokens").is_some())
-            {
-                let usage = extract_usage(usage_value);
-                if usage.input_tokens.is_some() || usage.output_tokens.is_some() {
-                    self.usage = Some(usage);
-                }
-            }
-            // 内容判定与 chunk_has_content 对齐：content / reasoning_content / tool_calls
-            // 任一非空即视为首个内容 token（推理模型与纯函数调用流同样计入 ttft）。
-            if !self.saw_content
-                && (value
-                    .pointer("/choices/0/delta/content")
+        }
+        // 内容判定与 chunk_has_content 对齐：content / reasoning_content / tool_calls
+        // 任一非空即视为首个内容 token（推理模型与纯函数调用流同样计入 ttft）。
+        if !self.saw_content
+            && (value
+                .pointer("/choices/0/delta/content")
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty())
+                || value
+                    .pointer("/choices/0/delta/reasoning_content")
                     .and_then(Value::as_str)
                     .is_some_and(|s| !s.is_empty())
-                    || value
-                        .pointer("/choices/0/delta/reasoning_content")
-                        .and_then(Value::as_str)
-                        .is_some_and(|s| !s.is_empty())
-                    || value
-                        .pointer("/choices/0/delta/tool_calls")
-                        .and_then(Value::as_array)
-                        .is_some_and(|calls| !calls.is_empty()))
-            {
-                self.saw_content = true;
-                // 内容 token 时刻由调用方在 feed 时统一记录（见 StreamMetrics::on_token）。
-            }
+                || value
+                    .pointer("/choices/0/delta/tool_calls")
+                    .and_then(Value::as_array)
+                    .is_some_and(|calls| !calls.is_empty()))
+        {
+            self.saw_content = true;
+            // 内容 token 时刻由调用方在 feed 时统一记录（见 StreamMetrics::on_token）。
         }
     }
 }
@@ -138,6 +155,20 @@ impl OpenAiStreamScanner {
 mod tests {
     use super::*;
     use serde_json::from_str;
+
+    #[test]
+    fn is_usage_only_chunk_detects_spec_shape() {
+        // OpenAI 规范：include_usage 注入产生的尾块 choices 为空数组。
+        assert!(is_usage_only_chunk(
+            r#"{"id":"x","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#
+        ));
+        assert!(!is_usage_only_chunk(
+            r#"{"id":"x","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}"#
+        ));
+        assert!(!is_usage_only_chunk(r#"{"usage":{"prompt_tokens":1}}"#));
+        assert!(!is_usage_only_chunk("not json"));
+        assert!(!is_usage_only_chunk("[DONE]"));
+    }
 
     #[test]
     fn build_body_rewrites_model_and_injects_include_usage() {

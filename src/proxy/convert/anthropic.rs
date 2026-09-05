@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::{
     ANTHROPIC_DEFAULT_MAX_TOKENS, chat_max_tokens, chat_messages, client_usage_json,
-    collect_tool_call_names, inline_defs, message_text, reasoning_budget,
+    collect_tool_call_names, inline_defs, message_text, reasoning_budget, truncate_chars,
 };
 use crate::proxy::metrics::Usage;
 
@@ -151,8 +151,24 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
         }
     }
 
-    let mut tool_choice = map_tool_choice(chat);
     let thinking = map_thinking(chat, max_tokens);
+    let thinking = drop_thinking_without_history_blocks(chat, thinking);
+    let thinking_active = thinking.is_some();
+    let mut tool_choice = map_tool_choice(chat);
+    if thinking_active
+        && let Some(choice) = tool_choice.take()
+        && matches!(
+            choice.get("type").and_then(Value::as_str),
+            Some("any") | Some("tool")
+        )
+    {
+        // thinking 模式只允许 auto/none：强制工具调用降级为 auto（保留并行开关）。
+        let mut downgraded = json!({"type": "auto"});
+        if let Some(disable) = choice.get("disable_parallel_tool_use") {
+            downgraded["disable_parallel_tool_use"] = disable.clone();
+        }
+        tool_choice = Some(downgraded);
+    }
     let mut json_mode_tool = false;
 
     if let Some(response_format) = chat.get("response_format") {
@@ -198,14 +214,25 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
     if !system_blocks.is_empty() {
         body.insert("system".to_string(), Value::Array(system_blocks));
     }
-    if let Some(temperature) = chat.get("temperature") {
+    if let Some(temperature) = chat.get("temperature")
+        && (!thinking_active || temperature.as_f64() == Some(1.0))
+    {
+        // thinking 启用时官方只允许 temperature=1。
         body.insert("temperature".to_string(), temperature.clone());
     }
-    if let Some(top_p) = chat.get("top_p") {
+    if !thinking_active && let Some(top_p) = chat.get("top_p") {
         body.insert("top_p".to_string(), top_p.clone());
     }
     if let Some(stop_sequences) = map_stop(chat) {
         body.insert("stop_sequences".to_string(), Value::Array(stop_sequences));
+    }
+    if let Some(user) = chat.get("user").and_then(Value::as_str)
+        && !user.is_empty()
+    {
+        body.insert(
+            "metadata".to_string(),
+            json!({"user_id": truncate_chars(user, 512)}),
+        );
     }
     if !tools.is_empty() {
         body.insert("tools".to_string(), Value::Array(tools));
@@ -254,8 +281,27 @@ fn map_thinking(chat: &Value, max_tokens: i64) -> Option<Value> {
     if max_tokens <= 1024 {
         return None;
     }
-    let budget = reasoning_budget(effort).min(max_tokens - 1);
+    // 官方约束：budget_tokens >= 1024 且 < max_tokens（LiteLLM 同款钳制）。
+    let budget = reasoning_budget(effort).max(1024).min(max_tokens - 1);
     Some(json!({"type": "enabled", "budget_tokens": budget}))
+}
+
+/// assistant 历史含 tool_calls 时丢弃 thinking：转换层不回传 thinking 块
+/// （无有效 signature），此时启用 thinking 会触发 Anthropic
+/// "Expected thinking or redacted_thinking" 400（LiteLLM 同款规避）。
+fn drop_thinking_without_history_blocks(chat: &Value, thinking: Option<Value>) -> Option<Value> {
+    let has_tool_calls = chat_messages(chat).iter().any(|message| {
+        message.get("role").and_then(Value::as_str) == Some("assistant")
+            && message
+                .get("tool_calls")
+                .and_then(Value::as_array)
+                .is_some_and(|calls| !calls.is_empty())
+    });
+    if has_tool_calls && thinking.is_some() {
+        tracing::warn!("已丢弃 thinking 参数：assistant 历史含 tool_calls 且无 thinking 块");
+        return None;
+    }
+    thinking
 }
 
 fn map_stop(chat: &Value) -> Option<Vec<Value>> {
@@ -331,8 +377,8 @@ pub fn normalize_stop_reason(stop_reason: &str, has_tool_calls: bool) -> &'stati
         return "tool_calls";
     }
     match stop_reason {
-        "end_turn" | "stop_sequence" => "stop",
-        "max_tokens" => "length",
+        "end_turn" | "stop_sequence" | "pause_turn" => "stop",
+        "max_tokens" | "compaction" | "model_context_window_exceeded" => "length",
         "refusal" => "content_filter",
         "" => "stop",
         other => {
@@ -745,9 +791,57 @@ mod tests {
         .unwrap();
         let (body, _) = build_request_body(&chat, "claude-x").unwrap();
         assert_eq!(body["stop_sequences"], json!(["END"]));
-        assert_eq!(body["tool_choice"]["type"], "any");
+        // thinking 与强制 tool_choice 互斥，required 降级为 auto。
+        assert_eq!(body["tool_choice"]["type"], "auto");
         assert_eq!(body["tool_choice"]["disable_parallel_tool_use"], true);
         assert_eq!(body["thinking"]["budget_tokens"], 4095);
+    }
+
+    #[test]
+    fn thinking_drops_incompatible_sampling_params() {
+        // 官方：thinking 启用时 temperature 只能不传或 =1，top_p 不可用。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"high","max_tokens":4096,"temperature":0.7,"top_p":0.9}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(body["thinking"].is_object());
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("top_p").is_none());
+    }
+
+    #[test]
+    fn thinking_keeps_temperature_one() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"high","max_tokens":4096,"temperature":1}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["temperature"], 1);
+    }
+
+    #[test]
+    fn thinking_without_forced_tool_choice_keeps_any() {
+        // 未启用 thinking 时强制 tool_choice 不受影响。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"tool_choice":"required"}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["tool_choice"]["type"], "any");
+    }
+
+    #[test]
+    fn thinking_dropped_when_history_has_tool_calls_without_thinking_blocks() {
+        // assistant 历史永远没有有效 signature 的 thinking 块（转换层不回传
+        // reasoning_content），此时启用 thinking 会触发 Anthropic
+        // "Expected thinking or redacted_thinking" 400；与 LiteLLM 同款直接丢弃。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_1","content":"ok"}],"reasoning_effort":"high","max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(body.get("thinking").is_none());
     }
 
     #[test]
@@ -758,6 +852,17 @@ mod tests {
         .unwrap();
         let (body, _) = build_request_body(&chat, "claude-x").unwrap();
         assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn clamps_minimal_effort_budget_to_official_minimum() {
+        // Anthropic 官方要求 budget_tokens >= 1024，更小的值会被 400 拒绝。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"minimal","max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["thinking"]["budget_tokens"], 1024);
     }
 
     #[test]
@@ -799,6 +904,28 @@ mod tests {
         assert!(json_mode);
         assert!(body["thinking"].is_object(), "thinking 与 json 模式可共存");
         assert!(body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn maps_extended_stop_reasons() {
+        // 官方 StopReason 新枚举：context window 耗尽与 compaction 语义为
+        // length；pause_turn 是可续传的中断，按 stop 透出。
+        assert_eq!(
+            normalize_stop_reason("model_context_window_exceeded", false),
+            "length"
+        );
+        assert_eq!(normalize_stop_reason("compaction", false), "length");
+        assert_eq!(normalize_stop_reason("pause_turn", false), "stop");
+    }
+
+    #[test]
+    fn user_param_becomes_metadata_user_id() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"user":"user-123"}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["metadata"]["user_id"], "user-123");
     }
 
     #[test]
