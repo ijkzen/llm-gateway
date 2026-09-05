@@ -1,5 +1,4 @@
 import { EmptyState } from "@/components/empty-state";
-import { StatusBadge } from "@/components/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,23 +48,20 @@ export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDeta
 						<CardTitle className="text-xl">{job.name}</CardTitle>
 						<p className="mt-1 text-sm text-muted-foreground">{job.title}</p>
 					</div>
-					<div className="flex items-center gap-2">
-						<Switch
-							checked={job.enabled}
-							disabled={updateCronJob.isPending}
-							aria-label={`${t("cronJobs.toggleStatus")} ${job.name} ${t("cronJobs.toggleStatusSuffix")}`}
-							onCheckedChange={() =>
-								updateCronJob.mutate(
-									{ name: job.name, enabled: !job.enabled },
-									{
-										onSuccess: () => toastSuccess(t("common.success")),
-										onError: (error) => toastError(t("common.error"), error),
-									},
-								)
-							}
-						/>
-						<StatusBadge status={job.enabled ? "enabled" : "disabled"} />
-					</div>
+					<Switch
+						checked={job.enabled}
+						disabled={updateCronJob.isPending}
+						aria-label={`${t("cronJobs.toggleStatus")} ${job.name} ${t("cronJobs.toggleStatusSuffix")}`}
+						onCheckedChange={() =>
+							updateCronJob.mutate(
+								{ name: job.name, enabled: !job.enabled },
+								{
+									onSuccess: () => toastSuccess(t("common.success")),
+									onError: (error) => toastError(t("common.error"), error),
+								},
+							)
+						}
+					/>
 				</div>
 			</CardHeader>
 			<CardContent className="flex-1 space-y-6 py-6">

@@ -4,7 +4,6 @@ import { DataTablePagination } from "@/components/data-table/pagination";
 import { EmptyState } from "@/components/empty-state";
 import { MidEllipsis } from "@/components/mid-ellipsis";
 import { RelativeTime } from "@/components/relative-time";
-import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -109,15 +108,12 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 			cell: ({ row }) => {
 				const apiKey = row.original;
 				return (
-					<div className="flex items-center gap-2">
-						<Switch
-							checked={apiKey.enable}
-							disabled={toggleApiKey.isPending}
-							aria-label={`${t("apiKeys.toggleStatus")} ${apiKey.name} ${t("apiKeys.toggleStatusSuffix")}`}
-							onCheckedChange={() => toggleEnable(apiKey)}
-						/>
-						<StatusBadge status={apiKey.enable ? "enabled" : "disabled"} />
-					</div>
+					<Switch
+						checked={apiKey.enable}
+						disabled={toggleApiKey.isPending}
+						aria-label={`${t("apiKeys.toggleStatus")} ${apiKey.name} ${t("apiKeys.toggleStatusSuffix")}`}
+						onCheckedChange={() => toggleEnable(apiKey)}
+					/>
 				);
 			},
 		},
