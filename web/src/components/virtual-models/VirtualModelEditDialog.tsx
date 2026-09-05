@@ -76,6 +76,8 @@ interface ProviderGroup {
 	provider: Provider;
 	rows: DraftMember[];
 	candidates: ProviderModel[];
+	/** 组排序键：组内最优先成员在后端 items（LB 序）中的下标；无成员组为 Number.MAX_SAFE_INTEGER。 */
+	lbIndex: number;
 }
 
 /** 分组头键盘折叠/展开：← 折叠、→ 展开；Enter/Space 由按钮原生切换。 */
@@ -90,9 +92,10 @@ function onHeaderKeyDown(
 
 /**
  * 创建/编辑虚拟模型弹窗：标题栏与底部操作栏固定，中间内容区滚动；
- * 成员模型分「已使用 / 未使用」两个 Tab 按供应商分组展示——组内成员按
- * 后端用量感知 LB 序排列（enable 优先 → 组内保持后端返回序），与主列表一致；
- * 分组头支持鼠标与方向键折叠/展开（与供应商启用状态无关）。
+ * 成员模型分「已使用 / 未使用」两个 Tab 按供应商分组展示——已使用组间按组内
+ * 最优先成员的后端 LB 位置排序、组内 enable 优先 + 保持后端返回序，与主列表
+ * 一致；未使用组保持 providers 顺序；分组头支持鼠标与方向键折叠/展开（与
+ * 供应商启用状态无关）。
  */
 export function VirtualModelEditDialog({
 	open,
@@ -210,16 +213,28 @@ export function VirtualModelEditDialog({
 	/** 供应商分组：成员行（join 供应商模型，组内按 enable 优先 + 后端 LB 序）+ 候选；组存在性由调用方过滤。 */
 	const groupOf = (provider: Provider): ProviderGroup => {
 		const rows = draftItems
-			.flatMap((draft) => {
+			.flatMap((draft, index) => {
 				const model = modelById.get(draft.modelId);
-				return model !== undefined && model.providerId === provider.id ? [{ draft, model }] : [];
+				return model !== undefined && model.providerId === provider.id
+					? [{ draft, model, index }]
+					: [];
 			})
 			.sort((a, b) => compareDraftMembers(a, b));
-		return { provider, rows, candidates: candidatesOf(provider.id) };
+		return {
+			provider,
+			rows,
+			candidates: candidatesOf(provider.id),
+			lbIndex:
+				rows.length > 0 ? Math.min(...rows.map((row) => row.index)) : Number.MAX_SAFE_INTEGER,
+		};
 	};
 
-	// 已使用：有成员的供应商组；未使用：无成员但有可添加候选的供应商组。均按 providers 顺序。
-	const usedGroups = providers.map(groupOf).filter((group) => group.rows.length > 0);
+	// 已使用组：组间按组内最优先成员的后端 LB 位置排序（与主列表用量感知 LB 序同口径）；
+	// 未使用组无成员、无 LB 位置，保持 providers 顺序。
+	const usedGroups = providers
+		.map(groupOf)
+		.filter((group) => group.rows.length > 0)
+		.sort((a, b) => a.lbIndex - b.lbIndex);
 	const unusedGroups = providers
 		.map(groupOf)
 		.filter((group) => group.rows.length === 0 && group.candidates.length > 0);
