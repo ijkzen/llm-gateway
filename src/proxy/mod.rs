@@ -622,23 +622,6 @@ fn opencode_session_fallback(api_key_name: &str) -> String {
     .to_string()
 }
 
-/// 第 4 层透传默认 allowlist：W3C Trace Context 头（traceparent 原样透传；
-/// tracestate 仅在透传 traceparent 时透传）、`x-opencode-session`（客户端
-/// 自带的 OpenCode 会话标识按原值透传）与 `user-agent`（下游客户端标识
-/// 原样透传所有上游）。其余下游头一律不透传。
-pub fn forward_allowlist() -> &'static [HeaderName] {
-    use std::sync::OnceLock;
-    static ALLOWLIST: OnceLock<Vec<HeaderName>> = OnceLock::new();
-    ALLOWLIST.get_or_init(|| {
-        vec![
-            HeaderName::from_static("traceparent"),
-            HeaderName::from_static("tracestate"),
-            HeaderName::from_static(OPENCODE_SESSION_HEADER),
-            HeaderName::from_static("user-agent"),
-        ]
-    })
-}
-
 /// 判定 header 名是否落在剥离/禁止清单。
 pub fn is_never_outbound(name: &HeaderName) -> bool {
     NEVER_OUTBOUND
@@ -650,6 +633,8 @@ pub fn is_never_outbound(name: &HeaderName) -> bool {
 /// - allowlist 命中项 first-wins、单值（HTTP 语义上重复等同逗号列表的项我们不透传）。
 /// - 剥离清单命中项即使 allowlist 里写了也不透传（黑名单优先）。
 ///
+/// allowlist 来自设置项 `downstream_request_header_allow_list` 的进程内缓存
+/// （`AppSettings::downstream_header_allow_list`），设置页更新后热生效。
 /// 供 `/v1` 入口（handler 拿到下游 `HeaderMap`）与本模块单测使用。
 pub fn select_forwardable_headers(
     downstream: &HeaderMap,
@@ -2182,7 +2167,7 @@ mod tests {
             ("authorization", "Bearer lg-secret"),
             ("host", "evil.example"),
         ]);
-        let out = select_forwardable_headers(&map, forward_allowlist());
+        let out = select_forwardable_headers(&map, &allowlist(&["traceparent", "tracestate"]));
         let got: Vec<(String, String)> = out
             .iter()
             .map(|(n, v)| (n.as_str().to_string(), v.to_str().unwrap().to_string()))
@@ -2488,10 +2473,17 @@ mod tests {
         assert!(!has_duplicate_names(&call2));
     }
 
+    /// 测试用 allowlist（与设置项 `downstream_request_header_allow_list` 的
+    /// 解析产物同构）。
+    fn allowlist(names: &[&'static str]) -> Vec<HeaderName> {
+        names.iter().map(|n| HeaderName::from_static(n)).collect()
+    }
+
     #[test]
     fn forward_allowlist_includes_opencode_session() {
         let map = header_map(&[("x-opencode-session", "client-sess"), ("x-other", "v")]);
-        let out = select_forwardable_headers(&map, forward_allowlist());
+        let out =
+            select_forwardable_headers(&map, &allowlist(&["traceparent", "x-opencode-session"]));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0.as_str(), "x-opencode-session");
         assert_eq!(out[0].1, hv("client-sess"));
@@ -2500,7 +2492,7 @@ mod tests {
     #[test]
     fn forward_allowlist_forwards_downstream_user_agent() {
         let map = header_map(&[("user-agent", "zcode/1.2.3"), ("x-other", "v")]);
-        let out = select_forwardable_headers(&map, forward_allowlist());
+        let out = select_forwardable_headers(&map, &allowlist(&["user-agent"]));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0.as_str(), "user-agent");
         assert_eq!(out[0].1, hv("zcode/1.2.3"));

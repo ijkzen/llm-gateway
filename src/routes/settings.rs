@@ -1,16 +1,20 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderName, StatusCode},
     response::IntoResponse,
     routing::{delete, get, put},
 };
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
 
-use crate::app_settings::{KEY_LANGUAGE, KEY_MAX_CONSECUTIVE_FAILURES, KEY_TIMEZONE};
+use crate::app_settings::{
+    KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST, KEY_LANGUAGE, KEY_MAX_CONSECUTIVE_FAILURES,
+    KEY_TIMEZONE,
+};
 use crate::entity::setting;
 use crate::i18n::Lang;
+use crate::proxy;
 use crate::response::{self, Response};
 use crate::state::AppState;
 
@@ -78,6 +82,13 @@ fn validate_setting_value(
                 .tr("value 必须是 true 或 false", "value must be true or false")
                 .to_string());
         }
+        Ok(setting::SettingType::Json)
+            if serde_json::from_str::<serde_json::Value>(value.trim()).is_err() =>
+        {
+            return Err(lang
+                .tr("value 必须是合法的 JSON", "value must be valid JSON")
+                .to_string());
+        }
         _ => {}
     }
 
@@ -106,6 +117,47 @@ fn validate_setting_value(
                 "value must be a positive integer (at least 1)",
             )
             .to_string());
+    }
+    if key == KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST {
+        return validate_header_allow_list(value, lang);
+    }
+    Ok(())
+}
+
+/// 透传 allowlist 附加校验：必须是 JSON 字符串数组，每个条目为合法 HTTP
+/// 头名，且不得命中剥离清单（黑名单头绝不入站，读侧还会再兜底过滤）。
+fn validate_header_allow_list(value: &str, lang: Lang) -> Result<(), String> {
+    let entries: Vec<String> = match serde_json::from_str(value.trim()) {
+        Ok(entries) => entries,
+        Err(_) => {
+            return Err(lang
+                .tr(
+                    "downstream_request_header_allow_list 必须是 JSON 字符串数组",
+                    "downstream_request_header_allow_list must be a JSON array of strings",
+                )
+                .to_string());
+        }
+    };
+    for entry in entries {
+        let name = entry.trim();
+        let Ok(header_name) = HeaderName::from_bytes(name.as_bytes()) else {
+            return Err(lang
+                .tr(
+                    "包含非法的 HTTP 头名：",
+                    "contains an invalid HTTP header name: ",
+                )
+                .to_string()
+                + name);
+        };
+        if proxy::is_never_outbound(&header_name) {
+            return Err(lang
+                .tr(
+                    "以下头属于剥离清单（凭据/框架/链路头），不允许透传：",
+                    "the following header is on the never-outbound list and cannot be forwarded: ",
+                )
+                .to_string()
+                + name);
+        }
     }
     Ok(())
 }

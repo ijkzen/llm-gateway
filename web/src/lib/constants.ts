@@ -2,7 +2,7 @@ import i18n from "@/i18n";
 
 export const DEFAULT_GROUP = "默认";
 
-export const SETTING_TYPES = ["String", "Int", "Float", "Bool"] as const;
+export const SETTING_TYPES = ["String", "Int", "Float", "Bool", "Json"] as const;
 
 export type SettingType = (typeof SETTING_TYPES)[number];
 

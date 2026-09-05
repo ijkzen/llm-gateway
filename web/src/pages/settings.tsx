@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { SearchInput } from "@/components/search-input";
 import { ChangePasswordDialog } from "@/components/settings/ChangePasswordDialog";
+import { JsonSettingEditDialog } from "@/components/settings/JsonSettingEditDialog";
 import { SettingDeleteDialog } from "@/components/settings/SettingDeleteDialog";
 import { SettingEditDialog } from "@/components/settings/SettingEditDialog";
 import { SettingsTable } from "@/components/settings/SettingsTable";
@@ -101,11 +102,20 @@ export default function SettingsPage() {
 				onDelete={setDeletingSetting}
 			/>
 
-			<SettingEditDialog
-				setting={editingSetting}
-				open={!!editingSetting}
-				onOpenChange={(open) => !open && setEditingSetting(null)}
-			/>
+			{/* Json 类型走结构化表单弹窗（逐行增删键值），其余类型沿用单值编辑。 */}
+			{editingSetting?.type === "Json" ? (
+				<JsonSettingEditDialog
+					setting={editingSetting}
+					open={!!editingSetting}
+					onOpenChange={(open) => !open && setEditingSetting(null)}
+				/>
+			) : (
+				<SettingEditDialog
+					setting={editingSetting}
+					open={!!editingSetting}
+					onOpenChange={(open) => !open && setEditingSetting(null)}
+				/>
+			)}
 
 			<SettingDeleteDialog
 				setting={deletingSetting}

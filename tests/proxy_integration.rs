@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use llm_gateway::entity::request;
+use llm_gateway::entity::setting;
 use llm_gateway::entity::{provider, provider_model, virtual_model, virtual_model_item};
 
 const TEST_BEARER: &str = "Bearer lg-itest-api-key-0000000000000";
@@ -1206,6 +1207,56 @@ async fn downstream_user_agent_is_forwarded_verbatim() {
     let upstream = headers.first().expect("应有上游头快照");
     assert_eq!(header_value(upstream, "user-agent"), Some("zcode/1.2.3"));
     assert_eq!(header_count(upstream, "user-agent"), 1);
+}
+
+#[tokio::test]
+async fn downstream_allowlist_setting_controls_forwarding() {
+    let captured_headers = capture_headers();
+    let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
+    let (app, db) = common_setup_with_member(&base, 0, 0, 0).await;
+
+    // 种子 allowlist 设置行（Json 类型），再经设置接口热更新为仅 user-agent。
+    setting::ActiveModel {
+        key: Set(llm_gateway::app_settings::KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST.to_string()),
+        value: Set(
+            llm_gateway::app_settings::DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST.to_string(),
+        ),
+        r#type: Set(4),
+        updated_at: Set(chrono::Utc::now()),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+    let put = Request::builder()
+        .method("PUT")
+        .uri("/api/settings/downstream_request_header_allow_list")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"value":"[\"user-agent\"]"}"#))
+        .unwrap();
+    let response = app.clone().oneshot(put).await.unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+
+    let (status, text) = send_chat_with_headers(
+        &app,
+        chat_body("vm-x", false),
+        &[
+            (
+                "traceparent",
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            ),
+            ("user-agent", "zcode/1.2.3"),
+        ],
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+
+    let headers = captured_headers.lock().unwrap();
+    let upstream = headers.first().expect("应有上游头快照");
+    assert_eq!(header_value(upstream, "user-agent"), Some("zcode/1.2.3"));
+    assert!(
+        header_value(upstream, "traceparent").is_none(),
+        "allowlist 更新后 traceparent 不应再透传"
+    );
 }
 
 #[tokio::test]

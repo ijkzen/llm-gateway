@@ -7,6 +7,7 @@
 use std::str::FromStr;
 use std::sync::Arc;
 
+use axum::http::HeaderName;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use tokio::sync::RwLock;
 
@@ -24,9 +25,32 @@ pub const KEY_MAX_CONSECUTIVE_FAILURES: &str = "max_consecutive_failures";
 /// 连续失败熔断阈值的种子默认值。
 pub const DEFAULT_MAX_CONSECUTIVE_FAILURES: u32 = 5;
 
+/// 设置项 key：`/v1` 下游请求头透传 allowlist（JSON 字符串数组，元素为
+/// HTTP 头名）。命中项原样透传上游；剥离清单（`NEVER_OUTBOUND`）优先级
+/// 更高，写入时即拒绝黑名单头名。
+pub const KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST: &str = "downstream_request_header_allow_list";
+/// 透传 allowlist 的种子默认值：与历史静态 allowlist 等价。
+pub const DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST: &str =
+    r#"["traceparent","tracestate","x-opencode-session","user-agent"]"#;
+
 /// 种子的默认时区：与生产容器 `TZ=Asia/Shanghai` 语义一致。
 /// 引导页初始化后会用浏览器时区覆盖该值。
 pub const DEFAULT_TIMEZONE: &str = "Asia/Shanghai";
+
+/// 解析透传 allowlist 设置值（JSON 字符串数组 → 去重后的 `HeaderName` 列表）。
+/// 非法 JSON 返回 `None`（调用方保持原值）；数组内非法/空白条目跳过。
+fn parse_header_allow_list(value: &str) -> Option<Vec<HeaderName>> {
+    let entries: Vec<String> = serde_json::from_str(value.trim()).ok()?;
+    let mut list = Vec::new();
+    for entry in entries {
+        if let Ok(name) = HeaderName::from_bytes(entry.trim().as_bytes())
+            && !list.contains(&name)
+        {
+            list.push(name);
+        }
+    }
+    Some(list)
+}
 
 #[derive(Clone, Debug)]
 struct AppSettingsInner {
@@ -35,6 +59,8 @@ struct AppSettingsInner {
     timezone: Option<chrono_tz::Tz>,
     /// 连续失败熔断阈值（正整数）。
     max_consecutive_failures: u32,
+    /// `/v1` 下游请求头透传 allowlist。
+    downstream_header_allow_list: Vec<HeaderName>,
 }
 
 /// 语言/时区设置的可克隆句柄。内部用 `RwLock` 支持运行时热更新
@@ -51,6 +77,10 @@ impl Default for AppSettings {
                 language: Lang::default(),
                 timezone: None,
                 max_consecutive_failures: DEFAULT_MAX_CONSECUTIVE_FAILURES,
+                downstream_header_allow_list: parse_header_allow_list(
+                    DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST,
+                )
+                .unwrap_or_default(),
             })),
         }
     }
@@ -80,6 +110,9 @@ impl AppSettings {
         let mut language = Lang::default();
         let mut timezone: Option<chrono_tz::Tz> = None;
         let mut max_consecutive_failures = DEFAULT_MAX_CONSECUTIVE_FAILURES;
+        let mut downstream_header_allow_list =
+            parse_header_allow_list(DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST)
+                .unwrap_or_default();
 
         for model in setting::Entity::find().all(db).await? {
             match model.key.as_str() {
@@ -98,6 +131,11 @@ impl AppSettings {
                         max_consecutive_failures = v;
                     }
                 }
+                KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST => {
+                    if let Some(list) = parse_header_allow_list(&model.value) {
+                        downstream_header_allow_list = list;
+                    }
+                }
                 _ => {}
             }
         }
@@ -109,6 +147,7 @@ impl AppSettings {
                 language,
                 timezone,
                 max_consecutive_failures,
+                downstream_header_allow_list,
             })),
         };
         settings.ensure_seed_rows(db).await?;
@@ -132,6 +171,11 @@ impl AppSettings {
                 KEY_MAX_CONSECUTIVE_FAILURES,
                 DEFAULT_MAX_CONSECUTIVE_FAILURES.to_string(),
                 SettingType::Int,
+            ),
+            (
+                KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST,
+                DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST.to_string(),
+                SettingType::Json,
             ),
         ] {
             let exists = setting::Entity::find()
@@ -168,6 +212,11 @@ impl AppSettings {
         self.inner.read().await.max_consecutive_failures
     }
 
+    /// 当前 `/v1` 下游请求头透传 allowlist。
+    pub async fn downstream_header_allow_list(&self) -> Vec<HeaderName> {
+        self.inner.read().await.downstream_header_allow_list.clone()
+    }
+
     /// 更新设置（由 `PUT /api/settings/{key}` 调用）。`timezone` 值非法时
     /// 保持原值（校验已在上层拒绝非法输入，这里只是防御性处理）。
     pub async fn update(&self, key: &str, value: &str) {
@@ -189,6 +238,11 @@ impl AppSettings {
                     inner.max_consecutive_failures = v;
                 }
             }
+            KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST => {
+                if let Some(list) = parse_header_allow_list(value) {
+                    inner.downstream_header_allow_list = list;
+                }
+            }
             _ => {}
         }
     }
@@ -201,3 +255,32 @@ impl AppSettings {
 }
 
 static LANG_SYNC: std::sync::Mutex<Lang> = std::sync::Mutex::new(Lang::Zh);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_header_allow_list_normalizes_dedupes_and_skips_invalid() {
+        let list = parse_header_allow_list(
+            r#"["Traceparent","user-agent","user-agent","bad name!","  ","x-ok"]"#,
+        )
+        .unwrap();
+        // HeaderName 统一小写、去重，非法/空白条目跳过。
+        let names: Vec<&str> = list.iter().map(|n| n.as_str()).collect();
+        assert_eq!(names, vec!["traceparent", "user-agent", "x-ok"]);
+    }
+
+    #[test]
+    fn parse_header_allow_list_rejects_invalid_json_and_accepts_empty() {
+        assert!(parse_header_allow_list("not-json").is_none());
+        assert!(parse_header_allow_list(r#"["a"] trailing"#).is_none());
+        assert!(parse_header_allow_list("[]").unwrap().is_empty());
+    }
+
+    #[test]
+    fn default_allowlist_value_parses_to_four_entries() {
+        let list = parse_header_allow_list(DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST).unwrap();
+        assert_eq!(list.len(), 4);
+    }
+}
