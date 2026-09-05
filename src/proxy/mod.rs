@@ -32,6 +32,7 @@ use uuid::Uuid;
 use crate::auth::{AuthedApiKey, openai_error};
 use crate::crypto;
 use crate::entity::{provider, provider_model, virtual_model, virtual_model_item};
+use crate::provider_template;
 use crate::proxy::convert::{
     anthropic, build_upstream_url, cached_client_usage_json, chunk_json, client_usage_json,
     extract_error_message, gemini, openai, responses, truncate_chars, usage_chunk_json,
@@ -472,14 +473,16 @@ async fn resolve_usage_map(
 
 /// 组装发往上游的请求。返回 (调用, Anthropic 是否注入了 JSON 模式合成工具)。
 ///
-/// Header 组装为四层覆盖模型（低层 → 高层依次 insert）：
+/// Header 组装优先级（同名时高优先级者胜，低优先级只补缺）：
+///   协议鉴权/必需头：网关生成，任何层不得覆盖（D3）
 ///   第 4 层：`forwarded` 下游 allowlist 透传（调用方已剥离/过滤，first-wins）
-///   第 3 层：provider `custom_header`（覆盖透传层）
-///   第 2 层：协议鉴权/必需头（custom_header 与透传均不得覆盖，D3）
+///   第 3 层：provider `custom_header`（不覆盖透传层同名）
+///   模板默认头：按 base_url host 查漏补缺（不覆盖透传/custom_header 同名，
+///            见 `provider_template::template_default_headers`）
 ///   第 1 层：框架头（`Host`/`Content-Type`/`Accept`/`Content-Length`）由
 ///            `upstream::send_upstream_request` 发送端唯一写入。
 /// 另：`opencode.ai` 上游要求携带 `x-opencode-session` 会话头（OpenCode Go
-/// 会话亲和，缺失部分后端直接 400）；四层组装完后若仍无该头，注入
+/// 会话亲和，缺失部分后端直接 400）；全部组装完后若仍无该头，注入
 /// `opencode_session` 回退值（仅对该 host 生效，不覆盖已有值）。
 fn build_upstream_call(
     member: &Member,
@@ -516,21 +519,24 @@ fn build_upstream_call(
     };
 
     let url = build_upstream_url(&member.base_url, member.protocol_code(), &sub_path);
+    let upstream_host = provider_template::host_of(&member.base_url).unwrap_or_default();
     let body_bytes = Bytes::from(body.to_string());
     let mut headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
     // 第 4 层：下游透传子集（调用方已过滤）。
     headers.extend_from_slice(forwarded);
-    // 第 3 层：provider custom_header（insert 覆盖透传层；协议保留名跳过并告警）。
+    // 第 3 层：provider custom_header（同名不覆盖透传层；协议保留名跳过并告警）。
     merge_custom_headers(
         &member.custom_header,
         member.protocol,
         request_id,
         &mut headers,
     );
-    // 第 2 层：协议鉴权/必需头（insert 覆盖 custom_header 与透传，D3）。
+    // 模板默认头：按 host 查漏补缺（同名以下游透传/custom_header 为准）。
+    merge_template_default_headers(&upstream_host, &mut headers);
+    // 第 2 层：协议鉴权/必需头（insert 覆盖以上所有层，D3）。
     apply_protocol_auth_headers(member.protocol, api_key, &mut headers);
     // OpenCode Go 会话亲和头：透传/custom_header 已带则不覆盖。
-    if is_opencode_host(base_url_host(&member.base_url))
+    if provider_template::is_opencode_host(&upstream_host)
         && !headers
             .iter()
             .any(|(n, _)| n.as_str().eq_ignore_ascii_case(OPENCODE_SESSION_HEADER))
@@ -605,21 +611,6 @@ const NEVER_OUTBOUND: &[&str] = &[
 /// OpenCode Go 会话亲和头名（缺失时上游部分后端直接 400）。
 const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
-/// 判定是否 OpenCode 上游 host（模板含 OpenCode Zen 与 OpenCode Go 两个入口，
-/// 同域 `opencode.ai`）。
-fn is_opencode_host(host: &str) -> bool {
-    host.eq_ignore_ascii_case("opencode.ai")
-}
-
-/// 从 base_url 提取 host（去 scheme / path / 端口），供供应商特判。
-fn base_url_host(base_url: &str) -> &str {
-    let rest = base_url
-        .trim()
-        .split_once("://")
-        .map_or(base_url, |(_, r)| r);
-    rest.split(['/', ':']).next().unwrap_or(rest)
-}
-
 /// 按 API Key 派生稳定的回退会话 ID（UUIDv5）：网关无会话概念，取
 /// 「每个 API Key 一个稳定会话」作为会话亲和的近似——重启不漂移，换 Key 即换会话。
 /// 客户端自带的 `x-opencode-session` 透传值优先于此回退。
@@ -680,7 +671,7 @@ pub fn select_forwardable_headers(
 /// - 命中协议鉴权/必需头名（`protocol_auth_header_names`，D3）→ 跳过并 `warn!`
 ///   （管理员误配同名协议头会静默失效，需告警；只记 request_id/协议/头名，不记值）。
 /// - 命中其余剥离清单名（框架头、凭据名等）→ 跳过。
-/// - 其余项 `insert` 覆盖低层同名（下游透传层）。
+/// - 其余项仅补缺：同名已存在（下游透传层）则跳过，下游值优先。
 ///
 /// JSON 非法 / 非对象 / 非字符串值：静默跳过（保持原语义）。
 fn merge_custom_headers(
@@ -716,7 +707,25 @@ fn merge_custom_headers(
             if is_never_outbound(&name) {
                 continue;
             }
-            headers.retain(|(existing, _)| existing != name);
+            // 下游 allowlist 透传同名值优先：custom_header 只补缺，不覆盖。
+            if headers.iter().any(|(existing, _)| *existing == name) {
+                continue;
+            }
+            headers.push((name, value));
+        }
+    }
+}
+
+/// 模板默认头查漏补缺：按 base_url host 取 `provider_template` 的默认
+/// custom_header（opencode.ai → pi 同款 UA、api.kimi.com → KimiCLI），仅补
+/// 出站表中尚不存在的名字——下游透传与 custom_header 同名值优先。
+fn merge_template_default_headers(host: &str, headers: &mut Vec<(HeaderName, HeaderValue)>) {
+    for (name, value) in provider_template::template_default_headers(host) {
+        if let (Ok(name), Ok(value)) = (
+            HeaderName::from_bytes(name.as_bytes()),
+            HeaderValue::from_str(&value),
+        ) && !headers.iter().any(|(existing, _)| *existing == name)
+        {
             headers.push((name, value));
         }
     }
@@ -2255,7 +2264,7 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_trace_is_present_and_custom_overrides_forwarded() {
+    fn forwarded_headers_beat_custom_header_on_same_name() {
         let m = member(
             Protocol::OpenAiCompat,
             r#"{"traceparent":"custom-tp","X-A":"b"}"#,
@@ -2283,8 +2292,8 @@ mod tests {
             .iter()
             .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
             .collect();
-        // custom_header 里同名 traceparent 覆盖透传层（第 3 层 insert 覆盖第 4 层）。
-        assert_eq!(map.get("traceparent").copied(), Some("custom-tp"));
+        // 同名时下游透传值优先，custom_header 只补缺（新合并语义）。
+        assert_eq!(map.get("traceparent").copied(), Some("00-downstream-tp"));
         assert_eq!(map.get("x-trace-id").copied(), Some("client-1"));
         assert_eq!(map.get("x-a").copied(), Some("b"));
         assert!(!has_duplicate_names(&call));
@@ -2325,16 +2334,6 @@ mod tests {
                 Some("Bearer sk-provider")
             );
         }
-    }
-
-    #[test]
-    fn base_url_host_extracts_host_without_scheme_path_port() {
-        assert_eq!(
-            base_url_host("https://opencode.ai/zen/go/v1"),
-            "opencode.ai"
-        );
-        assert_eq!(base_url_host("https://opencode.ai:8443/v1"), "opencode.ai");
-        assert_eq!(base_url_host("http://127.0.0.1:1234"), "127.0.0.1");
     }
 
     #[test]
@@ -2390,7 +2389,7 @@ mod tests {
             .collect();
         assert_eq!(map.get("x-opencode-session").copied(), Some("from-client"));
 
-        // custom_header（第 3 层）覆盖客户端透传（既有语义）。
+        // custom_header（第 3 层）不覆盖客户端透传（同名下游值优先），但仍优先于回退。
         let m2 = member_with_base_url(
             Protocol::OpenAiCompat,
             r#"{"x-opencode-session":"from-custom"}"#,
@@ -2404,7 +2403,17 @@ mod tests {
             .iter()
             .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
             .collect();
-        assert_eq!(map2.get("x-opencode-session").copied(), Some("from-custom"));
+        assert_eq!(map2.get("x-opencode-session").copied(), Some("from-client"));
+
+        // 无客户端值时 custom_header 仍优先于回退。
+        let (call3, _) =
+            build_upstream_call(&m2, &chat, false, "sk-provider", &[], "test", "fb").unwrap();
+        let map3: std::collections::HashMap<&str, &str> = call3
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        assert_eq!(map3.get("x-opencode-session").copied(), Some("from-custom"));
     }
 
     #[test]
@@ -2418,6 +2427,65 @@ mod tests {
             !joined.contains("x-opencode-session"),
             "非 opencode 上游不应注入回退会话头：{joined}"
         );
+    }
+
+    #[test]
+    fn template_default_user_agent_fills_opencode_and_kimi_hosts() {
+        let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let user_agent = |base_url: &str| {
+            let m = member_with_base_url(Protocol::OpenAiCompat, "{}", base_url);
+            let (call, _) =
+                build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb").unwrap();
+            let map: std::collections::HashMap<&str, &str> = call
+                .headers
+                .iter()
+                .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+                .collect();
+            map.get("user-agent").copied().unwrap_or("").to_string()
+        };
+        // OpenCode：pi 同款动态 UA（内核版本随宿主机变化，只断言形状）。
+        let opencode_ua = user_agent("https://opencode.ai/zen/go/v1");
+        assert!(opencode_ua.starts_with("pi ("), "{opencode_ua}");
+        assert!(opencode_ua.ends_with(')'), "{opencode_ua}");
+        // Kimi For Coding：官方 kimi-cli 当前版本 UA。
+        assert_eq!(
+            user_agent("https://api.kimi.com/coding/v1"),
+            provider_template::KIMI_CODE_USER_AGENT
+        );
+        // 非模板 host 不注入默认 UA。
+        assert_eq!(user_agent("https://api.example.com/v1"), "");
+    }
+
+    #[test]
+    fn custom_and_forwarded_user_agent_beat_template_default() {
+        let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let m = member_with_base_url(
+            Protocol::OpenAiCompat,
+            r#"{"User-Agent":"custom/9"}"#,
+            "https://opencode.ai/zen/go/v1",
+        );
+        let (call, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb").unwrap();
+        let map: std::collections::HashMap<&str, &str> = call
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        // custom_header 优先于模板默认头。
+        assert_eq!(map.get("user-agent").copied(), Some("custom/9"));
+
+        // 下游透传又优先于 custom_header。
+        let forwarded = vec![(HeaderName::from_static("user-agent"), hv("from-client"))];
+        let (call2, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &forwarded, "test", "fb").unwrap();
+        let map2: std::collections::HashMap<&str, &str> = call2
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        assert_eq!(map2.get("user-agent").copied(), Some("from-client"));
+        assert!(!has_duplicate_names(&call));
+        assert!(!has_duplicate_names(&call2));
     }
 
     #[test]

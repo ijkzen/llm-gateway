@@ -23,16 +23,31 @@ struct TemplateResponse {
     protocol_type: i32,
     billing_mode: i32,
     extra: String,
+    /// 模板默认 custom_header（JSON；按 base_url host 从
+    /// `provider_template::template_default_headers` 计算，无默认为 "{}"）。
+    custom_header: String,
 }
 
 impl From<provider_template::Model> for TemplateResponse {
     fn from(model: provider_template::Model) -> Self {
+        let host = crate::provider_template::host_of(&model.base_url).unwrap_or_default();
+        let defaults = crate::provider_template::template_default_headers(&host);
+        let custom_header = if defaults.is_empty() {
+            "{}".to_string()
+        } else {
+            let map: serde_json::Map<String, serde_json::Value> = defaults
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), serde_json::Value::String(value)))
+                .collect();
+            serde_json::Value::Object(map).to_string()
+        };
         Self {
             name: model.name,
             base_url: model.base_url,
             protocol_type: model.protocol_type,
             billing_mode: model.billing_mode,
             extra: model.extra,
+            custom_header,
         }
     }
 }

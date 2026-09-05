@@ -33,6 +33,8 @@ export interface ProviderTemplate {
 	protocolType: number;
 	billingMode: number;
 	extra: string;
+	/** 模板默认 custom_header（JSON 字符串；按 base_url host 计算，无默认 "{}"）。 */
+	customHeader: string;
 }
 
 export interface ProviderPayload {

@@ -214,6 +214,27 @@ fn test_host_of_extracts_domain() {
     assert_eq!(host_of(""), None);
 }
 
+#[test]
+fn test_template_default_headers_per_host() {
+    use super::{KIMI_CODE_USER_AGENT, template_default_headers};
+
+    // OpenCode：pi 同款动态 UA（内核版本随宿主机变化，只断言形状）。
+    let opencode = template_default_headers("opencode.ai");
+    assert_eq!(opencode.len(), 1);
+    assert_eq!(opencode[0].0, "User-Agent");
+    assert!(opencode[0].1.starts_with("pi ("), "{}", opencode[0].1);
+    assert!(opencode[0].1.ends_with(')'), "{}", opencode[0].1);
+
+    // Kimi For Coding：官方 kimi-cli 当前版本 UA。
+    let kimi = template_default_headers("api.kimi.com");
+    assert_eq!(kimi.len(), 1);
+    assert_eq!(kimi[0].0, "User-Agent");
+    assert_eq!(kimi[0].1, KIMI_CODE_USER_AGENT);
+
+    // 其他 host 无默认头。
+    assert!(template_default_headers("api.example.com").is_empty());
+}
+
 // ── 模板首次插入时向同 host 既有 provider 回填 extra 缺失键 ──
 
 async fn insert_provider(db: &DatabaseConnection, name: &str, base_url: &str, extra: &str) {

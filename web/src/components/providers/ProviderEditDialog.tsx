@@ -207,6 +207,12 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 		form.setValue("name", template.name);
 		form.setValue("protocolType", template.protocolType);
 		form.setValue("billingMode", template.billingMode);
+		// 模板默认 custom_header：只补缺，不覆盖用户已填的键。
+		const templateHeaders = parseExtra(template.customHeader);
+		if (Object.keys(templateHeaders).length > 0) {
+			const merged = { ...templateHeaders, ...parseExtra(form.getValues("customHeader")) };
+			form.setValue("customHeader", JSON.stringify(merged));
+		}
 		const keys = editableExtraKeys(template.extra);
 		const defaults: Record<string, string> = {};
 		for (const key of keys) {
