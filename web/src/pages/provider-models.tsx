@@ -16,9 +16,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
-interface SelectedModel {
-	provider: Provider;
-	model: ProviderModel;
+/** 弹窗选中目标只存 id：展示时从最新查询数据派生，避免保存/refetch 后弹窗显示旧值快照。 */
+interface SelectedModelRef {
+	providerId: number;
+	modelId: number;
 }
 
 interface SearchGroup {
@@ -29,7 +30,7 @@ interface SearchGroup {
 export default function ProviderModelsPage() {
 	const { t } = useTranslation();
 	const [addingProvider, setAddingProvider] = useState<Provider | null>(null);
-	const [selectedModel, setSelectedModel] = useState<SelectedModel | null>(null);
+	const [selected, setSelected] = useState<SelectedModelRef | null>(null);
 	const [search, setSearch] = useState("");
 	const [searchOpen, setSearchOpen] = useState(false);
 	const searchRef = useRef<HTMLDivElement>(null);
@@ -47,6 +48,20 @@ export default function ProviderModelsPage() {
 		refetch: refetchModels,
 	} = useProviderModels();
 
+	// 选中目标按 id 从当前数据派生：refetch 后拿到的是新对象，弹窗内容随之刷新。
+	const selectedDetail = useMemo(() => {
+		if (!selected || !providers || !models) return null;
+		const provider = providers.find((p) => p.id === selected.providerId);
+		const model = models.find((m) => m.modelId === selected.modelId);
+		if (!provider || !model) return null;
+		return { provider, model };
+	}, [selected, providers, models]);
+
+	// 选中目标在数据里消失（如被别处删除）时清掉选中态，弹窗保持关闭。
+	useEffect(() => {
+		if (selected && !selectedDetail) setSelected(null);
+	}, [selected, selectedDetail]);
+
 	const searchGroups = useMemo<SearchGroup[]>(() => {
 		const query = search.trim().toLowerCase();
 		if (!query || !providers || !models) return [];
@@ -62,12 +77,12 @@ export default function ProviderModelsPage() {
 
 	useEffect(() => {
 		const closeSearch = (event: PointerEvent) => {
-			if (selectedModel || searchRef.current?.contains(event.target as Node)) return;
+			if (selected || searchRef.current?.contains(event.target as Node)) return;
 			setSearchOpen(false);
 		};
 		document.addEventListener("pointerdown", closeSearch);
 		return () => document.removeEventListener("pointerdown", closeSearch);
-	}, [selectedModel]);
+	}, [selected]);
 
 	if (providersLoading || modelsLoading) {
 		return (
@@ -151,7 +166,9 @@ export default function ProviderModelsPage() {
 												<button
 													key={model.modelId}
 													type="button"
-													onClick={() => setSelectedModel({ provider, model })}
+													onClick={() =>
+														setSelected({ providerId: provider.id, modelId: model.modelId })
+													}
 													className="flex w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
 												>
 													{model.providerModelId}
@@ -185,7 +202,7 @@ export default function ProviderModelsPage() {
 						models={(models ?? []).filter((model) => model.providerId === provider.id)}
 						onAdd={setAddingProvider}
 						onOpenModel={(selectedProvider, model) =>
-							setSelectedModel({ provider: selectedProvider, model })
+							setSelected({ providerId: selectedProvider.id, modelId: model.modelId })
 						}
 					/>
 				))}
@@ -200,15 +217,15 @@ export default function ProviderModelsPage() {
 			/>
 
 			<ProviderModelDetailDialog
-				open={selectedModel !== null}
+				open={selectedDetail !== null}
 				onOpenChange={(open) => {
-					if (!open) setSelectedModel(null);
+					if (!open) setSelected(null);
 				}}
-				providerId={selectedModel?.provider.id ?? 0}
-				providerName={selectedModel?.provider.name ?? ""}
-				providerProxyAddr={selectedModel?.provider.proxyAddr}
-				providerProtocolType={selectedModel?.provider.protocolType ?? 0}
-				model={selectedModel?.model ?? null}
+				providerId={selectedDetail?.provider.id ?? 0}
+				providerName={selectedDetail?.provider.name ?? ""}
+				providerProxyAddr={selectedDetail?.provider.proxyAddr}
+				providerProtocolType={selectedDetail?.provider.protocolType ?? 0}
+				model={selectedDetail?.model ?? null}
 			/>
 		</div>
 	);

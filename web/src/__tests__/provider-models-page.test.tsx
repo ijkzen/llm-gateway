@@ -72,7 +72,13 @@ vi.mock("@/components/provider-models/AddProviderModelsDialog", () => ({
 
 vi.mock("@/components/provider-models/ProviderModelDetailDialog", () => ({
 	ProviderModelDetailDialog: ({ open, model }: { open: boolean; model: ProviderModel | null }) =>
-		open ? <dialog open>{model?.providerModelId}</dialog> : null,
+		open ? (
+			<dialog open>
+				<span data-testid="dlg-model-id">{model?.providerModelId}</span>
+				<span data-testid="dlg-context">{model?.contextLength}</span>
+				<span data-testid="dlg-maxout">{model?.maxOutputTokens}</span>
+			</dialog>
+		) : null,
 }));
 
 function makeProvider(id: number, name: string, enable = true): Provider {
@@ -233,5 +239,46 @@ describe("ProviderModelsPage", () => {
 		renderPage();
 
 		expect(screen.getByText(/暂无模型/)).toBeTruthy();
+	});
+
+	it("保存后弹窗随最新数据刷新，不再显示旧值快照", () => {
+		mocks.providers = [makeProvider(1, "OpenAI")];
+		mocks.models = [makeModel(1, 11, "gpt-4o")];
+		const { rerender } = renderPage();
+
+		fireEvent.click(screen.getByTestId("provider-model-card-11"));
+		expect(screen.getByTestId("dlg-maxout").textContent).toBe("4096");
+
+		// 模拟更新成功后 invalidateQueries → refetch 返回全新对象（值已变，含改名）。
+		mocks.models = [
+			{ ...makeModel(1, 11, "gpt-4o"), maxOutputTokens: 8192, providerModelId: "gpt-4o-v2" },
+		];
+		rerender(
+			<MemoryRouter>
+				<ProviderModelsPage />
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByRole("dialog")).toBeTruthy();
+		expect(screen.getByTestId("dlg-model-id").textContent).toBe("gpt-4o-v2");
+		expect(screen.getByTestId("dlg-maxout").textContent).toBe("8192");
+	});
+
+	it("选中模型从数据中消失时弹窗关闭", () => {
+		mocks.providers = [makeProvider(1, "OpenAI")];
+		mocks.models = [makeModel(1, 11, "gpt-4o")];
+		const { rerender } = renderPage();
+
+		fireEvent.click(screen.getByTestId("provider-model-card-11"));
+		expect(screen.getByRole("dialog")).toBeTruthy();
+
+		mocks.models = [];
+		rerender(
+			<MemoryRouter>
+				<ProviderModelsPage />
+			</MemoryRouter>,
+		);
+
+		expect(screen.queryByRole("dialog")).toBeNull();
 	});
 });
