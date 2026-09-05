@@ -67,6 +67,7 @@ function makeCandidate(overrides: Partial<RefreshCandidate> = {}): RefreshCandid
 		toolUse: true,
 		imageUnderstand: false,
 		videoUnderstand: false,
+		suggestions: null,
 		...overrides,
 	};
 }
@@ -333,6 +334,126 @@ describe("AddProviderModelsDialog Tab 与目录候选", () => {
 		fireEvent.click(screen.getByRole("button", { name: "gpt-4o-mini" }));
 		expect((input as HTMLInputElement).value).toBe("gpt-4o-mini");
 		expect(screen.queryByRole("button", { name: "gpt-4o-mini" })).toBeNull();
+	});
+});
+
+describe("AddProviderModelsDialog 待确认候选", () => {
+	const pendingSuggestions = [
+		{
+			catalogId: "openai/gpt-4o-mini",
+			contextLength: 128000,
+			maxOutputTokens: 16384,
+			reasoning: false,
+			toolUse: true,
+			imageUnderstand: true,
+			videoUnderstand: false,
+		},
+		{
+			catalogId: "openai/gpt-4o",
+			contextLength: 128000,
+			maxOutputTokens: 4096,
+			reasoning: false,
+			toolUse: true,
+			imageUnderstand: true,
+			videoUnderstand: false,
+		},
+	];
+
+	function makePendingCandidate(): RefreshCandidate {
+		return makeCandidate({
+			providerModelId: "vendor/gpt-4o-mini-x",
+			matchState: "pending",
+			contextLength: null,
+			maxOutputTokens: null,
+			reasoning: false,
+			toolUse: false,
+			suggestions: pendingSuggestions,
+		});
+	}
+
+	function renderPendingAndJump() {
+		mocks.refreshMutate.mockImplementation((_args, opts) => {
+			opts.onSuccess([makePendingCandidate()]);
+		});
+		Element.prototype.scrollIntoView = vi.fn();
+
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
+		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
+		fireEvent.click(screen.getByText("vendor/gpt-4o-mini-x"));
+	}
+
+	it("pending 显示待确认且禁选，点击跳转手动添加并预填相似度最高建议", async () => {
+		renderPendingAndJump();
+
+		const input = screen.getByPlaceholderText("如 gpt-4o") as HTMLInputElement;
+		expect(input.value).toBe("vendor/gpt-4o-mini-x");
+		const numbers = screen.getAllByRole("spinbutton");
+		expect((required(numbers[0]) as HTMLInputElement).value).toBe("128000");
+		expect((required(numbers[1]) as HTMLInputElement).value).toBe("16384");
+		// 右上角徽章：第一条建议默认选中。
+		expect(
+			screen.getByRole("button", { name: "openai/gpt-4o-mini" }).getAttribute("aria-pressed"),
+		).toBe("true");
+		expect(screen.getByRole("button", { name: "openai/gpt-4o" }).getAttribute("aria-pressed")).toBe(
+			"false",
+		);
+		await waitFor(() => expect(Element.prototype.scrollIntoView).toHaveBeenCalled());
+	});
+
+	it("pending 候选本体不可勾选（等用户在手动表单确认）", () => {
+		mocks.refreshMutate.mockImplementation((_args, opts) => {
+			opts.onSuccess([makePendingCandidate()]);
+		});
+
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
+		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
+
+		expect(screen.getByText("待确认")).toBeTruthy();
+		const checkbox = screen.getByRole("checkbox", {
+			name: "选择 vendor/gpt-4o-mini-x",
+		}) as HTMLButtonElement;
+		expect(checkbox.disabled).toBe(true);
+	});
+
+	it("点击其他徽章切换预填参数，模型 ID 保持远程 ID", () => {
+		renderPendingAndJump();
+
+		fireEvent.click(screen.getByRole("button", { name: "openai/gpt-4o" }));
+
+		const input = screen.getByPlaceholderText("如 gpt-4o") as HTMLInputElement;
+		expect(input.value).toBe("vendor/gpt-4o-mini-x");
+		const numbers = screen.getAllByRole("spinbutton");
+		expect((required(numbers[0]) as HTMLInputElement).value).toBe("128000");
+		expect((required(numbers[1]) as HTMLInputElement).value).toBe("4096");
+		expect(screen.getByRole("button", { name: "openai/gpt-4o" }).getAttribute("aria-pressed")).toBe(
+			"true",
+		);
+	});
+
+	it("manual 候选跳转后不渲染相似模型徽章", () => {
+		mocks.refreshMutate.mockImplementation((_args, opts) => {
+			opts.onSuccess([
+				makeCandidate({
+					providerModelId: "manual/only-model",
+					matchState: "manual",
+					contextLength: null,
+					maxOutputTokens: null,
+					reasoning: false,
+					toolUse: false,
+				}),
+			]);
+		});
+		Element.prototype.scrollIntoView = vi.fn();
+
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
+		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
+		fireEvent.click(screen.getByText("manual/only-model"));
+
+		expect(screen.getByPlaceholderText("如 gpt-4o")).toBeTruthy();
+		expect(screen.queryByRole("button", { name: "openai/gpt-4o-mini" })).toBeNull();
 	});
 });
 

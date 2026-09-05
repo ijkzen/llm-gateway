@@ -331,6 +331,8 @@ const zhCN = {
 		smartFilled: "已智能填充",
 		partialInfo: "信息不完整",
 		needManual: "需手动填写",
+		pendingConfirm: "待确认",
+		similarModels: "相似模型",
 		selectModel: "选择",
 		required: "必填",
 		selectedOfTotal: "已选 {{selected}} / 共 {{total}} 个",
