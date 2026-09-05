@@ -381,6 +381,67 @@ async fn openai_passthrough_stream_with_usage_injection() {
 }
 
 #[tokio::test]
+async fn anthropic_stream_includes_cached_tokens_in_usage_chunk() {
+    // usage chunk 与非流式口径一致：缓存命中明细（prompt_tokens_details）必须保留。
+    let base = spawn_mock(capture()).await;
+    let (app, _) = common_setup_with_member(&base, 2, 0, 0).await;
+
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "stream": true,
+            "stream_options": {"include_usage": true},
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 128,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    // mock 上游：cache_read 3 + cache_creation 2 → cached_tokens 5。
+    assert!(
+        text.contains(r#""prompt_tokens_details":{"cached_tokens":5}"#),
+        "{text}"
+    );
+    assert!(text.contains("data: [DONE]"));
+}
+
+#[tokio::test]
+async fn openai_passthrough_stream_hides_usage_chunk_unless_requested() {
+    // include_usage 注入只为统计指标；客户端未请求时 usage 尾块（choices 空
+    // 数组）必须过滤，不透给客户端（OpenAI 规范语义）。
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, db) = common_setup_with_member(&base, 0, 0, 0).await;
+
+    let (status, text) = send_chat(&app, chat_body("vm-x", true)).await;
+    assert_eq!(status, 200, "{text}");
+    let data_lines: Vec<&str> = text
+        .lines()
+        .filter(|line| line.starts_with("data: "))
+        .collect();
+    assert!(
+        data_lines.iter().all(|line| !line.contains("\"usage\"")),
+        "未请求 include_usage 时不应透出 usage chunk：{text}"
+    );
+    assert!(text.contains("data: [DONE]"));
+
+    // 客户端显式请求 include_usage：usage chunk 必须保留。
+    let mut body = chat_body("vm-x", true);
+    body["stream_options"] = json!({"include_usage": true});
+    let (status, text) = send_chat(&app, body).await;
+    assert_eq!(status, 200, "{text}");
+    assert!(text.contains("\"usage\""), "{text}");
+
+    // 过滤不影响指标统计：两次请求都应记录到 usage。
+    let rows = wait_for_records(&db, 2).await;
+    for record in &rows {
+        assert_eq!(record.input_tokens, Some(11));
+        assert_eq!(record.output_tokens, Some(3));
+    }
+}
+
+#[tokio::test]
 async fn anthropic_non_stream_converts_and_merges_cache_tokens() {
     let captured = capture();
     let base = spawn_mock(captured.clone()).await;
@@ -512,7 +573,8 @@ async fn responses_stream_includes_cached_tokens_in_usage_chunk() {
         .find(|chunk| chunk["choices"].as_array().is_some_and(Vec::is_empty))
         .unwrap();
     assert_eq!(usage_chunk["id"], "chatcmpl-resp_1");
-    assert_eq!(usage_chunk["model"], "gpt-x");
+    // model 保持客户端请求的虚拟模型别名（不跟随上游实际模型名）。
+    assert_eq!(usage_chunk["model"], "vm-x");
     assert!(text.contains("data: [DONE]"));
 }
 

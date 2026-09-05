@@ -34,8 +34,8 @@ use crate::crypto;
 use crate::entity::{provider, provider_model, virtual_model, virtual_model_item};
 use crate::provider_template;
 use crate::proxy::convert::{
-    anthropic, build_upstream_url, cached_client_usage_json, chunk_json, client_usage_json,
-    extract_error_message, gemini, openai, responses, truncate_chars, usage_chunk_json,
+    anthropic, build_upstream_url, cached_client_usage_json, chunk_json, extract_error_message,
+    gemini, openai, responses, truncate_chars, usage_chunk_json,
 };
 use crate::proxy::metrics::{RequestRecord, StreamMetrics, Usage, now_ms};
 use crate::proxy::pool::PooledBody;
@@ -484,7 +484,7 @@ async fn resolve_usage_map(
 /// 另：`opencode.ai` 上游要求携带 `x-opencode-session` 会话头（OpenCode Go
 /// 会话亲和，缺失部分后端直接 400）；全部组装完后若仍无该头，注入
 /// `opencode_session` 回退值（仅对该 host 生效，不覆盖已有值）。
-fn build_upstream_call(
+async fn build_upstream_call(
     member: &Member,
     chat: &Value,
     client_stream: bool,
@@ -507,7 +507,10 @@ fn build_upstream_call(
             (body, json_mode_tool, "messages".to_string())
         }
         Protocol::Gemini => {
-            let body = gemini::build_request_body(chat, &member.model_id)?;
+            let mut body = gemini::build_request_body(chat, &member.model_id)?;
+            // 远程 http(s) 图片下载转 inlineData（fileData 仅接受 GCS/Files API）。
+            let proxy_addr = member.proxy_enabled.then_some(member.proxy_addr.as_str());
+            gemini::inline_remote_images(&mut body, proxy_addr, request_id).await;
             let action = gemini::generate_action(client_stream);
             let model_path = if member.model_id.starts_with("models/") {
                 member.model_id.clone()
@@ -910,12 +913,10 @@ pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
     if !tool_calls.is_empty() {
         let calls: Vec<Value> = tool_calls
             .into_iter()
-            .enumerate()
-            .map(|(position, (_, (call_id, name, arguments)))| {
+            .map(|(_, (call_id, name, arguments))| {
                 json!({
                     "id": call_id,
                     "type": "function",
-                    "index": position,
                     "function": {"name": name, "arguments": arguments},
                 })
             })
@@ -1144,7 +1145,9 @@ pub async fn forward_chat(
             &forwarded,
             &request_id,
             &opencode_session,
-        ) {
+        )
+        .await
+        {
             Ok(result) => result,
             Err(message) => {
                 note_member_failure(state, member, &request_id, &mut counted_failures).await;
@@ -1380,7 +1383,8 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
             .insert(&state.db);
             (StatusCode::OK, axum::Json(parsed)).into_response()
         }
-        // OpenAI Compat 流式：字节直通 + 旁路扫描统计。
+        // OpenAI Compat 流式：事件直通（重帧）+ 旁路扫描统计；客户端未请求
+        // include_usage 时过滤注入产生的 usage 尾块。
         (Protocol::OpenAiCompat, true) => {
             let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
             let db = state.db.clone();
@@ -1389,8 +1393,9 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
             let mut stream_metrics = StreamMetrics::new(reply.start_at_ms);
             tokio::spawn(async move {
                 let mut body = reply.body;
+                let mut splitter = crate::proxy::sse::SseSplitter::default();
                 let mut disconnect = false;
-                while let Some(frame) = body.frame().await {
+                'outer: while let Some(frame) = body.frame().await {
                     let bytes = match frame {
                         Ok(frame) => frame.into_data().unwrap_or_default(),
                         Err(e) => {
@@ -1399,14 +1404,25 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                         }
                     };
                     let text = String::from_utf8_lossy(&bytes).to_string();
-                    scanner.feed(&text);
-                    if scanner.saw_content {
-                        scanner.saw_content = false;
-                        stream_metrics.on_token();
-                    }
-                    if tx.send(Ok(bytes)).await.is_err() {
-                        disconnect = true;
-                        break;
+                    for event in splitter.feed(&text) {
+                        scanner.feed_event(&event);
+                        if scanner.saw_content {
+                            scanner.saw_content = false;
+                            stream_metrics.on_token();
+                        }
+                        // include_usage 注入只为统计指标；客户端未请求时，
+                        // 空 choices 的 usage 尾块不透出（OpenAI 规范语义）。
+                        if !include_usage && openai::is_usage_only_chunk(&event) {
+                            continue;
+                        }
+                        if tx
+                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(&event))))
+                            .await
+                            .is_err()
+                        {
+                            disconnect = true;
+                            break 'outer;
+                        }
                     }
                 }
                 let end_time = now_ms();
@@ -1690,15 +1706,11 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                             .await;
                     }
                     if include_usage && let Some(usage) = converter.usage() {
-                        let usage_json = if protocol == Protocol::Gemini {
-                            cached_client_usage_json(&usage)
-                        } else {
-                            client_usage_json(&usage)
-                        };
+                        // 各协议统一带缓存明细（与非流式口径一致）。
                         let usage_chunk = usage_chunk_json(
                             &converter.completion_id(),
                             &requested_model,
-                            usage_json,
+                            cached_client_usage_json(&usage),
                         );
                         let frame = usage_chunk.to_string();
                         let _ = tx
@@ -1898,7 +1910,8 @@ pub async fn test_model(
         &[],
         &request_id,
         &opencode_session_fallback(TEST_API_KEY_NAME),
-    )?;
+    )
+    .await?;
 
     // Member 已由 resolve_proxy 归一：proxy_enabled 时地址必非空。
     let proxy = member.proxy_enabled.then_some(member.proxy_addr.as_str());
@@ -2055,6 +2068,35 @@ mod tests {
     }
 
     #[test]
+    fn accumulate_chunks_strips_index_from_tool_calls() {
+        // 非流式 chat.completion 的 tool_calls 无 index 字段（流式专属）。
+        let chunks = vec![
+            chunk_json("chatcmpl-1", "vm-a", json!({"role": "assistant"}), None),
+            chunk_json(
+                "chatcmpl-1",
+                "vm-a",
+                json!({"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{\"a\":"}}]}),
+                None,
+            ),
+            chunk_json(
+                "chatcmpl-1",
+                "vm-a",
+                json!({"tool_calls": [{"index": 0, "function": {"arguments": "1}"}}]}),
+                None,
+            ),
+            chunk_json("chatcmpl-1", "vm-a", json!({}), Some("tool_calls")),
+        ];
+        let completion = accumulate_chunks(&chunks, &Usage::default());
+        let call = &completion["choices"][0]["message"]["tool_calls"][0];
+        assert_eq!(call["function"]["name"], "f");
+        assert_eq!(call["function"]["arguments"], "{\"a\":1}");
+        assert!(
+            call.get("index").is_none(),
+            "非流式 tool_calls 不应带 index"
+        );
+    }
+
+    #[test]
     fn resolve_proxy_prefers_model_then_provider_then_direct() {
         // 模型开启 → 用模型地址（即使供应商也开着、地址不同）。
         assert_eq!(
@@ -2103,6 +2145,30 @@ mod tests {
 
     fn hv(value: &str) -> HeaderValue {
         HeaderValue::from_str(value).unwrap()
+    }
+
+    /// `build_upstream_call` 已异步化（Gemini 远程图片下载），测试用
+    /// current_thread runtime 同步驱动。
+    fn build_call_sync(
+        member: &Member,
+        chat: &Value,
+        forwarded: &[(HeaderName, HeaderValue)],
+        session: &str,
+    ) -> (UpstreamCall, bool) {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(build_upstream_call(
+                member,
+                chat,
+                false,
+                "sk-provider",
+                forwarded,
+                "test",
+                session,
+            ))
+            .unwrap()
     }
 
     fn names(call: &UpstreamCall) -> Vec<String> {
@@ -2204,8 +2270,7 @@ mod tests {
             r#"{"x-api-key":"custom","anthropic-version":"2099-01-01","authorization":"Bearer custom","content-type":"text/plain","X-A":"b"}"#,
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
+        let (call, _) = build_call_sync(&m, &chat, &[], "fb-sess");
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2233,8 +2298,7 @@ mod tests {
             r#"{"authorization":"Bearer stale","X-Tenant":"t1"}"#,
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
+        let (call, _) = build_call_sync(&m, &chat, &[], "fb-sess");
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2262,16 +2326,7 @@ mod tests {
             ),
             (HeaderName::from_static("x-trace-id"), hv("client-1")),
         ];
-        let (call, _) = build_upstream_call(
-            &m,
-            &chat,
-            false,
-            "sk-provider",
-            &forwarded,
-            "test",
-            "fb-sess",
-        )
-        .unwrap();
+        let (call, _) = build_call_sync(&m, &chat, &forwarded, "fb-sess");
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2288,8 +2343,7 @@ mod tests {
     fn gemini_auth_header_is_x_goog_api_key() {
         let m = member(Protocol::Gemini, r#"{"x-goog-api-key":"custom","X-A":"b"}"#);
         let chat = json!({"model":"m","contents":[{"role":"user","parts":[{"text":"hi"}]}]});
-        let (call, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
+        let (call, _) = build_call_sync(&m, &chat, &[], "fb-sess");
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2305,9 +2359,7 @@ mod tests {
         for raw in ["not-json", "[]", r#"{"x":123}"#, r#"{"x":"v","y":1}"#] {
             let m = member(Protocol::OpenAiCompat, raw);
             let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-            let (call, _) =
-                build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess")
-                    .unwrap();
+            let (call, _) = build_call_sync(&m, &chat, &[], "fb-sess");
             // 非对象 JSON / 非字符串值整体跳过：只剩协议鉴权头。
             let map: std::collections::HashMap<&str, &str> = call
                 .headers
@@ -2341,8 +2393,7 @@ mod tests {
             "https://opencode.ai/zen/go/v1",
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "sess-a").unwrap();
+        let (call, _) = build_call_sync(&m, &chat, &[], "sess-a");
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2365,8 +2416,7 @@ mod tests {
             "{}",
             "https://opencode.ai/zen/go/v1",
         );
-        let (call, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &forwarded, "test", "fb").unwrap();
+        let (call, _) = build_call_sync(&m, &chat, &forwarded, "fb");
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2380,9 +2430,7 @@ mod tests {
             r#"{"x-opencode-session":"from-custom"}"#,
             "https://opencode.ai/zen/go/v1",
         );
-        let (call2, _) =
-            build_upstream_call(&m2, &chat, false, "sk-provider", &forwarded, "test", "fb")
-                .unwrap();
+        let (call2, _) = build_call_sync(&m2, &chat, &forwarded, "fb");
         let map2: std::collections::HashMap<&str, &str> = call2
             .headers
             .iter()
@@ -2391,8 +2439,7 @@ mod tests {
         assert_eq!(map2.get("x-opencode-session").copied(), Some("from-client"));
 
         // 无客户端值时 custom_header 仍优先于回退。
-        let (call3, _) =
-            build_upstream_call(&m2, &chat, false, "sk-provider", &[], "test", "fb").unwrap();
+        let (call3, _) = build_call_sync(&m2, &chat, &[], "fb");
         let map3: std::collections::HashMap<&str, &str> = call3
             .headers
             .iter()
@@ -2405,8 +2452,7 @@ mod tests {
     fn non_opencode_member_does_not_inject_session_fallback() {
         let m = member(Protocol::OpenAiCompat, "{}");
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
+        let (call, _) = build_call_sync(&m, &chat, &[], "fb-sess");
         let joined = names(&call).join(",");
         assert!(
             !joined.contains("x-opencode-session"),
@@ -2419,8 +2465,7 @@ mod tests {
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
         let user_agent = |base_url: &str| {
             let m = member_with_base_url(Protocol::OpenAiCompat, "{}", base_url);
-            let (call, _) =
-                build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb").unwrap();
+            let (call, _) = build_call_sync(&m, &chat, &[], "fb");
             let map: std::collections::HashMap<&str, &str> = call
                 .headers
                 .iter()
@@ -2449,8 +2494,7 @@ mod tests {
             r#"{"User-Agent":"custom/9"}"#,
             "https://opencode.ai/zen/go/v1",
         );
-        let (call, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb").unwrap();
+        let (call, _) = build_call_sync(&m, &chat, &[], "fb");
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2461,8 +2505,7 @@ mod tests {
 
         // 下游透传又优先于 custom_header。
         let forwarded = vec![(HeaderName::from_static("user-agent"), hv("from-client"))];
-        let (call2, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &forwarded, "test", "fb").unwrap();
+        let (call2, _) = build_call_sync(&m, &chat, &forwarded, "fb");
         let map2: std::collections::HashMap<&str, &str> = call2
             .headers
             .iter()
@@ -2514,8 +2557,7 @@ mod tests {
             r#"{"connection":"keep-alive","host":"evil","x-custom":"ok"}"#,
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
+        let (call, _) = build_call_sync(&m, &chat, &[], "fb-sess");
         let joined = names(&call).join(",");
         assert!(
             !joined.contains("connection"),

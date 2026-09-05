@@ -6,10 +6,14 @@
 
 use std::collections::HashMap;
 
+use base64::Engine as _;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
-use super::{chat_max_tokens, chat_messages, collect_tool_call_names, inline_defs, message_text};
+use super::{
+    chat_max_tokens, chat_messages, collect_tool_call_names, inline_defs, message_text,
+    reasoning_budget,
+};
 use crate::proxy::metrics::Usage;
 
 /// 生成 Gemini URL 的 action 后缀（generateContent / streamGenerateContent）。
@@ -18,6 +22,139 @@ pub fn generate_action(stream: bool) -> String {
         "streamGenerateContent?alt=sse".to_string()
     } else {
         "generateContent".to_string()
+    }
+}
+
+/// Gemini 内联图片字节数上限（generateContent 请求体上限）。
+const MAX_INLINE_IMAGE_BYTES: usize = 20 * 1024 * 1024;
+
+const INLINE_IMAGE_MIME_TYPES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+fn is_remote_http_uri(uri: &str) -> bool {
+    uri.starts_with("http://") || uri.starts_with("https://")
+}
+
+/// Gemini 原生接受的 fileData URI（GCS 与 Files API），无需下载内联。
+fn is_native_file_uri(uri: &str) -> bool {
+    uri.starts_with("gs://")
+        || uri.starts_with("https://generativelanguage.googleapis.com/")
+        || uri.starts_with("http://generativelanguage.googleapis.com/")
+}
+
+fn build_image_client(proxy: Option<&str>) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15));
+    if let Some(proxy_addr) = proxy {
+        let proxy = reqwest::Proxy::all(proxy_addr).map_err(|e| e.to_string())?;
+        builder = builder.proxy(proxy);
+    }
+    builder.build().map_err(|e| e.to_string())
+}
+
+async fn fetch_image_inline(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<(String, String), String> {
+    let response = client.get(url).send().await.map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status().as_u16()));
+    }
+    let mime = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !INLINE_IMAGE_MIME_TYPES.contains(&mime.as_str()) {
+        return Err(format!("不支持的图片类型：{mime}"));
+    }
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_INLINE_IMAGE_BYTES {
+        return Err(format!("图片超过 {} 字节上限", MAX_INLINE_IMAGE_BYTES));
+    }
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok((mime, data))
+}
+
+/// 把 contents 中指向任意 http(s) URL 的 fileData 图片下载后转为 inlineData。
+///
+/// Gemini 的 fileData 仅接受 GCS / Files API URI，任意 http(s) 图片 URL 会被
+/// 上游 400（LiteLLM 采取同样的下载内联策略）。下载失败移除该 part 并告警，
+/// 不阻塞请求；先全部下载再按 part 下标倒序应用，避免移除时的索引位移。
+pub async fn inline_remote_images(body: &mut Value, proxy: Option<&str>, request_id: &str) {
+    let Some(contents) = body.get_mut("contents").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let mut targets: Vec<(usize, usize, String)> = Vec::new();
+    for (content_index, content) in contents.iter().enumerate() {
+        let Some(parts) = content.get("parts").and_then(Value::as_array) else {
+            continue;
+        };
+        for (part_index, part) in parts.iter().enumerate() {
+            let Some(uri) = part.pointer("/fileData/fileUri").and_then(Value::as_str) else {
+                continue;
+            };
+            if is_remote_http_uri(uri) && !is_native_file_uri(uri) {
+                targets.push((content_index, part_index, uri.to_string()));
+            }
+        }
+    }
+    if targets.is_empty() {
+        return;
+    }
+
+    let client = match build_image_client(proxy) {
+        Ok(client) => client,
+        Err(e) => {
+            tracing::warn!(request_id, "图片下载客户端构建失败，移除全部远程图片：{e}");
+            for (content_index, part_index, _) in targets.iter().rev() {
+                remove_part(body, *content_index, *part_index);
+            }
+            return;
+        }
+    };
+    let mut results = Vec::with_capacity(targets.len());
+    for (content_index, part_index, url) in &targets {
+        let inline = match fetch_image_inline(&client, url).await {
+            Ok(inline) => Some(inline),
+            Err(e) => {
+                tracing::warn!(request_id, url, "下载远程图片失败，已移除该图片：{e}");
+                None
+            }
+        };
+        results.push((*content_index, *part_index, inline));
+    }
+    for (content_index, part_index, inline) in results.into_iter().rev() {
+        let Some(parts) = body
+            .get_mut("contents")
+            .and_then(Value::as_array_mut)
+            .and_then(|contents| contents.get_mut(content_index))
+            .and_then(|content| content.get_mut("parts"))
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        match inline {
+            Some((mime, data)) => {
+                parts[part_index] = json!({"inlineData": {"mimeType": mime, "data": data}});
+            }
+            None => {
+                parts.remove(part_index);
+            }
+        }
+    }
+}
+
+fn remove_part(body: &mut Value, content_index: usize, part_index: usize) {
+    if let Some(parts) = body
+        .get_mut("contents")
+        .and_then(Value::as_array_mut)
+        .and_then(|contents| contents.get_mut(content_index))
+        .and_then(|content| content.get_mut("parts"))
+        .and_then(Value::as_array_mut)
+    {
+        parts.remove(part_index);
     }
 }
 
@@ -75,8 +212,11 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
                             .pointer("/function/arguments")
                             .and_then(Value::as_str)
                             .unwrap_or("{}");
-                        let args: Value =
-                            serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+                        // functionCall.args 必须是 JSON 对象，非法值退空对象。
+                        let args = serde_json::from_str::<Value>(arguments)
+                            .ok()
+                            .filter(Value::is_object)
+                            .unwrap_or_else(|| json!({}));
                         parts.push(json!({
                             "functionCall": {
                                 "name": call.pointer("/function/name").and_then(Value::as_str).unwrap_or(""),
@@ -94,13 +234,24 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
                     .get("tool_call_id")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown_tool");
-                let name = tool_names
-                    .get(tool_call_id)
-                    .cloned()
-                    .unwrap_or_else(|| tool_call_id.to_string());
+                let name = match tool_names.get(tool_call_id) {
+                    Some(name) => name.clone(),
+                    None => {
+                        tracing::warn!(
+                            tool_call_id,
+                            "tool 结果未反查到工具名，退用 tool_call_id 作为 functionResponse.name"
+                        );
+                        tool_call_id.to_string()
+                    }
+                };
                 let raw = message_text(content);
-                let result: Value =
-                    serde_json::from_str(&raw).unwrap_or_else(|_| json!({"result": raw}));
+                // functionResponse.response 必须是 JSON 对象：非对象值（数组/
+                // 数字/字符串字面量）包装进 result，避免上游 400（LiteLLM 同款）。
+                let result = match serde_json::from_str::<Value>(&raw) {
+                    Ok(value) if value.is_object() => value,
+                    Ok(value) => json!({"result": value}),
+                    Err(_) => json!({"result": raw}),
+                };
                 push_contents(
                     &mut contents,
                     "user".to_string(),
@@ -137,6 +288,21 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
     }
     if let Some(seed) = chat.get("seed").and_then(Value::as_i64) {
         generation_config.insert("seed".to_string(), json!(seed));
+    }
+    if let Some(effort) = chat.get("reasoning_effort").and_then(Value::as_str)
+        && !effort.is_empty()
+        && effort != "none"
+    {
+        generation_config.insert(
+            "thinkingConfig".to_string(),
+            json!({"thinkingBudget": reasoning_budget(effort)}),
+        );
+    }
+    if let Some(presence) = chat.get("presence_penalty").and_then(Value::as_f64) {
+        generation_config.insert("presencePenalty".to_string(), json!(presence));
+    }
+    if let Some(frequency) = chat.get("frequency_penalty").and_then(Value::as_f64) {
+        generation_config.insert("frequencyPenalty".to_string(), json!(frequency));
     }
     if let Some(stop) = chat.get("stop") {
         let sequences = match stop {
@@ -371,7 +537,9 @@ pub fn map_finish_reason(reason: &str, has_tool_calls: bool) -> &'static str {
         | "FINISH_REASON_UNSPECIFIED"
         | "MALFORMED_FUNCTION_CALL"
         | "TOO_MANY_TOOL_CALLS"
-        | "MALFORMED_RESPONSE" => "stop",
+        | "MALFORMED_RESPONSE"
+        | "UNEXPECTED_TOOL_CALL"
+        | "NO_IMAGE" => "stop",
         "MAX_TOKENS" => "length",
         "SAFETY"
         | "RECITATION"
@@ -380,6 +548,8 @@ pub fn map_finish_reason(reason: &str, has_tool_calls: bool) -> &'static str {
         | "SPII"
         | "IMAGE_SAFETY"
         | "IMAGE_PROHIBITED_CONTENT"
+        | "IMAGE_RECITATION"
+        | "IMAGE_OTHER"
         | "LANGUAGE"
         | "OTHER" => "content_filter",
         "" => "stop",
@@ -496,11 +666,17 @@ pub fn convert_response(
 
     let usage = extract_usage(upstream.get("usageMetadata").unwrap_or(&Value::Null));
     let has_tool_calls = message.get("tool_calls").is_some();
-    let finish_reason = candidate
-        .get("finishReason")
-        .and_then(Value::as_str)
-        .map(|reason| map_finish_reason(reason, has_tool_calls))
-        .unwrap_or(if has_tool_calls { "tool_calls" } else { "stop" });
+    // 提示词被安全拦截时 candidates 通常为空，必须显式返回 content_filter，
+    // 否则客户端把拒答误判为正常空响应（LiteLLM 同款）。
+    let finish_reason = if upstream.pointer("/promptFeedback/blockReason").is_some() {
+        "content_filter"
+    } else {
+        candidate
+            .get("finishReason")
+            .and_then(Value::as_str)
+            .map(|reason| map_finish_reason(reason, has_tool_calls))
+            .unwrap_or(if has_tool_calls { "tool_calls" } else { "stop" })
+    };
 
     let completion = json!({
         "id": format!("chatcmpl-{}", Uuid::new_v4()),
@@ -630,6 +806,11 @@ impl GeminiStreamConverter {
             self.finish_reason = Some(map_finish_reason(reason, self.tool_counter > 0));
         }
 
+        // 流式中提示词被拦截（candidates 为空）时同样要给 content_filter。
+        if value.pointer("/promptFeedback/blockReason").is_some() {
+            self.finish_reason = Some("content_filter");
+        }
+
         // Gemini 以 finishReason + usageMetadata 收尾；没有显式终止事件，
         // 上游关闭连接即结束。这里不输出 finish chunk，由管线在流结束时补发。
         Ok(out)
@@ -734,6 +915,166 @@ mod tests {
         assert_eq!(map_finish_reason("RECITATION", false), "content_filter");
         assert_eq!(map_finish_reason("MALFORMED_FUNCTION_CALL", false), "stop");
         assert_eq!(map_finish_reason("STOP", true), "tool_calls");
+        assert_eq!(map_finish_reason("UNEXPECTED_TOOL_CALL", false), "stop");
+        assert_eq!(map_finish_reason("NO_IMAGE", false), "stop");
+        assert_eq!(map_finish_reason("IMAGE_OTHER", false), "content_filter");
+        assert_eq!(
+            map_finish_reason("IMAGE_RECITATION", false),
+            "content_filter"
+        );
+    }
+
+    #[test]
+    fn tool_response_non_object_json_is_wrapped() {
+        // 官方要求 functionResponse.response 必须是 JSON 对象；数组/数字等
+        // 非对象值必须包装后发送，否则 400。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[
+                {"role":"user","content":"hi"},
+                {"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+                {"role":"tool","tool_call_id":"call_1","content":"[1,2,3]"}
+            ]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        let response = &body["contents"][2]["parts"][0]["functionResponse"]["response"];
+        assert_eq!(response["result"], json!([1, 2, 3]));
+
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[
+                {"role":"user","content":"hi"},
+                {"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+                {"role":"tool","tool_call_id":"call_1","content":"42"}
+            ]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        let response = &body["contents"][2]["parts"][0]["functionResponse"]["response"];
+        assert_eq!(response["result"], 42);
+    }
+
+    #[test]
+    fn tool_call_non_object_arguments_become_empty_object() {
+        // functionCall.args 同样必须是对象。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[
+                {"role":"user","content":"hi"},
+                {"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"\"abc\""}}]}
+            ]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        assert_eq!(
+            body["contents"][1]["parts"][0]["functionCall"]["args"],
+            json!({})
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_maps_to_thinking_config() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"high"}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            4096
+        );
+
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"none"}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        assert!(body["generationConfig"].get("thinkingConfig").is_none());
+    }
+
+    #[test]
+    fn penalties_map_into_generation_config() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"presence_penalty":0.3,"frequency_penalty":-0.5}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        assert_eq!(body["generationConfig"]["presencePenalty"], 0.3);
+        assert_eq!(body["generationConfig"]["frequencyPenalty"], -0.5);
+    }
+
+    #[test]
+    fn blocked_prompt_maps_to_content_filter() {
+        let upstream = from_str::<Value>(r#"{"promptFeedback":{"blockReason":"SAFETY"}}"#).unwrap();
+        let (completion, _) = convert_response(&upstream, "req-1", "vm-a").unwrap();
+        assert_eq!(completion["choices"][0]["finish_reason"], "content_filter");
+    }
+
+    fn body_with_remote_image(url: &str) -> Value {
+        json!({"contents": [{"role": "user", "parts": [
+            {"text": "hi"},
+            {"fileData": {"fileUri": url}},
+        ]}]})
+    }
+
+    #[tokio::test]
+    async fn remote_image_url_is_downloaded_and_inlined() {
+        // Gemini 的 fileData 仅接受 GCS / Files API URI；任意 http(s) 图片 URL
+        // 必须下载后转 inlineData，否则上游 400（LiteLLM 同款策略）。
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 2048];
+            let _ = sock.read(&mut buf).await;
+            let body = b"\x89PNG-fake-bytes";
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = sock.write_all(head.as_bytes()).await;
+            let _ = sock.write_all(body).await;
+            let _ = sock.shutdown().await;
+        });
+        let url = format!("http://{addr}/cat.png");
+        let mut body = body_with_remote_image(&url);
+        inline_remote_images(&mut body, None, "req-1").await;
+        server.await.unwrap();
+        let part = &body["contents"][0]["parts"][1];
+        assert_eq!(part["inlineData"]["mimeType"], "image/png");
+        assert_eq!(
+            part["inlineData"]["data"],
+            base64::engine::general_purpose::STANDARD.encode(b"\x89PNG-fake-bytes")
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_image_failure_drops_part() {
+        let mut body = body_with_remote_image("http://127.0.0.1:1/cat.png");
+        inline_remote_images(&mut body, None, "req-1").await;
+        let parts = body["contents"][0]["parts"].as_array().unwrap();
+        assert!(parts.iter().all(|part| part.get("fileData").is_none()));
+        assert_eq!(parts[0]["text"], "hi");
+    }
+
+    #[tokio::test]
+    async fn gs_and_files_api_uris_are_untouched() {
+        let mut body = json!({"contents": [{"role": "user", "parts": [
+            {"fileData": {"fileUri": "gs://bucket/cat.png"}},
+            {"fileData": {"fileUri": "https://generativelanguage.googleapis.com/v1beta/files/abc"}},
+        ]}]});
+        let before = body.clone();
+        inline_remote_images(&mut body, None, "req-1").await;
+        assert_eq!(body, before);
+    }
+
+    #[test]
+    fn stream_block_reason_sets_content_filter_finish() {
+        let mut converter = GeminiStreamConverter::new("req-1", "vm-a");
+        converter
+            .convert_event(r#"{"promptFeedback":{"blockReason":"SAFETY"}}"#)
+            .unwrap();
+        let finish = converter.final_chunk().unwrap();
+        assert_eq!(finish["choices"][0]["finish_reason"], "content_filter");
     }
 
     #[test]
