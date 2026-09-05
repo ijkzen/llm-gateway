@@ -715,6 +715,59 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 		expect(screen.getByRole("button", { name: "更新" })).toBeTruthy();
 	});
 
+	// 真实浏览器会把 click 的默认行为（form activation）留到事件派发结束后执行；
+	// 若「编辑」与「更新」复用同一 DOM 节点，React 原地把节点改成 type=submit 后，
+	// 浏览器会用该节点提交表单（幽灵提交）。jsdom 不模拟该默认行为，只能锁节点不复用这一不变量。
+	it("编辑与更新按钮不得复用同一 DOM 节点（防浏览器幽灵提交）", () => {
+		render(
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					providerProtocolType={0}
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
+		);
+
+		const editBtn = screen.getByRole("button", { name: "编辑" });
+		fireEvent.click(editBtn);
+		const updateBtn = screen.getByRole("button", { name: "更新" });
+		expect(updateBtn).not.toBe(editBtn);
+	});
+
+	it("保存成功后表单基线重置：再进编辑态时更新按钮禁用，须再次改动才能提交", async () => {
+		mocks.updateMutate.mockImplementation((_payload, opts) => {
+			required(opts).onSuccess();
+		});
+		render(
+			<MemoryRouter>
+				<ProviderModelDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					providerId={7}
+					providerName="OpenAI"
+					providerProtocolType={0}
+					model={makeModel()}
+				/>
+			</MemoryRouter>,
+		);
+
+		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+		fireEvent.change(required(screen.getAllByRole("spinbutton")[0]), {
+			target: { value: "256000" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "更新" }));
+		await waitFor(() => expect(mocks.updateMutate).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(screen.getByRole("button", { name: "编辑" })).toBeTruthy());
+
+		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+		const updateBtn = screen.getByRole("button", { name: "更新" }) as HTMLButtonElement;
+		expect(updateBtn.disabled).toBe(true);
+	});
+
 	it("进入编辑态但未改动任何值时，更新按钮禁用且不触发提交（双击编辑不会立即更新成功）", async () => {
 		render(
 			<MemoryRouter>
@@ -769,6 +822,50 @@ describe("ProviderModelDetailDialog 编辑态", () => {
 		expect(payload.modelId).toBe(1);
 		expect(payload.contextLength).toBe(256000);
 		expect(payload.maxOutputTokens).toBe(4096);
+	});
+
+	it("保存成功后再点编辑仍可修改字段并再次提交（回归：无法再编辑）", async () => {
+		mocks.updateMutate.mockImplementation((_payload, opts) => {
+			required(opts).onSuccess();
+		});
+		function DialogHarness() {
+			const [open, setOpen] = useState(true);
+			return (
+				<MemoryRouter>
+					<ProviderModelDetailDialog
+						open={open}
+						onOpenChange={setOpen}
+						providerId={7}
+						providerName="OpenAI"
+						providerProtocolType={0}
+						model={makeModel()}
+					/>
+				</MemoryRouter>
+			);
+		}
+		render(<DialogHarness />);
+
+		// 第一轮：编辑 → 改上下文长度 → 更新 → 成功后回到只读。
+		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+		fireEvent.change(required(screen.getAllByRole("spinbutton")[0]), {
+			target: { value: "256000" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: "更新" }));
+		await waitFor(() => expect(mocks.updateMutate).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(screen.getByRole("button", { name: "编辑" })).toBeTruthy());
+
+		// 第二轮：再点编辑，字段仍应可改且能再次提交。
+		fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+		fireEvent.change(required(screen.getAllByRole("spinbutton")[1]), {
+			target: { value: "8192" },
+		});
+		const updateBtn = screen.getByRole("button", { name: "更新" }) as HTMLButtonElement;
+		await waitFor(() => expect(updateBtn.disabled).toBe(false));
+		fireEvent.click(updateBtn);
+
+		await waitFor(() => expect(mocks.updateMutate).toHaveBeenCalledTimes(2));
+		const payload = required(mocks.updateMutate.mock.calls[1])[0];
+		expect(payload.maxOutputTokens).toBe(8192);
 	});
 });
 

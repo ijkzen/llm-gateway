@@ -162,15 +162,18 @@ export function ProviderModelDetailDialog({
 		// 进入编辑态后未改动任何值不提交：防止双击「编辑」时第二击落在同槽位的「更新」上，
 		// 把未变更的值原样 PUT 并误报「更新成功」。
 		if (!model || !form.formState.isDirty) return;
+		const proxyAddr = values.proxyEnabled ? values.proxyAddr.trim() : "";
 		updateModel.mutate(
 			{
 				modelId: model.modelId,
 				...values,
 				// 关闭代理时地址清空（与供应商代理提交一致，避免残留旧地址）。
-				proxyAddr: values.proxyEnabled ? values.proxyAddr.trim() : "",
+				proxyAddr,
 			},
 			{
 				onSuccess: () => {
+					// 表单基线重置为已保存值：清掉脏标记，避免残留脏值让幽灵提交/误触再次 PUT。
+					form.reset({ ...values, proxyAddr });
 					setEditing(false);
 					toastSuccess(t("common.updateSuccess"));
 				},
@@ -404,6 +407,7 @@ export function ProviderModelDetailDialog({
 						{editing ? (
 							<>
 								<Button
+									key="delete"
 									type="button"
 									variant="outline"
 									size="sm"
@@ -413,7 +417,10 @@ export function ProviderModelDetailDialog({
 									<Trash2 className="mr-1.5 size-4" />
 									{t("providerModels.deleteModel")}
 								</Button>
+								{/* key 强制换 DOM 节点：与只读态的「编辑」同槽位复用节点时，浏览器会把
+								    click 的默认行为落在原地改成 type=submit 的节点上，触发幽灵提交。 */}
 								<Button
+									key="update"
 									type="submit"
 									size="sm"
 									form="provider-model-detail-form"
@@ -425,6 +432,7 @@ export function ProviderModelDetailDialog({
 						) : (
 							<>
 								<Button
+									key="test"
 									type="button"
 									variant="outline"
 									size="sm"
@@ -438,7 +446,13 @@ export function ProviderModelDetailDialog({
 									)}
 									{t(testModel.isPending ? "providerModels.testing" : "providerModels.test")}
 								</Button>
-								<Button type="button" variant="outline" size="sm" onClick={() => setEditing(true)}>
+								<Button
+									key="edit"
+									type="button"
+									variant="outline"
+									size="sm"
+									onClick={() => setEditing(true)}
+								>
 									<Pencil className="mr-1.5 size-4" />
 									{t("providerModels.editModel")}
 								</Button>
