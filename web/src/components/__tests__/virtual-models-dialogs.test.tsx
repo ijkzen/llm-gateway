@@ -516,7 +516,7 @@ describe("VirtualModelItemDetailDialog", () => {
 });
 
 describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
-	it("有成员的供应商进「已使用」，其余供应商进「未使用」；两者都按 providers 顺序", () => {
+	it("有成员的供应商进「已使用」（组间按 LB 位置），其余供应商进「未使用」（按 providers 顺序）", () => {
 		// providers 顺序故意与 model id 顺序错开：OpenAI(7) 在 DeepSeek(8) 前。
 		render(
 			<VirtualModelEditDialog
@@ -550,10 +550,11 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 		expect(screen.getByRole("button", { name: "添加 o3" })).toBeTruthy();
 	});
 
-	it("已使用 Tab 组内成员：enable 优先，组内保持后端用量 LB 序（不按 id 重排）", () => {
+	it("已使用 Tab 组间按组内最优先成员的后端 LB 位置、组内 enable 优先保持后端序", () => {
 		// 后端 items 已按用量感知 LB 序返回（enable 优先 → 组内用量 → 平局 id）。
-		// mock 刻意让停用组内 gpt-4o(id 30) 排在 o3-mini(id 10) 前（用量/后端序），
-		// 弹窗应保持该后端相对顺序，而不是被前端按 virtualModelItemId 重排成 o3-mini 在前。
+		// providers 序（OpenAI 在前）故意与后端 LB 序错开：DeepSeek 的成员在最前，
+		// 弹窗组间序应跟 LB 位置（DeepSeek 组在前），组内保持后端相对顺序、
+		// 不按 virtualModelItemId 或 providers 序重排。
 		render(
 			<VirtualModelEditDialog
 				open
@@ -597,13 +598,44 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 			/>,
 		);
 
-		// 成员行按组内 enable 优先 + 后端返回序渲染：
-		// OpenAI 组启用 o3 → 停用按后端序 gpt-4o → o3-mini → DeepSeek 组 deepseek-chat。
+		// 组间：DeepSeek 组最优先成员在后端下标 0 → 排 OpenAI 组（下标 1）前。
+		// 组内：enable 优先 + 后端返回序（o3 启用 → 停用按后端序 gpt-4o → o3-mini）。
 		const switches = screen
 			.getAllByRole("switch")
 			.map((s) => s.getAttribute("aria-label"))
 			.filter((name): name is string => name !== null);
-		expect(switches).toEqual(["启停 o3", "启停 gpt-4o", "启停 o3-mini", "启停 deepseek-chat"]);
+		expect(switches).toEqual(["启停 deepseek-chat", "启停 o3", "启停 gpt-4o", "启停 o3-mini"]);
+	});
+
+	it("暂存新增成员的供应商组排在已有组之后（LB 位置取暂存下标）", () => {
+		// 已有成员只有 DeepSeek 的 deepseek-chat（后端下标 0）；providers 序 OpenAI 在前。
+		// 向 OpenAI 组暂存新增 gpt-4o（追加尾部）→ OpenAI 组进「已使用」且排 DeepSeek 之后。
+		render(
+			<VirtualModelEditDialog
+				open
+				onOpenChange={vi.fn()}
+				virtualModel={makeVm({
+					items: [makeItem({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" })],
+				})}
+				providers={providers}
+				providerModels={[
+					makeModel(),
+					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
+				]}
+				mappedModelIds={new Set()}
+			/>,
+		);
+
+		switchTab("未使用");
+		fireEvent.click(screen.getByRole("button", { name: "添加 gpt-4o" }));
+		switchTab("已使用");
+
+		const deepseekHeader = groupHeader("DeepSeek");
+		const openaiHeader = groupHeader("OpenAI");
+		expect(
+			deepseekHeader.compareDocumentPosition(openaiHeader) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
+		expect(screen.getByRole("switch", { name: "启停 gpt-4o" })).toBeTruthy();
 	});
 
 	it("编辑模式默认「已使用」Tab；组头可点击折叠/展开整组", () => {
