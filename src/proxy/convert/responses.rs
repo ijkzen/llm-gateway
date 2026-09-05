@@ -199,6 +199,30 @@ fn finish_from_status(status: &str, incomplete_reason: Option<&str>) -> &'static
     }
 }
 
+/// 从 response 对象推导 finish_reason：output 含 function_call 项时必须是
+/// "tool_calls"（OpenAI 客户端工具循环依赖该语义，审计 C1），否则按 status。
+fn finish_from_response(response: &Value) -> &'static str {
+    let has_function_call = response
+        .get("output")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(Value::as_str) == Some("function_call"))
+        });
+    if has_function_call {
+        return "tool_calls";
+    }
+    let status = response
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("completed");
+    let incomplete_reason = response
+        .pointer("/incomplete_details/reason")
+        .and_then(Value::as_str);
+    finish_from_status(status, incomplete_reason)
+}
+
 /// Responses SSE → OpenAI chunk 流转换器。
 #[derive(Debug)]
 pub struct ResponsesStreamConverter {
@@ -511,15 +535,8 @@ impl ResponsesStreamConverter {
                 if let Some(usage) = response.get("usage") {
                     self.capture_usage(usage);
                 }
-                let status = response
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("completed");
-                let incomplete_reason = response
-                    .pointer("/incomplete_details/reason")
-                    .and_then(Value::as_str);
                 self.ensure_started(&mut out);
-                self.finish_reason = Some(finish_from_status(status, incomplete_reason));
+                self.finish_reason = Some(finish_from_response(&response));
                 self.finish_emitted = true;
                 out.push(super::chunk_json(
                     &self.id,
@@ -532,9 +549,6 @@ impl ResponsesStreamConverter {
             Some("response.incomplete") => {
                 let response = value.get("response").cloned().unwrap_or(json!({}));
                 self.emit_final_output(&response, &mut out);
-                let incomplete_reason = response
-                    .pointer("/incomplete_details/reason")
-                    .and_then(Value::as_str);
                 if let Some(usage) = response.get("usage") {
                     self.capture_usage(usage);
                 }
@@ -544,7 +558,7 @@ impl ResponsesStreamConverter {
                     &self.id,
                     &self.model,
                     json!({}),
-                    Some(finish_from_status("incomplete", incomplete_reason)),
+                    Some(finish_from_response(&response)),
                 ));
                 self.finished = true;
             }
@@ -668,6 +682,22 @@ mod tests {
         assert!(body.get("stop").is_none());
         assert!(body.get("seed").is_none());
         assert!(body.get("frequency_penalty").is_none());
+    }
+
+    #[test]
+    fn function_call_output_sets_tool_calls_finish() {
+        // 审计 C1：output 以 function_call 收尾时 finish_reason 必须是
+        // tool_calls，否则 OpenAI 客户端工具循环误判为最终回答。
+        let mut converter = ResponsesStreamConverter::new("req-1", "vm-a");
+        let chunks = converter
+            .convert_event(
+                r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","call_id":"call_1","name":"f","arguments":"{}"}]}}"#,
+            )
+            .unwrap();
+        assert_eq!(
+            chunks.last().unwrap()["choices"][0]["finish_reason"],
+            "tool_calls"
+        );
     }
 
     #[test]
