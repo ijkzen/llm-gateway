@@ -338,7 +338,8 @@ export function AddProviderModelsDialog({
 	/** pending（待确认）候选：模型 ID 填远程 ID，参数默认按相似度最高的建议预填。 */
 	const jumpToManualWithSuggestion = (candidate: RefreshCandidate) => {
 		const suggestions = candidate.suggestions ?? [];
-		if (suggestions.length > 0) applySuggestion(suggestions[0]);
+		const top = suggestions[0];
+		if (top) applySuggestion(top);
 		form.setValue("providerModelId", candidate.providerModelId);
 		setModelSearchQuery(candidate.providerModelId);
 		setModelSearchDebounced("");
