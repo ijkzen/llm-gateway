@@ -478,6 +478,9 @@ async fn resolve_usage_map(
 ///   第 2 层：协议鉴权/必需头（custom_header 与透传均不得覆盖，D3）
 ///   第 1 层：框架头（`Host`/`Content-Type`/`Accept`/`Content-Length`）由
 ///            `upstream::send_upstream_request` 发送端唯一写入。
+/// 另：`opencode.ai` 上游要求携带 `x-opencode-session` 会话头（OpenCode Go
+/// 会话亲和，缺失部分后端直接 400）；四层组装完后若仍无该头，注入
+/// `opencode_session` 回退值（仅对该 host 生效，不覆盖已有值）。
 fn build_upstream_call(
     member: &Member,
     chat: &Value,
@@ -485,6 +488,7 @@ fn build_upstream_call(
     api_key: &str,
     forwarded: &[(HeaderName, HeaderValue)],
     request_id: &str,
+    opencode_session: &str,
 ) -> Result<(UpstreamCall, bool), String> {
     let (body, json_mode_tool, sub_path) = match member.protocol {
         Protocol::OpenAiCompat => {
@@ -525,6 +529,15 @@ fn build_upstream_call(
     );
     // 第 2 层：协议鉴权/必需头（insert 覆盖 custom_header 与透传，D3）。
     apply_protocol_auth_headers(member.protocol, api_key, &mut headers);
+    // OpenCode Go 会话亲和头：透传/custom_header 已带则不覆盖。
+    if is_opencode_host(base_url_host(&member.base_url))
+        && !headers
+            .iter()
+            .any(|(n, _)| n.as_str().eq_ignore_ascii_case(OPENCODE_SESSION_HEADER))
+        && let Ok(value) = HeaderValue::from_str(opencode_session)
+    {
+        headers.push((HeaderName::from_static(OPENCODE_SESSION_HEADER), value));
+    }
 
     Ok((
         UpstreamCall {
@@ -589,8 +602,38 @@ const NEVER_OUTBOUND: &[&str] = &[
     "x-real-ip",
 ];
 
+/// OpenCode Go 会话亲和头名（缺失时上游部分后端直接 400）。
+const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
+
+/// 判定是否 OpenCode 上游 host（模板含 OpenCode Zen 与 OpenCode Go 两个入口，
+/// 同域 `opencode.ai`）。
+fn is_opencode_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("opencode.ai")
+}
+
+/// 从 base_url 提取 host（去 scheme / path / 端口），供供应商特判。
+fn base_url_host(base_url: &str) -> &str {
+    let rest = base_url
+        .trim()
+        .split_once("://")
+        .map_or(base_url, |(_, r)| r);
+    rest.split(['/', ':']).next().unwrap_or(rest)
+}
+
+/// 按 API Key 派生稳定的回退会话 ID（UUIDv5）：网关无会话概念，取
+/// 「每个 API Key 一个稳定会话」作为会话亲和的近似——重启不漂移，换 Key 即换会话。
+/// 客户端自带的 `x-opencode-session` 透传值优先于此回退。
+fn opencode_session_fallback(api_key_name: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("llm-gateway/opencode-session/{api_key_name}").as_bytes(),
+    )
+    .to_string()
+}
+
 /// 第 4 层透传默认 allowlist：W3C Trace Context 头（traceparent 原样透传；
-/// tracestate 仅在透传 traceparent 时透传）。其余下游头一律不透传。
+/// tracestate 仅在透传 traceparent 时透传）与 `x-opencode-session`（客户端
+/// 自带的 OpenCode 会话标识按原值透传）。其余下游头一律不透传。
 pub fn forward_allowlist() -> &'static [HeaderName] {
     use std::sync::OnceLock;
     static ALLOWLIST: OnceLock<Vec<HeaderName>> = OnceLock::new();
@@ -598,6 +641,7 @@ pub fn forward_allowlist() -> &'static [HeaderName] {
         vec![
             HeaderName::from_static("traceparent"),
             HeaderName::from_static("tracestate"),
+            HeaderName::from_static(OPENCODE_SESSION_HEADER),
         ]
     })
 }
@@ -911,6 +955,8 @@ pub async fn forward_chat(
     forwarded: Vec<(HeaderName, HeaderValue)>,
 ) -> Response {
     let request_id = Uuid::new_v4().to_string();
+    // OpenCode Go 会话亲和：客户端自带值经 allowlist 透传，缺失时用回退值。
+    let opencode_session = opencode_session_fallback(&api_key.name);
     let requested_model = client_body
         .get("model")
         .and_then(Value::as_str)
@@ -1101,6 +1147,7 @@ pub async fn forward_chat(
             &decrypted_key,
             &forwarded,
             &request_id,
+            &opencode_session,
         ) {
             Ok(result) => result,
             Err(message) => {
@@ -1847,8 +1894,15 @@ pub async fn test_model(
     });
     // test_model 无下游请求头（管理面手动触发）：透传子集为空。
     let request_id = format!("test-{}", Uuid::new_v4());
-    let (call, _json_mode_tool) =
-        build_upstream_call(&member, &chat, false, api_key, &[], &request_id)?;
+    let (call, _json_mode_tool) = build_upstream_call(
+        &member,
+        &chat,
+        false,
+        api_key,
+        &[],
+        &request_id,
+        &opencode_session_fallback(TEST_API_KEY_NAME),
+    )?;
 
     // Member 已由 resolve_proxy 归一：proxy_enabled 时地址必非空。
     let proxy = member.proxy_enabled.then_some(member.proxy_addr.as_str());
@@ -2034,12 +2088,16 @@ mod tests {
     // ─── 上游出站头组装（四层覆盖 + 剥离）单测 ───
 
     fn member(protocol: Protocol, custom_header: &str) -> Member {
+        member_with_base_url(protocol, custom_header, "https://api.example.com/v1")
+    }
+
+    fn member_with_base_url(protocol: Protocol, custom_header: &str, base_url: &str) -> Member {
         Member {
             provider_id: 1,
             model_id: "m".to_string(),
             protocol,
             billing_mode: 0,
-            base_url: "https://api.example.com/v1".to_string(),
+            base_url: base_url.to_string(),
             api_key_encrypted: "enc".to_string(),
             custom_header: custom_header.to_string(),
             proxy_enabled: false,
@@ -2150,7 +2208,8 @@ mod tests {
             r#"{"x-api-key":"custom","anthropic-version":"2099-01-01","authorization":"Bearer custom","content-type":"text/plain","X-A":"b"}"#,
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
+        let (call, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2178,7 +2237,8 @@ mod tests {
             r#"{"authorization":"Bearer stale","X-Tenant":"t1"}"#,
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
+        let (call, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2206,8 +2266,16 @@ mod tests {
             ),
             (HeaderName::from_static("x-trace-id"), hv("client-1")),
         ];
-        let (call, _) =
-            build_upstream_call(&m, &chat, false, "sk-provider", &forwarded, "test").unwrap();
+        let (call, _) = build_upstream_call(
+            &m,
+            &chat,
+            false,
+            "sk-provider",
+            &forwarded,
+            "test",
+            "fb-sess",
+        )
+        .unwrap();
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2224,7 +2292,8 @@ mod tests {
     fn gemini_auth_header_is_x_goog_api_key() {
         let m = member(Protocol::Gemini, r#"{"x-goog-api-key":"custom","X-A":"b"}"#);
         let chat = json!({"model":"m","contents":[{"role":"user","parts":[{"text":"hi"}]}]});
-        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
+        let (call, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
         let map: std::collections::HashMap<&str, &str> = call
             .headers
             .iter()
@@ -2241,7 +2310,8 @@ mod tests {
             let m = member(Protocol::OpenAiCompat, raw);
             let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
             let (call, _) =
-                build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
+                build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess")
+                    .unwrap();
             // 非对象 JSON / 非字符串值整体跳过：只剩协议鉴权头。
             let map: std::collections::HashMap<&str, &str> = call
                 .headers
@@ -2253,6 +2323,108 @@ mod tests {
                 Some("Bearer sk-provider")
             );
         }
+    }
+
+    #[test]
+    fn base_url_host_extracts_host_without_scheme_path_port() {
+        assert_eq!(
+            base_url_host("https://opencode.ai/zen/go/v1"),
+            "opencode.ai"
+        );
+        assert_eq!(base_url_host("https://opencode.ai:8443/v1"), "opencode.ai");
+        assert_eq!(base_url_host("http://127.0.0.1:1234"), "127.0.0.1");
+    }
+
+    #[test]
+    fn opencode_session_fallback_is_stable_uuid_per_key() {
+        let a = opencode_session_fallback("itest-key");
+        assert_eq!(
+            a,
+            opencode_session_fallback("itest-key"),
+            "同 Key 派生应稳定"
+        );
+        assert_ne!(a, opencode_session_fallback("other-key"), "换 Key 应换会话");
+        assert!(Uuid::parse_str(&a).is_ok());
+    }
+
+    #[test]
+    fn opencode_member_injects_session_fallback() {
+        let m = member_with_base_url(
+            Protocol::OpenAiCompat,
+            "{}",
+            "https://opencode.ai/zen/go/v1",
+        );
+        let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let (call, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "sess-a").unwrap();
+        let map: std::collections::HashMap<&str, &str> = call
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        assert_eq!(map.get("x-opencode-session").copied(), Some("sess-a"));
+        assert!(!has_duplicate_names(&call));
+    }
+
+    #[test]
+    fn opencode_session_client_and_custom_values_win_over_fallback() {
+        let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let forwarded = vec![(
+            HeaderName::from_static("x-opencode-session"),
+            hv("from-client"),
+        )];
+        // 客户端自带值优先于回退（回退仅在四层组装后仍无该头时注入）。
+        let m = member_with_base_url(
+            Protocol::OpenAiCompat,
+            "{}",
+            "https://opencode.ai/zen/go/v1",
+        );
+        let (call, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &forwarded, "test", "fb").unwrap();
+        let map: std::collections::HashMap<&str, &str> = call
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        assert_eq!(map.get("x-opencode-session").copied(), Some("from-client"));
+
+        // custom_header（第 3 层）覆盖客户端透传（既有语义）。
+        let m2 = member_with_base_url(
+            Protocol::OpenAiCompat,
+            r#"{"x-opencode-session":"from-custom"}"#,
+            "https://opencode.ai/zen/go/v1",
+        );
+        let (call2, _) =
+            build_upstream_call(&m2, &chat, false, "sk-provider", &forwarded, "test", "fb")
+                .unwrap();
+        let map2: std::collections::HashMap<&str, &str> = call2
+            .headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+            .collect();
+        assert_eq!(map2.get("x-opencode-session").copied(), Some("from-custom"));
+    }
+
+    #[test]
+    fn non_opencode_member_does_not_inject_session_fallback() {
+        let m = member(Protocol::OpenAiCompat, "{}");
+        let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
+        let (call, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
+        let joined = names(&call).join(",");
+        assert!(
+            !joined.contains("x-opencode-session"),
+            "非 opencode 上游不应注入回退会话头：{joined}"
+        );
+    }
+
+    #[test]
+    fn forward_allowlist_includes_opencode_session() {
+        let map = header_map(&[("x-opencode-session", "client-sess"), ("x-other", "v")]);
+        let out = select_forwardable_headers(&map, forward_allowlist());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0.as_str(), "x-opencode-session");
+        assert_eq!(out[0].1, hv("client-sess"));
     }
 
     /// 断言出站头无同名重复。
@@ -2271,7 +2443,8 @@ mod tests {
             r#"{"connection":"keep-alive","host":"evil","x-custom":"ok"}"#,
         );
         let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});
-        let (call, _) = build_upstream_call(&m, &chat, false, "sk-provider", &[], "test").unwrap();
+        let (call, _) =
+            build_upstream_call(&m, &chat, false, "sk-provider", &[], "test", "fb-sess").unwrap();
         let joined = names(&call).join(",");
         assert!(
             !joined.contains("connection"),

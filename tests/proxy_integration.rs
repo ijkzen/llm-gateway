@@ -1150,6 +1150,45 @@ async fn trace_headers_are_forwarded_verbatim_and_credentials_stripped() {
 }
 
 #[tokio::test]
+async fn client_opencode_session_header_is_forwarded_verbatim() {
+    let captured_headers = capture_headers();
+    let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
+    // mock 上游非 opencode host：仅验证 allowlist 原值透传，不触发回退注入。
+    let (app, _db) = common_setup_with_member(&base, 0, 0, 0).await;
+
+    let (status, text) = send_chat_with_headers(
+        &app,
+        chat_body("vm-x", false),
+        &[("x-opencode-session", "client-session-1")],
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+
+    let headers = captured_headers.lock().unwrap();
+    let upstream = headers.first().expect("应有上游头快照");
+    assert_eq!(
+        header_value(upstream, "x-opencode-session"),
+        Some("client-session-1")
+    );
+    assert_eq!(header_count(upstream, "x-opencode-session"), 1);
+}
+
+#[tokio::test]
+async fn non_opencode_upstream_gets_no_session_fallback() {
+    let captured_headers = capture_headers();
+    let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
+    let (app, _db) = common_setup_with_member(&base, 0, 0, 0).await;
+
+    // 下游未带 x-opencode-session 且上游非 opencode host：不得注入回退值。
+    let (status, text) = send_chat_with_headers(&app, chat_body("vm-x", false), &[]).await;
+    assert_eq!(status, 200, "{text}");
+
+    let headers = captured_headers.lock().unwrap();
+    let upstream = headers.first().expect("应有上游头快照");
+    assert!(header_value(upstream, "x-opencode-session").is_none());
+}
+
+#[tokio::test]
 async fn downstream_authorization_never_reaches_upstream() {
     let captured_headers = capture_headers();
     let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
