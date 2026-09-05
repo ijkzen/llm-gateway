@@ -325,7 +325,7 @@ const zhCN = {
 		addDesc: "从 {{provider}} 拉取远端模型列表并智能填充；供应商未提供 Models 接口时可手动添加。",
 		tryRefresh: "尝试刷新",
 		autoAdd: "自动添加",
-		refreshHint: "拉取远端列表，按模型目录自动补全",
+		candidateSearch: "搜索候选模型…",
 		notRefreshed: "尚未刷新，点击「尝试刷新」获取远端模型列表",
 		refreshEmpty: "远端未返回模型，或全部模型已导入；可使用下方手动添加",
 		smartFilled: "已智能填充",
