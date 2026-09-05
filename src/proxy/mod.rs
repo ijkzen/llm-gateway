@@ -632,8 +632,9 @@ fn opencode_session_fallback(api_key_name: &str) -> String {
 }
 
 /// 第 4 层透传默认 allowlist：W3C Trace Context 头（traceparent 原样透传；
-/// tracestate 仅在透传 traceparent 时透传）与 `x-opencode-session`（客户端
-/// 自带的 OpenCode 会话标识按原值透传）。其余下游头一律不透传。
+/// tracestate 仅在透传 traceparent 时透传）、`x-opencode-session`（客户端
+/// 自带的 OpenCode 会话标识按原值透传）与 `user-agent`（下游客户端标识
+/// 原样透传所有上游）。其余下游头一律不透传。
 pub fn forward_allowlist() -> &'static [HeaderName] {
     use std::sync::OnceLock;
     static ALLOWLIST: OnceLock<Vec<HeaderName>> = OnceLock::new();
@@ -642,6 +643,7 @@ pub fn forward_allowlist() -> &'static [HeaderName] {
             HeaderName::from_static("traceparent"),
             HeaderName::from_static("tracestate"),
             HeaderName::from_static(OPENCODE_SESSION_HEADER),
+            HeaderName::from_static("user-agent"),
         ]
     })
 }
@@ -2425,6 +2427,15 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].0.as_str(), "x-opencode-session");
         assert_eq!(out[0].1, hv("client-sess"));
+    }
+
+    #[test]
+    fn forward_allowlist_forwards_downstream_user_agent() {
+        let map = header_map(&[("user-agent", "zcode/1.2.3"), ("x-other", "v")]);
+        let out = select_forwardable_headers(&map, forward_allowlist());
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].0.as_str(), "user-agent");
+        assert_eq!(out[0].1, hv("zcode/1.2.3"));
     }
 
     /// 断言出站头无同名重复。

@@ -1189,6 +1189,26 @@ async fn non_opencode_upstream_gets_no_session_fallback() {
 }
 
 #[tokio::test]
+async fn downstream_user_agent_is_forwarded_verbatim() {
+    let captured_headers = capture_headers();
+    let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
+    let (app, _db) = common_setup_with_member(&base, 0, 0, 0).await;
+
+    let (status, text) = send_chat_with_headers(
+        &app,
+        chat_body("vm-x", false),
+        &[("user-agent", "zcode/1.2.3")],
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+
+    let headers = captured_headers.lock().unwrap();
+    let upstream = headers.first().expect("应有上游头快照");
+    assert_eq!(header_value(upstream, "user-agent"), Some("zcode/1.2.3"));
+    assert_eq!(header_count(upstream, "user-agent"), 1);
+}
+
+#[tokio::test]
 async fn downstream_authorization_never_reaches_upstream() {
     let captured_headers = capture_headers();
     let base = spawn_mock_with_headers(capture(), captured_headers.clone()).await;
