@@ -3,6 +3,8 @@ pub mod seed;
 #[cfg(test)]
 mod tests;
 
+use std::sync::OnceLock;
+
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
@@ -72,6 +74,74 @@ pub(crate) fn is_krill_host(host: &str) -> bool {
 
 pub(crate) fn is_sensenova_host(host: &str) -> bool {
     matches!(host, "token.sensenova.cn" | "platform.sensenova.cn")
+}
+
+/// OpenCode 上游 host（模板含 OpenCode Zen / OpenCode Go 两个入口，同域）。
+pub(crate) fn is_opencode_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("opencode.ai")
+}
+
+/// Kimi For Coding 上游 host。
+fn is_kimi_coding_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("api.kimi.com")
+}
+
+/// Kimi For Coding 兜底 UA：Kimi 按 coding-agent User-Agent 白名单放行
+/// （非白名单一律 429/403），取官方 kimi-cli 当前版本的真实值
+/// （`KimiCLI/<version>`，白名单按前缀匹配）。
+pub(crate) const KIMI_CODE_USER_AGENT: &str = "KimiCLI/1.50.0";
+
+/// OpenCode 上游兜底 UA：复刻 pi coding agent 的出站 UA。pi 对所有上游统一
+/// 发送 `pi (<平台> <内核>; <架构>)`（pi-mono packages/ai/src/utils/
+/// pi-user-agent.ts 的 `getPiUserAgent()`），按网关宿主机动态生成同款。
+pub(crate) fn pi_user_agent() -> String {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let platform = match std::env::consts::OS {
+                "macos" => "darwin",
+                other => other,
+            };
+            let arch = match std::env::consts::ARCH {
+                "x86_64" => "x64",
+                "aarch64" => "arm64",
+                other => other,
+            };
+            format!("pi ({platform} {}; {arch})", kernel_release())
+        })
+        .clone()
+}
+
+/// 内核版本（与 node `os.release()` 同源）：Linux 容器与宿主共享内核，直读
+/// procfs；其余平台退回 `uname -r`。进程内缓存一次。
+fn kernel_release() -> String {
+    if let Ok(release) = std::fs::read_to_string("/proc/sys/kernel/osrelease") {
+        let trimmed = release.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    std::process::Command::new("uname")
+        .arg("-r")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
+        .filter(|release| !release.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// 模板默认出站头（seed 默认值的唯一真源）：按 base_url host 给出该供应商
+/// 的兜底 custom_header。三处共用——模板匹配接口（前端预填）、/v1 转发的
+/// 查漏补缺、测试请求；同名头一律以下游透传 / 用户 custom_header 为准。
+pub fn template_default_headers(host: &str) -> Vec<(&'static str, String)> {
+    if is_opencode_host(host) {
+        return vec![("User-Agent", pi_user_agent())];
+    }
+    if is_kimi_coding_host(host) {
+        return vec![("User-Agent", KIMI_CODE_USER_AGENT.to_string())];
+    }
+    Vec::new()
 }
 
 /// 遍历全部 provider，对 host 命中的：解密 extra → 解析为 JSON 对象 →

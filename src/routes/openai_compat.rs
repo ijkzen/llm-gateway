@@ -30,10 +30,12 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
-    // 按 allowlist 选出透传的下游头（默认 traceparent/tracestate；黑名单优先，
-    // 凭据/框架/hop-by-hop 头已在此被排除）。同一请求多次 failover 出站共用
-    // 同一快照。
-    let forwarded = proxy::select_forwardable_headers(&headers, proxy::forward_allowlist());
+    // 按 allowlist 选出透传的下游头（allowlist 来自设置项
+    // `downstream_request_header_allow_list` 的进程内缓存，设置页更新后热生效；
+    // 黑名单优先，凭据/框架/hop-by-hop 头已在此被排除）。同一请求多次
+    // failover 出站共用同一快照。
+    let allowlist = state.settings.downstream_header_allow_list().await;
+    let forwarded = proxy::select_forwardable_headers(&headers, &allowlist);
     proxy::forward_chat(&state, api_key, body, forwarded).await
 }
 

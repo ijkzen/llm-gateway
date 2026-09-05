@@ -1,5 +1,5 @@
 import { ProviderEditDialog } from "@/components/providers/ProviderEditDialog";
-import type { Provider } from "@/hooks/use-providers";
+import type { Provider, ProviderTemplate } from "@/hooks/use-providers";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => {
 		updateMutate: vi.fn(),
 		toastSuccess: vi.fn(),
 		toastError: vi.fn(),
+		templates: [] as ProviderTemplate[],
 	};
 });
 
@@ -19,7 +20,7 @@ vi.mock("@/hooks/use-providers", async () => {
 		...actual,
 		useCreateProvider: () => ({ mutate: mocks.createMutate, isPending: false }),
 		useUpdateProvider: () => ({ mutate: mocks.updateMutate, isPending: false }),
-		useMatchTemplate: () => ({ data: [] }),
+		useMatchTemplate: () => ({ data: mocks.templates }),
 	};
 });
 
@@ -57,6 +58,38 @@ function makeProvider(overrides: Partial<Provider> = {}): Provider {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.templates = [];
+});
+
+describe("ProviderEditDialog：模板默认 custom_header 预填", () => {
+	const kimiTemplate: ProviderTemplate = {
+		name: "Kimi For Coding",
+		baseUrl: "https://api.kimi.com/coding/v1",
+		protocolType: 2,
+		billingMode: 1,
+		extra: "{}",
+		customHeader: JSON.stringify({ "User-Agent": "KimiCLI/1.50.0" }),
+	};
+
+	it("创建模式应用模板：补填默认 custom_header，不覆盖已填键", () => {
+		mocks.templates = [kimiTemplate];
+		render(<ProviderEditDialog open onOpenChange={vi.fn()} provider={null} />);
+
+		// 用户先手动填入一个自定义头键。
+		fireEvent.click(screen.getByRole("button", { name: "高级设置" }));
+		const headerInput = screen.getByLabelText("自定义请求头（JSON）");
+		fireEvent.change(headerInput, { target: { value: '{"X-Keeper":"keep-me"}' } });
+
+		// 应用模板：模板键补入，用户键保留。
+		fireEvent.click(screen.getByRole("button", { name: "应用 Kimi For Coding 模板" }));
+		const merged = JSON.parse(
+			(screen.getByLabelText("自定义请求头（JSON）") as HTMLTextAreaElement).value,
+		) as Record<string, string>;
+		expect(merged).toMatchObject({
+			"User-Agent": "KimiCLI/1.50.0",
+			"X-Keeper": "keep-me",
+		});
+	});
 });
 
 describe("ProviderEditDialog：SenseNova 账号密码登录字段", () => {

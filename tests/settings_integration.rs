@@ -326,3 +326,92 @@ async fn test_delete_setting_returns_500_on_db_error() {
     let body_str = String::from_utf8(body.to_vec()).unwrap();
     assert!(body_str.contains("DB_ERROR"));
 }
+
+// ── downstream_request_header_allow_list（Json 类型 + 透传黑名单校验）──
+
+async fn setup_app_with_allowlist_setting() -> (axum::Router, sea_orm::DatabaseConnection) {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    insert_setting(
+        &db,
+        llm_gateway::app_settings::KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST,
+        llm_gateway::app_settings::DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST,
+        4,
+    )
+    .await;
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+    (app, db)
+}
+
+async fn allowlist_setting_value(db: &sea_orm::DatabaseConnection) -> String {
+    setting::Entity::find_by_id(llm_gateway::app_settings::KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST)
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap()
+        .value
+}
+
+#[tokio::test]
+async fn test_update_allowlist_rejects_invalid_json() {
+    let (app, db) = setup_app_with_allowlist_setting().await;
+
+    let response = put_setting(app, "downstream_request_header_allow_list", r#"not-json"#).await;
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        allowlist_setting_value(&db).await,
+        llm_gateway::app_settings::DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST
+    );
+}
+
+#[tokio::test]
+async fn test_update_allowlist_rejects_non_array() {
+    let (app, _db) = setup_app_with_allowlist_setting().await;
+
+    // 合法 JSON 但不是字符串数组。
+    let response = put_setting(app, "downstream_request_header_allow_list", r#"{"a":"b"}"#).await;
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn test_update_allowlist_rejects_blacklisted_header() {
+    let (app, _db) = setup_app_with_allowlist_setting().await;
+
+    let response = put_setting(
+        app,
+        "downstream_request_header_allow_list",
+        r#"[\"user-agent\", \"cookie\"]"#,
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn test_update_allowlist_rejects_invalid_header_name() {
+    let (app, _db) = setup_app_with_allowlist_setting().await;
+
+    let response = put_setting(
+        app,
+        "downstream_request_header_allow_list",
+        r#"[\"bad header!\"]"#,
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+}
+
+#[tokio::test]
+async fn test_update_allowlist_accepts_valid_array_and_persists() {
+    let (app, db) = setup_app_with_allowlist_setting().await;
+
+    let response = put_setting(
+        app,
+        "downstream_request_header_allow_list",
+        r#"[\"user-agent\", \"traceparent\"]"#,
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        allowlist_setting_value(&db).await,
+        r#"["user-agent", "traceparent"]"#
+    );
+}

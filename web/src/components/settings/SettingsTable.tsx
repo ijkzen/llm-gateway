@@ -48,6 +48,7 @@ const TYPE_BADGE_VARIANTS: Record<SettingType, string> = {
 	Int: "bg-info/10 text-info hover:bg-info/10",
 	Float: "bg-warning/10 text-warning hover:bg-warning/10",
 	Bool: "bg-success/10 text-success hover:bg-success/10",
+	Json: "bg-primary/10 text-primary hover:bg-primary/10",
 };
 
 const FALLBACK_TYPE_BADGE_VARIANT = "bg-muted text-muted-foreground hover:bg-muted";

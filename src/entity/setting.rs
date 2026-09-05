@@ -8,6 +8,7 @@ pub enum SettingType {
     Float = 1,
     Int = 2,
     Bool = 3,
+    Json = 4,
 }
 
 impl std::fmt::Display for SettingType {
@@ -17,6 +18,7 @@ impl std::fmt::Display for SettingType {
             SettingType::Float => write!(f, "Float"),
             SettingType::Int => write!(f, "Int"),
             SettingType::Bool => write!(f, "Bool"),
+            SettingType::Json => write!(f, "Json"),
         }
     }
 }
@@ -30,6 +32,7 @@ impl std::str::FromStr for SettingType {
             "Float" => Ok(SettingType::Float),
             "Int" => Ok(SettingType::Int),
             "Bool" => Ok(SettingType::Bool),
+            "Json" => Ok(SettingType::Json),
             _ => Err(format!("invalid setting type: {}", s)),
         }
     }
@@ -44,6 +47,7 @@ impl std::convert::TryFrom<i32> for SettingType {
             1 => Ok(SettingType::Float),
             2 => Ok(SettingType::Int),
             3 => Ok(SettingType::Bool),
+            4 => Ok(SettingType::Json),
             _ => Err(format!("invalid setting type value: {}", value)),
         }
     }
