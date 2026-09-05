@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import {
 	RaceWindowControl,
 	type RaceWindowState,
@@ -132,11 +133,14 @@ export function ApiKeyRaceCard({
 				</span>
 				<div className="min-w-0">
 					<h3 className="text-sm font-semibold text-foreground">{t("dashboard.apiKeyRace")}</h3>
-					<p className="truncate text-xs text-muted-foreground">
-						{windowState.period === "custom"
-							? t("overview.customWindow")
-							: formatPeriodLabel(windowState.period, windowState.offset, now)}
-					</p>
+					<MidEllipsis
+						className="text-xs text-muted-foreground"
+						text={
+							windowState.period === "custom"
+								? t("overview.customWindow")
+								: formatPeriodLabel(windowState.period, windowState.offset, now)
+						}
+					/>
 				</div>
 
 				<div className="ml-auto">

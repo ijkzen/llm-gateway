@@ -1,4 +1,5 @@
 import { EmptyState } from "@/components/empty-state";
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { TestFailedDialog } from "@/components/provider-models/TestFailedDialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -104,9 +105,7 @@ export function ProviderSpeedTestDialog({
 							title={t("providers.speedTestTitle", { name: provider?.name ?? "" })}
 						>
 							<Gauge className="size-4 shrink-0" />
-							<span className="truncate">
-								{t("providers.speedTestTitle", { name: provider?.name ?? "" })}
-							</span>
+							<MidEllipsis text={t("providers.speedTestTitle", { name: provider?.name ?? "" })} />
 						</DialogTitle>
 						<div className="flex items-center justify-between gap-3">
 							<DialogDescription>{t("providers.speedTestDesc")}</DialogDescription>
@@ -140,12 +139,10 @@ export function ProviderSpeedTestDialog({
 											key={model.modelId}
 											className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5"
 										>
-											<span
-												className="min-w-0 truncate font-mono text-sm"
-												title={model.providerModelId}
-											>
-												{model.providerModelId}
-											</span>
+											<MidEllipsis
+												text={model.providerModelId}
+												className="min-w-0 font-mono text-sm"
+											/>
 											<span className="flex shrink-0 items-center gap-2">
 												{typeof result === "number" && (
 													<span className="text-sm text-muted-foreground tabular-nums">

@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { ProviderModelCard } from "@/components/provider-models/ProviderModelCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -55,7 +56,7 @@ export function ProviderModelSection({
 						className="group flex min-w-0 items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
 						title={t("providerModels.viewProviderOverview", { provider: provider.name })}
 					>
-						<span className="min-w-0 truncate">{provider.name}</span>
+						<MidEllipsis text={provider.name} className="min-w-0" />
 						<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 					</Link>
 				</h2>

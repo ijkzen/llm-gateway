@@ -1,4 +1,5 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { CAPABILITIES } from "@/components/provider-models/CapabilityIcons";
 import { TestFailedDialog } from "@/components/provider-models/TestFailedDialog";
 import { PROTOCOL_TYPES, protocolLabel } from "@/components/providers/ProtocolIcon";
@@ -217,7 +218,7 @@ export function ProviderModelDetailDialog({
 								className="group flex min-w-0 items-center justify-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60 sm:justify-start"
 								title={t("providerModels.viewModelOverview", { model: model.providerModelId })}
 							>
-								<span className="min-w-0 truncate">{model.providerModelId}</span>
+								<MidEllipsis text={model.providerModelId} className="min-w-0" />
 								<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 							</Link>
 						</DialogTitle>
@@ -329,7 +330,9 @@ export function ProviderModelDetailDialog({
 						<dl className="space-y-3">
 							<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
 								<dt className="text-sm text-muted-foreground">{t("providerModels.modelId")}</dt>
-								<dd className="min-w-0 truncate font-mono text-sm">{model.providerModelId}</dd>
+								<dd className="min-w-0 font-mono text-sm">
+									<MidEllipsis text={model.providerModelId} />
+								</dd>
 							</div>
 							<div className="grid grid-cols-2 gap-3">
 								<div className="rounded-lg border px-4 py-2.5">

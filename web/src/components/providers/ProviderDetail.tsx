@@ -1,4 +1,5 @@
 import { EmptyState } from "@/components/empty-state";
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { ProviderProxyRow } from "@/components/providers/ProviderProxyRow";
 import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
 import { Button } from "@/components/ui/button";
@@ -159,9 +160,10 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 				<div className="flex items-start justify-between gap-4">
 					<div className="min-w-0">
 						<CardTitle className="text-xl">{provider.name}</CardTitle>
-						<p className="mt-1 truncate text-sm font-mono text-muted-foreground">
-							{provider.baseUrl}
-						</p>
+						<MidEllipsis
+							text={provider.baseUrl}
+							className="mt-1 text-sm font-mono text-muted-foreground"
+						/>
 					</div>
 					<div className="flex shrink-0 items-center gap-2">
 						<Switch
@@ -181,7 +183,7 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 						) : (
 							<span className="flex items-center gap-2 font-mono">
 								<KeyRound className="size-4 shrink-0 text-muted-foreground" />
-								<span className="truncate">{plainKey ?? provider.apiKeyMasked}</span>
+								<MidEllipsis text={plainKey ?? provider.apiKeyMasked} />
 								<Button
 									type="button"
 									variant="ghost"

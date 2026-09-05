@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { Badge } from "@/components/ui/badge";
 import { useTranslation } from "react-i18next";
 
@@ -17,7 +18,10 @@ export function ProviderProxyRow({ enabled, addr, inherited }: ProviderProxyRowP
 		return (
 			<span className="inline-flex items-center gap-1.5">
 				<Badge variant="default">{t("providers.proxyOn")}</Badge>
-				<span className="max-w-48 truncate font-mono text-xs text-muted-foreground">{addr}</span>
+				<MidEllipsis
+					text={addr ?? ""}
+					className="max-w-48 font-mono text-xs text-muted-foreground"
+				/>
 			</span>
 		);
 	}
@@ -25,9 +29,10 @@ export function ProviderProxyRow({ enabled, addr, inherited }: ProviderProxyRowP
 		return (
 			<span className="inline-flex items-center gap-1.5">
 				<Badge variant="secondary">{t("providers.proxyOff")}</Badge>
-				<span className="max-w-48 truncate text-xs text-muted-foreground">
-					{t("providers.proxyInherited")}
-				</span>
+				<MidEllipsis
+					text={t("providers.proxyInherited")}
+					className="max-w-48 text-xs text-muted-foreground"
+				/>
 			</span>
 		);
 	}

@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type ApiKey, apiKeyKeys, fetchApiKeyDetail, useApiKeyDetail } from "@/hooks/use-api-keys";
@@ -47,9 +48,10 @@ export function ApiKeyCell({ apiKey }: ApiKeyCellProps) {
 			{showKey && detailLoading ? (
 				<Skeleton className="h-5 w-40" />
 			) : (
-				<span className="max-w-[24rem] truncate">
-					{effectiveShowKey ? detail?.key : apiKey.keyMasked}
-				</span>
+				<MidEllipsis
+					className="max-w-[24rem]"
+					text={effectiveShowKey ? (detail?.key ?? "") : apiKey.keyMasked}
+				/>
 			)}
 			<Button
 				type="button"

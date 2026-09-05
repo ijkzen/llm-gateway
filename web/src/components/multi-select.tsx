@@ -1,7 +1,8 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn, middleEllipsis } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { ChevronDown, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -100,7 +101,7 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 					className={cn("justify-between font-normal", className)}
 					{...rest}
 				>
-					<span className="truncate">{triggerLabel}</span>
+					<MidEllipsis text={triggerLabel ?? ""} />
 					<ChevronDown className="ml-1 size-4 shrink-0 opacity-50" />
 				</Button>
 			</PopoverTrigger>
@@ -147,9 +148,7 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 									checked={isAll ? false : selectedSet.has(row.option.value)}
 									onCheckedChange={() => toggle(row.option.value)}
 								/>
-								<span className="truncate" title={row.option.label}>
-									{middleEllipsis(row.option.label, 18)}
-								</span>
+								<MidEllipsis text={row.option.label} />
 							</label>
 						),
 					)}

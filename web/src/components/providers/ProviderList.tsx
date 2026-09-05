@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { ProtocolIcon } from "@/components/providers/ProtocolIcon";
 import { Card, CardContent } from "@/components/ui/card";
 import { type Provider, providerKeys, useReorderProviders } from "@/hooks/use-providers";
@@ -89,7 +90,7 @@ function SortableProviderRow({ provider, selected, onSelect }: SortableProviderR
 						selected ? "text-background dark:text-primary-foreground" : "text-muted-foreground"
 					}
 				/>
-				<span className="min-w-0 flex-1 truncate font-medium">{provider.name}</span>
+				<MidEllipsis text={provider.name} className="min-w-0 flex-1 font-medium" />
 				<span
 					className={cn(
 						"size-2 shrink-0 rounded-full",

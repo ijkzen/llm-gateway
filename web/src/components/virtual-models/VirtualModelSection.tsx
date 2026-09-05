@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -63,9 +64,10 @@ function MemberCard({
 					className="group flex min-w-0 cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
 					title={t("providerModels.viewModelOverview", { model: item.providerModelId })}
 				>
-					<span className="min-w-0 max-w-full truncate font-mono text-sm font-medium">
-						{item.providerModelId}
-					</span>
+					<MidEllipsis
+						text={item.providerModelId}
+						className="min-w-0 font-mono text-sm font-medium"
+					/>
 					<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 				</span>
 				<span data-static className="flex shrink-0 items-center">
@@ -73,7 +75,7 @@ function MemberCard({
 				</span>
 			</div>
 			<p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-				<span className="truncate">{item.providerName}</span>
+				<MidEllipsis text={item.providerName} />
 				{providerDisabled && (
 					<span className="shrink-0 text-warning">{t("virtualModels.disabledWithProvider")}</span>
 				)}
@@ -105,7 +107,7 @@ export function VirtualModelSection({
 								model: virtualModel.displayId,
 							})}
 						>
-							<span className="min-w-0 truncate">{virtualModel.displayId}</span>
+							<MidEllipsis text={virtualModel.displayId} className="min-w-0" />
 							<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 						</Link>
 					</h2>

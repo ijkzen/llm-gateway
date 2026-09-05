@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { StatusBadge } from "@/components/status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { CronJob } from "@/hooks/use-cron-jobs";
@@ -57,17 +58,16 @@ export function CronJobList({ jobs, selectedName, onSelect }: CronJobListProps) 
 										)}
 									>
 										<div className="min-w-0">
-											<p className="truncate font-medium">{job.name}</p>
-											<p
+											<MidEllipsis text={job.name} className="font-medium" />
+											<MidEllipsis
 												className={cn(
-													"truncate text-xs",
+													"text-xs",
 													selectedName === job.name
 														? "text-background/60 dark:text-primary-foreground/60"
 														: "text-muted-foreground",
 												)}
-											>
-												{job.title}
-											</p>
+												text={job.title}
+											/>
 										</div>
 										<StatusBadge status={job.enabled ? "enabled" : "disabled"} />
 									</button>

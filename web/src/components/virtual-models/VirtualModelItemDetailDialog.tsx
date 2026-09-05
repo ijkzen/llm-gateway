@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { CAPABILITIES } from "@/components/provider-models/CapabilityIcons";
 import {
 	Dialog,
@@ -78,7 +79,7 @@ export function VirtualModelItemDetailDialog({
 								model: currentItem.providerModelId,
 							})}
 						>
-							<span className="min-w-0 truncate">{currentItem.providerModelId}</span>
+							<MidEllipsis text={currentItem.providerModelId} className="min-w-0" />
 							<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 						</Link>
 					</DialogTitle>
@@ -97,7 +98,9 @@ export function VirtualModelItemDetailDialog({
 				<dl className="space-y-3">
 					<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
 						<dt className="text-sm text-muted-foreground">{t("providerModels.modelId")}</dt>
-						<dd className="min-w-0 truncate font-mono text-sm">{currentItem.providerModelId}</dd>
+						<dd className="min-w-0 font-mono text-sm">
+							<MidEllipsis text={currentItem.providerModelId} />
+						</dd>
 					</div>
 					<div className="grid grid-cols-2 gap-3">
 						<div className="rounded-lg border px-4 py-2.5">

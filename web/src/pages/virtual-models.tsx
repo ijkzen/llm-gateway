@@ -1,5 +1,6 @@
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { Button } from "@/components/ui/button";
@@ -157,10 +158,11 @@ export default function VirtualModelsPage() {
 													onClick={() => setDetail({ virtualModel, item })}
 													className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
 												>
-													<span className="min-w-0 truncate font-mono">{item.providerModelId}</span>
-													<span className="shrink-0 truncate text-xs text-muted-foreground">
-														{item.providerName}
-													</span>
+													<MidEllipsis text={item.providerModelId} className="min-w-0 font-mono" />
+													<MidEllipsis
+														text={item.providerName}
+														className="shrink-0 text-xs text-muted-foreground"
+													/>
 												</button>
 											))}
 										</div>

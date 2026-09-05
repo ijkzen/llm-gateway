@@ -2,6 +2,7 @@ import { ApiKeyCell } from "@/components/api-keys/ApiKeyCell";
 import { DataTableColumnHeader } from "@/components/data-table/column-header";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { EmptyState } from "@/components/empty-state";
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { RelativeTime } from "@/components/relative-time";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -88,7 +89,7 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 						title={t("apiKeys.viewOverview", { key: apiKey.name })}
 						className="group flex max-w-full cursor-pointer items-center gap-0.5 rounded-md px-1 py-0.5 text-left font-medium transition-colors hover:bg-muted/60"
 					>
-						<span className="truncate">{apiKey.name}</span>
+						<MidEllipsis text={apiKey.name} />
 						<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 					</button>
 				);

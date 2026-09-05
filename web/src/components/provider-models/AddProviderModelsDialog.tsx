@@ -1,4 +1,5 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { badgeVariants } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -533,9 +534,10 @@ export function AddProviderModelsDialog({
 																onClick={() => locateCandidate(hit.providerModelId)}
 																className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
 															>
-																<span className="min-w-0 truncate font-mono">
-																	{hit.providerModelId}
-																</span>
+																<MidEllipsis
+																	text={hit.providerModelId}
+																	className="min-w-0 font-mono"
+																/>
 																<MatchStateLabel state={hit.matchState} />
 															</button>
 														))}
@@ -602,12 +604,10 @@ export function AddProviderModelsDialog({
 																}
 																aria-label={`${t("providerModels.selectModel")} ${candidate.providerModelId}`}
 															/>
-															<span
-																className="min-w-0 flex-1 truncate font-mono text-sm"
-																title={candidate.providerModelId}
-															>
-																{candidate.providerModelId}
-															</span>
+															<MidEllipsis
+																text={candidate.providerModelId}
+																className="min-w-0 flex-1 font-mono text-sm"
+															/>
 															<MatchStateLabel state={candidate.matchState} />
 														</div>
 														<div className="mt-2.5 grid grid-cols-2 gap-2">
@@ -698,7 +698,7 @@ export function AddProviderModelsDialog({
 															"max-w-44 cursor-pointer font-mono",
 														)}
 													>
-														<span className="truncate">{suggestion.catalogId}</span>
+														<MidEllipsis text={suggestion.catalogId} />
 													</button>
 												))}
 											</div>
@@ -738,11 +738,11 @@ export function AddProviderModelsDialog({
 																>
 																	<Sparkles className="size-4 shrink-0 text-success" />
 																	<span className="min-w-0">
-																		<span className="block truncate font-mono">{hit.id}</span>
-																		<span className="block truncate text-xs text-muted-foreground">
-																			{hit.name}
-																			{hit.family ? ` · ${hit.family}` : ""}
-																		</span>
+																		<MidEllipsis text={hit.id} className="font-mono" />
+																		<MidEllipsis
+																			text={hit.family ? `${hit.name} · ${hit.family}` : hit.name}
+																			className="text-xs text-muted-foreground"
+																		/>
 																	</span>
 																</button>
 															))}

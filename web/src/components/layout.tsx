@@ -1,4 +1,5 @@
 import LocaleToggle from "@/components/locale-toggle";
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { SkipToMain } from "@/components/skip-to-main";
 import { ThemeToggle } from "@/components/theme-toggle";
@@ -117,14 +118,16 @@ export default function AppLayout() {
 											{(me?.username ?? "?").slice(0, 1)}
 										</div>
 										<div className="flex min-w-0 flex-col leading-none">
-											<span className="truncate font-medium">{me?.username ?? "..."}</span>
+											<MidEllipsis text={me?.username ?? "..."} className="font-medium" />
 											<span className="text-xs text-muted-foreground">{t("nav.loggedInAs")}</span>
 										</div>
 										<ChevronUp className="ml-auto size-4" />
 									</SidebarMenuButton>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent side="top" align="start" className="min-w-[180px]">
-									<DropdownMenuLabel className="truncate">{me?.username}</DropdownMenuLabel>
+									<DropdownMenuLabel>
+										<MidEllipsis text={me?.username ?? ""} />
+									</DropdownMenuLabel>
 									<DropdownMenuSeparator />
 									<DropdownMenuItem variant="destructive" onClick={handleLogout}>
 										<LogOut className="size-4" />

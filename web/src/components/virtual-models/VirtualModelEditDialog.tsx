@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -285,7 +286,7 @@ export function VirtualModelEditDialog({
 					className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-muted/60"
 				>
 					<span className="flex min-w-0 items-center gap-2">
-						<span className="truncate text-sm font-medium">{group.provider.name}</span>
+						<MidEllipsis text={group.provider.name} className="text-sm font-medium" />
 						{providerDisabled && (
 							<span className="shrink-0 text-xs text-warning">
 								{t("virtualModels.providerDisabled")}
@@ -314,9 +315,7 @@ export function VirtualModelEditDialog({
 										)}
 									>
 										<div className="min-w-0 flex-1">
-											<p className="truncate font-mono text-sm" title={model.providerModelId}>
-												{model.providerModelId}
-											</p>
+											<MidEllipsis text={model.providerModelId} className="font-mono text-sm" />
 											<p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
 												<span className="shrink-0">{formatContextLength(model.contextLength)}</span>
 												{providerDisabled && (
@@ -381,12 +380,10 @@ export function VirtualModelEditDialog({
 										>
 											<Plus className="size-4" />
 										</Button>
-										<span
-											className="min-w-0 flex-1 truncate font-mono text-sm"
-											title={model.providerModelId}
-										>
-											{model.providerModelId}
-										</span>
+										<MidEllipsis
+											text={model.providerModelId}
+											className="min-w-0 flex-1 font-mono text-sm"
+										/>
 										<span className="shrink-0 text-xs text-muted-foreground">
 											{formatContextLength(model.contextLength)}
 										</span>

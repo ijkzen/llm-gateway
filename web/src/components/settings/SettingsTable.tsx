@@ -2,6 +2,7 @@ import { DataTableColumnHeader } from "@/components/data-table/column-header";
 import { DataTablePagination } from "@/components/data-table/pagination";
 import { DataTableViewOptions } from "@/components/data-table/view-options";
 import { EmptyState } from "@/components/empty-state";
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { RelativeTime } from "@/components/relative-time";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -85,7 +86,9 @@ export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps
 					return (
 						<Tooltip>
 							<TooltipTrigger asChild>
-								<span className="block max-w-xs truncate">{value}</span>
+								<span className="block max-w-xs">
+									<MidEllipsis text={value} />
+								</span>
 							</TooltipTrigger>
 							<TooltipContent>
 								<p className="max-w-md break-all">{value}</p>

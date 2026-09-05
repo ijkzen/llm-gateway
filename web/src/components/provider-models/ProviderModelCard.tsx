@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { CapabilityIcons } from "@/components/provider-models/CapabilityIcons";
 import type { ProviderModel } from "@/hooks/use-provider-models";
 import { ChevronRight } from "lucide-react";
@@ -35,9 +36,7 @@ export function ProviderModelCard({ model, onOpen }: ProviderModelCardProps) {
 				className="group flex min-w-0 max-w-full items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
 				title={t("providerModels.viewModelOverview", { model: model.providerModelId })}
 			>
-				<span className="min-w-0 max-w-full truncate text-sm font-medium">
-					{model.providerModelId}
-				</span>
+				<MidEllipsis text={model.providerModelId} className="min-w-0 text-sm font-medium" />
 				<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 			</span>
 			<span data-static className="flex shrink-0 items-center">

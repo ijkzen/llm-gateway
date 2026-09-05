@@ -263,6 +263,7 @@ pnpm vitest run                    # 前端全量测试
 - 使用函数式组件与 Hooks，状态管理以 TanStack Query 为主，Zustand 用于主题等全局状态（`web/src/hooks/use-theme.ts`）。
 - UI 文案为中文（如“定时任务”、“设置”、“操作成功”）。
 - 弹窗内容可滚动时，标题栏与底部操作区必须固定高度、固定位置且不参与滚动；仅中间内容区负责滚动。
+- 超长文本展示规范：单行截断一律用 `MidEllipsis` 组件（`web/src/components/mid-ellipsis.tsx`，按实测宽度自适应保留首尾、中间收起为 `…`），禁止新增 `truncate`/`text-ellipsis` 尾部省略；固定字符数截断（图表轴等 SVG 场景）用 `lib/utils.ts` 的 `middleEllipsis()`。多行 `line-clamp`、富文本混合节点与 shadcn 基础组件内部（sidebar 菜单、select 触发器）不适用中间省略，保留原样。
 
 ## 数据库与迁移
 
