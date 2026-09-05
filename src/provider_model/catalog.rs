@@ -199,6 +199,103 @@ fn last_segment(value: &str) -> &str {
     value.rsplit('/').next().unwrap_or(value)
 }
 
+/// 待确认候选的相似度阈值：归一化后字符相似度须超过 50%。
+const SIMILARITY_THRESHOLD: f64 = 0.5;
+
+/// 归一化：去掉 `/`、`-`、`_`、`.` 后转小写（相似度匹配用）。
+fn normalize_for_similarity(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| !matches!(c, '/' | '-' | '_' | '.'))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// Levenshtein 编辑距离（滚动数组，输入为归一化后的短串）。
+fn levenshtein(a: &[char], b: &[char]) -> usize {
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let mut prev: Vec<usize> = (0..=short.len()).collect();
+    let mut curr: Vec<usize> = vec![0; short.len() + 1];
+    for (i, lc) in long.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, sc) in short.iter().enumerate() {
+            let cost = usize::from(lc != sc);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[short.len()]
+}
+
+/// 字符相似度 = 1 - 编辑距离 / 较长串长度；任一为空返回 0。
+fn similarity(a: &str, b: &str) -> f64 {
+    let ac: Vec<char> = a.chars().collect();
+    let bc: Vec<char> = b.chars().collect();
+    let longest = ac.len().max(bc.len());
+    if longest == 0 {
+        return 0.0;
+    }
+    1.0 - levenshtein(&ac, &bc) as f64 / longest as f64
+}
+
+/// 待确认建议：目录 key + 参数条目。
+pub type SimilarEntry = (String, CatalogEntry);
+
+/// 目录中与 `model_id` 归一化后相似度超过 50% 的条目，
+/// 按相似度降序、同分按 id 字典序取前 `limit` 条（待确认候选的建议来源）。
+pub fn similar_entries(model_id: &str, limit: usize) -> Vec<SimilarEntry> {
+    let target = normalize_for_similarity(model_id);
+    if target.is_empty() {
+        return Vec::new();
+    }
+    let target_len = target.chars().count();
+    let mut scored: Vec<(f64, String, CatalogEntry)> = raw()
+        .iter()
+        .filter_map(|(key, model)| {
+            let norm = normalize_for_similarity(key);
+            let norm_len = norm.chars().count();
+            let longest = target_len.max(norm_len);
+            if longest == 0 {
+                return None;
+            }
+            // 编辑距离相似度上界 = 1 - 长度差/较长长度，先用它粗筛再算距离。
+            let bound = 1.0 - target_len.abs_diff(norm_len) as f64 / longest as f64;
+            if bound <= SIMILARITY_THRESHOLD {
+                return None;
+            }
+            let score = similarity(&target, &norm);
+            if score <= SIMILARITY_THRESHOLD {
+                return None;
+            }
+            let modalities = model
+                .modalities
+                .as_ref()
+                .map(|m| m.input.clone())
+                .unwrap_or_default();
+            Some((
+                score,
+                key.clone(),
+                entry_from(
+                    model.limit.as_ref(),
+                    &modalities,
+                    model.reasoning,
+                    model.tool_call,
+                ),
+            ))
+        })
+        .collect();
+    scored.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.1.cmp(&b.1))
+    });
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, key, entry)| (key, entry))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +375,49 @@ mod tests {
             .filter(|entry| !entry.is_complete())
             .count();
         assert_eq!(incomplete, 8);
+    }
+
+    #[test]
+    fn test_normalize_strips_separators_and_lowercases() {
+        assert_eq!(
+            normalize_for_similarity("Anthropic/Claude-Sonnet_4.5"),
+            "anthropicclaudesonnet45"
+        );
+        assert_eq!(normalize_for_similarity(""), "");
+    }
+
+    #[test]
+    fn test_similarity_full_and_empty() {
+        assert_eq!(similarity("abc", "abc"), 1.0);
+        assert_eq!(similarity("", "abc"), 0.0);
+        assert_eq!(similarity("", ""), 0.0);
+    }
+
+    #[test]
+    fn test_similar_entries_hits_variant() {
+        // 目录条目的近亲变体（多一段日期后缀）应命中且参数齐全。
+        let hits = similar_entries("openai/gpt-4o-mini-2029-99-99", 3);
+        assert!(!hits.is_empty(), "gpt-4o-mini 变体应命中目录");
+        assert!(
+            hits.iter()
+                .any(|(id, entry)| id.ends_with("gpt-4o-mini") && entry.is_complete())
+        );
+    }
+
+    #[test]
+    fn test_similar_entries_desc_and_limit() {
+        let hits = similar_entries("openai/gpt-4o-mini-suffix", 2);
+        assert!(hits.len() <= 2);
+        // 最相近的目录条目排第一（自身同尾段相似度最高）。
+        if let Some((top, _)) = hits.first() {
+            assert!(top.ends_with("gpt-4o-mini"));
+        }
+    }
+
+    #[test]
+    fn test_similar_entries_miss_returns_empty() {
+        // 与目录条目均无 50% 以上相似度的 ID 返回空。
+        assert!(similar_entries("qqqqwwwwzzzzxxxx", 3).is_empty());
+        assert!(similar_entries("", 3).is_empty());
     }
 }

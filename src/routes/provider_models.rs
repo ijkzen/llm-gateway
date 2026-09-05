@@ -97,12 +97,28 @@ struct BatchCreateRequest {
     models: Vec<UpsertProviderModelRequest>,
 }
 
-/// 刷新候选：match_state 为 `smart`（已智能填充）/ `partial`（信息不完整）/ `manual`（需手动填写）。
+/// 刷新候选：match_state 为 `smart`（已智能填充）/ `partial`（信息不完整）/
+/// `pending`（待确认，目录有相似条目）/ `manual`（需手动填写）。
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RefreshCandidate {
     provider_model_id: String,
     match_state: &'static str,
+    context_length: Option<i64>,
+    max_output_tokens: Option<i64>,
+    reasoning: bool,
+    tool_use: bool,
+    image_understand: bool,
+    video_understand: bool,
+    /// 仅 pending 候选携带：相似度最高的目录建议（最多 3 条，降序）。
+    suggestions: Option<Vec<CatalogSuggestion>>,
+}
+
+/// 待确认候选的目录建议（预填参数来源）。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogSuggestion {
+    catalog_id: String,
     context_length: Option<i64>,
     max_output_tokens: Option<i64>,
     reasoning: bool,
@@ -622,27 +638,61 @@ async fn refresh_provider_models(
                 tool_use: entry.tool_use,
                 image_understand: entry.image_understand,
                 video_understand: entry.video_understand,
+                suggestions: None,
             },
-            None => RefreshCandidate {
-                provider_model_id: id.to_string(),
-                match_state: "manual",
-                context_length: None,
-                max_output_tokens: None,
-                reasoning: false,
-                tool_use: false,
-                image_understand: false,
-                video_understand: false,
-            },
+            // 目录未命中：与目录算相似度，超 50% 的取最高 3 条记「待确认」。
+            None => {
+                let suggestions = catalog::similar_entries(id, 3);
+                if suggestions.is_empty() {
+                    RefreshCandidate {
+                        provider_model_id: id.to_string(),
+                        match_state: "manual",
+                        context_length: None,
+                        max_output_tokens: None,
+                        reasoning: false,
+                        tool_use: false,
+                        image_understand: false,
+                        video_understand: false,
+                        suggestions: None,
+                    }
+                } else {
+                    RefreshCandidate {
+                        provider_model_id: id.to_string(),
+                        match_state: "pending",
+                        context_length: None,
+                        max_output_tokens: None,
+                        reasoning: false,
+                        tool_use: false,
+                        image_understand: false,
+                        video_understand: false,
+                        suggestions: Some(
+                            suggestions
+                                .into_iter()
+                                .map(|(catalog_id, entry)| CatalogSuggestion {
+                                    catalog_id,
+                                    context_length: entry.context_length,
+                                    max_output_tokens: entry.max_output_tokens,
+                                    reasoning: entry.reasoning,
+                                    tool_use: entry.tool_use,
+                                    image_understand: entry.image_understand,
+                                    video_understand: entry.video_understand,
+                                })
+                                .collect(),
+                        ),
+                    }
+                }
+            }
         };
         candidates.push(candidate);
     }
 
-    // 排序：先按匹配状态（smart → partial → manual），组内再按尾段字典序。
+    // 排序：先按匹配状态（smart → partial → pending → manual），组内再按尾段字典序。
     candidates.sort_by(|a, b| {
         let rank = |s: &str| match s {
             "smart" => 0,
             "partial" => 1,
-            _ => 2,
+            "pending" => 2,
+            _ => 3,
         };
         rank(a.match_state)
             .cmp(&rank(b.match_state))

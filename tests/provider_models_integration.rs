@@ -646,6 +646,39 @@ async fn spawn_models_mock() -> String {
     format!("http://{addr}")
 }
 
+/// 目标 mock：返回自定义模型 ID 列表（待确认相似度匹配用例）。
+async fn spawn_models_mock_with_ids(ids: &[&str]) -> String {
+    let data: Vec<Value> = ids
+        .iter()
+        .map(|id| json!({ "id": id, "object": "model" }))
+        .collect();
+    let app = axum::Router::new().route(
+        "/v1/models",
+        axum::routing::get(move || {
+            let data = data.clone();
+            async move { axum::Json(json!({ "object": "list", "data": data })) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
+/// 把 seed 供应商的 base_url 指向本地 mock（seed 默认 api.example.com 不可达）。
+async fn point_provider_at(db: &sea_orm::DatabaseConnection, provider_id: i32, target: &str) {
+    let row = provider::Entity::find_by_id(provider_id)
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: provider::ActiveModel = row.into();
+    active.base_url = Set(format!("{target}/v1"));
+    active.update(db).await.unwrap();
+}
+
 /// 开启网络代理的 provider，「刷新模型」请求应经 CONNECT 代理到达目标。
 #[tokio::test]
 async fn test_refresh_models_goes_through_provider_proxy() {
@@ -722,6 +755,62 @@ async fn test_refresh_models_direct_without_proxy() {
     )
     .await;
     assert_eq!(status, 200, "直连刷新失败：{body}");
+}
+
+/// 目录未命中但与目录条目相似度超 50% 的远端 ID → pending 态并携带建议。
+#[tokio::test]
+async fn test_refresh_pending_with_catalog_suggestions() {
+    let target = spawn_models_mock_with_ids(&["gpt-4o-mini-x"]).await;
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "pending-refresh").await;
+    point_provider_at(&db, provider_id, &target).await;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/refresh"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "刷新失败：{body}");
+    let list = body["data"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "远端仅一个 ID：{list:?}");
+    assert_eq!(list[0]["matchState"], "pending", "应为待确认：{list:?}");
+    // pending 候选本体不预填数值，等用户确认后由建议填充。
+    assert!(list[0]["contextLength"].is_null());
+    let suggestions = list[0]["suggestions"].as_array().expect("应携带建议");
+    assert!(!suggestions.is_empty() && suggestions.len() <= 3);
+    assert!(
+        suggestions[0]["catalogId"]
+            .as_str()
+            .unwrap()
+            .ends_with("gpt-4o-mini"),
+        "最相似建议应为 gpt-4o-mini：{suggestions:?}"
+    );
+    assert!(suggestions[0]["contextLength"].as_i64().unwrap() > 0);
+    assert!(suggestions[0]["maxOutputTokens"].as_i64().unwrap() > 0);
+}
+
+/// 目录未命中且无相似条目的远端 ID → manual 态、无建议。
+#[tokio::test]
+async fn test_refresh_manual_without_suggestions() {
+    let target = spawn_models_mock_with_ids(&["qqqqwwwwzzzzxxxx"]).await;
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "manual-refresh").await;
+    point_provider_at(&db, provider_id, &target).await;
+
+    let (status, body) = send_json(
+        app,
+        "POST",
+        &format!("/api/providers/{provider_id}/models/refresh"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200, "刷新失败：{body}");
+    let list = body["data"].as_array().unwrap();
+    assert_eq!(list.len(), 1, "远端仅一个 ID：{list:?}");
+    assert_eq!(list[0]["matchState"], "manual");
+    assert!(list[0]["suggestions"].is_null());
 }
 
 // ─── 供应商模型级网络代理：CRUD 与校验 ────────────────────────────────────────

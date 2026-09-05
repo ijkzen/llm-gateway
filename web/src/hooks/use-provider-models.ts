@@ -23,8 +23,19 @@ export interface ProviderModel {
 	updatedAt: string;
 }
 
-/** 刷新候选的三态：smart=已智能填充、partial=信息不完整、manual=需手动填写。 */
-export type MatchState = "smart" | "partial" | "manual";
+/** 刷新候选四态：smart=已智能填充、partial=信息不完整、pending=待确认、manual=需手动填写。 */
+export type MatchState = "smart" | "partial" | "pending" | "manual";
+
+/** 待确认候选的目录建议（相似度最高的最多 3 条，按相似度降序）。 */
+export interface CatalogSuggestion {
+	catalogId: string;
+	contextLength: number | null;
+	maxOutputTokens: number | null;
+	reasoning: boolean;
+	toolUse: boolean;
+	imageUnderstand: boolean;
+	videoUnderstand: boolean;
+}
 
 export interface RefreshCandidate {
 	providerModelId: string;
@@ -35,6 +46,8 @@ export interface RefreshCandidate {
 	toolUse: boolean;
 	imageUnderstand: boolean;
 	videoUnderstand: boolean;
+	/** 仅 pending 候选携带，其余为 null。 */
+	suggestions: CatalogSuggestion[] | null;
 }
 
 export interface ProviderModelPayload {

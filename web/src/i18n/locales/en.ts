@@ -334,6 +334,8 @@ const en: Translation = {
 		smartFilled: "Auto-filled",
 		partialInfo: "Incomplete info",
 		needManual: "Fill in manually",
+		pendingConfirm: "Needs review",
+		similarModels: "Similar models",
 		selectModel: "Select",
 		required: "Required",
 		selectedOfTotal: "{{selected}} / {{total}} selected",

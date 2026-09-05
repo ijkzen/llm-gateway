@@ -1,4 +1,5 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { badgeVariants } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -22,6 +23,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
 	type CatalogCandidate,
+	type CatalogSuggestion,
 	type MatchState,
 	type ProviderModelPayload,
 	type RefreshCandidate,
@@ -97,6 +99,13 @@ function MatchStateLabel({ state }: { state: MatchState }) {
 			</span>
 		);
 	}
+	if (state === "pending") {
+		return (
+			<span className="shrink-0 text-xs font-medium text-primary">
+				{t("providerModels.pendingConfirm")}
+			</span>
+		);
+	}
 	return (
 		<span className="shrink-0 text-xs font-medium text-muted-foreground">
 			{t("providerModels.needManual")}
@@ -135,6 +144,12 @@ export function AddProviderModelsDialog({
 	const [modelSearchDebounced, setModelSearchDebounced] = useState("");
 	// 已从目录选中的模型 ID：应用后隐藏下拉，直到用户重新输入。
 	const [appliedModelId, setAppliedModelId] = useState<string | null>(null);
+	// 待确认候选跳转手动添加时携带的目录建议：右上角徽章 + 参数预填来源。
+	const [pendingSuggest, setPendingSuggest] = useState<{
+		remoteId: string;
+		suggestions: CatalogSuggestion[];
+	} | null>(null);
+	const [activeSuggestIndex, setActiveSuggestIndex] = useState(0);
 	// 尝试刷新失败时用弹窗展示完整错误详情（上游报错信息较长，toast 展示不完整）。
 	const [refreshError, setRefreshError] = useState<string | null>(null);
 
@@ -148,12 +163,13 @@ export function AddProviderModelsDialog({
 		return () => document.removeEventListener("pointerdown", closeCatalog);
 	}, []);
 
-	// 弹窗打开时清空联想。
+	// 弹窗打开时清空联想与待确认预填。
 	useEffect(() => {
 		if (!open) return;
 		setModelSearchQuery("");
 		setModelSearchDebounced("");
 		setAppliedModelId(null);
+		setPendingSuggest(null);
 		setActiveTab("auto");
 		setCatalogOpen(false);
 	}, [open]);
@@ -179,6 +195,7 @@ export function AddProviderModelsDialog({
 		setModelSearchDebounced("");
 		setAppliedModelId(hit.id);
 		setCatalogOpen(false);
+		setPendingSuggest(null);
 	};
 
 	const form = useForm<ManualFormValues>({
@@ -200,6 +217,7 @@ export function AddProviderModelsDialog({
 		setCandidates(null);
 		setNumberEdits({});
 		setSelected(new Set());
+		setPendingSuggest(null);
 		form.reset({
 			providerModelId: "",
 			contextLength: 0,
@@ -285,6 +303,27 @@ export function AddProviderModelsDialog({
 	// 手动添加表单的引用：manual 候选点击后滚动到此处并聚焦输入。
 	const manualFormRef = useRef<HTMLFormElement | null>(null);
 
+	/** 滚动到手动添加表单并聚焦模型 ID 输入。 */
+	const focusManualForm = () => {
+		requestAnimationFrame(() => {
+			manualFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+			const input = manualFormRef.current?.querySelector<HTMLInputElement>(
+				"input[name='providerModelId']",
+			);
+			input?.focus();
+		});
+	};
+
+	/** 把目录建议的参数预填进表单（模型 ID 之外的全部字段）。 */
+	const applySuggestion = (s: CatalogSuggestion) => {
+		form.setValue("contextLength", s.contextLength ?? 0);
+		form.setValue("maxOutputTokens", s.maxOutputTokens ?? 0);
+		form.setValue("reasoning", s.reasoning);
+		form.setValue("toolUse", s.toolUse);
+		form.setValue("imageUnderstand", s.imageUnderstand);
+		form.setValue("videoUnderstand", s.videoUnderstand);
+	};
+
 	/** manual（需手动填写）候选：预填模型 ID 并滚动/聚焦到手动添加表单。 */
 	const jumpToManual = (candidate: RefreshCandidate) => {
 		form.setValue("providerModelId", candidate.providerModelId);
@@ -293,13 +332,30 @@ export function AddProviderModelsDialog({
 		setAppliedModelId(candidate.providerModelId);
 		setCatalogOpen(false);
 		setActiveTab("manual");
-		requestAnimationFrame(() => {
-			manualFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-			const input = manualFormRef.current?.querySelector<HTMLInputElement>(
-				"input[name='providerModelId']",
-			);
-			input?.focus();
-		});
+		focusManualForm();
+	};
+
+	/** pending（待确认）候选：模型 ID 填远程 ID，参数默认按相似度最高的建议预填。 */
+	const jumpToManualWithSuggestion = (candidate: RefreshCandidate) => {
+		const suggestions = candidate.suggestions ?? [];
+		if (suggestions.length > 0) applySuggestion(suggestions[0]);
+		form.setValue("providerModelId", candidate.providerModelId);
+		setModelSearchQuery(candidate.providerModelId);
+		setModelSearchDebounced("");
+		setAppliedModelId(candidate.providerModelId);
+		setCatalogOpen(false);
+		setPendingSuggest({ remoteId: candidate.providerModelId, suggestions });
+		setActiveSuggestIndex(0);
+		setActiveTab("manual");
+		focusManualForm();
+	};
+
+	/** 点击相似模型徽章：切换参数预填来源，模型 ID 保持远程 ID 不变。 */
+	const selectSuggestion = (index: number) => {
+		const suggestion = pendingSuggest?.suggestions[index];
+		if (!suggestion) return;
+		applySuggestion(suggestion);
+		setActiveSuggestIndex(index);
 	};
 
 	const handleManualAdd = (values: ManualFormValues) => {
@@ -327,6 +383,7 @@ export function AddProviderModelsDialog({
 					setModelSearchQuery("");
 					setModelSearchDebounced("");
 					setAppliedModelId(null);
+					setPendingSuggest(null);
 				},
 				onError: (error) => toastError(t("common.addFailed"), error),
 			},
@@ -413,8 +470,13 @@ export function AddProviderModelsDialog({
 											{candidates.map((candidate) => {
 												const edits = editsOf(candidate);
 												const selectable = isSelectable(candidate);
-												// manual 候选整卡可点：跳转手动添加表单并预填模型 ID。
-												const clickable = candidate.matchState === "manual";
+												// manual/pending 候选整卡可点：跳转手动添加表单（pending 额外预填建议参数）。
+												const clickable =
+													candidate.matchState === "manual" || candidate.matchState === "pending";
+												const jump = () =>
+													candidate.matchState === "pending"
+														? jumpToManualWithSuggestion(candidate)
+														: jumpToManual(candidate);
 												return (
 													<div
 														key={candidate.providerModelId}
@@ -425,13 +487,13 @@ export function AddProviderModelsDialog({
 														)}
 														role={clickable ? "button" : undefined}
 														tabIndex={clickable ? 0 : undefined}
-														onClick={clickable ? () => jumpToManual(candidate) : undefined}
+														onClick={clickable ? jump : undefined}
 														onKeyDown={
 															clickable
 																? (e) => {
 																		if (e.key === "Enter" || e.key === " ") {
 																			e.preventDefault();
-																			jumpToManual(candidate);
+																			jump();
 																		}
 																	}
 																: undefined
@@ -522,7 +584,33 @@ export function AddProviderModelsDialog({
 									onSubmit={form.handleSubmit(handleManualAdd)}
 									className="space-y-4"
 								>
-									<h3 className="text-sm font-semibold">{t("providerModels.manualAdd")}</h3>
+									<div className="flex items-center justify-between gap-2">
+										<h3 className="text-sm font-semibold">{t("providerModels.manualAdd")}</h3>
+										{pendingSuggest !== null && pendingSuggest.suggestions.length > 0 && (
+											<div
+												className="flex items-center gap-1.5"
+												aria-label={t("providerModels.similarModels")}
+											>
+												{pendingSuggest.suggestions.map((suggestion, index) => (
+													<button
+														key={suggestion.catalogId}
+														type="button"
+														title={suggestion.catalogId}
+														aria-pressed={index === activeSuggestIndex}
+														onClick={() => selectSuggestion(index)}
+														className={cn(
+															badgeVariants({
+																variant: index === activeSuggestIndex ? "default" : "outline",
+															}),
+															"max-w-44 cursor-pointer font-mono",
+														)}
+													>
+														<span className="truncate">{suggestion.catalogId}</span>
+													</button>
+												))}
+											</div>
+										)}
+									</div>
 									<FormField
 										control={form.control}
 										name="providerModelId"
