@@ -231,3 +231,34 @@ export function raceWindowBounds(
 	}
 	return periodBounds(state.period, state.offset, now);
 }
+
+/** 赛马卡默认窗口：当天（offset 0），自定义输入值退化为过去 1 小时。 */
+export function defaultRaceWindowState(): RaceWindowState {
+	return {
+		period: "day",
+		offset: 0,
+		customStart: Date.now() - 3_600_000,
+		customEnd: Date.now(),
+		appliedCustom: null,
+	};
+}
+
+/**
+ * 深链查询串（赛马行跳转统一拼接）：自定义窗口带起止时间，
+ * 预设周期带 period/offset。与 initialWindowFromUrl 构成往返。
+ */
+export function windowQueryString(
+	state: RaceWindowState,
+	window: { startTime: number; endTime: number },
+): string {
+	const params = new URLSearchParams();
+	if (state.period === "custom") {
+		params.set("period", "custom");
+		params.set("startTime", String(window.startTime));
+		params.set("endTime", String(window.endTime));
+	} else {
+		params.set("period", state.period);
+		params.set("offset", String(state.offset));
+	}
+	return params.toString();
+}
