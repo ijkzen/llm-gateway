@@ -7,7 +7,7 @@ use crate::state::AppState;
 /// 执行一轮连续失败禁用供应商的自动恢复探测，返回成功恢复数量。
 pub async fn recover_failure_disabled(state: &AppState) -> Result<usize, DbErr> {
     let providers = provider::Entity::find()
-        .filter(provider::Column::FailureDisabled.eq(true))
+        .filter(provider::Column::DisabledReason.eq("failure"))
         .all(&state.db)
         .await?;
     let mut recovered = 0;
@@ -20,7 +20,9 @@ pub async fn recover_failure_disabled(state: &AppState) -> Result<usize, DbErr> 
             .one(&state.db)
             .await
         {
-            Ok(Some(provider)) if provider.failure_disabled => provider,
+            Ok(Some(provider)) if provider.disabled_reason.as_deref() == Some("failure") => {
+                provider
+            }
             Ok(_) => continue,
             Err(error) => {
                 tracing::warn!(
@@ -71,17 +73,15 @@ pub async fn recover_failure_disabled(state: &AppState) -> Result<usize, DbErr> 
             tracing::warn!(provider_id = provider.id, "自动恢复探测失败：{error}");
             continue;
         }
-        match crate::provider_repo::recover_provider_from_failures(
+        match crate::availability::recover_probe(
             &state.db,
+            &state.failure_counter,
             provider.id,
             provider.updated_at,
         )
         .await
         {
-            Ok(true) => {
-                state.failure_counter.reset(provider.id);
-                recovered += 1;
-            }
+            Ok(true) => recovered += 1,
             Ok(false) => {}
             Err(error) => {
                 tracing::warn!(provider_id = provider.id, "自动恢复状态更新失败：{error}")

@@ -151,7 +151,7 @@ async fn test_state() -> AppState {
         scheduler,
         log_tx,
         lb_state: llm_gateway::proxy::LbState::default(),
-        failure_counter: llm_gateway::proxy::failure_counter::FailureCounter::default(),
+        failure_counter: llm_gateway::availability::FailureCounter::default(),
         recheck_gate: llm_gateway::proxy::failure_recheck::RecheckGate::default(),
         upstream_pool: llm_gateway::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(
             600,
@@ -171,7 +171,7 @@ async fn seed_failure_disabled_provider(state: &AppState, base_url: &str) -> (i3
         protocol_type: Set(0),
         billing_mode: Set(0),
         extra: Set("{}".to_string()),
-        failure_disabled: Set(true),
+        disabled_reason: Set(Some("failure".to_string())),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
@@ -351,7 +351,7 @@ async fn provider_without_model_stays_disabled_without_request() {
         .unwrap()
         .unwrap();
     assert!(!provider.enable);
-    assert!(provider.failure_disabled);
+    assert_eq!(provider.disabled_reason.as_deref(), Some("failure"));
     assert_eq!(request::Entity::find().count(&state.db).await.unwrap(), 0);
 }
 
@@ -379,9 +379,9 @@ async fn failed_provider_does_not_stop_later_recovery() {
         .await
         .unwrap()
         .unwrap();
-    assert!(failed.failure_disabled);
+    assert_eq!(failed.disabled_reason.as_deref(), Some("failure"));
     assert!(!failed.enable);
-    assert!(!recovered.failure_disabled);
+    assert_eq!(recovered.disabled_reason, None);
     assert!(recovered.enable);
 }
 
@@ -402,7 +402,7 @@ async fn redirect_probe_keeps_provider_disabled_and_records_failure() {
         .unwrap()
         .unwrap();
     assert!(!provider.enable);
-    assert!(provider.failure_disabled);
+    assert_eq!(provider.disabled_reason.as_deref(), Some("failure"));
     let rows = wait_for_requests(&state, 1).await;
     assert_eq!(rows.len(), 1);
     assert!(!rows[0].success);
@@ -436,7 +436,7 @@ async fn stale_probe_does_not_overwrite_provider_changed_during_request() {
         .unwrap()
         .unwrap();
     assert!(!provider.enable);
-    assert!(provider.failure_disabled);
+    assert_eq!(provider.disabled_reason.as_deref(), Some("failure"));
 }
 
 #[tokio::test]
@@ -492,7 +492,7 @@ async fn successful_probe_recovers_provider_and_cascade_disabled_item() {
         .unwrap()
         .unwrap();
     assert!(provider.enable);
-    assert!(!provider.failure_disabled);
+    assert_eq!(provider.disabled_reason, None);
     let item = virtual_model_item::Entity::find()
         .filter(virtual_model_item::Column::ModelId.eq(model_id))
         .one(&state.db)

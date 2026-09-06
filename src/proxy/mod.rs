@@ -5,7 +5,6 @@
 //! 并把每次请求的指标异步写入 request 表。
 
 pub mod convert;
-pub mod failure_counter;
 pub mod failure_recheck;
 pub mod failure_recovery;
 pub mod metrics;
@@ -70,8 +69,8 @@ fn is_retryable_status(status: StatusCode) -> bool {
 }
 
 /// 成员请求失败后记连续失败（所有失败，含不可重试 4xx）；达到设置项
-/// `max_consecutive_failures` 阈值时熔断停用供应商（原子化，详见
-/// `provider_repo::disable_provider_on_failures`）。
+/// `max_consecutive_failures` 阈值时由可用性状态机熔断停用供应商（计数、
+/// 阈值判断与状态迁移见 `availability::on_forward_failure`）。
 /// `counted` 为本次请求已计数的 provider 集合：同一请求内同一供应商的多个
 /// 成员失败只计一次，避免一次降级链把计数顶到阈值。
 async fn note_member_failure(
@@ -83,18 +82,15 @@ async fn note_member_failure(
     if !counted.insert(member.provider_id) {
         return;
     }
-    let consecutive = state.failure_counter.record_failure(member.provider_id);
-    // 失败复查（异步节流）：耗尽即门控禁用，切断缓存过期导致的后续降级。
-    failure_recheck::trigger(state, member.provider_id, request_id);
     let threshold = state.settings.max_consecutive_failures().await;
-    if consecutive >= threshold
-        && let Err(e) = crate::provider_repo::disable_provider_on_failures(
-            &state.db,
-            member.provider_id,
-            consecutive,
-            request_id,
-        )
-        .await
+    if let Err(e) = crate::availability::on_forward_failure(
+        &state.db,
+        &state.failure_counter,
+        member.provider_id,
+        threshold,
+        request_id,
+    )
+    .await
     {
         tracing::warn!(
             request_id,
@@ -102,6 +98,8 @@ async fn note_member_failure(
             "连续失败熔断执行失败：{e}"
         );
     }
+    // 失败复查（异步节流）：耗尽即门控禁用，切断缓存过期导致的后续降级。
+    failure_recheck::trigger(state, member.provider_id, request_id);
 }
 
 /// LB 轮转状态：虚拟模型 id → 已轮转次数。
@@ -2041,7 +2039,7 @@ mod tests {
             sort_order: 0,
             proxy_enabled,
             proxy_addr: proxy_addr.to_string(),
-            failure_disabled: false,
+            disabled_reason: None,
             created_at: now,
             updated_at: now,
         }

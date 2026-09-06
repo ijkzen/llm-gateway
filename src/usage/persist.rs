@@ -146,8 +146,8 @@ pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> 
     Ok(ok)
 }
 
-// Provider 及其虚拟模型子模型的启用状态开关已收编到 `crate::provider_repo`
-// （`set_provider_enabled` / `set_items_enabled`），接口与定时任务共用同一入口并输出日志。
+// Provider 及其虚拟模型子模型的启用状态开关已收编到 `crate::availability`
+// （可用性状态机，ADR-0003），接口路由、转发链路与定时任务共用同一组动作入口。
 // 「订阅制是否可用」判定已收敛到 `UsageData::subscription_usable`（src/usage/types.rs），
 // 用量门控与 LB 选路共用同一口径。
 
@@ -157,6 +157,7 @@ pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> 
 /// - 按量付费（billing_mode=0）：按 `balance_usable` 判定（查得到余额且合计为 0 即不可用）。
 ///
 /// 无法判定（None）或未开启用量查询的供应商不做任何动作；抓取失败/无数据的场景由调用方保证不传入。
+/// 状态迁移的守卫（额度刷新只解除 quota 态，manual/failure 不受触碰）由 availability 模块保证。
 pub async fn apply_usage_gate(
     db: &DatabaseConnection,
     p: &provider::Model,
@@ -165,26 +166,15 @@ pub async fn apply_usage_gate(
     let Some(usable) = data.usable_for_billing_mode(p.billing_mode) else {
         return Ok(());
     };
-    let (recovered_msg, exhausted_msg) = if p.billing_mode == 1 {
-        (
-            "订阅额度已恢复，自动启用供应商及其全部虚拟模型子模型",
-            "订阅额度已耗尽，自动停用供应商及其全部虚拟模型子模型",
-        )
+    let label = if p.billing_mode == 1 {
+        "订阅额度"
     } else {
-        (
-            "余额已恢复，自动启用供应商及其全部虚拟模型子模型",
-            "余额已耗尽，自动停用供应商及其全部虚拟模型子模型",
-        )
+        "余额"
     };
-    // 连续失败禁用（failure_disabled）不能由普通用量刷新解除；由手动启用或自动恢复探测处理。
-    if usable && !p.enable && !p.failure_disabled {
-        crate::provider_repo::set_provider_enabled(db, p.id, true).await?;
-        let items = crate::provider_repo::set_items_enabled(db, p.id, true).await?;
-        tracing::info!(provider_id = p.id, items, "{recovered_msg}");
-    } else if !usable && p.enable {
-        crate::provider_repo::set_provider_enabled(db, p.id, false).await?;
-        let items = crate::provider_repo::set_items_enabled(db, p.id, false).await?;
-        tracing::info!(provider_id = p.id, items, "{exhausted_msg}");
+    if usable {
+        crate::availability::recover_quota(db, p.id, label).await?;
+    } else {
+        crate::availability::disable_for_quota(db, p.id, label).await?;
     }
     Ok(())
 }
