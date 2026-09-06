@@ -689,16 +689,8 @@ mod tests {
     ) -> tracing::subscriber::DefaultGuard {
         use tracing_subscriber::layer::SubscriberExt;
 
-        let (std_tx, std_rx) = std::sync::mpsc::channel::<JobLogEvent>();
-        let bridge_tx = log_tx.clone();
-        // std mpsc recv 阻塞线程，放 blocking 线程池，避免饿死 current_thread runtime。
-        tokio::task::spawn_blocking(move || {
-            while let Ok(event) = std_rx.recv() {
-                let _ = bridge_tx.send(event);
-            }
-        });
         let subscriber = tracing_subscriber::Registry::default()
-            .with(crate::cron::log_capture::JobLogLayer::new(std_tx));
+            .with(crate::cron::log_capture::JobLogLayer::new(log_tx));
         tracing::subscriber::set_default(subscriber)
     }
 

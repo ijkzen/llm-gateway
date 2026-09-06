@@ -2,13 +2,13 @@
 //!
 //! worker 执行 handler 时会创建一个带 `job_name` / `run_id` 字段的 span，
 //! 本模块的 [`JobLogLayer`] 从全局 tracing 事件流中捕获该 span 内的日志事件，
-//! 通过 std 同步通道转发给 lib.rs 的桥接任务，再进入 tokio broadcast 供
-//! worker（落库）与 SSE（实时推送）订阅。span 外的普通日志（启动日志、
-//! HTTP 访问日志等）不会被捕获。
+//! 直接发送到 tokio broadcast 供 worker（落库）与 SSE（实时推送）订阅。
+//! span 外的普通日志（启动日志、HTTP 访问日志等）不会被捕获。
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::mpsc::Sender;
+
+use tokio::sync::broadcast::Sender;
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -88,9 +88,10 @@ impl JobLogEvent {
 
 /// 捕获 cron job span 内日志事件的 [`Layer`]。
 ///
-/// `on_event` 是同步回调，不能 await，因此使用 std 同步通道；
-/// lib.rs 中的桥接任务负责把事件转发到 tokio broadcast，供 worker
-/// 与 SSE 按 `job_name`（+ `run_id`）过滤订阅。
+/// `on_event` 是同步回调，broadcast 的 `send` 同步且不阻塞（通道满丢弃
+/// 最旧事件、无订阅者返回 Err），可直接调用；worker 与 SSE 按 `job_name`
+/// （+ `run_id`）过滤订阅。直连 broadcast 保证事件在 `tracing::info!`
+/// 返回前已入队，handler 结束后 worker 的 drain 不会漏收。
 pub struct JobLogLayer {
     sender: Sender<JobLogEvent>,
     /// span id -> (job_name, run_id)，只登记带归属字段的任务 span。
@@ -138,8 +139,7 @@ where
         event.record(&mut recorder);
         let message = trim_and_limit(recorder.message.as_deref().unwrap_or_default());
 
-        // 无界 std 通道的 send 同步且不阻塞；接收端（桥接任务）关闭后事件
-        // 静默丢弃，此时没有任何订阅者，不影响运行。
+        // 无订阅者时 send 返回 Err（事件静默丢弃）；通道满时丢弃最旧事件。
         let _ = self.sender.send(JobLogEvent {
             kind: "log".to_string(),
             job_name,
@@ -259,9 +259,8 @@ pub(crate) static SUBSCRIBER_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 mod tests {
-    use std::sync::mpsc::Receiver;
-
     use super::*;
+    use tokio::sync::broadcast::error::TryRecvError;
     use tracing_subscriber::Registry;
     use tracing_subscriber::layer::SubscriberExt;
 
@@ -270,8 +269,11 @@ mod tests {
     fn capture_events(
         job_name: &str,
         run_id: &str,
-    ) -> (Receiver<JobLogEvent>, std::sync::mpsc::Sender<JobLogEvent>) {
-        let (tx, rx) = std::sync::mpsc::channel();
+    ) -> (
+        tokio::sync::broadcast::Receiver<JobLogEvent>,
+        Sender<JobLogEvent>,
+    ) {
+        let (tx, rx) = tokio::sync::broadcast::channel(16);
         // 额外保留一个 Sender，避免 subscriber 销毁后 channel 断连。
         let keep_alive = tx.clone();
         let subscriber = Registry::default().with(JobLogLayer::new(tx));
@@ -293,30 +295,27 @@ mod tests {
     #[test]
     fn test_captures_events_inside_job_span() {
         let _guard = SUBSCRIBER_LOCK.lock().unwrap();
-        let (rx, _keep_alive) = capture_events("job_a", "run_1");
+        let (mut rx, _keep_alive) = capture_events("job_a", "run_1");
 
-        let first = rx.recv().unwrap();
+        let first = rx.blocking_recv().unwrap();
         assert_eq!(first.kind, "log");
         assert_eq!(first.job_name, "job_a");
         assert_eq!(first.run_id, "run_1");
         assert_eq!(first.level.as_deref(), Some("INFO"));
         assert_eq!(first.message.as_deref(), Some("step one"));
 
-        let second = rx.recv().unwrap();
+        let second = rx.blocking_recv().unwrap();
         assert_eq!(second.message.as_deref(), Some("step two with 42"));
         assert_eq!(second.level.as_deref(), Some("WARN"));
 
         // 没有第三条事件。
-        assert!(matches!(
-            rx.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        ));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
     }
 
     #[test]
     fn test_ignores_events_outside_job_span() {
         let _guard = SUBSCRIBER_LOCK.lock().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let keep_alive = tx.clone();
         let subscriber = Registry::default().with(JobLogLayer::new(tx));
         tracing::subscriber::with_default(subscriber, || {
@@ -326,17 +325,14 @@ mod tests {
                 tracing::info!("nested but not a job span");
             });
         });
-        assert!(matches!(
-            rx.try_recv(),
-            Err(std::sync::mpsc::TryRecvError::Empty)
-        ));
+        assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
         drop(keep_alive);
     }
 
     #[test]
     fn test_captures_events_nested_inside_job_span() {
         let _guard = SUBSCRIBER_LOCK.lock().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
         let keep_alive = tx.clone();
         let subscriber = Registry::default().with(JobLogLayer::new(tx));
         tracing::subscriber::with_default(subscriber, || {
@@ -353,7 +349,7 @@ mod tests {
                 });
             });
         });
-        let event = rx.recv().unwrap();
+        let event = rx.blocking_recv().unwrap();
         assert_eq!(event.job_name, "job_b");
         assert_eq!(event.run_id, "run_2");
         assert_eq!(event.message.as_deref(), Some("nested inside job span"));

@@ -44,5 +44,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      # worker 日志链路测试依赖全局 tracing subscriber，并行执行存在跨测试干扰，
+      # 单线程串行运行规避。
       - name: Run Rust tests
-        run: cargo test --all-targets
+        run: cargo test --all-targets -- --test-threads=1
