@@ -29,38 +29,73 @@ fn capture() -> Captured {
     Arc::new(Mutex::new(Vec::new()))
 }
 
-/// 启动仅含 OpenAI chat 路径的 mock 上游：流式返回思考增量 + 正文增量。
+/// 启动含 OpenAI chat 与 Anthropic messages 路径的 mock 上游：流式返回思考增量 + 正文增量。
 async fn spawn_mock(captured: Captured) -> String {
-    let app = Router::new().route(
-        "/v1/chat/completions",
-        post(move |request: Request<Body>| {
-            let captured = captured.clone();
-            async move {
-                let body = axum::body::to_bytes(request.into_body(), usize::MAX)
-                    .await
-                    .unwrap();
-                let parsed: Value = serde_json::from_str(&String::from_utf8_lossy(&body)).unwrap();
-                captured.lock().unwrap().push(parsed);
-                let payload = [
-                    json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}).to_string(),
-                    json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"reasoning_content":"想一想"},"finish_reason":null}]}).to_string(),
-                    json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}).to_string(),
-                    json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}).to_string(),
-                    json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}).to_string(),
-                ]
-                .iter()
-                .map(|event| format!("data: {event}\n\n"))
-                .collect::<String>()
-                    + "data: [DONE]\n\n";
-                (
-                    HttpStatus::OK,
-                    [("content-type", "text/event-stream")],
-                    payload,
-                )
-                    .into_response()
-            }
-        }),
-    );
+    let captured_messages = captured.clone();
+    let app = Router::new()
+        .route(
+            "/v1/chat/completions",
+            post(move |request: Request<Body>| {
+                let captured = captured.clone();
+                async move {
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let parsed: Value =
+                        serde_json::from_str(&String::from_utf8_lossy(&body)).unwrap();
+                    captured.lock().unwrap().push(parsed);
+                    let payload = [
+                        json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}).to_string(),
+                        json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"reasoning_content":"想一想"},"finish_reason":null}]}).to_string(),
+                        json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}).to_string(),
+                        json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}).to_string(),
+                        json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}).to_string(),
+                    ]
+                    .iter()
+                    .map(|event| format!("data: {event}\n\n"))
+                    .collect::<String>()
+                        + "data: [DONE]\n\n";
+                    (
+                        HttpStatus::OK,
+                        [("content-type", "text/event-stream")],
+                        payload,
+                    )
+                        .into_response()
+                }
+            }),
+        )
+        .route(
+            "/v1/messages",
+            post(move |request: Request<Body>| {
+                let captured = captured_messages.clone();
+                async move {
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                        .await
+                        .unwrap();
+                    let parsed: Value =
+                        serde_json::from_str(&String::from_utf8_lossy(&body)).unwrap();
+                    captured.lock().unwrap().push(parsed);
+                    let payload = [
+                        json!({"type":"message_start","message":{"id":"msg-c1","usage":{"input_tokens":5}}}).to_string(),
+                        json!({"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}).to_string(),
+                        json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"想一想"}}).to_string(),
+                        json!({"type":"content_block_start","index":1,"content_block":{"type":"text"}}).to_string(),
+                        json!({"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"你好"}}).to_string(),
+                        json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}).to_string(),
+                        json!({"type":"message_stop"}).to_string(),
+                    ]
+                    .iter()
+                    .map(|event| format!("data: {event}\n\n"))
+                    .collect::<String>();
+                    (
+                        HttpStatus::OK,
+                        [("content-type", "text/event-stream")],
+                        payload,
+                    )
+                        .into_response()
+                }
+            }),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
@@ -76,6 +111,7 @@ async fn seed_provider_named(
     name: &str,
     base_url: &str,
     enable: bool,
+    protocol_type: i32,
 ) -> i32 {
     let active = provider::ActiveModel {
         name: Set(name.to_string()),
@@ -83,7 +119,7 @@ async fn seed_provider_named(
         base_url: Set(base_url.to_string()),
         api_key: Set(llm_gateway::crypto::encrypt("sk-mock")),
         custom_header: Set("{}".to_string()),
-        protocol_type: Set(0),
+        protocol_type: Set(protocol_type),
         billing_mode: Set(0),
         extra: Set("{}".to_string()),
         created_at: Set(chrono::Utc::now()),
@@ -94,7 +130,7 @@ async fn seed_provider_named(
 }
 
 async fn seed_provider(db: &sea_orm::DatabaseConnection, base_url: &str, enable: bool) -> i32 {
-    seed_provider_named(db, "p-chat", base_url, enable).await
+    seed_provider_named(db, "p-chat", base_url, enable, 0).await
 }
 
 async fn seed_provider_model(
@@ -213,11 +249,13 @@ async fn chat_stream_direct_with_reasoning_and_record() {
     assert!(text.contains("\"content\":\"你好\""), "{text}");
     assert!(text.contains("finish_reason\":\"stop"), "{text}");
 
-    // 上游收到的 model 为供应商模型 ID，stream 强制为 true。
+    // 上游收到的 model 为供应商模型 ID，stream 强制为 true；
+    // OpenAI Compat 为透传协议，不注入 reasoning_effort。
     let upstream_bodies = captured.lock().unwrap();
     assert_eq!(upstream_bodies.len(), 1);
     assert_eq!(upstream_bodies[0]["model"], json!("m-1"));
     assert_eq!(upstream_bodies[0]["stream"], json!(true));
+    assert!(upstream_bodies[0].get("reasoning_effort").is_none());
 
     let rows = wait_for_records(&db, 1).await;
     assert_eq!(rows.len(), 1);
@@ -237,7 +275,7 @@ async fn chat_rejects_unknown_provider_or_model() {
     let (status, _, text) = send_chat(&app, chat_body(provider_id, 99999)).await;
     assert_eq!(status, 404, "{text}");
     // 供应商对不上模型归属同样 404。
-    let other_provider = seed_provider_named(&db, "p-chat-2", "http://127.0.0.1:1", true).await;
+    let other_provider = seed_provider_named(&db, "p-chat-2", "http://127.0.0.1:1", true, 0).await;
     let model_id = seed_provider_model(&db, provider_id, "m-1").await;
     let (status, _, text) = send_chat(&app, chat_body(other_provider, model_id)).await;
     assert_eq!(status, 404, "{text}");
@@ -265,4 +303,36 @@ async fn chat_rejects_empty_messages() {
     )
     .await;
     assert_eq!(status, 400, "{text}");
+}
+
+#[tokio::test]
+async fn chat_anthropic_reasoning_model_requests_thinking() {
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider_named(&db, "p-anthropic", &base, true, 2).await;
+    let model_id = seed_provider_model(&db, provider_id, "m-1").await;
+
+    let (status, content_type, text) = send_chat(&app, chat_body(provider_id, model_id)).await;
+    assert_eq!(status, 200, "{text}");
+    assert!(content_type.contains("text/event-stream"), "{content_type}");
+
+    // 请求体已按 reasoning 能力注入 thinking 预算（reasoning_effort=medium → Anthropic thinking）。
+    let upstream_bodies = captured.lock().unwrap();
+    assert_eq!(upstream_bodies.len(), 1);
+    assert_eq!(upstream_bodies[0]["thinking"]["type"], json!("enabled"));
+    assert!(
+        upstream_bodies[0]["thinking"]["budget_tokens"]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
+
+    // 上游 thinking 增量被归一为 reasoning_content 透传给前端。
+    assert!(text.contains("reasoning_content"), "{text}");
+    assert!(text.contains("想一想"), "{text}");
+    assert!(text.contains("\"content\":\"你好\""), "{text}");
+    drop(upstream_bodies);
+    let rows = wait_for_records(&db, 1).await;
+    assert!(rows[0].success);
 }

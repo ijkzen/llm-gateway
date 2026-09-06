@@ -293,9 +293,10 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
         && !effort.is_empty()
         && effort != "none"
     {
+        // includeThoughts=true：不开启时上游只思考不返回思考摘要，客户端收不到。
         generation_config.insert(
             "thinkingConfig".to_string(),
-            json!({"thinkingBudget": reasoning_budget(effort)}),
+            json!({"thinkingBudget": reasoning_budget(effort), "includeThoughts": true}),
         );
     }
     if let Some(presence) = chat.get("presence_penalty").and_then(Value::as_f64) {
@@ -980,6 +981,10 @@ mod tests {
         assert_eq!(
             body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
             4096
+        );
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            true
         );
 
         let chat = from_str::<Value>(
