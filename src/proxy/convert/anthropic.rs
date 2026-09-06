@@ -23,6 +23,10 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
     let stream = chat.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let max_tokens = chat_max_tokens(chat).unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS);
     let tool_names = collect_tool_call_names(chat);
+    // 先于消息循环计算：assistant 历史的 thinking 块注入以 thinking 启用为前提
+    // （官方约束：input 携带 thinking 块时必须开启 thinking）。
+    let thinking = map_thinking(chat, max_tokens);
+    let thinking_requested = thinking.is_some();
 
     let mut system_blocks: Vec<Value> = Vec::new();
     let mut messages: Vec<(String, Vec<Value>)> = Vec::new();
@@ -60,11 +64,15 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
             }
             "assistant" => {
                 let mut blocks = Vec::new();
+                // 回传的 thinking 块置于 text/tool_use 之前（官方要求 thinking
+                // 块位于 assistant 消息开头），仅 thinking 启用时注入。
+                if thinking_requested {
+                    blocks.extend(anthropic_thinking_blocks(message));
+                }
                 let text = message_text(content);
                 if !text.is_empty() {
                     blocks.push(json!({"type": "text", "text": text}));
                 }
-                // assistant 的 reasoning_content 不回传：thinking 块需要有效的 signature。
                 if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
                     for call in tool_calls {
                         let name = call
@@ -151,7 +159,6 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
         }
     }
 
-    let thinking = map_thinking(chat, max_tokens);
     let thinking = drop_thinking_without_history_blocks(chat, thinking);
     let thinking_active = thinking.is_some();
     let mut tool_choice = map_tool_choice(chat);
@@ -286,22 +293,59 @@ fn map_thinking(chat: &Value, max_tokens: i64) -> Option<Value> {
     Some(json!({"type": "enabled", "budget_tokens": budget}))
 }
 
-/// assistant 历史含 tool_calls 时丢弃 thinking：转换层不回传 thinking 块
-/// （无有效 signature），此时启用 thinking 会触发 Anthropic
-/// "Expected thinking or redacted_thinking" 400（LiteLLM 同款规避）。
+/// assistant 消息上回传的 anthropic 格式 reasoning_details → thinking 块。
+/// 无有效签名/密文的项无法通过官方校验，跳过；块内容原样语义还原。
+fn anthropic_thinking_blocks(message: &Value) -> Vec<Value> {
+    super::valid_reasoning_details(message)
+        .into_iter()
+        .filter(|detail| {
+            detail.get("format").and_then(Value::as_str) == Some(super::REASONING_FORMAT_ANTHROPIC)
+        })
+        .filter_map(|detail| match detail.get("type").and_then(Value::as_str) {
+            Some("reasoning.text") => {
+                let signature = detail
+                    .get("signature")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if signature.is_empty() {
+                    return None;
+                }
+                Some(json!({
+                    "type": "thinking",
+                    "thinking": detail.get("text").and_then(Value::as_str).unwrap_or(""),
+                    "signature": signature,
+                }))
+            }
+            Some("reasoning.encrypted") => {
+                let data = detail.get("data").and_then(Value::as_str)?;
+                (!data.is_empty()).then(|| json!({"type": "redacted_thinking", "data": data}))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// thinking + tool_calls 共存的官方约束规避：最后一条含 tool_calls 的
+/// assistant 消息若没有可回传的 thinking 块（无有效 signature），启用
+/// thinking 会触发 "Expected thinking or redacted_thinking" 400，此时丢弃
+/// thinking 参数（LiteLLM 同款）；有块回传则正常保留。
 fn drop_thinking_without_history_blocks(chat: &Value, thinking: Option<Value>) -> Option<Value> {
-    let has_tool_calls = chat_messages(chat).iter().any(|message| {
+    let thinking = thinking?;
+    let messages = chat_messages(chat);
+    let Some(message) = messages.iter().rev().find(|message| {
         message.get("role").and_then(Value::as_str) == Some("assistant")
             && message
                 .get("tool_calls")
                 .and_then(Value::as_array)
                 .is_some_and(|calls| !calls.is_empty())
-    });
-    if has_tool_calls && thinking.is_some() {
-        tracing::warn!("已丢弃 thinking 参数：assistant 历史含 tool_calls 且无 thinking 块");
+    }) else {
+        return Some(thinking);
+    };
+    if anthropic_thinking_blocks(message).is_empty() {
+        tracing::warn!("已丢弃 thinking 参数：含 tool_calls 的 assistant 轮无 thinking 块回传");
         return None;
     }
-    thinking
+    Some(thinking)
 }
 
 fn map_stop(chat: &Value) -> Option<Vec<Value>> {
@@ -423,6 +467,7 @@ pub fn convert_response(
         .unwrap_or("");
     let mut text = String::new();
     let mut reasoning_parts: Vec<String> = Vec::new();
+    let mut reasoning_details: Vec<Value> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
     let mut json_tool_output: Option<String> = None;
 
@@ -438,6 +483,20 @@ pub fn convert_response(
                     if let Some(part) = block.get("thinking").and_then(Value::as_str) {
                         reasoning_parts.push(part.to_string());
                     }
+                    reasoning_details.push(super::reasoning_text_detail(
+                        super::REASONING_FORMAT_ANTHROPIC,
+                        reasoning_details.len() as i64,
+                        block.get("thinking").and_then(Value::as_str).unwrap_or(""),
+                        block.get("signature").and_then(Value::as_str),
+                    ));
+                }
+                Some("redacted_thinking") => {
+                    reasoning_details.push(super::reasoning_encrypted_detail(
+                        super::REASONING_FORMAT_ANTHROPIC,
+                        reasoning_details.len() as i64,
+                        None,
+                        block.get("data").cloned().unwrap_or(Value::Null),
+                    ));
                 }
                 Some("tool_use") => {
                     let name = block.get("name").and_then(Value::as_str).unwrap_or("");
@@ -485,6 +544,7 @@ pub fn convert_response(
                 json!(reasoning_parts.join("\n")),
             );
         }
+        super::attach_reasoning_details(&mut message, reasoning_details);
         Value::Object(message)
     };
 
@@ -515,6 +575,9 @@ pub struct AnthropicStreamConverter {
     json_mode_tool: bool,
     json_mode_indexes: HashSet<i64>,
     json_mode_buffers: HashMap<i64, String>,
+    /// 进行中的 thinking 块缓冲：block_index → (思考文本, 签名)。
+    thinking_buffers: HashMap<i64, (String, String)>,
+    next_detail_index: i64,
     usage: Option<Usage>,
     finished: bool,
     finish_emitted: bool,
@@ -532,6 +595,8 @@ impl AnthropicStreamConverter {
             json_mode_tool,
             json_mode_indexes: HashSet::new(),
             json_mode_buffers: HashMap::new(),
+            thinking_buffers: HashMap::new(),
+            next_detail_index: 0,
             usage: None,
             finished: false,
             finish_emitted: false,
@@ -609,6 +674,25 @@ impl AnthropicStreamConverter {
                         }),
                         None,
                     ));
+                } else if block_type == "thinking" {
+                    self.thinking_buffers
+                        .insert(block_index, (String::new(), String::new()));
+                } else if block_type == "redacted_thinking" {
+                    // redacted_thinking 无增量事件，data 随 content_block_start 一次到齐。
+                    let detail = super::reasoning_encrypted_detail(
+                        super::REASONING_FORMAT_ANTHROPIC,
+                        self.next_detail_index,
+                        None,
+                        block.get("data").cloned().unwrap_or(Value::Null),
+                    );
+                    self.next_detail_index += 1;
+                    self.ensure_started(&mut out);
+                    out.push(super::chunk_json(
+                        &self.id,
+                        &self.model,
+                        json!({"reasoning_details": [detail]}),
+                        None,
+                    ));
                 }
             }
             Some("content_block_delta") => {
@@ -629,6 +713,9 @@ impl AnthropicStreamConverter {
                     }
                     Some("thinking_delta") => {
                         let text = delta.get("thinking").and_then(Value::as_str).unwrap_or("");
+                        if let Some(buffer) = self.thinking_buffers.get_mut(&block_index) {
+                            buffer.0.push_str(text);
+                        }
                         if !text.is_empty() {
                             self.ensure_started(&mut out);
                             out.push(super::chunk_json(
@@ -637,6 +724,13 @@ impl AnthropicStreamConverter {
                                 json!({"reasoning_content": text}),
                                 None,
                             ));
+                        }
+                    }
+                    Some("signature_delta") => {
+                        let signature =
+                            delta.get("signature").and_then(Value::as_str).unwrap_or("");
+                        if let Some(buffer) = self.thinking_buffers.get_mut(&block_index) {
+                            buffer.1.push_str(signature);
                         }
                     }
                     Some("input_json_delta") => {
@@ -664,6 +758,29 @@ impl AnthropicStreamConverter {
                         }
                     }
                     _ => {}
+                }
+            }
+            Some("content_block_stop") => {
+                let block_index = value.get("index").and_then(Value::as_i64).unwrap_or(0);
+                if let Some((text, signature)) = self.thinking_buffers.remove(&block_index) {
+                    let detail = super::reasoning_text_detail(
+                        super::REASONING_FORMAT_ANTHROPIC,
+                        self.next_detail_index,
+                        &text,
+                        if signature.is_empty() {
+                            None
+                        } else {
+                            Some(signature.as_str())
+                        },
+                    );
+                    self.next_detail_index += 1;
+                    self.ensure_started(&mut out);
+                    out.push(super::chunk_json(
+                        &self.id,
+                        &self.model,
+                        json!({"reasoning_details": [detail]}),
+                        None,
+                    ));
                 }
             }
             Some("message_delta") => {
@@ -907,6 +1024,73 @@ mod tests {
     }
 
     #[test]
+    fn thinking_kept_when_tool_turn_has_thinking_details() {
+        // 客户端原样回传带签名的 thinking 块时，tool_use 轮保留 thinking 并注入块。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","content":"需要查询","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}],"reasoning_details":[{"type":"reasoning.text","text":"想一想","signature":"sig-1","id":null,"format":"anthropic-claude-v1","index":0}]},{"role":"tool","tool_call_id":"call_1","content":"ok"}],"reasoning_effort":"high","max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(body["thinking"].is_object());
+        let assistant = &body["messages"][1];
+        assert_eq!(assistant["content"][0]["type"], "thinking");
+        assert_eq!(assistant["content"][0]["thinking"], "想一想");
+        assert_eq!(assistant["content"][0]["signature"], "sig-1");
+        assert_eq!(assistant["content"][1]["type"], "text");
+        assert_eq!(assistant["content"][2]["type"], "tool_use");
+    }
+
+    #[test]
+    fn redacted_thinking_detail_is_injected_verbatim() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}],"reasoning_details":[{"type":"reasoning.encrypted","data":"blob","id":null,"format":"anthropic-claude-v1","index":0}]},{"role":"tool","tool_call_id":"call_1","content":"ok"}],"reasoning_effort":"high","max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(body["thinking"].is_object());
+        assert_eq!(
+            body["messages"][1]["content"][0]["type"],
+            "redacted_thinking"
+        );
+        assert_eq!(body["messages"][1]["content"][0]["data"], "blob");
+    }
+
+    #[test]
+    fn thinking_dropped_when_tool_turn_details_are_other_format() {
+        // 其他厂商格式（加密签名不互通）无法用于 Anthropic，维持禁用规避。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}],"reasoning_details":[{"type":"reasoning.encrypted","data":"gAAA","id":null,"format":"google-gemini-v1","index":0}]},{"role":"tool","tool_call_id":"call_1","content":"ok"}],"reasoning_effort":"high","max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn thinking_details_without_signature_are_skipped() {
+        // 无签名的 text detail 无法通过官方校验，按缺块处理（维持禁用规避）。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}],"reasoning_details":[{"type":"reasoning.text","text":"想","signature":null,"id":null,"format":"anthropic-claude-v1","index":0}]},{"role":"tool","tool_call_id":"call_1","content":"ok"}],"reasoning_effort":"high","max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(body.get("thinking").is_none());
+    }
+
+    #[test]
+    fn thinking_details_not_injected_without_thinking_enabled() {
+        // 未申请思考时不注入块（官方约束：input 带 thinking 块必须开 thinking）。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","content":"答","reasoning_details":[{"type":"reasoning.text","text":"想","signature":"sig-1","id":null,"format":"anthropic-claude-v1","index":0}]}]}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(body.get("thinking").is_none());
+        let assistant = &body["messages"][1];
+        assert_eq!(assistant["content"][0]["type"], "text");
+    }
+
+    #[test]
     fn maps_extended_stop_reasons() {
         // 官方 StopReason 新枚举：context window 耗尽与 compaction 语义为
         // length；pause_turn 是可续传的中断，按 stop 透出。
@@ -1014,5 +1198,80 @@ mod tests {
             chunks.last().unwrap()["choices"][0]["finish_reason"],
             "stop"
         );
+    }
+
+    #[test]
+    fn non_stream_captures_thinking_signature_details() {
+        let upstream = from_str::<Value>(
+            r#"{
+                "id": "msg_1",
+                "content": [
+                    {"type": "thinking", "thinking": "hmm", "signature": "EqQBCkYI"},
+                    {"type": "redacted_thinking", "data": "encrypted-blob"},
+                    {"type": "text", "text": "hello"}
+                ],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5}
+            }"#,
+        )
+        .unwrap();
+        let (completion, _) = convert_response(&upstream, "req-1", "vm-a", false).unwrap();
+        let details = completion["choices"][0]["message"]["reasoning_details"]
+            .as_array()
+            .unwrap();
+        assert_eq!(details.len(), 2);
+        assert_eq!(details[0]["type"], "reasoning.text");
+        assert_eq!(details[0]["text"], "hmm");
+        assert_eq!(details[0]["signature"], "EqQBCkYI");
+        assert_eq!(details[0]["format"], "anthropic-claude-v1");
+        assert_eq!(details[0]["index"], 0);
+        assert_eq!(details[1]["type"], "reasoning.encrypted");
+        assert_eq!(details[1]["data"], "encrypted-blob");
+        assert_eq!(details[1]["format"], "anthropic-claude-v1");
+        assert_eq!(details[1]["index"], 1);
+    }
+
+    #[test]
+    fn stream_captures_thinking_signature_details() {
+        let mut converter = AnthropicStreamConverter::new("req-1", "vm-a", false);
+        let mut chunks = Vec::new();
+        for event in [
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"想"}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"blob"}}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+            r#"{"type":"message_stop"}"#,
+        ] {
+            chunks.extend(converter.convert_event(event).unwrap());
+        }
+        let details: Vec<&Value> = chunks
+            .iter()
+            .filter_map(|chunk| {
+                chunk
+                    .pointer("/choices/0/delta/reasoning_details")
+                    .and_then(Value::as_array)
+            })
+            .flat_map(|items| items.iter())
+            .collect();
+        assert_eq!(details.len(), 2);
+        assert_eq!(details[0]["type"], "reasoning.text");
+        assert_eq!(details[0]["text"], "想");
+        assert_eq!(details[0]["signature"], "sig-1");
+        assert_eq!(details[0]["index"], 0);
+        assert_eq!(details[1]["type"], "reasoning.encrypted");
+        assert_eq!(details[1]["data"], "blob");
+        // thinking 文本增量照旧透出 reasoning_content。
+        let reasoning: String = chunks
+            .iter()
+            .filter_map(|chunk| {
+                chunk
+                    .pointer("/choices/0/delta/reasoning_content")
+                    .and_then(Value::as_str)
+            })
+            .collect();
+        assert_eq!(reasoning, "想");
     }
 }

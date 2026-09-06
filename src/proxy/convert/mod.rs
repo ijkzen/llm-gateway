@@ -7,12 +7,97 @@ pub mod gemini;
 pub mod openai;
 pub mod responses;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::provider_model::refresh::PROTOCOL_GEMINI;
 
 /// Anthropic `max_tokens` 缺省值（Anthropic 必填该字段）。
 pub const ANTHROPIC_DEFAULT_MAX_TOKENS: i64 = 4096;
+
+/// reasoning_details 载体的 format 标识（OpenRouter 兼容值）。
+pub const REASONING_FORMAT_ANTHROPIC: &str = "anthropic-claude-v1";
+pub const REASONING_FORMAT_RESPONSES: &str = "openai-responses-v1";
+pub const REASONING_FORMAT_GEMINI: &str = "google-gemini-v1";
+
+/// 构造 reasoning.text detail（思考原文 + 可选签名；签名缺失填 null）。
+pub fn reasoning_text_detail(
+    format: &str,
+    index: i64,
+    text: &str,
+    signature: Option<&str>,
+) -> Value {
+    json!({
+        "type": "reasoning.text",
+        "text": text,
+        "signature": signature,
+        "id": Value::Null,
+        "format": format,
+        "index": index,
+    })
+}
+
+/// 构造 reasoning.encrypted detail（data 为厂商原生签名/密文，原样搬运）。
+pub fn reasoning_encrypted_detail(
+    format: &str,
+    index: i64,
+    id: Option<&str>,
+    data: Value,
+) -> Value {
+    json!({
+        "type": "reasoning.encrypted",
+        "data": data,
+        "id": id,
+        "format": format,
+        "index": index,
+    })
+}
+
+/// 非空时把 reasoning_details 数组写入 message。
+pub fn attach_reasoning_details(message: &mut Map<String, Value>, details: Vec<Value>) {
+    if !details.is_empty() {
+        message.insert("reasoning_details".to_string(), Value::Array(details));
+    }
+}
+
+/// reasoning_details 请求侧校验上限（防滥用；正常回传远小于此）。
+const REASONING_DETAILS_MAX_ITEMS: usize = 128;
+const REASONING_DETAILS_MAX_BYTES: usize = 512 * 1024;
+
+/// 读取 assistant 消息上回传的 reasoning_details，逐项做形状校验与
+/// 总量钳制；畸形项丢弃（debug 日志）。顺序保持原样（签名链不允许重排）。
+pub fn valid_reasoning_details(message: &Value) -> Vec<Value> {
+    let Some(items) = message.get("reasoning_details").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut total_bytes = 0usize;
+    for item in items.iter().take(REASONING_DETAILS_MAX_ITEMS) {
+        let Some(object) = item.as_object() else {
+            tracing::debug!("丢弃畸形 reasoning_details 项：非对象");
+            continue;
+        };
+        let detail_type = object
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !detail_type.starts_with("reasoning.") {
+            tracing::debug!(detail_type, "丢弃畸形 reasoning_details 项：type 非法");
+            continue;
+        }
+        let format = object.get("format").and_then(Value::as_str).unwrap_or("");
+        if format.is_empty() {
+            tracing::debug!("丢弃畸形 reasoning_details 项：format 缺失");
+            continue;
+        }
+        total_bytes += item.to_string().len();
+        if total_bytes > REASONING_DETAILS_MAX_BYTES {
+            tracing::debug!("reasoning_details 超出大小上限，截断后续项");
+            break;
+        }
+        out.push(item.clone());
+    }
+    out
+}
 
 /// reasoning_effort → thinking/thinkingConfig 预算（LiteLLM 档位）。
 pub fn reasoning_budget(effort: &str) -> i64 {
@@ -301,6 +386,24 @@ mod tests {
         assert_eq!(reasoning_budget("high"), 4096);
         assert_eq!(reasoning_budget("max"), 16384);
         assert_eq!(reasoning_budget("minimal"), 128);
+    }
+
+    #[test]
+    fn valid_reasoning_details_filters_malformed_items() {
+        let message = json!({
+            "role": "assistant",
+            "reasoning_details": [
+                "not-an-object",
+                {"type": "wrong", "format": "x"},
+                {"type": "reasoning.text"},
+                {"type": "reasoning.text", "text": "ok", "format": "anthropic-claude-v1"},
+            ],
+        });
+        let details = valid_reasoning_details(&message);
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0]["text"], "ok");
+        // 非 assistant 场景由调用方保证；无字段时返回空。
+        assert!(valid_reasoning_details(&json!({"role": "assistant"})).is_empty());
     }
 
     #[test]

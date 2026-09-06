@@ -13,6 +13,8 @@ interface ChatMessage {
 	role: "user" | "assistant";
 	content: string;
 	reasoning: string;
+	/** 无损思考载体（OpenRouter reasoning_details 兼容形状），发送历史时原样回传。 */
+	reasoningDetails?: unknown[];
 	/** 思考过程折叠区展开态；正文到达或流结束自动折叠（手动切换后不再自动干预）。 */
 	reasoningOpen: boolean;
 	reasoningTouched: boolean;
@@ -28,17 +30,24 @@ function eventData(event: string): string | null {
 
 /** 解析一个 OpenAI chunk 的 delta 增量。思考字段同时兼容 DeepSeek 风格
  * （reasoning_content，网关透传 DeepSeek/Kimi 等原生键名）与 OpenRouter 风格
- * （reasoning，网关透传 Command Code 等聚合器键名）。 */
-function deltaOf(data: string): { reasoning?: string; content?: string } {
+ * （reasoning，网关透传 Command Code 等聚合器键名）；reasoning_details 为
+ * 网关无损思考载体，随历史原样回传。 */
+function deltaOf(data: string): {
+	reasoning?: string;
+	content?: string;
+	details?: unknown[];
+} {
 	if (data === "[DONE]") return {};
 	const parsed: unknown = JSON.parse(data);
 	const delta = (parsed as { choices?: Array<{ delta?: Record<string, unknown> }> }).choices?.[0]
 		?.delta;
 	const reasoning = delta?.reasoning_content ?? delta?.reasoning;
 	const content = delta?.content;
+	const details = Array.isArray(delta?.reasoning_details) ? delta.reasoning_details : undefined;
 	return {
 		reasoning: typeof reasoning === "string" && reasoning ? reasoning : undefined,
 		content: typeof content === "string" && content ? content : undefined,
+		details,
 	};
 }
 
@@ -92,8 +101,14 @@ export default function ChatPage() {
 		const text = input.trim();
 		if (!text || !modelKey || streaming) return;
 		const [providerId, modelId] = modelKey.split(":").map(Number);
-		// 只回传文本上下文，思考内容不回传上游。
-		const history = messages.map((m) => ({ role: m.role, content: m.content }));
+		// assistant 消息携带的思考载体原样回传（无损续链）；思考文本仅供展示。
+		const history = messages.map((m) => ({
+			role: m.role,
+			content: m.content,
+			...(m.role === "assistant" && m.reasoningDetails?.length
+				? { reasoning_details: m.reasoningDetails }
+				: {}),
+		}));
 		const controller = new AbortController();
 		abortRef.current = controller;
 		setInput("");
@@ -159,6 +174,13 @@ export default function ChatPage() {
 							...msg,
 							reasoning: msg.reasoning + delta.reasoning,
 							reasoningOpen: msg.reasoningTouched ? msg.reasoningOpen : !msg.content,
+						}));
+					}
+					if (delta.details) {
+						const details = delta.details;
+						patchLast((msg) => ({
+							...msg,
+							reasoningDetails: [...(msg.reasoningDetails ?? []), ...details],
 						}));
 					}
 					if (delta.content !== undefined) {

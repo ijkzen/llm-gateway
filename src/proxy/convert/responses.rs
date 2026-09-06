@@ -3,7 +3,7 @@
 //! 上游始终强制流式（`stream: true`，与 nyro/LiteLLM 一致：部分 Responses
 //! 后端仅支持 SSE）；客户端请求非流式时由管线把 chunk 聚合回单个 JSON。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -35,6 +35,11 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
                 }));
             }
             "assistant" => {
+                // 回传的 reasoning item 置于其产出项之前，满足 Responses
+                // 「reasoning 后必须紧跟对应输出项」的结构校验。
+                for item in responses_reasoning_items(message) {
+                    input.push(item);
+                }
                 let text = message_text(content);
                 if !text.is_empty() {
                     input.push(json!({
@@ -76,6 +81,8 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
         // Responses 后端普遍只支持 SSE；客户端非流式时由管线聚合。
         "stream": true,
         "store": false,
+        // store:false 下不显式申请就拿不到 reasoning 密文，透传回传无从谈起。
+        "include": ["reasoning.encrypted_content"],
     });
     let object = body.as_object_mut().expect("object body");
     // instructions 可选：客户端没写 system 时不应注入默认值（LiteLLM 同款）。
@@ -163,6 +170,29 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
     Ok(body)
 }
 
+/// assistant 消息上回传的 openai-responses 格式 details → reasoning item。
+/// encrypted_content 是 store:false 下唯一可回传载体，缺失即跳过。
+fn responses_reasoning_items(message: &Value) -> Vec<Value> {
+    super::valid_reasoning_details(message)
+        .into_iter()
+        .filter(|detail| {
+            detail.get("format").and_then(Value::as_str) == Some(super::REASONING_FORMAT_RESPONSES)
+        })
+        .filter(|detail| detail.get("type").and_then(Value::as_str) == Some("reasoning.encrypted"))
+        .filter_map(|detail| {
+            let encrypted = detail.get("data").and_then(Value::as_str)?;
+            (!encrypted.is_empty()).then(|| {
+                json!({
+                    "type": "reasoning",
+                    "id": detail.get("id").cloned().unwrap_or(Value::Null),
+                    "summary": [],
+                    "encrypted_content": encrypted,
+                })
+            })
+        })
+        .collect()
+}
+
 fn user_content(content: Option<&Value>) -> Value {
     match content {
         Some(Value::String(text)) => json!([{"type": "input_text", "text": text}]),
@@ -234,6 +264,10 @@ pub struct ResponsesStreamConverter {
     streamed_text: HashMap<i64, String>,
     streamed_reasoning: HashMap<i64, String>,
     streamed_args: HashMap<i64, String>,
+    /// 已捕获 encrypted_content detail 的 output_index（output_item.done 与
+    /// completed 回放双路径去重）。
+    reasoning_detail_captured: HashSet<i64>,
+    next_detail_index: i64,
     finish_reason: Option<&'static str>,
     usage: Option<Usage>,
     finished: bool,
@@ -252,6 +286,8 @@ impl ResponsesStreamConverter {
             streamed_text: HashMap::new(),
             streamed_reasoning: HashMap::new(),
             streamed_args: HashMap::new(),
+            reasoning_detail_captured: HashSet::new(),
+            next_detail_index: 0,
             finish_reason: None,
             usage: None,
             finished: false,
@@ -421,6 +457,27 @@ impl ResponsesStreamConverter {
             Some("reasoning") => {
                 let summary = Self::reasoning_summary(item);
                 self.emit_missing_reasoning(output_index, &summary, out);
+                // encrypted_content 是 store:false 下回传 reasoning 的唯一载体，
+                // 缺失（上游未提供）时跳过，仅保留 summary 展示。
+                if let Some(encrypted) = item.get("encrypted_content").and_then(Value::as_str)
+                    && !encrypted.is_empty()
+                    && self.reasoning_detail_captured.insert(output_index)
+                {
+                    let detail = super::reasoning_encrypted_detail(
+                        super::REASONING_FORMAT_RESPONSES,
+                        self.next_detail_index,
+                        item.get("id").and_then(Value::as_str),
+                        json!(encrypted),
+                    );
+                    self.next_detail_index += 1;
+                    self.ensure_started(out);
+                    out.push(super::chunk_json(
+                        &self.id,
+                        &self.model,
+                        json!({"reasoning_details": [detail]}),
+                        None,
+                    ));
+                }
             }
             _ => {}
         }
@@ -858,6 +915,36 @@ mod tests {
     }
 
     #[test]
+    fn replays_reasoning_items_before_their_outputs() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","content":"hi","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}],"reasoning_details":[{"type":"reasoning.encrypted","data":"gAAA","id":"rs_1","format":"openai-responses-v1","index":0}]},{"role":"tool","tool_call_id":"call_1","content":"ok"}]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        let input = body["input"].as_array().unwrap();
+        // input[0] 是 user 消息；reasoning item 紧贴其产出项之前。
+        assert_eq!(input[1]["type"], "reasoning");
+        assert_eq!(input[1]["id"], "rs_1");
+        assert_eq!(input[1]["encrypted_content"], "gAAA");
+        assert_eq!(input[1]["summary"], json!([]));
+        assert_eq!(input[2]["type"], "message");
+        assert_eq!(input[3]["type"], "function_call");
+        assert_eq!(input[4]["type"], "function_call_output");
+    }
+
+    #[test]
+    fn cross_format_reasoning_details_are_not_injected() {
+        // 其他厂商格式不注入（加密签名不互通，failover 换供应商时属预期）。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","content":"hi","reasoning_details":[{"type":"reasoning.text","text":"想","signature":"sig","id":null,"format":"anthropic-claude-v1","index":0}]}]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        let input = body["input"].as_array().unwrap();
+        assert!(input.iter().all(|item| item["type"] != "reasoning"));
+    }
+
+    #[test]
     fn maps_incomplete_status_to_length() {
         let mut converter = ResponsesStreamConverter::new("req-1", "vm-a");
         let chunks = converter
@@ -869,5 +956,53 @@ mod tests {
             chunks.last().unwrap()["choices"][0]["finish_reason"],
             "length"
         );
+    }
+
+    #[test]
+    fn captures_encrypted_reasoning_details_with_replay_dedupe() {
+        let mut converter = ResponsesStreamConverter::new("req-1", "vm-a");
+        let mut chunks = Vec::new();
+        for event in [
+            r#"{"type":"response.created","response":{"id":"resp_1"}}"#,
+            r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"思考"}],"encrypted_content":"gAAA"}}"#,
+            r#"{"type":"response.completed","response":{"status":"completed","output":[{"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"思考"}],"encrypted_content":"gAAA"}]}}"#,
+        ] {
+            chunks.extend(converter.convert_event(event).unwrap());
+        }
+        let details: Vec<&Value> = chunks
+            .iter()
+            .filter_map(|chunk| {
+                chunk
+                    .pointer("/choices/0/delta/reasoning_details")
+                    .and_then(Value::as_array)
+            })
+            .flat_map(|items| items.iter())
+            .collect();
+        // output_item.done 与 completed 回放只捕获一次。
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0]["type"], "reasoning.encrypted");
+        assert_eq!(details[0]["data"], "gAAA");
+        assert_eq!(details[0]["id"], "rs_1");
+        assert_eq!(details[0]["format"], "openai-responses-v1");
+        // 无 encrypted_content 的 reasoning item 不产出 detail。
+        let mut converter = ResponsesStreamConverter::new("req-2", "vm-a");
+        let chunks = converter
+            .convert_event(
+                r#"{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_2","summary":[]}}"#,
+            )
+            .unwrap();
+        assert!(chunks.iter().all(|chunk| {
+            chunk
+                .pointer("/choices/0/delta/reasoning_details")
+                .is_none()
+        }));
+    }
+
+    #[test]
+    fn requests_encrypted_reasoning_include() {
+        let chat = from_str::<Value>(r#"{"model":"m","messages":[{"role":"user","content":"x"}]}"#)
+            .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
     }
 }

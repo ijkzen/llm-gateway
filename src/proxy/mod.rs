@@ -33,8 +33,8 @@ use crate::crypto;
 use crate::entity::{provider, provider_model, virtual_model, virtual_model_item};
 use crate::provider_template;
 use crate::proxy::convert::{
-    anthropic, build_upstream_url, cached_client_usage_json, chunk_json, extract_error_message,
-    gemini, openai, responses, truncate_chars, usage_chunk_json,
+    anthropic, attach_reasoning_details, build_upstream_url, cached_client_usage_json, chunk_json,
+    extract_error_message, gemini, openai, responses, truncate_chars, usage_chunk_json,
 };
 use crate::proxy::metrics::{RequestRecord, StreamMetrics, Usage, now_ms};
 use crate::proxy::pool::PooledBody;
@@ -847,6 +847,7 @@ pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
     let mut model = String::new();
     let mut content = String::new();
     let mut reasoning = String::new();
+    let mut reasoning_details: Vec<Value> = Vec::new();
     let mut tool_calls: BTreeMap<i64, (String, String, String)> = BTreeMap::new();
     let mut finish_reason = "stop".to_string();
     let mut created = 0i64;
@@ -875,6 +876,9 @@ pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
         }
         if let Some(text) = delta.get("reasoning_content").and_then(Value::as_str) {
             reasoning.push_str(text);
+        }
+        if let Some(details) = delta.get("reasoning_details").and_then(Value::as_array) {
+            reasoning_details.extend(details.iter().cloned());
         }
         if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for call in calls {
@@ -924,6 +928,7 @@ pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
     if !reasoning.is_empty() {
         message.insert("reasoning_content".to_string(), json!(reasoning));
     }
+    attach_reasoning_details(&mut message, reasoning_details);
 
     json!({
         "id": id,

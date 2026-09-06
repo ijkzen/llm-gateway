@@ -197,6 +197,7 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
             }
             "assistant" => {
                 let mut parts = Vec::new();
+                let mut function_call_positions: Vec<usize> = Vec::new();
                 let text = message_text(content);
                 if !text.is_empty() {
                     parts.push(json!({"text": text}));
@@ -217,12 +218,33 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
                             .ok()
                             .filter(Value::is_object)
                             .unwrap_or_else(|| json!({}));
+                        function_call_positions.push(parts.len());
                         parts.push(json!({
                             "functionCall": {
                                 "name": call.pointer("/function/name").and_then(Value::as_str).unwrap_or(""),
                                 "args": args,
                             },
                         }));
+                    }
+                }
+                // 回传的 thoughtSignature 按 tool_calls 下标挂回对应 functionCall
+                // part（Gemini 3 工具轮强制校验签名，缺失直接 400）。
+                for detail in super::valid_reasoning_details(message) {
+                    if detail.get("format").and_then(Value::as_str)
+                        != Some(super::REASONING_FORMAT_GEMINI)
+                        || detail.get("type").and_then(Value::as_str) != Some("reasoning.encrypted")
+                    {
+                        continue;
+                    }
+                    let Some(signature) = detail.get("data").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if signature.is_empty() {
+                        continue;
+                    }
+                    let index = detail.get("index").and_then(Value::as_i64).unwrap_or(-1);
+                    if let Some(&position) = function_call_positions.get(index.max(0) as usize) {
+                        parts[position]["thoughtSignature"] = json!(signature);
                     }
                 }
                 if !parts.is_empty() {
@@ -587,14 +609,21 @@ pub fn extract_usage(usage: &Value) -> Usage {
     }
 }
 
-fn parts_to_message(parts: &[Value]) -> (String, String, Vec<Value>) {
+/// parts → (正文, 思考文本, tool_calls, 各 tool_call 对应的 thoughtSignature)。
+fn parts_to_message(parts: &[Value]) -> (String, String, Vec<Value>, Vec<Option<String>>) {
     let mut text = String::new();
     let mut reasoning = String::new();
     let mut tool_calls: Vec<Value> = Vec::new();
+    let mut signatures: Vec<Option<String>> = Vec::new();
     for part in parts {
         if part.get("functionCall").is_some() {
             let call = part.get("functionCall").cloned().unwrap_or(json!({}));
             let name = call.get("name").and_then(Value::as_str).unwrap_or("");
+            signatures.push(
+                part.get("thoughtSignature")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            );
             tool_calls.push(json!({
                 "id": format!("call_{}", Uuid::new_v4()),
                 "type": "function",
@@ -619,7 +648,7 @@ fn parts_to_message(parts: &[Value]) -> (String, String, Vec<Value>) {
             text.push_str(content_text);
         }
     }
-    (text, reasoning, tool_calls)
+    (text, reasoning, tool_calls, signatures)
 }
 
 /// Gemini 非流式响应 → OpenAI chat.completion。
@@ -635,7 +664,7 @@ pub fn convert_response(
         .pointer("/candidates/0")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let (text, reasoning, mut tool_calls) = parts_to_message(
+    let (text, reasoning, mut tool_calls, signatures) = parts_to_message(
         candidate
             .pointer("/content/parts")
             .and_then(Value::as_array)
@@ -664,6 +693,21 @@ pub fn convert_response(
     if !reasoning.is_empty() {
         message.insert("reasoning_content".to_string(), json!(reasoning));
     }
+    let reasoning_details = signatures
+        .iter()
+        .enumerate()
+        .filter_map(|(index, signature)| {
+            signature.as_ref().map(|signature| {
+                super::reasoning_encrypted_detail(
+                    super::REASONING_FORMAT_GEMINI,
+                    index as i64,
+                    None,
+                    json!(signature),
+                )
+            })
+        })
+        .collect();
+    super::attach_reasoning_details(&mut message, reasoning_details);
 
     let usage = extract_usage(upstream.get("usageMetadata").unwrap_or(&Value::Null));
     let has_tool_calls = message.get("tool_calls").is_some();
@@ -766,7 +810,7 @@ impl GeminiStreamConverter {
             .pointer("/candidates/0/content/parts")
             .and_then(Value::as_array)
         {
-            let (text, reasoning, tool_calls) = parts_to_message(parts);
+            let (text, reasoning, tool_calls, signatures) = parts_to_message(parts);
             if !reasoning.is_empty() {
                 self.ensure_started(&mut out);
                 out.push(super::chunk_json(
@@ -785,7 +829,7 @@ impl GeminiStreamConverter {
                     None,
                 ));
             }
-            for call in tool_calls {
+            for (call, signature) in tool_calls.into_iter().zip(signatures) {
                 self.ensure_started(&mut out);
                 let index = self.tool_counter;
                 self.tool_counter += 1;
@@ -797,6 +841,20 @@ impl GeminiStreamConverter {
                     json!({"tool_calls": [call]}),
                     None,
                 ));
+                if let Some(signature) = signature {
+                    let detail = super::reasoning_encrypted_detail(
+                        super::REASONING_FORMAT_GEMINI,
+                        index,
+                        None,
+                        json!(signature),
+                    );
+                    out.push(super::chunk_json(
+                        &self.id,
+                        &self.requested_model,
+                        json!({"reasoning_details": [detail]}),
+                        None,
+                    ));
+                }
             }
         }
 
@@ -1120,6 +1178,41 @@ mod tests {
     }
 
     #[test]
+    fn replays_thought_signature_on_function_call() {
+        // 回传的签名按下标挂到对应 functionCall part 上（Gemini 3 强制校验）。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}},{"id":"call_2","type":"function","function":{"name":"g","arguments":"{}"}}],"reasoning_details":[{"type":"reasoning.encrypted","data":"sig-2","id":null,"format":"google-gemini-v1","index":1}]},{"role":"tool","tool_call_id":"call_1","content":"ok"},{"role":"tool","tool_call_id":"call_2","content":"ok"}]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        let parts = &body["contents"][1]["parts"];
+        let function_calls: Vec<&Value> = parts
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|part| part.get("functionCall").is_some())
+            .collect();
+        assert_eq!(function_calls.len(), 2);
+        assert!(function_calls[0].get("thoughtSignature").is_none());
+        assert_eq!(function_calls[1]["thoughtSignature"], "sig-2");
+    }
+
+    #[test]
+    fn cross_format_signatures_are_not_injected() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}],"reasoning_details":[{"type":"reasoning.encrypted","data":"blob","id":null,"format":"anthropic-claude-v1","index":0}]},{"role":"tool","tool_call_id":"call_1","content":"ok"}]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        let parts = body["contents"][1]["parts"].as_array().unwrap();
+        assert!(
+            parts
+                .iter()
+                .all(|part| part.get("thoughtSignature").is_none())
+        );
+    }
+
+    #[test]
     fn converts_non_stream_response() {
         let upstream = from_str::<Value>(
             r#"{
@@ -1146,5 +1239,61 @@ mod tests {
             4
         );
         assert_eq!(usage.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn non_stream_captures_thought_signatures() {
+        let upstream = from_str::<Value>(
+            r#"{
+                "candidates": [{
+                    "content": {"parts": [
+                        {"functionCall": {"name": "f", "args": {"a": 1}}, "thoughtSignature": "sig-a"},
+                        {"functionCall": {"name": "g", "args": {}}}
+                    ]}
+                }],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}
+            }"#,
+        )
+        .unwrap();
+        let (completion, _) = convert_response(&upstream, "req-1", "vm-a").unwrap();
+        let details = completion["choices"][0]["message"]["reasoning_details"]
+            .as_array()
+            .unwrap();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0]["type"], "reasoning.encrypted");
+        assert_eq!(details[0]["data"], "sig-a");
+        assert_eq!(details[0]["format"], "google-gemini-v1");
+        assert_eq!(details[0]["index"], 0);
+    }
+
+    #[test]
+    fn stream_captures_thought_signatures() {
+        let mut converter = GeminiStreamConverter::new("req-1", "vm-a");
+        let chunks = converter
+            .convert_event(
+                r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"f","args":{}},"thoughtSignature":"sig-1"}]}}]}"#,
+            )
+            .unwrap();
+        let details: Vec<&Value> = chunks
+            .iter()
+            .filter_map(|chunk| {
+                chunk
+                    .pointer("/choices/0/delta/reasoning_details")
+                    .and_then(Value::as_array)
+            })
+            .flat_map(|items| items.iter())
+            .collect();
+        assert_eq!(details.len(), 1);
+        assert_eq!(details[0]["data"], "sig-1");
+        // detail 的 index 与 tool_calls 下标对齐。
+        let tool_index = chunks
+            .iter()
+            .find_map(|chunk| {
+                chunk
+                    .pointer("/choices/0/delta/tool_calls/0/index")
+                    .and_then(Value::as_i64)
+            })
+            .unwrap();
+        assert_eq!(details[0]["index"], tool_index);
     }
 }

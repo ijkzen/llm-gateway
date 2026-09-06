@@ -138,6 +138,45 @@ describe("ChatPage", () => {
 		});
 	});
 
+	it("reasoning_details 载体随流收集并随历史原样回传", async () => {
+		const detail = {
+			type: "reasoning.text",
+			text: "想",
+			signature: "sig-1",
+			id: null,
+			format: "anthropic-claude-v1",
+			index: 0,
+		};
+		const { fetchMock } = mockStreamingFetch([
+			new TextDecoder().decode(sseFrame({ role: "assistant" })),
+			new TextDecoder().decode(sseFrame({ reasoning_content: "想", reasoning_details: [detail] })),
+			new TextDecoder().decode(sseFrame({ content: "答" })),
+			"data: [DONE]\n\n",
+		]);
+		vi.stubGlobal("fetch", fetchMock);
+		renderPage();
+		selectModelAndSend("问");
+		await waitFor(() => expect(screen.getByText("答")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument());
+
+		// 第二轮发送：历史里 assistant 消息原样携带 reasoning_details。
+		const second = mockStreamingFetch([
+			new TextDecoder().decode(sseFrame({ content: "再答" })),
+			"data: [DONE]\n\n",
+		]);
+		vi.stubGlobal("fetch", second.fetchMock);
+		fireEvent.change(screen.getByPlaceholderText("输入消息…"), { target: { value: "再问" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await waitFor(() => expect(screen.getByText("再答")).toBeInTheDocument());
+		const [, init] = second.fetchMock.mock.calls[0] as [string, RequestInit];
+		const body = JSON.parse(String(init.body));
+		expect(body.messages).toEqual([
+			{ role: "user", content: "问" },
+			{ role: "assistant", content: "答", reasoning_details: [detail] },
+			{ role: "user", content: "再问" },
+		]);
+	});
+
 	it("发送中可停止，已收内容保留并标注停止", async () => {
 		const { fetchMock, closeStream } = mockStreamingFetch(
 			[new TextDecoder().decode(sseFrame({ content: "部分" }))],

@@ -6,11 +6,20 @@ use serde_json::{Value, json};
 use crate::proxy::metrics::Usage;
 use crate::proxy::sse::SseSplitter;
 
-/// 生成发往上游的请求体副本：重写 model；流式且客户端未开 include_usage 时注入。
+/// 生成发往上游的请求体副本：重写 model；流式且客户端未开 include_usage 时注入；
+/// 剥离 messages 中的 reasoning_details（网关内部无损载体，OpenAI 兼容上游
+/// 以原生 reasoning_content/reasoning 字段工作，避免严格实现拒收未知字段）。
 pub fn build_request_body(chat: &Value, actual_model: &str) -> Value {
     let mut body = chat.clone();
     if let Some(object) = body.as_object_mut() {
         object.insert("model".to_string(), json!(actual_model));
+        if let Some(messages) = object.get_mut("messages").and_then(Value::as_array_mut) {
+            for message in messages.iter_mut() {
+                if let Some(message_object) = message.as_object_mut() {
+                    message_object.remove("reasoning_details");
+                }
+            }
+        }
         let stream = object
             .get("stream")
             .and_then(Value::as_bool)
@@ -187,6 +196,19 @@ mod tests {
         let chat = from_str::<Value>(r#"{"model":"vm-a","messages":[]}"#).unwrap();
         let body = build_request_body(&chat, "gpt-4o");
         assert!(body.get("stream_options").is_none());
+    }
+
+    #[test]
+    fn build_body_strips_reasoning_details() {
+        // reasoning_details 是网关内部载体，直通上游前剥离。
+        let chat = from_str::<Value>(
+            r#"{"model":"vm-a","messages":[{"role":"user","content":"x"},{"role":"assistant","content":"hi","reasoning_details":[{"type":"reasoning.text","text":"想","signature":"sig","id":null,"format":"anthropic-claude-v1","index":0}]}]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-4o");
+        assert!(body["messages"][0].get("reasoning_details").is_none());
+        assert!(body["messages"][1].get("reasoning_details").is_none());
+        assert_eq!(body["messages"][1]["content"], "hi");
     }
 
     #[test]

@@ -122,6 +122,21 @@ async fn spawn_mock_with_headers(captured: Captured, captured_headers: CapturedH
                     let body = String::from_utf8_lossy(&body).to_string();
                     record_capture(&captured, &body);
                     let parsed: Value = serde_json::from_str(&body).unwrap();
+                    // 触发器：返回带 signature 的 thinking 块（reasoning_details 往返用）。
+                    if parsed.pointer("/messages/0/content/0/text")
+                        == Some(&json!("think-signature"))
+                    {
+                        return Json(json!({
+                            "id": "msg_sig",
+                            "content": [
+                                {"type": "thinking", "thinking": "想一想", "signature": "sig-abc"},
+                                {"type": "text", "text": "你好"}
+                            ],
+                            "stop_reason": "end_turn",
+                            "usage": {"input_tokens": 10, "output_tokens": 5}
+                        }))
+                        .into_response();
+                    }
                     if parsed["stream"] == json!(true) {
                         sse(&[
                             json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}}}).to_string(),
@@ -156,6 +171,14 @@ async fn spawn_mock_with_headers(captured: Captured, captured_headers: CapturedH
                     let body = String::from_utf8_lossy(&body).to_string();
                     record_capture(&captured, &body);
                     let parsed: Value = serde_json::from_str(&body).unwrap();
+                    // 触发器：返回带 encrypted_content 的 reasoning item（往返用）。
+                    if parsed.pointer("/input/0/content/0/text") == Some(&json!("encrypted-only"))
+                    {
+                        return sse(&[
+                            json!({"type":"response.created","response":{"id":"resp_enc","model":"enc"}}).to_string(),
+                            json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"reasoning","id":"rs_enc","summary":[{"type":"summary_text","text":"推理"}],"encrypted_content":"gAAA-enc"}],"usage":{"input_tokens":5,"output_tokens":3}}}).to_string(),
+                        ]);
+                    }
                     if parsed.pointer("/input/0/content/0/text") == Some(&json!("final-only")) {
                         return sse(&[
                             json!({"type":"response.created","response":{"id":"resp_final","model":"final-only"}}).to_string(),
@@ -183,6 +206,17 @@ async fn spawn_mock_with_headers(captured: Captured, captured_headers: CapturedH
                         .unwrap();
                     let body = String::from_utf8_lossy(&body).to_string();
                     record_capture(&captured, &body);
+                    let parsed: Value = serde_json::from_str(&body).unwrap();
+                    // 触发器：返回带 thoughtSignature 的 functionCall part（往返用）。
+                    if parsed.pointer("/contents/0/parts/0/text")
+                        == Some(&json!("tool-call-please"))
+                    {
+                        return Json(json!({
+                            "candidates": [{"content": {"parts": [{"functionCall": {"name": "get_weather", "args": {"city": "sf"}}, "thoughtSignature": "sig-gem"}], "role": "model"}, "finishReason": "STOP"}],
+                            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 4, "totalTokenCount": 14}
+                        }))
+                        .into_response();
+                    }
                     Json(json!({
                         "candidates": [{"content": {"parts": [{"text": "你好"}], "role": "model"}, "finishReason": "STOP"}],
                         "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 4, "thoughtsTokenCount": 2, "cachedContentTokenCount": 6, "totalTokenCount": 16}
@@ -604,6 +638,194 @@ async fn gemini_non_stream_converts() {
     assert_eq!(record.input_cache_tokens, 6);
     // 输出 = candidates 4 + thoughts 2（含思考）。
     assert_eq!(record.output_tokens, Some(6));
+}
+
+#[tokio::test]
+async fn anthropic_round_trips_thinking_signature_details() {
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, _) = common_setup_with_member(&base, 2, 0, 0).await;
+
+    // 第一轮：上游 thinking+signature → 下游 reasoning_details 原样透出。
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "messages": [{"role": "user", "content": "think-signature"}],
+            "max_tokens": 128,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    let completion: Value = serde_json::from_str(&text).unwrap();
+    let details = &completion["choices"][0]["message"]["reasoning_details"];
+    assert_eq!(details[0]["type"], "reasoning.text");
+    assert_eq!(details[0]["text"], "想一想");
+    assert_eq!(details[0]["signature"], "sig-abc");
+    assert_eq!(details[0]["format"], "anthropic-claude-v1");
+
+    // 第二轮：客户端回传 details → 上游收到原样 thinking 块，且 tool_use 轮
+    // 不再触发禁 thinking 降级。
+    let echo = json!({
+        "model": "vm-x",
+        "messages": [
+            {"role": "user", "content": "think-signature"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"sf\"}"}}], "reasoning_details": [
+                {"type": "reasoning.text", "text": "想一想", "signature": "sig-abc", "id": null, "format": "anthropic-claude-v1", "index": 0}
+            ]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
+        ],
+        "reasoning_effort": "high",
+        "max_tokens": 4096,
+    });
+    let (status, text) = send_chat(&app, echo).await;
+    assert_eq!(status, 200, "{text}");
+    let upstream_bodies = captured.lock().unwrap();
+    let second = &upstream_bodies[1];
+    assert_eq!(second["thinking"]["type"], "enabled");
+    let assistant = second.pointer("/messages/1").unwrap();
+    assert_eq!(assistant["content"][0]["type"], "thinking");
+    assert_eq!(assistant["content"][0]["thinking"], "想一想");
+    assert_eq!(assistant["content"][0]["signature"], "sig-abc");
+    assert_eq!(assistant["content"][1]["type"], "tool_use");
+}
+
+#[tokio::test]
+async fn responses_round_trips_encrypted_reasoning_details() {
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, _) = common_setup_with_member(&base, 1, 0, 0).await;
+
+    // 第一轮：reasoning item（含 encrypted_content）→ 下游 reasoning_details。
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "messages": [{"role": "user", "content": "encrypted-only"}],
+            "max_tokens": 128,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    let completion: Value = serde_json::from_str(&text).unwrap();
+    let details = &completion["choices"][0]["message"]["reasoning_details"];
+    assert_eq!(details[0]["type"], "reasoning.encrypted");
+    assert_eq!(details[0]["data"], "gAAA-enc");
+    assert_eq!(details[0]["id"], "rs_enc");
+    assert_eq!(details[0]["format"], "openai-responses-v1");
+
+    // 第二轮：回传 → reasoning item 注入 function_call 之前 + include 参数。
+    let echo = json!({
+        "model": "vm-x",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}], "reasoning_details": [
+                {"type": "reasoning.encrypted", "data": "gAAA-enc", "id": "rs_enc", "format": "openai-responses-v1", "index": 0}
+            ]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        ],
+        "max_tokens": 128,
+    });
+    let (status, text) = send_chat(&app, echo).await;
+    assert_eq!(status, 200, "{text}");
+    let upstream_bodies = captured.lock().unwrap();
+    let second = &upstream_bodies[1];
+    assert_eq!(second["include"], json!(["reasoning.encrypted_content"]));
+    let input = second["input"].as_array().unwrap();
+    // input[0]=user；reasoning 紧贴 function_call 之前。
+    assert_eq!(input[1]["type"], "reasoning");
+    assert_eq!(input[1]["id"], "rs_enc");
+    assert_eq!(input[1]["encrypted_content"], "gAAA-enc");
+    assert_eq!(input[2]["type"], "function_call");
+    assert_eq!(input[3]["type"], "function_call_output");
+}
+
+#[tokio::test]
+async fn gemini_round_trips_thought_signature_details() {
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, _) = common_setup_with_member(&base, 3, 0, 0).await;
+
+    // 第一轮：functionCall part 带 thoughtSignature → 下游 reasoning_details。
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "messages": [{"role": "user", "content": "tool-call-please"}],
+            "max_tokens": 128,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    let completion: Value = serde_json::from_str(&text).unwrap();
+    let details = &completion["choices"][0]["message"]["reasoning_details"];
+    assert_eq!(details[0]["type"], "reasoning.encrypted");
+    assert_eq!(details[0]["data"], "sig-gem");
+    assert_eq!(details[0]["format"], "google-gemini-v1");
+    assert_eq!(details[0]["index"], 0);
+    let call_id = completion["choices"][0]["message"]["tool_calls"][0]["id"].clone();
+
+    // 第二轮：回传 → thoughtSignature 按 tool_calls 下标挂回 functionCall part。
+    let echo = json!({
+        "model": "vm-x",
+        "messages": [
+            {"role": "user", "content": "tool-call-please"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": call_id, "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\":\"sf\"}"}}], "reasoning_details": [
+                {"type": "reasoning.encrypted", "data": "sig-gem", "id": null, "format": "google-gemini-v1", "index": 0}
+            ]},
+            {"role": "tool", "tool_call_id": call_id, "content": "{\"temp\":20}"}
+        ],
+        "max_tokens": 128,
+    });
+    let (status, text) = send_chat(&app, echo).await;
+    assert_eq!(status, 200, "{text}");
+    let upstream_bodies = captured.lock().unwrap();
+    let parts = upstream_bodies[1]
+        .pointer("/contents/1/parts")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    let function_call = parts
+        .iter()
+        .find(|part| part.get("functionCall").is_some())
+        .unwrap();
+    assert_eq!(function_call["thoughtSignature"], "sig-gem");
+}
+
+#[tokio::test]
+async fn cross_format_details_are_dropped_not_forwarded() {
+    // anthropic 格式 details 发给 gemini 上游：不注入、请求成功
+    // （failover 换供应商时的预期行为，加密签名不互通）。
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, _) = common_setup_with_member(&base, 3, 0, 0).await;
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}], "reasoning_details": [
+                    {"type": "reasoning.encrypted", "data": "blob", "id": null, "format": "anthropic-claude-v1", "index": 0}
+                ]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+            ],
+            "max_tokens": 128,
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    let upstream_bodies = captured.lock().unwrap();
+    let parts = upstream_bodies[0]
+        .pointer("/contents/1/parts")
+        .unwrap()
+        .as_array()
+        .unwrap();
+    assert!(
+        parts
+            .iter()
+            .all(|part| part.get("thoughtSignature").is_none())
+    );
 }
 
 #[tokio::test]
