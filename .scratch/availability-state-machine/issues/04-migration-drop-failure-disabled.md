@@ -6,6 +6,10 @@
 
 **Status:** ready-for-agent
 
-- [ ] 迁移执行后旧列不存在、实体不再定义该字段
-- [ ] 全库无任何对旧列的读写残留（编译期即可证明）
-- [ ] 全量质量门绿；迁移幂等
+- [x] 迁移执行后旧列不存在、实体不再定义该字段
+- [x] 全库无任何对旧列的读写残留（编译期即可证明）
+- [x] 全量质量门绿；迁移幂等
+
+## Comments
+
+- 46b4d73（feat/availability-state-machine）实施完成；全量质量门绿（fmt/clippy -D warnings/cargo test 634 通过；前端无改动，主仓 lint+vitest 335 通过）。迁移 22（contract）：旧列删除、实体字段移除、全部种子行清理；编译期证明无读写残留。schema 校验更新。
