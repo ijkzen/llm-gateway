@@ -607,7 +607,7 @@ async fn test_manual_enable_clears_failure_disabled_flag() {
     let (app, db) = setup_app().await;
     let id = create_named_provider(&app, "FailDisable").await as i32;
 
-    // 模拟连续失败熔断后的状态：禁用 + failure_disabled 标记。
+    // 模拟连续失败熔断后的状态：禁用 + failure 停用原因。
     let model = llm_gateway::entity::provider::Entity::find_by_id(id)
         .one(&db)
         .await
@@ -615,10 +615,10 @@ async fn test_manual_enable_clears_failure_disabled_flag() {
         .unwrap();
     let mut active: llm_gateway::entity::provider::ActiveModel = model.into();
     active.enable = Set(false);
-    active.failure_disabled = Set(true);
+    active.disabled_reason = Set(Some("failure".to_string()));
     active.update(&db).await.unwrap();
 
-    // 手动启用 → 标记清除。
+    // 手动启用 → 停用原因清除（回到可用态镜像 NULL）。
     let (status, _) = send_json(
         &app,
         "PUT",
@@ -633,7 +633,7 @@ async fn test_manual_enable_clears_failure_disabled_flag() {
         .unwrap()
         .unwrap();
     assert!(model.enable);
-    assert!(!model.failure_disabled);
+    assert_eq!(model.disabled_reason, None);
 }
 
 #[tokio::test]

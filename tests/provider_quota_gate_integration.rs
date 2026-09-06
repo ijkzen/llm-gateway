@@ -225,13 +225,13 @@ async fn quota_exhaustion_disables_and_restore_reenables() {
     assert!(item_enabled(&db, model_id).await);
 }
 
-async fn failure_disabled(db: &sea_orm::DatabaseConnection, id: i32) -> bool {
+async fn disabled_reason(db: &sea_orm::DatabaseConnection, id: i32) -> Option<String> {
     provider::Entity::find_by_id(id)
         .one(db)
         .await
         .unwrap()
         .unwrap()
-        .failure_disabled
+        .disabled_reason
 }
 
 #[tokio::test]
@@ -239,7 +239,7 @@ async fn failure_disabled_provider_not_auto_restored() {
     let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
     let (pid, _model_id) = seed_subscription_provider(&db).await;
 
-    // 模拟连续失败禁用后的状态：禁用 + failure_disabled 标记。
+    // 模拟连续失败禁用后的状态：禁用 + failure 停用原因。
     let p = provider::Entity::find_by_id(pid)
         .one(&db)
         .await
@@ -247,12 +247,12 @@ async fn failure_disabled_provider_not_auto_restored() {
         .unwrap();
     let mut active: provider::ActiveModel = p.into();
     active.enable = Set(false);
-    active.failure_disabled = Set(true);
+    active.disabled_reason = Set(Some("failure".to_string()));
     active.update(&db).await.unwrap();
     assert!(!provider_enabled(&db, pid).await);
-    assert!(failure_disabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("failure"));
 
-    // 额度恢复也不自动恢复：连续失败禁用只允许手动解除。
+    // 额度恢复也不自动恢复：连续失败禁用只允许手动启用或恢复探测解除。
     let p = provider::Entity::find_by_id(pid)
         .one(&db)
         .await
@@ -262,7 +262,7 @@ async fn failure_disabled_provider_not_auto_restored() {
         .await
         .unwrap();
     assert!(!provider_enabled(&db, pid).await);
-    assert!(failure_disabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("failure"));
 
     // 子模型条目也保持停用（被级联停用的不因额度恢复而恢复）。
     let p = provider::Entity::find_by_id(pid)
@@ -272,10 +272,40 @@ async fn failure_disabled_provider_not_auto_restored() {
         .unwrap();
     let mut active: provider::ActiveModel = p.into();
     active.enable = Set(true);
-    active.failure_disabled = Set(false);
+    active.disabled_reason = Set(None);
     active.update(&db).await.unwrap();
     assert!(provider_enabled(&db, pid).await);
-    assert!(!failure_disabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await, None);
+}
+
+/// 核心回归（ADR-0003）：管理员手动停用的供应商不被额度刷新自动重新启用。
+/// 修复前 enable+failure_disabled 两列分不清 manual 与 quota，手动停用会被覆盖。
+#[tokio::test]
+async fn manual_disabled_provider_not_auto_restored() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (pid, _model_id) = seed_subscription_provider(&db).await;
+
+    // 管理员手动停用（可用性状态机动作）。
+    llm_gateway::availability::disable_manual(&db, pid)
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("manual"));
+
+    // 额度充足 → 额度刷新不得触碰 manual 态。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &quota_data(pid, 40.0, 50.0, 100.0))
+        .await
+        .unwrap();
+    assert!(
+        !provider_enabled(&db, pid).await,
+        "手动停用不应被额度恢复自动启用"
+    );
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("manual"));
 }
 
 #[tokio::test]

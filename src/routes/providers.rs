@@ -363,6 +363,8 @@ async fn create_provider(
     let active = ActiveModel {
         name: Set(req.name.trim().to_string()),
         enable: Set(req.enable),
+        // 停用原因镜像不变式（ADR-0003）：创建即停用视为手动停用。
+        disabled_reason: Set((!req.enable).then(|| "manual".to_string())),
         base_url: Set(req.base_url.trim().to_string()),
         api_key: Set(crypto::encrypt(api_key)),
         custom_header: Set(req.custom_header),
@@ -453,16 +455,10 @@ async fn update_provider(
         return response::bad_request(msg);
     }
 
-    let had_failure_disabled = model.failure_disabled;
     let mut active: ActiveModel = model.into();
     active.name = Set(name.trim().to_string());
-    active.enable = Set(enable_new);
-    // 手动启用即解除连续失败禁用（清除熔断标记并清零内存计数）。
-    if enable_new && had_failure_disabled {
-        active.failure_disabled = Set(false);
-        state.failure_counter.reset(id);
-        tracing::info!(provider_id = id, "手动启用供应商，清除连续失败禁用标记");
-    }
+    // 启用状态不在此处写入：enable 变更经可用性状态机动作迁移（ADR-0003），
+    // 由模块统一处理停用原因镜像、失败计数清零与虚拟模型条目级联。
     active.base_url = Set(base_url.trim().to_string());
     active.protocol_type = Set(protocol_type);
     active.billing_mode = Set(billing_mode);
@@ -482,13 +478,17 @@ async fn update_provider(
 
     match crate::provider_repo::update_provider(&state.db, active).await {
         Ok(model) => {
-            // 手动切换启用状态时级联同步该供应商名下全部虚拟模型子模型
-            // （与用量额度门控共用 set_items_enabled，保证成员排序/编辑态一致）。
-            if enable_changed
-                && let Err(e) =
-                    crate::availability::set_items_enabled(&state.db, id, enable_new).await
-            {
-                tracing::warn!(provider_id = id, "级联更新虚拟模型子模型启用状态失败：{e}");
+            // 启用状态切换走可用性状态机：手动启用解除任意停用并清零失败计数，
+            // 手动停用标记 manual；两者都级联同步名下虚拟模型条目。
+            if enable_changed {
+                let result = if enable_new {
+                    crate::availability::enable_manual(&state.db, &state.failure_counter, id).await
+                } else {
+                    crate::availability::disable_manual(&state.db, id).await
+                };
+                if let Err(e) = result {
+                    tracing::warn!(provider_id = id, "手动启停供应商失败：{e}");
+                }
             }
             // 凭据/字段可能变化，失效用量缓存（数据库）避免展示旧结果。
             if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {

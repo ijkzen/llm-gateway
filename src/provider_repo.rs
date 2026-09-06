@@ -4,10 +4,7 @@
 //! （`src/usage/persist.rs` 定时任务）共用同一入口，保证任何路径的变更都有日志。
 //! 日志统一为结构化 tracing，api_key 一律经 `crypto::mask` 脱敏，绝不落明文。
 
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
-    QueryFilter, Set, TransactionTrait,
-};
+use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, Set};
 
 use crate::crypto;
 use crate::entity::provider::{self, ActiveModel, Entity};
@@ -113,101 +110,6 @@ pub async fn delete_provider(
         "删除供应商",
     );
     Ok(())
-}
-
-/// 开关单个供应商的启用状态（接口更新与额度门控共用入口）。
-/// 幂等：enable 未变化时直接返回 false 且不打日志。
-pub async fn set_provider_enabled(
-    db: &DatabaseConnection,
-    provider_id: i32,
-    enabled: bool,
-) -> Result<bool, DbErr> {
-    let Some(row) = provider::Entity::find_by_id(provider_id).one(db).await? else {
-        return Ok(false);
-    };
-    if row.enable == enabled {
-        return Ok(false);
-    }
-    let (id, name, enable_old) = (row.id, row.name.clone(), row.enable);
-    let mut active: provider::ActiveModel = row.into();
-    active.enable = Set(enabled);
-    active.updated_at = Set(chrono::Utc::now());
-    active.update(db).await?;
-    tracing::info!(
-        provider_id = id,
-        name = %name,
-        enable_old,
-        enable_new = enabled,
-        "Provider 启用状态变更",
-    );
-    Ok(true)
-}
-
-/// 连续失败达到阈值时的熔断停用：供应商停用 + 名下虚拟模型条目级联停用 +
-/// 打 `failure_disabled` 标记。与额度门控禁用区分：普通用量刷新不会自动恢复，
-/// 仅管理员手动启用或自动恢复探测成功时解除。
-/// 原子性：条件更新 `failure_disabled=0 → 1`，并发仅一个胜出，返回 true。
-///
-/// 待 availability 模块全面接管后删除（票 03）；级联已收拢至
-/// `crate::availability::set_items_enabled`。
-pub async fn disable_provider_on_failures(
-    db: &DatabaseConnection,
-    provider_id: i32,
-    consecutive: u32,
-    request_id: &str,
-) -> Result<bool, DbErr> {
-    use sea_orm::sea_query::Expr;
-    let now = chrono::Utc::now();
-    let affected = provider::Entity::update_many()
-        .col_expr(provider::Column::Enable, Expr::value(false))
-        .col_expr(provider::Column::FailureDisabled, Expr::value(true))
-        .col_expr(provider::Column::UpdatedAt, Expr::value(now))
-        .filter(provider::Column::Id.eq(provider_id))
-        .filter(provider::Column::FailureDisabled.eq(false))
-        .exec(db)
-        .await?;
-    if affected.rows_affected == 0 {
-        return Ok(false);
-    }
-    let items = crate::availability::set_items_enabled(db, provider_id, false).await?;
-    tracing::warn!(
-        request_id,
-        provider_id,
-        consecutive,
-        items,
-        "连续失败达到阈值，熔断停用供应商及其全部虚拟模型子模型"
-    );
-    Ok(true)
-}
-
-/// 连续失败禁用供应商探测成功后的条件恢复。
-/// 仅当 `failure_disabled=true` 且探测期间未发生更新时恢复，避免旧探测覆盖新状态。
-///
-/// 待 availability 模块全面接管后删除（票 03）。
-pub async fn recover_provider_from_failures(
-    db: &DatabaseConnection,
-    provider_id: i32,
-    expected_updated_at: chrono::DateTime<chrono::Utc>,
-) -> Result<bool, DbErr> {
-    use sea_orm::sea_query::Expr;
-    let txn = db.begin().await?;
-    let affected = provider::Entity::update_many()
-        .col_expr(provider::Column::Enable, Expr::value(true))
-        .col_expr(provider::Column::FailureDisabled, Expr::value(false))
-        .col_expr(provider::Column::UpdatedAt, Expr::value(chrono::Utc::now()))
-        .filter(provider::Column::Id.eq(provider_id))
-        .filter(provider::Column::FailureDisabled.eq(true))
-        .filter(provider::Column::UpdatedAt.eq(expected_updated_at))
-        .exec(&txn)
-        .await?;
-    if affected.rows_affected == 0 {
-        txn.commit().await?;
-        return Ok(false);
-    }
-    let items = crate::availability::set_items_enabled(&txn, provider_id, true).await?;
-    txn.commit().await?;
-    tracing::info!(provider_id, items, "自动恢复连续失败禁用供应商");
-    Ok(true)
 }
 
 #[cfg(test)]

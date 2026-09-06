@@ -1,5 +1,5 @@
 //! 连续失败熔断 + 失败复查集成测试：成员失败计入内存连续失败计数，达到阈值后
-//! 熔断停用供应商及其虚拟模型子模型并打 failure_disabled 标记；成功清零；设置项
+//! 熔断停用供应商及其虚拟模型子模型并标记 failure 停用原因；成功清零；设置项
 //! max_consecutive_failures 可配置且热生效；失败复查在失败后实时核验用量，
 //! 耗尽走额度门控禁用（可自动恢复），充足不动。
 
@@ -206,14 +206,18 @@ async fn consecutive_failures_reach_threshold_disable_provider() {
     }
     let row = provider_row(&db, pid).await;
     assert!(row.enable, "未达阈值不应停用");
-    assert!(!row.failure_disabled);
+    assert_eq!(row.disabled_reason, None);
 
     // 第 5 次连续失败 → 熔断：供应商 + 子模型停用 + 标记。
     let status = send_chat(&app, "vm-break").await;
     assert_eq!(status, 500);
     let row = provider_row(&db, pid).await;
     assert!(!row.enable, "达到阈值应停用供应商");
-    assert!(row.failure_disabled, "应打上 failure_disabled 标记");
+    assert_eq!(
+        row.disabled_reason.as_deref(),
+        Some("failure"),
+        "应标记 failure 停用原因"
+    );
     let item = virtual_model_item::Entity::find()
         .filter(virtual_model_item::Column::ModelId.eq(model_id))
         .one(&db)
@@ -270,7 +274,7 @@ async fn success_resets_failure_counter() {
     }
     let row = provider_row(&db, pid).await;
     assert!(row.enable, "成功清零后不应触发熔断");
-    assert!(!row.failure_disabled);
+    assert_eq!(row.disabled_reason, None);
 }
 
 #[tokio::test]
@@ -298,7 +302,7 @@ async fn threshold_setting_configurable_and_hot() {
     }
     let row = provider_row(&db, pid).await;
     assert!(!row.enable, "阈值改为 2 后两次失败应熔断");
-    assert!(row.failure_disabled);
+    assert_eq!(row.disabled_reason.as_deref(), Some("failure"));
 }
 
 // ---------- 失败复查 ----------
@@ -415,9 +419,10 @@ async fn recheck_exhausted_disables_and_auto_restores() {
 
         let row = provider_row(&db, pid).await;
         assert!(!row.enable, "余额耗尽应禁用供应商");
-        assert!(
-            !row.failure_disabled,
-            "额度门控禁用不打 failure_disabled 标记（可自动恢复）"
+        assert_eq!(
+            row.disabled_reason.as_deref(),
+            Some("quota"),
+            "额度门控禁用标记 quota 停用原因（可自动恢复）"
         );
         let item = virtual_model_item::Entity::find()
             .filter(virtual_model_item::Column::ModelId.eq(model_id))
@@ -440,7 +445,7 @@ async fn recheck_exhausted_disables_and_auto_restores() {
             .unwrap();
         let row = provider_row(&db, pid).await;
         assert!(row.enable, "额度恢复后应自动启用");
-        assert!(!row.failure_disabled);
+        assert_eq!(row.disabled_reason, None);
     })
     .await;
 }
@@ -463,7 +468,7 @@ async fn recheck_sufficient_keeps_provider_enabled() {
         wait_usage_cache(&db, pid).await;
         let row = provider_row(&db, pid).await;
         assert!(row.enable, "余额充足不应禁用");
-        assert!(!row.failure_disabled);
+        assert_eq!(row.disabled_reason, None);
     })
     .await;
 }
@@ -489,5 +494,5 @@ async fn non_retryable_4xx_counts_toward_threshold() {
     assert_eq!(status, 400);
     let row = provider_row(&db, pid).await;
     assert!(!row.enable, "4xx 也应累计到连续失败并触发熔断");
-    assert!(row.failure_disabled);
+    assert_eq!(row.disabled_reason.as_deref(), Some("failure"));
 }
