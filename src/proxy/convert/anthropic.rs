@@ -10,8 +10,9 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use super::{
-    ANTHROPIC_DEFAULT_MAX_TOKENS, chat_max_tokens, chat_messages, client_usage_json,
-    collect_tool_call_names, inline_defs, message_text, reasoning_budget, truncate_chars,
+    ANTHROPIC_DEFAULT_MAX_TOKENS, cached_client_usage_json, chat_max_tokens, chat_messages,
+    chat_reasoning, collect_tool_call_names, inline_defs, message_text, reasoning_budget,
+    truncate_chars,
 };
 use crate::proxy::metrics::Usage;
 
@@ -230,6 +231,10 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
     if !thinking_active && let Some(top_p) = chat.get("top_p") {
         body.insert("top_p".to_string(), top_p.clone());
     }
+    // top_k 官方支持且与 thinking 互斥（同 temperature 规则）。
+    if !thinking_active && let Some(top_k) = chat.get("top_k").and_then(Value::as_i64) {
+        body.insert("top_k".to_string(), json!(top_k));
+    }
     if let Some(stop_sequences) = map_stop(chat) {
         body.insert("stop_sequences".to_string(), Value::Array(stop_sequences));
     }
@@ -281,15 +286,17 @@ fn map_tool_choice(chat: &Value) -> Option<Value> {
 }
 
 fn map_thinking(chat: &Value, max_tokens: i64) -> Option<Value> {
-    let effort = chat.get("reasoning_effort").and_then(Value::as_str)?;
-    if effort == "none" || effort.is_empty() {
-        return None;
-    }
+    let reasoning = chat_reasoning(chat)?;
     if max_tokens <= 1024 {
         return None;
     }
     // 官方约束：budget_tokens >= 1024 且 < max_tokens（LiteLLM 同款钳制）。
-    let budget = reasoning_budget(effort).max(1024).min(max_tokens - 1);
+    // reasoning.max_tokens 直传预算（OpenRouter Anthropic 风格），否则按 effort 档位换算。
+    let budget = reasoning
+        .max_tokens
+        .unwrap_or_else(|| reasoning_budget(&reasoning.effort))
+        .max(1024)
+        .min(max_tokens - 1);
     Some(json!({"type": "enabled", "budget_tokens": budget}))
 }
 
@@ -416,11 +423,16 @@ pub fn unwrap_json_tool_output(value: Value) -> Value {
     value
 }
 
-pub fn normalize_stop_reason(stop_reason: &str, has_tool_calls: bool) -> &'static str {
+/// stop_reason → (OpenAI finish_reason, 原生值透传)；空值原生为 None。
+pub fn normalize_stop_reason(
+    stop_reason: &str,
+    has_tool_calls: bool,
+) -> (&'static str, Option<&str>) {
+    let native = Some(stop_reason).filter(|reason| !reason.is_empty());
     if has_tool_calls {
-        return "tool_calls";
+        return ("tool_calls", native);
     }
-    match stop_reason {
+    let finish_reason = match stop_reason {
         "end_turn" | "stop_sequence" | "pause_turn" => "stop",
         "max_tokens" | "compaction" | "model_context_window_exceeded" => "length",
         "refusal" => "content_filter",
@@ -429,10 +441,12 @@ pub fn normalize_stop_reason(stop_reason: &str, has_tool_calls: bool) -> &'stati
             tracing::debug!("unmapped anthropic stop_reason: {other}");
             "stop"
         }
-    }
+    };
+    (finish_reason, native)
 }
 
-/// usage 归一：input_tokens + cache_read + cache_creation（含缓存的总输入）。
+/// usage 归一：prompt_tokens = input + cache_read + cache_creation（含缓存总输入）；
+/// 缓存命中口径只算 cache_read——cache_creation 是写入，计入会虚高命中率（OpenRouter 同口径）。
 pub fn extract_usage(usage: &Value) -> Usage {
     let input = usage.get("input_tokens").and_then(Value::as_i64);
     let output = usage.get("output_tokens").and_then(Value::as_i64);
@@ -446,7 +460,7 @@ pub fn extract_usage(usage: &Value) -> Usage {
         .unwrap_or(0);
     Usage {
         input_tokens: input.map(|input| input + read + creation),
-        cache_tokens: (read + creation).max(0),
+        cache_tokens: read.max(0),
         output_tokens: output,
     }
 }
@@ -549,7 +563,8 @@ pub fn convert_response(
     };
 
     let has_tool_calls = message.get("tool_calls").is_some();
-    let completion = json!({
+    let (finish_reason, native_finish_reason) = normalize_stop_reason(stop_reason, has_tool_calls);
+    let mut completion = json!({
         "id": upstream.get("id").and_then(Value::as_str).map(|s| s.to_string()).unwrap_or_else(|| request_id.to_string()),
         "object": "chat.completion",
         "created": chrono::Utc::now().timestamp(),
@@ -557,10 +572,11 @@ pub fn convert_response(
         "choices": [{
             "index": 0,
             "message": message,
-            "finish_reason": normalize_stop_reason(stop_reason, has_tool_calls),
+            "finish_reason": finish_reason,
         }],
-        "usage": client_usage_json(&usage),
+        "usage": cached_client_usage_json(&usage),
     });
+    super::attach_native_finish_reason(&mut completion, native_finish_reason);
     Ok((completion, usage))
 }
 
@@ -825,11 +841,14 @@ impl AnthropicStreamConverter {
                     ));
                 }
                 self.finish_emitted = true;
-                out.push(super::chunk_json(
+                let (finish_reason, native) =
+                    normalize_stop_reason(stop_reason, self.next_tool_index > 0);
+                out.push(super::chunk_json_with_native(
                     &self.id,
                     &self.model,
                     json!({}),
-                    Some(normalize_stop_reason(stop_reason, self.next_tool_index > 0)),
+                    Some(finish_reason),
+                    native,
                 ));
             }
             Some("message_stop") => {
@@ -915,6 +934,45 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_object_enables_thinking() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning":{"effort":"high"},"max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["thinking"]["budget_tokens"], 4095);
+    }
+
+    #[test]
+    fn reasoning_max_tokens_caps_thinking_budget() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning":{"max_tokens":2000},"max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["thinking"]["budget_tokens"], 2000);
+
+        // 预算仍受官方上界约束（budget_tokens < max_tokens）。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning":{"max_tokens":8000},"max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["thinking"]["budget_tokens"], 4095);
+    }
+
+    #[test]
+    fn reasoning_max_tokens_wins_over_effort() {
+        // OpenRouter 语义：effort 与 max_tokens 二选一；同传时显式预算优先。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning":{"effort":"high","max_tokens":2000},"max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["thinking"]["budget_tokens"], 2000);
+    }
+
+    #[test]
     fn thinking_drops_incompatible_sampling_params() {
         // 官方：thinking 启用时 temperature 只能不传或 =1，top_p 不可用。
         let chat = from_str::<Value>(
@@ -925,6 +983,25 @@ mod tests {
         assert!(body["thinking"].is_object());
         assert!(body.get("temperature").is_none());
         assert!(body.get("top_p").is_none());
+    }
+
+    #[test]
+    fn top_k_passthrough_and_thinking_conflict() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"top_k":40,"max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["top_k"], 40);
+
+        // thinking 启用时 top_k 与 temperature/top_p 同规则丢弃。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"top_k":40,"reasoning":{"effort":"high"},"max_tokens":4096}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(body["thinking"].is_object());
+        assert!(body.get("top_k").is_none());
     }
 
     #[test]
@@ -1093,13 +1170,20 @@ mod tests {
     #[test]
     fn maps_extended_stop_reasons() {
         // 官方 StopReason 新枚举：context window 耗尽与 compaction 语义为
-        // length；pause_turn 是可续传的中断，按 stop 透出。
+        // length；pause_turn 是可续传的中断，按 stop 透出；原生值随 native_finish_reason 透传。
         assert_eq!(
             normalize_stop_reason("model_context_window_exceeded", false),
-            "length"
+            ("length", Some("model_context_window_exceeded"))
         );
-        assert_eq!(normalize_stop_reason("compaction", false), "length");
-        assert_eq!(normalize_stop_reason("pause_turn", false), "stop");
+        assert_eq!(
+            normalize_stop_reason("compaction", false),
+            ("length", Some("compaction"))
+        );
+        assert_eq!(
+            normalize_stop_reason("pause_turn", false),
+            ("stop", Some("pause_turn"))
+        );
+        assert_eq!(normalize_stop_reason("", false), ("stop", None));
     }
 
     #[test]
@@ -1131,6 +1215,7 @@ mod tests {
         assert_eq!(completion["object"], "chat.completion");
         assert_eq!(completion["model"], "vm-a");
         assert_eq!(completion["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(completion["choices"][0]["native_finish_reason"], "tool_use");
         assert_eq!(completion["choices"][0]["message"]["content"], "hello");
         assert_eq!(
             completion["choices"][0]["message"]["reasoning_content"],
@@ -1141,8 +1226,13 @@ mod tests {
             "toolu_1"
         );
         assert_eq!(usage.input_tokens, Some(15));
-        assert_eq!(usage.cache_tokens, 5);
+        assert_eq!(usage.cache_tokens, 3);
         assert_eq!(usage.output_tokens, Some(5));
+        // 客户端 usage 带缓存命中明细（与其他协议路径一致）。
+        assert_eq!(
+            completion["usage"]["prompt_tokens_details"]["cached_tokens"],
+            3
+        );
     }
 
     #[test]

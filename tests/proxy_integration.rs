@@ -362,6 +362,49 @@ fn chat_body(model: &str, stream: bool) -> Value {
     })
 }
 
+#[tokio::test]
+async fn reasoning_exclude_strips_thinking_from_response() {
+    let base = spawn_mock(capture()).await;
+    let (app, _) = common_setup_with_member(&base, 2, 0, 0).await;
+
+    // Anthropic 非流式：thinking 块照常产出但被剥除，正文不受影响。
+    let mut body = chat_body("vm-x", false);
+    body["messages"][0]["content"] = json!("think-signature");
+    body["reasoning"] = json!({"effort": "high", "exclude": true});
+    let (status, text) = send_chat(&app, body).await;
+    assert_eq!(status, 200, "{text}");
+    let completion: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(completion["choices"][0]["message"]["content"], "你好");
+    assert!(
+        completion["choices"][0]["message"]
+            .get("reasoning_content")
+            .is_none()
+    );
+    assert!(
+        completion["choices"][0]["message"]
+            .get("reasoning_details")
+            .is_none()
+    );
+
+    // Responses 流式：reasoning item 的 summary 增量同样被剥除。
+    let (app, _) = common_setup_with_member(&base, 1, 0, 0).await;
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "stream": true,
+            "messages": [{"role": "user", "content": "final-only"}],
+            "max_tokens": 128,
+            "reasoning": {"exclude": true},
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert!(!text.contains("reasoning_content"));
+    assert!(!text.contains("reasoning_details"));
+    assert!(text.contains("\"content\":\"最终内容\""));
+}
+
 // ---------- 用例 ----------
 
 #[tokio::test]
@@ -432,9 +475,9 @@ async fn anthropic_stream_includes_cached_tokens_in_usage_chunk() {
     )
     .await;
     assert_eq!(status, 200, "{text}");
-    // mock 上游：cache_read 3 + cache_creation 2 → cached_tokens 5。
+    // mock 上游：cache_read 3（creation 2 只计入总输入，不算命中）→ cached_tokens 3。
     assert!(
-        text.contains(r#""prompt_tokens_details":{"cached_tokens":5}"#),
+        text.contains(r#""prompt_tokens_details":{"cached_tokens":3}"#),
         "{text}"
     );
     assert!(text.contains("data: [DONE]"));
@@ -487,7 +530,9 @@ async fn anthropic_non_stream_converts_and_merges_cache_tokens() {
     assert_eq!(body["object"], "chat.completion");
     assert_eq!(body["choices"][0]["message"]["content"], "你好");
     assert_eq!(body["choices"][0]["finish_reason"], "stop");
-    assert!(body["usage"].get("prompt_tokens_details").is_none());
+    assert_eq!(body["choices"][0]["native_finish_reason"], "end_turn");
+    // 缓存命中明细只算 cache_read（3）；cache_creation（2）不计入命中率口径。
+    assert_eq!(body["usage"]["prompt_tokens_details"]["cached_tokens"], 3);
 
     // 上游请求为 Anthropic 形状。
     let upstream_bodies = captured.lock().unwrap();
@@ -498,7 +543,7 @@ async fn anthropic_non_stream_converts_and_merges_cache_tokens() {
     let record = &rows[0];
     // input = 10 + cache_read 3 + cache_creation 2 = 15（含缓存总输入）。
     assert_eq!(record.input_tokens, Some(15));
-    assert_eq!(record.input_cache_tokens, 5);
+    assert_eq!(record.input_cache_tokens, 3);
     assert_eq!(record.output_tokens, Some(5));
 }
 
@@ -512,6 +557,7 @@ async fn anthropic_stream_converts_to_openai_chunks() {
     assert!(text.contains("\"role\":\"assistant\""));
     assert!(text.contains("你好"));
     assert!(text.contains("\"finish_reason\":\"stop\""));
+    assert!(text.contains(r#""native_finish_reason":"end_turn""#));
     assert!(text.contains("data: [DONE]"));
 
     let rows = wait_for_records(&db, 1).await;
@@ -623,6 +669,7 @@ async fn gemini_non_stream_converts() {
     let body: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(body["choices"][0]["message"]["content"], "你好");
     assert_eq!(body["choices"][0]["finish_reason"], "stop");
+    assert_eq!(body["choices"][0]["native_finish_reason"], "STOP");
     assert_eq!(body["usage"]["prompt_tokens_details"]["cached_tokens"], 6);
 
     let upstream_bodies = captured.lock().unwrap();

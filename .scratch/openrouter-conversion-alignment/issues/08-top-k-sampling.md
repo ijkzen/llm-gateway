@@ -13,3 +13,8 @@
 - [ ] OpenAI Compat 直通透传 `top_k`
 - [ ] Responses 出站策略有明确定义（透传或丢弃，OpenAI Responses 上游是否接受需查证后定）
 - [ ] 不支持 `top_k` 的成员静默忽略（与网关「不支持则忽略」的既有原则一致）
+
+## Comments
+
+- 2026-09-06 实施。Responses 出口 top_k 透传依据：OpenRouter openapi ResponsesRequest 明确含 top_k（OPENROUTER-COMPARISON.md 专题 5.1）；OpenAI 兼容上游对未知顶层参数普遍宽容，严格上游拒绝时有 failover 兜底，风险接受。
+- 非整数 top_k 被静默忽略（as_i64），与「不支持则忽略」原则一致。

@@ -33,8 +33,9 @@ use crate::crypto;
 use crate::entity::{provider, provider_model, virtual_model, virtual_model_item};
 use crate::provider_template;
 use crate::proxy::convert::{
-    anthropic, attach_reasoning_details, build_upstream_url, cached_client_usage_json, chunk_json,
-    extract_error_message, gemini, openai, responses, truncate_chars, usage_chunk_json,
+    anthropic, attach_reasoning_details, build_upstream_url, cached_client_usage_json,
+    chat_reasoning, chunk_json, extract_error_message, gemini, openai, responses, truncate_chars,
+    usage_chunk_json,
 };
 use crate::proxy::metrics::{RequestRecord, StreamMetrics, Usage, now_ms};
 use crate::proxy::pool::PooledBody;
@@ -841,6 +842,28 @@ fn chunk_has_content(chunk: &Value) -> bool {
         .is_some_and(|calls| !calls.is_empty())
 }
 
+/// exclude:true 时剥除非流式响应 message 中的思考内容（模型照常思考，客户端不收）。
+fn strip_reasoning_message(completion: &mut Value) {
+    if let Some(message) = completion
+        .pointer_mut("/choices/0/message")
+        .and_then(Value::as_object_mut)
+    {
+        message.remove("reasoning_content");
+        message.remove("reasoning_details");
+    }
+}
+
+/// exclude:true 时剥除流式 delta 中的思考增量。
+fn strip_reasoning_delta(chunk: &mut Value) {
+    if let Some(delta) = chunk
+        .pointer_mut("/choices/0/delta")
+        .and_then(Value::as_object_mut)
+    {
+        delta.remove("reasoning_content");
+        delta.remove("reasoning_details");
+    }
+}
+
 /// 把流式转换出的 chunk 列表聚合为非流式 chat.completion（Responses 出站非流式路径）。
 pub fn accumulate_chunks(chunks: &[Value], usage: &Usage) -> Value {
     let mut id = String::from("chatcmpl");
@@ -971,6 +994,9 @@ pub async fn forward_chat(
         .pointer("/stream_options/include_usage")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // exclude:true：模型照常思考，但网关剥除响应中的思考内容再交客户端
+    //（OpenRouter reasoning.exclude 语义；OpenAI 直通为字节直通不生效）。
+    let reasoning_exclude = chat_reasoning(&client_body).is_some_and(|reasoning| reasoning.exclude);
 
     if requested_model.is_empty() {
         return openai_error(
@@ -1285,6 +1311,7 @@ pub async fn forward_chat(
                 client_stream,
                 include_usage,
                 json_mode_tool,
+                reasoning_exclude,
             },
         )
         .await;
@@ -1335,6 +1362,7 @@ struct SuccessContext {
     client_stream: bool,
     include_usage: bool,
     json_mode_tool: bool,
+    reasoning_exclude: bool,
 }
 
 /// 管理后台聊天请求写入 request 表时的来源标记：不属于任何虚拟模型，
@@ -1493,6 +1521,7 @@ pub async fn forward_chat_direct(
             client_stream,
             include_usage: false,
             json_mode_tool,
+            reasoning_exclude: false,
         },
     )
     .await
@@ -1511,6 +1540,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
         client_stream,
         include_usage,
         json_mode_tool,
+        reasoning_exclude,
     } = ctx;
 
     // 成功即清零该供应商的连续失败计数（偶发失败不累积）。
@@ -1641,7 +1671,10 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
             let usage = converter.usage().unwrap_or_default();
             let completion_id = converter.completion_id();
             let completion_model = converter.completion_model();
-            let completion = accumulate_chunks(&events.chunks, &usage);
+            let mut completion = accumulate_chunks(&events.chunks, &usage);
+            if reasoning_exclude {
+                strip_reasoning_message(&mut completion);
+            }
             let end_time = now_ms();
             let usage_for_chunk = usage.clone();
             RequestRecord {
@@ -1668,7 +1701,10 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
             if client_stream {
                 let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
                 tokio::spawn(async move {
-                    for chunk in events.chunks {
+                    for mut chunk in events.chunks {
+                        if reasoning_exclude {
+                            strip_reasoning_delta(&mut chunk);
+                        }
                         if tx
                             .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(
                                 &chunk.to_string(),
@@ -1754,7 +1790,10 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 };
                 let body_done = now_ms();
                 return match converted {
-                    Ok((completion, usage)) => {
+                    Ok((mut completion, usage)) => {
+                        if reasoning_exclude {
+                            strip_reasoning_message(&mut completion);
+                        }
                         RequestRecord {
                             request_id,
                             virtual_model_id,
@@ -1818,9 +1857,12 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     for event in splitter.feed(&text) {
                         match converter.convert_event(&event) {
                             Ok(chunks) => {
-                                for chunk in chunks {
+                                for mut chunk in chunks {
                                     if chunk_has_content(&chunk) {
                                         stream_metrics.on_token();
+                                    }
+                                    if reasoning_exclude {
+                                        strip_reasoning_delta(&mut chunk);
                                     }
                                     let frame = crate::proxy::sse::sse_frame(&chunk.to_string());
                                     if tx.send(Ok(Bytes::from(frame))).await.is_err() {

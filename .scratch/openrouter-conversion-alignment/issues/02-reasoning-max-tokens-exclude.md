@@ -12,3 +12,8 @@
 - [ ] `reasoning.max_tokens` 与 `reasoning.effort` 同传时的冲突规则有定义（OpenRouter 语义：二选一）并测试覆盖
 - [ ] `exclude:true` 时：上游照常开启思考，但响应/流式 delta 不输出 reasoning_content 与 reasoning_details（内部指标仍记录）
 - [ ] `reasoning.enabled:true` 等价于 medium effort 开启（OpenRouter 语义）行为正确
+
+## Comments
+
+- 2026-09-06 实施。`reasoning.max_tokens` 与 `reasoning.effort` 同传时显式预算优先（测试 reasoning_max_tokens_wins_over_effort 固化）；Responses 出口无对应参数，max_tokens 按「不支持即忽略」丢弃。
+- exclude 过滤仅作用于三转换协议响应（内部指标在剥离前记录，ttft 不受影响）；OpenAI 直通不生效（同工单 01 comment）。
