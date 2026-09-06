@@ -182,7 +182,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         })
         .await;
 
-    // 连续失败供应商恢复 handler：每个整点探测 failure_disabled 供应商。
+    // 连续失败供应商恢复 handler：每个整点探测连续失败禁用（failure 停用原因）的供应商。
     let failure_recovery_lock = Arc::new(tokio::sync::Mutex::new(()));
     scheduler
         .register_handler(crate::cron::seed::FAILURE_RECOVERY_JOB, {

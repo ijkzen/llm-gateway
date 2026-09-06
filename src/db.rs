@@ -455,6 +455,21 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     }
     changed |= ensure_migration(db, 21, &migration_21_statements).await?;
 
+    // Migration 22: 删除 provider.failure_disabled —— 布尔标志已被迁移 21 的
+    // disabled_reason 四值停用原因取代（ADR-0003）。SQLite 从 3.35 起支持
+    // DROP COLUMN；新库从未建过该列，仅记录版本号。
+    let migration_22_statements: Vec<&str> =
+        if column_exists(db, "provider", "failure_disabled").await? {
+            vec!["ALTER TABLE provider DROP COLUMN failure_disabled"]
+        } else {
+            Vec::new()
+        };
+    if migration_22_statements.is_empty() {
+        changed |= ensure_migration(db, 22, &["SELECT 1"]).await?;
+    } else {
+        changed |= ensure_migration(db, 22, &migration_22_statements).await?;
+    }
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)
@@ -696,10 +711,16 @@ mod tests {
         let db = connect("sqlite::memory:").await.unwrap();
 
         migrate(&db).await.unwrap();
-        // 模拟历史库：删列 + 移除版本记录 + 插入三类存量行。
+        // 模拟历史库：删 disabled_reason 列 + 加回旧 failure_disabled 列 + 移除
+        // 版本记录 + 插入三类存量行。
         db.execute_unprepared("ALTER TABLE provider DROP COLUMN disabled_reason")
             .await
             .unwrap();
+        db.execute_unprepared(
+            "ALTER TABLE provider ADD COLUMN failure_disabled boolean NOT NULL DEFAULT 0",
+        )
+        .await
+        .unwrap();
         db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 21")
             .await
             .unwrap();
@@ -737,6 +758,43 @@ mod tests {
         );
 
         // 再次执行：版本已记录，不报变更（幂等）。
+        let changed_again = migrate(&db).await.unwrap();
+        assert!(!changed_again, "重复执行不应再报告变更");
+    }
+
+    /// 历史库迁移：provider 表残留 failure_disabled 旧列（已被迁移 21 的
+    /// disabled_reason 取代）——migrate() 必须 DROP 该列；新库无该列时不重复
+    /// 执行（幂等，只记录版本号）。
+    #[tokio::test]
+    async fn migration_22_drops_stale_failure_disabled() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        migrate(&db).await.unwrap();
+        // 模拟历史库：手动加回旧列 + 移除 22 版本记录。
+        db.execute_unprepared(
+            "ALTER TABLE provider ADD COLUMN failure_disabled boolean NOT NULL DEFAULT 0",
+        )
+        .await
+        .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 22")
+            .await
+            .unwrap();
+        assert!(
+            column_exists(&db, "provider", "failure_disabled")
+                .await
+                .unwrap(),
+            "前置：应存在残留 failure_disabled 列"
+        );
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        assert!(
+            !column_exists(&db, "provider", "failure_disabled")
+                .await
+                .unwrap(),
+            "failure_disabled 列应被删除"
+        );
+
         let changed_again = migrate(&db).await.unwrap();
         assert!(!changed_again, "重复执行不应再报告变更");
     }

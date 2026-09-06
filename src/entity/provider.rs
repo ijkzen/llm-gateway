@@ -38,13 +38,9 @@ pub struct Model {
     /// HTTP 代理地址（如 `http://127.0.0.1:7890`，无认证）。
     #[sea_orm(default_value = "")]
     pub proxy_addr: String,
-    /// 连续失败禁用标记：由转发链路连续失败熔断设置；普通用量刷新不自动恢复，
-    /// 管理员手动启用或自动恢复探测成功时清除。
-    #[sea_orm(default_value = "0")]
-    pub failure_disabled: bool,
     /// 停用原因（ADR-0003）：NULL=正常启用、failure=连续失败禁用、quota=额度耗尽、
     /// manual=手动停用。与 enable 互为镜像（启用 ⇔ NULL），由 availability 模块
-    /// 统一写入保证一致；迁移 22 起取代 failure_disabled 列。
+    /// 统一写入保证一致。
     pub disabled_reason: Option<String>,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
