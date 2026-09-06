@@ -1,5 +1,6 @@
 mod api_keys;
 mod auth;
+mod chat;
 mod cron_jobs;
 mod openai_compat;
 mod provider_models;
@@ -33,6 +34,7 @@ pub fn create_app(state: &AppState) -> Router {
         .nest("/api/virtual-models", virtual_models::routes())
         .nest("/api/api-keys", api_keys::routes())
         .nest("/api/stats", stats::routes())
+        .nest("/api/chat", chat::routes())
         .nest("/api/request-logs", request_logs::routes())
         .nest("/v1", openai_compat::routes())
         .fallback(crate::static_assets::serve_asset)

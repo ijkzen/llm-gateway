@@ -5,6 +5,7 @@ import {
 	KeyRound,
 	Layers,
 	LayoutDashboard,
+	MessageSquare,
 	ScrollText,
 	Server,
 	Settings,
@@ -27,6 +28,12 @@ export const OVERVIEW_PAGE: PageConfig = {
 	path: "/",
 	titleKey: "nav.pages.overview.title",
 	icon: LayoutDashboard,
+};
+
+export const CHAT_PAGE: PageConfig = {
+	path: "/chat",
+	titleKey: "nav.pages.chat.title",
+	icon: MessageSquare,
 };
 
 export const CRON_JOBS_PAGE: PageConfig = {
@@ -73,6 +80,7 @@ export const REQUEST_LOGS_PAGE: PageConfig = {
 
 export const PAGES: readonly PageConfig[] = [
 	OVERVIEW_PAGE,
+	CHAT_PAGE,
 	CRON_JOBS_PAGE,
 	PROVIDERS_PAGE,
 	PROVIDER_MODELS_PAGE,
@@ -84,7 +92,7 @@ export const PAGES: readonly PageConfig[] = [
 
 /** 侧边栏导航分组：概览 / 接入配置 / 观测 / 管理。 */
 export const NAV_GROUPS: readonly PageGroup[] = [
-	{ labelKey: "nav.groups.overview", pages: [OVERVIEW_PAGE] },
+	{ labelKey: "nav.groups.overview", pages: [OVERVIEW_PAGE, CHAT_PAGE] },
 	{
 		labelKey: "nav.groups.access",
 		pages: [PROVIDERS_PAGE, PROVIDER_MODELS_PAGE, VIRTUAL_MODELS_PAGE, API_KEYS_PAGE],

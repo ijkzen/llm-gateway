@@ -1,0 +1,194 @@
+import ChatPage from "@/pages/chat";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+	providers: [
+		{ id: 1, name: "供应商A", enable: true },
+		{ id: 2, name: "供应商B", enable: false },
+	],
+	providerModels: [
+		{ modelId: 11, providerId: 1, providerModelId: "model-a1" },
+		{ modelId: 12, providerId: 2, providerModelId: "model-b1" },
+	],
+}));
+
+vi.mock("@/hooks/use-providers", async () => {
+	const actual =
+		await vi.importActual<typeof import("@/hooks/use-providers")>("@/hooks/use-providers");
+	return {
+		...actual,
+		useProviders: () => ({ data: mocks.providers, isLoading: false, isError: false }),
+	};
+});
+
+vi.mock("@/hooks/use-provider-models", async () => {
+	const actual = await vi.importActual<typeof import("@/hooks/use-provider-models")>(
+		"@/hooks/use-provider-models",
+	);
+	return {
+		...actual,
+		useProviderModels: () => ({ data: mocks.providerModels, isLoading: false, isError: false }),
+	};
+});
+
+/** 构造 SSE 流式 fetch mock：chunks 逐段入队，响应 abort 信号（模拟浏览器行为）。 */
+function mockStreamingFetch(chunks: string[], holdOpen = false) {
+	let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+	const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+		const stream = new ReadableStream<Uint8Array>({
+			start(controller) {
+				streamController = controller;
+				let delay = 0;
+				for (const chunk of chunks) {
+					delay += 10;
+					setTimeout(() => controller.enqueue(new TextEncoder().encode(chunk)), delay);
+				}
+				if (!holdOpen) {
+					setTimeout(() => controller.close(), delay + 20);
+				}
+				init?.signal?.addEventListener("abort", () => {
+					controller.error(new DOMException("Aborted", "AbortError"));
+				});
+			},
+		});
+		return Promise.resolve(
+			new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } }),
+		);
+	});
+	return {
+		fetchMock,
+		closeStream: () => {
+			try {
+				streamController?.close();
+			} catch {
+				// 流已因 abort 关闭
+			}
+		},
+	};
+}
+
+function sseFrame(delta: Record<string, unknown>): Uint8Array {
+	return new TextEncoder().encode(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\n`);
+}
+
+function renderPage() {
+	return render(
+		<MemoryRouter>
+			<ChatPage />
+		</MemoryRouter>,
+	);
+}
+
+/** 经浮窗选择模型并发送一条消息。 */
+function selectModelAndSend(text: string) {
+	openModelPickerAndSelect("供应商A / model-a1");
+	const input = screen.getByPlaceholderText("输入消息…");
+	fireEvent.change(input, { target: { value: text } });
+	fireEvent.click(screen.getByRole("button", { name: "发送" }));
+}
+
+/** 打开模型选择浮窗并选中指定项。 */
+function openModelPickerAndSelect(label: string) {
+	fireEvent.click(screen.getByRole("button", { name: /^(选择模型|供应商A \/ model-a1)$/ }));
+	fireEvent.click(screen.getByRole("button", { name: label }));
+}
+
+describe("ChatPage", () => {
+	beforeEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("流式渲染思考与正文，思考完毕自动折叠且可手动展开", async () => {
+		const { fetchMock } = mockStreamingFetch([
+			new TextDecoder().decode(sseFrame({ role: "assistant" })),
+			new TextDecoder().decode(sseFrame({ reasoning_content: "先想想" })),
+			new TextDecoder().decode(sseFrame({ content: "你好" })),
+			new TextDecoder().decode(sseFrame({})),
+			"data: [DONE]\n\n",
+		]);
+		vi.stubGlobal("fetch", fetchMock);
+		renderPage();
+		selectModelAndSend("嗨");
+
+		// 用户气泡靠右、助手气泡出现。
+		await waitFor(() => expect(screen.getByText("嗨")).toBeInTheDocument());
+		// 思考过程流式可见。
+		await waitFor(() => expect(screen.getByText("先想想")).toBeInTheDocument());
+		// 正文到达后思考自动折叠：思考文本不可见，但可通过手动展开回看。
+		await waitFor(() => expect(screen.getByText("你好")).toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByText("先想想")).not.toBeInTheDocument());
+		fireEvent.click(screen.getByRole("button", { name: /思考过程/ }));
+		expect(screen.getByText("先想想")).toBeInTheDocument();
+		// 请求体：直连端点、供应商与模型 ID、多轮消息。
+		const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		const body = JSON.parse(String(init.body));
+		expect(init.signal).toBeDefined();
+		expect(body).toEqual({
+			providerId: 1,
+			modelId: 11,
+			messages: [{ role: "user", content: "嗨" }],
+		});
+	});
+
+	it("发送中可停止，已收内容保留并标注停止", async () => {
+		const { fetchMock, closeStream } = mockStreamingFetch(
+			[new TextDecoder().decode(sseFrame({ content: "部分" }))],
+			true,
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		renderPage();
+		selectModelAndSend("嗨");
+		await waitFor(() => expect(screen.getByText("部分")).toBeInTheDocument());
+		fireEvent.click(screen.getByRole("button", { name: "停止" }));
+		await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument());
+		expect(screen.getByText("部分")).toBeInTheDocument();
+		expect(screen.getByText(/已停止/)).toBeInTheDocument();
+		closeStream();
+	});
+
+	it("清空对话重置消息列表", async () => {
+		const { fetchMock } = mockStreamingFetch([
+			new TextDecoder().decode(sseFrame({ content: "答" })),
+			"data: [DONE]\n\n",
+		]);
+		vi.stubGlobal("fetch", fetchMock);
+		renderPage();
+		selectModelAndSend("问");
+		await waitFor(() => expect(screen.getByText("答")).toBeInTheDocument());
+		// 等流结束（停止按钮变回发送）再清空，避免点击到禁用按钮。
+		await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument());
+		fireEvent.click(screen.getByRole("button", { name: "清空对话" }));
+		expect(screen.queryByText("问")).not.toBeInTheDocument();
+		expect(screen.queryByText("答")).not.toBeInTheDocument();
+	});
+
+	it("模型浮窗按供应商分组，仅列启用供应商且选中态回显", () => {
+		renderPage();
+		fireEvent.click(screen.getByRole("button", { name: "选择模型" }));
+		// 分组标题：启用供应商出现、停用供应商不出现。
+		expect(screen.getByText("供应商A")).toBeInTheDocument();
+		expect(screen.queryByText("供应商B")).not.toBeInTheDocument();
+		expect(screen.queryByText("供应商B / model-b1")).not.toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "供应商A / model-a1" })).toBeInTheDocument();
+		// 选中后浮窗关闭，触发器回显选中项。
+		fireEvent.click(screen.getByRole("button", { name: "供应商A / model-a1" }));
+		expect(screen.getByRole("button", { name: "供应商A / model-a1" })).toBeInTheDocument();
+		expect(screen.queryByText("供应商A / model-b1")).not.toBeInTheDocument();
+	});
+
+	it("请求失败在气泡内展示错误信息", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockResolvedValue(
+				new Response(JSON.stringify({ code: "UPSTREAM_ERROR", msg: "上游挂了" }), {
+					status: 502,
+				}),
+			),
+		);
+		renderPage();
+		selectModelAndSend("嗨");
+		await waitFor(() => expect(screen.getByText(/上游挂了/)).toBeInTheDocument());
+	});
+});
