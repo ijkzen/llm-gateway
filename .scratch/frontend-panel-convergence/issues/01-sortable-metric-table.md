@@ -6,8 +6,12 @@
 
 **Status:** ready-for-agent
 
-- [ ] 排序 hook：默认降序、点同列翻转、点新列重置——直测
-- [ ] 深链 URL 纯函数：自定义窗口带起止时间、预设窗口带周期与偏移——直测
-- [ ] 四卡两页全部换用共享实现，各自旧副本（列定义/排序/URL 拼接）本票删净
-- [ ] 渲染测试：点表头断言排序与深链（先例：图表组件测试）
-- [ ] pnpm lint + vitest 全绿
+- [x] 排序 hook：默认降序、点同列翻转、点新列重置——直测
+- [x] 深链 URL 纯函数：自定义窗口带起止时间、预设窗口带周期与偏移——直测
+- [x] 四卡两页全部换用共享实现，各自旧副本（列定义/排序/URL 拼接）本票删净
+- [x] 渲染测试：点表头断言排序与深链（先例：图表组件测试）
+- [x] pnpm lint + vitest 全绿
+
+## Comments
+
+- 1a7a05d（feat/frontend-panel-convergence）实施完成。RACE_COLUMNS 六指标列定义 + useRaceSort + 泛型 SortableMetricTable 收拢四卡两页；windowQueryString 深链纯函数与 initialWindowFromUrl 往返有测试；排序翻转/新列默认方向直测。
