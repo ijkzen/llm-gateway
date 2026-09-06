@@ -434,6 +434,27 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     )
     .await?;
 
+    // Migration 21: provider.disabled_reason —— 停用原因四值（NULL=正常启用 /
+    // failure=连续失败禁用 / quota=额度耗尽 / manual=手动停用），语义见 ADR-0003；
+    // 迁移 22 将删除被取代的 failure_disabled 布尔列。存量回填：failure_disabled=1
+    // → 'failure'；enable=0 且非失败禁用 → 'manual'（安全默认：无法区分额度/手动时
+    // 宁多一次手动启用，也不被额度刷新自动启用）。新库由实体建表带该列，无需回填。
+    let reason_exists = column_exists(db, "provider", "disabled_reason").await?;
+    let failure_flag_exists = column_exists(db, "provider", "failure_disabled").await?;
+    let mut migration_21_statements: Vec<&str> = Vec::new();
+    if !reason_exists {
+        migration_21_statements.push("ALTER TABLE provider ADD COLUMN disabled_reason varchar");
+    }
+    if failure_flag_exists {
+        // 回填语句以 failure_disabled 列存在为前提；该列删除后（迁移 22 之后的新库）
+        // 仅记录版本号。
+        migration_21_statements.extend([
+            "UPDATE provider SET disabled_reason = 'failure' WHERE failure_disabled = 1 AND disabled_reason IS NULL",
+            "UPDATE provider SET disabled_reason = 'manual' WHERE enable = 0 AND failure_disabled = 0 AND disabled_reason IS NULL",
+        ]);
+    }
+    changed |= ensure_migration(db, 21, &migration_21_statements).await?;
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)
@@ -524,6 +545,20 @@ async fn ensure_migration(
 mod tests {
     use super::*;
     use sea_orm::ConnectionTrait;
+
+    /// 读取 provider.disabled_reason（按名称），迁移回填断言用。
+    async fn disabled_reason(db: &DatabaseConnection, name: &str) -> Option<String> {
+        db.query_one_raw(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT disabled_reason AS r FROM provider WHERE name = ?",
+            [name.into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .try_get::<Option<String>>("", "r")
+        .unwrap()
+    }
 
     #[test]
     fn test_sqlite_url_path_relative() {
@@ -651,6 +686,59 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    /// 历史库迁移：provider.disabled_reason 四值停用原因（ADR-0003）。存量回填规则：
+    /// failure_disabled=1 → 'failure'；enable=0 且非失败禁用 → 'manual'（安全默认：
+    /// 宁多一次手动启用，不被额度刷新自动启用）；启用行保持 NULL。
+    #[tokio::test]
+    async fn migration_21_backfills_disabled_reason_on_legacy_db() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        migrate(&db).await.unwrap();
+        // 模拟历史库：删列 + 移除版本记录 + 插入三类存量行。
+        db.execute_unprepared("ALTER TABLE provider DROP COLUMN disabled_reason")
+            .await
+            .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 21")
+            .await
+            .unwrap();
+        db.execute_unprepared(
+            "INSERT INTO provider (name, base_url, api_key, enable, failure_disabled, created_at, updated_at) VALUES
+                ('p-failure', 'http://a', 'k', 0, 1, datetime('now'), datetime('now')),
+                ('p-manual', 'http://b', 'k', 0, 0, datetime('now'), datetime('now')),
+                ('p-active', 'http://c', 'k', 1, 0, datetime('now'), datetime('now'))",
+        )
+        .await
+        .unwrap();
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        assert!(
+            column_exists(&db, "provider", "disabled_reason")
+                .await
+                .unwrap()
+        );
+
+        assert_eq!(
+            disabled_reason(&db, "p-failure").await.as_deref(),
+            Some("failure"),
+            "连续失败禁用行回填为 failure"
+        );
+        assert_eq!(
+            disabled_reason(&db, "p-manual").await.as_deref(),
+            Some("manual"),
+            "无法区分来源的禁用行安全回填为 manual"
+        );
+        assert_eq!(
+            disabled_reason(&db, "p-active").await,
+            None,
+            "启用行保持 NULL（正常）"
+        );
+
+        // 再次执行：版本已记录，不报变更（幂等）。
+        let changed_again = migrate(&db).await.unwrap();
+        assert!(!changed_again, "重复执行不应再报告变更");
     }
 
     /// 历史库迁移：provider 表残留 status 死字段（旧 lg-proxy 方案遗留，恒为 0，

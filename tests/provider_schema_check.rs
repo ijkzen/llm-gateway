@@ -48,6 +48,11 @@ async fn provider_table_ddl_matches_expected() {
             "'{}'".to_string(),
         ),
         (
+            "disabled_reason".to_string(),
+            "varchar".to_string(),
+            String::new(),
+        ),
+        (
             "enable".to_string(),
             "boolean".to_string(),
             "'1'".to_string(),

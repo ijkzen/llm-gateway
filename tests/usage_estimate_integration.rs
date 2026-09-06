@@ -50,6 +50,7 @@ async fn seed_provider(db: &DatabaseConnection, id: i32, name: &str, billing_mod
         proxy_enabled: Set(false),
         proxy_addr: Set(String::new()),
         failure_disabled: Set(false),
+        disabled_reason: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
     }

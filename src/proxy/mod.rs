@@ -2042,6 +2042,7 @@ mod tests {
             proxy_enabled,
             proxy_addr: proxy_addr.to_string(),
             failure_disabled: false,
+            disabled_reason: None,
             created_at: now,
             updated_at: now,
         }
