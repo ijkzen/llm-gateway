@@ -224,6 +224,25 @@ ZCode 的 AI SDK 在组装历史消息时会带上 assistant 轮的 `reasoning_c
 
 ---
 
+## 附一：四协议 × ZCode（带思考 × 带工具调用）支持矩阵
+
+回答「llm-gateway 代理四种上游协议时，ZCode 能否正常工作」的完整定论。判断基于：ZCode 的行为（2026-09-06/07 逆向实证）＋ 网关各转换链路的当前实现。核心结论一句话：**ZCode 的核心循环只依赖 `content` / `tool_calls` / `finish_reason` / `usage` / `reasoning_content` 五个要素，这五样在四条链路上都已吻合；断的只是「签名类思考载体」这一层**——它只在「推理思考 + 多轮工具调用」这个交叉点上构成问题，普通对话（含思考）四条链路全部正常。
+
+| 上游协议 | 普通对话（含思考、无工具） | 多轮工具调用（ZCode 主场景，含思考） | 卡点说明 |
+| --- | --- | --- | --- |
+| **OpenAI Compatible（直通）** | ✅ 完全正常 | ✅ 完全正常 | 字节透传：`reasoning_effort`/`thinking`/`enable_thinking` 原样到上游；`reasoning_content` 回传保留（DeepSeek 工具轮必需）。本表其余问题与它无关 |
+| **Anthropic Messages** | ✅ 正常 | ⚠️ **能用但静默降智** | 思考开关/档位生效，思考文本照常返回。但 ZCode 不回传签名块 → 网关触发 `drop_thinking_without_history_blocks` 每轮关掉 thinking（不报错、工具循环正常）。修复后带 `x-llm-gateway-thinking-dropped: history` 响应头，降级可观测（工单 08） |
+| **Gemini generateContent** | ✅ 正常 | ❌→✅ 视模型与是否已部署工单 01 | 思考经 thinkingConfig 生效、`reasoning_content` 双向通。Gemini 3 系工具轮**强制** thoughtSignature：工单 01 部署前 ZCode 签名丢失 → 第二轮必 400；部署后双写到 `extra_content.google.thought_signature`，链闭合（待真机验证）。Gemini 2.5 及更早不强制签名，原本就可用 |
+| **OpenAI Responses** | ✅ 正常 | ❌ 推理模型结构性不行 | 网关强制流式 + 客户端非流式聚合，普通对话正常。但推理模型（gpt-5/o 系）工具轮要求回传 `encrypted_content` 密文：ZCode 存不下也回传不了（唯一三环不贯通的载体），后续工具轮可能 400。**网关侧无解**（AI SDK 线上格式没有可双写的密文载体，不像 Gemini 的 extra_content），规避法 = 这类模型挂 OpenAI Compatible 形态的上游（如代理商直通），或等 ZCode 侧支持 `reasoning_details` |
+
+补充边界（容易误读的点）：
+
+- 「四协议代理下 ZCode 不能正常工作」的说法不准确——只有上表标 ❌/⚠️ 的交叉点受影响，且 ⚠️ 只是降智不是不可用。
+- 用户当前生产（deepseek-v4-flash / kimi-k3 / longcat 等）全是 OpenAI Compatible 直通链路，本表问题不影响现网。
+- 矩阵列的是 ZCode 这一种客户端。OpenRouter 风格客户端（原样搬运 `reasoning_details`）在 Anthropic/Gemini/Responses 三条链上是完整闭环的——这正是网关双写方案「两种客户端都保」的原因。
+
+---
+
 ## 整改状态（2026-09-06，feat/zcode-compat-fixes 分支）
 
 已实现并全量测试通过：工单 01（Gemini 签名双写 `tool_calls[i].extra_content.google.thought_signature`，请求侧双来源注入、extra_content 优先）、02（tool_result 空内容兜底 `" "`）、03+04（`chat_reasoning` 三态化 `ChatReasoning::{Unspecified, Disabled, Enabled}`，补认 `thinking:{type}` 与 `enable_thinking` 形态，优先级 reasoning 对象 > reasoning_effort > thinking > enable_thinking；明确关闭时 Gemini 写 `thinkingBudget:0`、Responses 写 `effort:"none"`）、05（Responses effort 钳制：max→xhigh，未知→high 并 debug 日志）、06（`Usage` 增 reasoning_tokens，Responses/Gemini 提取，客户端 usage 补 `completion_tokens_details.reasoning_tokens`；不落 request 表）、08（降级标记响应头）。
