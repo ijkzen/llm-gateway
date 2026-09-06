@@ -1415,10 +1415,10 @@ pub async fn forward_chat_direct(
         "stream": true,
         "messages": messages,
     });
-    // 思考模型且协议为转换型（Anthropic/Gemini/Responses）时显式申请思考输出，
-    // 否则上游默认不返回思考内容。OpenAI Compat 为透传协议不注入（避免被严格
-    // 上游拒绝；该协议的 reasoning 模型本就原生返回 reasoning_content）。
-    if model.reasoning && member.protocol != Protocol::OpenAiCompat {
+    // 思考模型显式申请思考输出，否则上游默认不返回思考内容
+    //（实测 Command Code/Kimi/StepFun/SiliconFlow/Ant/OpenRouter/Xiaomi 均
+    // 接受 reasoning_effort 且返回 reasoning_content）。
+    if model.reasoning {
         client_body["reasoning_effort"] = json!("medium");
     }
     // 聊天无下游请求头（管理面发起）：透传子集为空。

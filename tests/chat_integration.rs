@@ -250,12 +250,12 @@ async fn chat_stream_direct_with_reasoning_and_record() {
     assert!(text.contains("finish_reason\":\"stop"), "{text}");
 
     // 上游收到的 model 为供应商模型 ID，stream 强制为 true；
-    // OpenAI Compat 为透传协议，不注入 reasoning_effort。
+    // 思考模型已注入 reasoning_effort 申请思考输出。
     let upstream_bodies = captured.lock().unwrap();
     assert_eq!(upstream_bodies.len(), 1);
     assert_eq!(upstream_bodies[0]["model"], json!("m-1"));
     assert_eq!(upstream_bodies[0]["stream"], json!(true));
-    assert!(upstream_bodies[0].get("reasoning_effort").is_none());
+    assert_eq!(upstream_bodies[0]["reasoning_effort"], json!("medium"));
 
     let rows = wait_for_records(&db, 1).await;
     assert_eq!(rows.len(), 1);
