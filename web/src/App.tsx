@@ -8,6 +8,7 @@ import { lazy } from "react";
 import { Route, Routes } from "react-router-dom";
 
 const OverviewPage = lazy(() => import("./pages/overview"));
+const ChatPage = lazy(() => import("./pages/chat"));
 const ProviderOverviewPage = lazy(() => import("./pages/provider-overview"));
 const VirtualModelOverviewPage = lazy(() => import("./pages/virtual-model-overview"));
 const ModelOverviewPage = lazy(() => import("./pages/model-overview"));
@@ -38,6 +39,7 @@ function App() {
 					}
 				>
 					<Route path="/" element={<OverviewPage />} />
+					<Route path="/chat" element={<ChatPage />} />
 					<Route path="/providers/:providerId/overview" element={<ProviderOverviewPage />} />
 					<Route
 						path="/virtual-models/:virtualModelId/overview"

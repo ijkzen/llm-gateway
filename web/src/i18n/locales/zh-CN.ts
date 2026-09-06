@@ -57,6 +57,7 @@ const zhCN = {
 		},
 		pages: {
 			overview: { title: "数据面板" },
+			chat: { title: "聊天" },
 			providers: { title: "供应商" },
 			providerModels: { title: "供应商模型" },
 			virtualModels: { title: "虚拟模型" },
@@ -695,6 +696,17 @@ const zhCN = {
 		notAvailable: "该窗口不可用",
 		estimate: "预估月 Token",
 		estimateHint: "按周用量 × 4 估算",
+	},
+	chat: {
+		inputPlaceholder: "输入消息…",
+		send: "发送",
+		stop: "停止",
+		clear: "清空对话",
+		thinking: "思考过程",
+		stopped: "已停止",
+		emptyHint: "选择模型，开始对话",
+		selectModel: "选择模型",
+		sendFailed: "发送失败",
 	},
 	error: {
 		internalError: "服务器内部错误",

@@ -58,6 +58,7 @@ const en: Translation = {
 		},
 		pages: {
 			overview: { title: "Dashboard" },
+			chat: { title: "Chat" },
 			providers: { title: "Providers" },
 			providerModels: { title: "Provider Models" },
 			virtualModels: { title: "Virtual Models" },
@@ -704,6 +705,17 @@ const en: Translation = {
 		notAvailable: "Not available for this window",
 		estimate: "Est. monthly tokens",
 		estimateHint: "Weekly usage × 4",
+	},
+	chat: {
+		inputPlaceholder: "Type a message…",
+		send: "Send",
+		stop: "Stop",
+		clear: "Clear chat",
+		thinking: "Thinking",
+		stopped: "Stopped",
+		emptyHint: "Pick a model to start chatting",
+		selectModel: "Select model",
+		sendFailed: "Send failed",
 	},
 	error: {
 		internalError: "Internal server error",
