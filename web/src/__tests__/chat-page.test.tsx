@@ -83,13 +83,13 @@ function renderPage() {
 
 /** 经浮窗选择模型并发送一条消息。 */
 function selectModelAndSend(text: string) {
-	openModelPickerAndSelect("供应商A / model-a1");
+	openModelPickerAndSelect("model-a1");
 	const input = screen.getByPlaceholderText("输入消息…");
 	fireEvent.change(input, { target: { value: text } });
 	fireEvent.click(screen.getByRole("button", { name: "发送" }));
 }
 
-/** 打开模型选择浮窗并选中指定项。 */
+/** 打开模型选择浮窗并选中指定模型条目（条目名只含模型 ID）。 */
 function openModelPickerAndSelect(label: string) {
 	fireEvent.click(screen.getByRole("button", { name: /^(选择模型|供应商A \/ model-a1)$/ }));
 	fireEvent.click(screen.getByRole("button", { name: label }));
@@ -170,12 +170,13 @@ describe("ChatPage", () => {
 		// 分组标题：启用供应商出现、停用供应商不出现。
 		expect(screen.getByText("供应商A")).toBeInTheDocument();
 		expect(screen.queryByText("供应商B")).not.toBeInTheDocument();
-		expect(screen.queryByText("供应商B / model-b1")).not.toBeInTheDocument();
+		expect(screen.queryByText("model-b1")).not.toBeInTheDocument();
+		// 分组内条目只显示模型 ID，不带供应商名。
+		expect(screen.getByRole("button", { name: "model-a1" })).toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "供应商A / model-a1" })).not.toBeInTheDocument();
+		// 选中后浮窗关闭，触发器回显「供应商 / 模型」。
+		fireEvent.click(screen.getByRole("button", { name: "model-a1" }));
 		expect(screen.getByRole("button", { name: "供应商A / model-a1" })).toBeInTheDocument();
-		// 选中后浮窗关闭，触发器回显选中项。
-		fireEvent.click(screen.getByRole("button", { name: "供应商A / model-a1" }));
-		expect(screen.getByRole("button", { name: "供应商A / model-a1" })).toBeInTheDocument();
-		expect(screen.queryByText("供应商A / model-b1")).not.toBeInTheDocument();
 	});
 
 	it("请求失败在气泡内展示错误信息", async () => {

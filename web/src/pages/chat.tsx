@@ -63,7 +63,9 @@ export default function ChatPage() {
 					.filter((m) => m.providerId === p.id)
 					.map((m) => ({
 						key: `${p.id}:${m.modelId}`,
-						label: `${p.name} / ${m.providerModelId}`,
+						providerName: p.name,
+						// 分组内只显示模型 ID，供应商名由分组标题与触发器承担。
+						label: m.providerModelId,
 					})),
 			}))
 			.filter((group) => group.models.length > 0);
@@ -235,7 +237,13 @@ export default function ChatPage() {
 					<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
 						<PopoverTrigger asChild>
 							<Button variant="outline" size="sm" className="max-w-72">
-								<MidEllipsis text={selected?.label ?? t("chat.selectModel")} />
+								<MidEllipsis
+									text={
+										selected
+											? `${selected.providerName} / ${selected.label}`
+											: t("chat.selectModel")
+									}
+								/>
 								<ChevronUp className="size-4 shrink-0 text-muted-foreground" />
 							</Button>
 						</PopoverTrigger>
