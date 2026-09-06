@@ -47,6 +47,7 @@ async fn spawn_mock(captured: Captured) -> String {
                     let payload = [
                         json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}).to_string(),
                         json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"reasoning_content":"想一想"},"finish_reason":null}]}).to_string(),
+                        json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"reasoning":"换个键名的思考"},"finish_reason":null}]}).to_string(),
                         json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}).to_string(),
                         json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}).to_string(),
                         json!({"id":"chatcmpl-c1","object":"chat.completion.chunk","model":"m-1","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}).to_string(),
@@ -246,6 +247,8 @@ async fn chat_stream_direct_with_reasoning_and_record() {
     // 思考增量与正文增量均透传；结束帧 finish_reason。
     assert!(text.contains("reasoning_content"), "{text}");
     assert!(text.contains("想一想"), "{text}");
+    // delta.reasoning（OpenRouter/Command Code 风格）被归一为 reasoning_content。
+    assert!(text.contains("换个键名的思考"), "{text}");
     assert!(text.contains("\"content\":\"你好\""), "{text}");
     assert!(text.contains("finish_reason\":\"stop"), "{text}");
 

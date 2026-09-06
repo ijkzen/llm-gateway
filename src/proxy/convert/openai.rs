@@ -97,6 +97,49 @@ pub fn is_usage_only_chunk(event: &str) -> bool {
             .is_some_and(|choices| choices.is_empty())
 }
 
+/// OpenAI 兼容透传的思考字段归一：部分聚合上游（OpenRouter/Command Code 风格）
+/// 用 `delta.reasoning`/`message.reasoning` 携带思考文本，统一改写为 DeepSeek
+/// 事实标准的 `reasoning_content`；已是 reasoning_content 或字段非字符串时不动。
+pub fn normalize_reasoning_value(value: &mut Value) -> bool {
+    let Some(choices) = value.get_mut("choices").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    for choice in choices {
+        for key in ["delta", "message"] {
+            let Some(map) = choice.get_mut(key).and_then(Value::as_object_mut) else {
+                continue;
+            };
+            if map.contains_key("reasoning_content") {
+                continue;
+            }
+            if let Some(reasoning) = map.remove("reasoning") {
+                if reasoning.is_string() {
+                    map.insert("reasoning_content".to_string(), reasoning);
+                    changed = true;
+                } else {
+                    map.insert("reasoning".to_string(), reasoning);
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// 归一单个 SSE 事件（JSON 文本）；非 JSON 或无需改写时原样返回。
+pub fn normalize_reasoning_event(event: &str) -> String {
+    match serde_json::from_str::<Value>(event) {
+        Ok(mut value) => {
+            if normalize_reasoning_value(&mut value) {
+                value.to_string()
+            } else {
+                event.to_string()
+            }
+        }
+        Err(_) => event.to_string(),
+    }
+}
+
 /// OpenAI 兼容流式旁路扫描器：统计 usage 与内容 token 时刻，不改变转发字节。
 #[derive(Debug, Default)]
 pub struct OpenAiStreamScanner {
@@ -235,5 +278,42 @@ mod tests {
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"f\"}}]}}]}\n\n",
         );
         assert!(tools.saw_content);
+    }
+    #[test]
+    fn normalizes_reasoning_field_to_reasoning_content() {
+        // 流式 delta.reasoning（OpenRouter/Command Code 风格）改写为 reasoning_content。
+        let event = r#"{"choices":[{"delta":{"reasoning":"想一想"}}]}"#;
+        let normalized = normalize_reasoning_event(event);
+        assert!(
+            normalized.contains(r#""reasoning_content":"想一想""#),
+            "{normalized}"
+        );
+        assert!(!normalized.contains(r#""reasoning":""#), "{normalized}");
+
+        // 已是 reasoning_content 时原样保留；非字符串 reasoning 不动。
+        let kept =
+            normalize_reasoning_event(r#"{"choices":[{"delta":{"reasoning_content":"已有"}}"#);
+        assert!(kept.contains("已有"));
+        let non_string =
+            normalize_reasoning_event(r#"{"choices":[{"delta":{"reasoning":{"enabled":true}}}]}"#);
+        assert!(non_string.contains(r#""reasoning":{"#));
+
+        // 非 JSON 与无 choices 时原样返回。
+        assert_eq!(normalize_reasoning_event("[DONE]"), "[DONE]");
+        assert_eq!(
+            normalize_reasoning_event(r#"{"usage":{}}"#),
+            r#"{"usage":{}}"#
+        );
+
+        // 非流式 message.reasoning 同样归一。
+        let mut value = serde_json::from_str::<Value>(
+            r#"{"choices":[{"message":{"role":"assistant","reasoning":"想","content":"答"}}]}"#,
+        )
+        .unwrap();
+        assert!(normalize_reasoning_value(&mut value));
+        let message = &value["choices"][0]["message"];
+        assert_eq!(message["reasoning_content"], "想");
+        assert!(message.get("reasoning").is_none());
+        assert_eq!(message["content"], "答");
     }
 }

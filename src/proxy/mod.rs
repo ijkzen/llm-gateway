@@ -1516,7 +1516,8 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
         (Protocol::OpenAiCompat, false) => {
             let body = upstream::read_body(reply.body).await.unwrap_or_default();
             let text = String::from_utf8_lossy(&body).to_string();
-            let parsed: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({}));
+            let mut parsed: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({}));
+            openai::normalize_reasoning_value(&mut parsed);
             let usage = parsed
                 .get("usage")
                 .filter(|u| u.is_object())
@@ -1564,6 +1565,8 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     };
                     let text = String::from_utf8_lossy(&bytes).to_string();
                     for event in splitter.feed(&text) {
+                        // 思考字段归一：delta.reasoning → delta.reasoning_content。
+                        let event = openai::normalize_reasoning_event(&event);
                         scanner.feed_event(&event);
                         if scanner.saw_content {
                             scanner.saw_content = false;
