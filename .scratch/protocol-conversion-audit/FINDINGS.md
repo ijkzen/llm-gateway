@@ -26,7 +26,24 @@
 
 同批附带：多轮 tool_use 历史无 thinking 块时丢弃 thinking 参数（防 "Expected thinking or redacted_thinking" 400，LiteLLM 同款）、user→metadata.user_id、流式 usage chunk 统一含缓存明细、非流式 tool_calls 去 index、Gemini 工具名反查失败告警、Responses refusal.delta/.done 处理。
 
-**仍未修复**：A2（adaptive thinking，需模型代际信息，待拍板单独立项）、A6（cache_creation 计入命中口径的取舍）、A7（tool_choice none + disable_parallel_tool_use 未知字段）、B2（thoughtSignature 透传，建议单独立项）、B8（流式 model 死代码等 nit）、C2（Responses 出站对流式客户端全量缓冲）、C4（max_output_tokens<16）、C5（strict 透传）、D3（chunk created 漂移）、D4 备忘。
+**已于 2026-09-06 随 reasoning_details 工作（3ffa3c3）修复**：B2（thoughtSignature 透传——functionCall part 的签名按 tool_call 下标装进 `reasoning.encrypted`（format `google-gemini-v1`）回传，请求侧按 index 回挂 functionCall part；流式/非流式双路径）。
+
+**仍未修复**：A2（adaptive thinking，需模型代际信息，待拍板单独立项）、A6（cache_creation 计入命中口径的取舍）、A7（tool_choice none + disable_parallel_tool_use 未知字段）、B8（流式 model 死代码等 nit）、C2（Responses 出站对流式客户端全量缓冲）、C4（max_output_tokens<16）、C5（strict 透传）、D3（chunk created 漂移）、D4 备忘。
+
+---
+
+## 六、OpenRouter 对照补充（2026-09-06）
+
+以 OpenRouter 公开行为（官方 docs 仓库 + openapi.yaml 一手来源）为参照的第二轮对照，完整报告见
+[OPENROUTER-COMPARISON.md](./OPENROUTER-COMPARISON.md)。新发现 O1–O6，要点：
+
+- **O1【中】**：请求侧只认 `reasoning_effort`，不认 OpenRouter 主参数形态 `reasoning` 对象（effort/max_tokens/exclude/enabled）——OpenRouter 生态客户端的思考请求静默失效（三协议入口 `anthropic.rs:284`/`gemini.rs:314`/`responses.rs:102`）。
+- **O2【中】**：effort→budget 换算口径：本地固定档位（LiteLLM），OpenRouter 按 max_tokens 比例（ratio 0.95/0.8/0.5/0.2/0.1，clamp [1024,128000]）。
+- **O3【中】**：Gemini 3 的 effort 应映射 `thinkingLevel`（本地恒用 `thinkingBudget`，对 Gemini 2.5 正确）。
+- **O4**：OpenRouter 已实施 Claude 4.6+ `adaptive` + `output_config.effort`，**印证 A2** 整改方向，可与 O3/O2 同捆。
+- **O5【低·错误】**：Anthropic 非流式 usage 用 `client_usage_json` 缺 `prompt_tokens_details.cached_tokens`，与 Gemini/Responses/流式路径不一致；OpenRouter `cached_tokens`=读缓存、写缓存单列，**印证 A6** 口径偏差。
+- **O6【低】**：native_finish_reason 透传（关联 A5）、思考键名 `reasoning` vs `reasoning_content`、流式 usage 恒发 vs 按需、流式错误 finish_reason:"error" 终止块、top_k 等扩展采样参数、多模态 audio/file/video（=D4）、error_type 归一、max_tokens 缺省 4096 偏小。
+- **核对通过**：reasoning_details 格式逐字段与官方 OpenAPI 吻合、三条注入链路语义正确、finish_reason 映射表、SSE 注释容忍、tool_choice/usage 聚合口径。
 
 ---
 
