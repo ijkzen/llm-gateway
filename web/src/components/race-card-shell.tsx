@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useInView } from "@/hooks/use-in-view";
 import { formatPeriodLabel } from "@/lib/race-period";
 import type { RaceWindow } from "@/lib/race-types";
+import { localeOf } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
 import { type ReactNode, type RefObject, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -70,7 +71,7 @@ export function RaceCardShell({
 	status,
 	children,
 }: RaceCardShellProps) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const { now, windowState, onWindowChange, ref, inView } = view;
 	return (
 		<Card ref={ref} className="p-5">
@@ -85,7 +86,12 @@ export function RaceCardShell({
 						text={
 							windowState.period === "custom"
 								? t("overview.customWindow")
-								: formatPeriodLabel(windowState.period, windowState.offset, now)
+								: formatPeriodLabel(
+										windowState.period,
+										windowState.offset,
+										now,
+										localeOf(i18n.language),
+									)
 						}
 					/>
 				</div>

@@ -1,5 +1,3 @@
-import i18n from "@/i18n";
-
 export const DEFAULT_GROUP = "默认";
 
 export const SETTING_TYPES = ["String", "Int", "Float", "Bool", "Json"] as const;
@@ -20,12 +18,11 @@ export const FALLBACK_STRATEGIES = [
 	{ value: 1, labelKey: "virtualModels.strategies.retryOthers" },
 ] as const;
 
-export function loadBalancingLabel(value: number): string {
-	return i18n.t(
-		LOAD_BALANCING_STRATEGIES.find((s) => s.value === value)?.labelKey ?? "common.unknown",
-	);
+/** 策略标签经调用方注入翻译函数（保持本模块无全局 i18n 读取）。 */
+export function loadBalancingLabel(value: number, t: (key: string) => string): string {
+	return t(LOAD_BALANCING_STRATEGIES.find((s) => s.value === value)?.labelKey ?? "common.unknown");
 }
 
-export function fallbackLabel(value: number): string {
-	return i18n.t(FALLBACK_STRATEGIES.find((s) => s.value === value)?.labelKey ?? "common.unknown");
+export function fallbackLabel(value: number, t: (key: string) => string): string {
+	return t(FALLBACK_STRATEGIES.find((s) => s.value === value)?.labelKey ?? "common.unknown");
 }

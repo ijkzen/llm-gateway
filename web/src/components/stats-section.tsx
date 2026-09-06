@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ChartGranularity } from "@/lib/race-period";
 import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
+import { localeOf } from "@/lib/utils";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -35,11 +36,11 @@ export function useSectionWindows<const K extends string>(
 
 /** 区块副标题：自定义区间文案 / 周期标签（各页逐字相同的闭包，收拢为一份）。 */
 export function useSectionSubtitle() {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	return (state: RaceWindowState, now: number) =>
 		state.period === "custom"
 			? t("overview.customWindow")
-			: formatPeriodLabel(state.period, state.offset, now);
+			: formatPeriodLabel(state.period, state.offset, now, localeOf(i18n.language));
 }
 
 /** 区块窗口（毫秒起止）。 */

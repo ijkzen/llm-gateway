@@ -15,7 +15,7 @@ import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useModelMetrics } from "@/hooks/use-model-metrics";
 import { clientTzOffsetMinutes } from "@/lib/race-period";
-import { formatTokenCount } from "@/lib/utils";
+import { formatTokenCount, localeOf } from "@/lib/utils";
 import { TrendingUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useParams } from "react-router-dom";
@@ -24,7 +24,7 @@ const SECTION_KEYS = ["call", "token", "metrics", "insight"] as const;
 
 /** 模型详情三级页：单模型指标卡片（置顶）+ 调用分析折线 + Token 折线，三块独立时间段。 */
 export default function ModelOverviewPage() {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const { providerId: providerIdParam, modelId: modelIdParam } = useParams();
 	const providerId = Number.parseInt(providerIdParam ?? "", 10);
 	const modelId = decodeURIComponent(modelIdParam ?? "");
@@ -124,7 +124,7 @@ export default function ModelOverviewPage() {
 				<TrendLineChart
 					data={tokenCharts.data?.tokenTrend ?? []}
 					label={t("overview.tokens")}
-					formatValue={formatTokenCount}
+					formatValue={(v) => formatTokenCount(v, localeOf(i18n.language))}
 					kind="tokens"
 					granularity={tokenGranularity}
 				/>

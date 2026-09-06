@@ -6,9 +6,8 @@ import {
 } from "@/components/ui/chart";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ModelValue, TrendPoint } from "@/hooks/use-dashboard-stats";
-import i18n from "@/i18n";
 import type { ChartGranularity } from "@/lib/race-period";
-import { cn, middleEllipsis, topWithOther } from "@/lib/utils";
+import { type Locale, cn, localeOf, middleEllipsis, topWithOther } from "@/lib/utils";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -36,9 +35,9 @@ export const CHART_COLORS = [
 
 export const OTHER_LABEL = "其他";
 
-/** 当前语言的「其他」标签（Top N + 其他聚合项）。 */
-export function otherLabel(): string {
-	return i18n.t("dashboard.other");
+/** 当前语言的「其他」标签（Top N + 其他聚合项）；翻译函数由调用方注入。 */
+export function otherLabel(t: (key: string) => string): string {
+	return t("dashboard.other");
 }
 
 export function chartColorAt(index: number): string {
@@ -60,8 +59,7 @@ function toChartItems(items: ModelValue[]): ChartItem[] {
 }
 
 /** Top 10 + 其他（降序）。 */
-export function toRankedModels(items: ModelValue[]): ChartItem[] {
-	const other = otherLabel();
+export function toRankedModels(items: ModelValue[], other: string): ChartItem[] {
 	return topWithOther(toChartItems(items), {
 		providerName: "",
 		modelId: OTHER_LABEL,
@@ -71,9 +69,13 @@ export function toRankedModels(items: ModelValue[]): ChartItem[] {
 }
 
 /** 按桶粒度格式化 X 轴标签：小时 → HH:00，天 → M月d日，月 → yyyy年M月，年 → yyyy年。 */
-export function formatBucketLabel(bucketStart: number, granularity: ChartGranularity): string {
+export function formatBucketLabel(
+	bucketStart: number,
+	granularity: ChartGranularity,
+	locale: Locale,
+): string {
 	const date = new Date(bucketStart);
-	const zh = i18n.language.startsWith("zh");
+	const zh = locale === "zh";
 	switch (granularity) {
 		case "hour":
 			return `${date.getHours().toString().padStart(2, "0")}:00`;
@@ -120,10 +122,10 @@ export function TrendLineChart({
 	kind = "calls",
 	granularity,
 }: TrendLineChartProps) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const resolvedGranularity = granularity ?? inferGranularity(data.map((p) => p.bucketStart));
 	const chartData = data.map((point) => ({
-		label: formatBucketLabel(point.bucketStart, resolvedGranularity),
+		label: formatBucketLabel(point.bucketStart, resolvedGranularity, localeOf(i18n.language)),
 		value: point.value,
 	}));
 	// 标签密度自适应：约每 6 个点显示一个标签，避免 24 点小时图过密 / 7 点周图过疏。
@@ -267,7 +269,7 @@ function renderActiveSector(sector: PieSectorDataItem) {
 /** 按模型占比的饼图（Top 10 + 其他）。 */
 export function ModelPieChart({ data, formatValue, kind = "calls" }: ModelChartProps) {
 	const { t } = useTranslation();
-	const ranked = toRankedModels(data);
+	const ranked = toRankedModels(data, otherLabel(t));
 	const total = ranked.reduce((sum, item) => sum + item.value, 0);
 	const [activeLabel, setActiveLabel] = useState<string | null>(null);
 	const isTokens = kind === "tokens";
@@ -321,7 +323,7 @@ export function ModelPieChart({ data, formatValue, kind = "calls" }: ModelChartP
 /** 按模型降序的横向条形图（Top 10 + 其他）。 */
 export function ModelRankBarChart({ data, formatValue, kind = "calls" }: ModelChartProps) {
 	const { t } = useTranslation();
-	const ranked = toRankedModels(data);
+	const ranked = toRankedModels(data, otherLabel(t));
 	const height = Math.max(200, ranked.length * 36 + 16);
 	const isTokens = kind === "tokens";
 	return (

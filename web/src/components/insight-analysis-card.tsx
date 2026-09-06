@@ -10,7 +10,7 @@ import { SegmentedControl } from "@/components/segmented-control";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { InsightData } from "@/hooks/use-dashboard-insight";
 import type { ChartGranularity } from "@/lib/race-period";
-import { formatTokenCount } from "@/lib/utils";
+import { formatTokenCount, localeOf } from "@/lib/utils";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -34,7 +34,7 @@ interface InsightAnalysisCardProps {
 /** 性能与可靠性分析卡片：失败诊断 / 延迟分位 / Token 结构 / 吞吐 四主题 Tab。
  *  首页与供应商/虚拟模型/模型详情页共用，按当前页面自动过滤。 */
 export function InsightAnalysisCard({ data, subtitle, granularity }: InsightAnalysisCardProps) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const [tab, setTab] = useState<InsightTab>("failure");
 	const options = INSIGHT_TABS.map((option) => ({
 		value: option.value,
@@ -96,7 +96,7 @@ export function InsightAnalysisCard({ data, subtitle, granularity }: InsightAnal
 								outputTokenTrend={data.outputTokenTrend}
 								cacheHitRateTrend={data.cacheHitRateTrend}
 								granularity={granularity}
-								formatValue={formatTokenCount}
+								formatValue={(v) => formatTokenCount(v, localeOf(i18n.language))}
 							/>
 							<div className="space-y-1">
 								<p className="text-sm font-medium">{t("dashboard.outputPerSec")}</p>
@@ -116,7 +116,7 @@ export function InsightAnalysisCard({ data, subtitle, granularity }: InsightAnal
 							tpmTrend={data.tpmTrend}
 							streamRatioTrend={data.streamRatioTrend}
 							granularity={granularity}
-							formatValue={formatTokenCount}
+							formatValue={(v) => formatTokenCount(v, localeOf(i18n.language))}
 						/>
 					))}
 			</CardContent>

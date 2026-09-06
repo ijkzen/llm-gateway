@@ -23,7 +23,7 @@ import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts, useDashboardSummary } from "@/hooks/use-dashboard-stats";
 import { OVERVIEW_PAGE } from "@/lib/pages";
 import { clientTzOffsetMinutes, periodBounds } from "@/lib/race-period";
-import { formatPercent, formatTokenCount } from "@/lib/utils";
+import { formatPercent, formatTokenCount, localeOf } from "@/lib/utils";
 import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -44,7 +44,7 @@ function defaultChartsWindow(): RaceWindowState {
 const SECTION_KEYS = ["call", "token", "insight"] as const;
 
 export default function OverviewPage() {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	// 今日窗口：本地今日 0 点 → 当前时刻（与图表区「天」周期同一语义）。
 	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS, defaultChartsWindow);
 	const subtitle = useSectionSubtitle();
@@ -159,7 +159,7 @@ export default function OverviewPage() {
 				<StatsCard
 					icon={Coins}
 					label={t("overview.totalTokens")}
-					value={formatTokenCount(summary.totalTokens)}
+					value={formatTokenCount(summary.totalTokens, localeOf(i18n.language))}
 					subLabel={t("overview.inputPlusOutput")}
 				/>
 				<StatsCard
@@ -186,7 +186,7 @@ export default function OverviewPage() {
 				<StatsCard
 					icon={Coins}
 					label={t("overview.totalTokens")}
-					value={formatTokenCount(todaySummary.totalTokens)}
+					value={formatTokenCount(todaySummary.totalTokens, localeOf(i18n.language))}
 					subLabel={t("overview.today")}
 				/>
 				<StatsCard

@@ -6,8 +6,6 @@
  * - 历史周期（offset<0）/未来周期（offset>0）：[周期起点, 下一周期起点) 半开区间。
  */
 
-import i18n from "@/i18n";
-
 export type RacePeriod = "day" | "week" | "month" | "year";
 
 /** 图表桶粒度（透传给 /api/stats/charts 的 granularity 参数）。 */
@@ -105,11 +103,16 @@ export function periodBounds(period: RacePeriod, offset: number, now: number): P
  * 周期窗口的展示标题。中文：`2026年8月（当前）`；英文：`Aug 2026 (current)`。
  * @param now 当前时刻（毫秒时间戳），用于「当前周期」标记。
  */
-export function formatPeriodLabel(period: RacePeriod, offset: number, now: number): string {
+export function formatPeriodLabel(
+	period: RacePeriod,
+	offset: number,
+	now: number,
+	locale: "zh" | "en",
+): string {
 	const bounds = periodBounds(period, offset, now);
 	const start = new Date(bounds.startTime);
 	const isCurrent = bounds.endTime === now;
-	const zh = i18n.language.startsWith("zh");
+	const zh = locale === "zh";
 	const currentSuffix = isCurrent ? (zh ? "（当前）" : " (current)") : "";
 
 	switch (period) {

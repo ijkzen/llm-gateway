@@ -97,27 +97,32 @@ describe("periodBounds 自然周期", () => {
 });
 
 describe("formatPeriodLabel", () => {
+	it("en 分支输出英文周期标题", () => {
+		expect(formatPeriodLabel("month", 0, NOW_MS, "en")).toBe("Aug 2026 (current)");
+		expect(formatPeriodLabel("day", -1, NOW_MS, "en")).toBe("Aug 29, 2026");
+	});
+
 	it("当前天带「（当前）」", () => {
-		expect(formatPeriodLabel("day", 0, NOW_MS)).toBe("2026年8月30日（当前）");
+		expect(formatPeriodLabel("day", 0, NOW_MS, "zh")).toBe("2026年8月30日（当前）");
 	});
 
 	it("历史天不带标记", () => {
-		expect(formatPeriodLabel("day", -1, NOW_MS)).toBe("2026年8月29日");
+		expect(formatPeriodLabel("day", -1, NOW_MS, "zh")).toBe("2026年8月29日");
 	});
 
 	it("周标题带周数", () => {
 		// 2026-08-24 周一所在周，2026-01-01 是周四。
-		expect(formatPeriodLabel("week", 0, NOW_MS)).toBe("2026年第35周（当前）");
+		expect(formatPeriodLabel("week", 0, NOW_MS, "zh")).toBe("2026年第35周（当前）");
 	});
 
 	it("月标题", () => {
-		expect(formatPeriodLabel("month", 0, NOW_MS)).toBe("2026年8月（当前）");
-		expect(formatPeriodLabel("month", -1, NOW_MS)).toBe("2026年7月");
+		expect(formatPeriodLabel("month", 0, NOW_MS, "zh")).toBe("2026年8月（当前）");
+		expect(formatPeriodLabel("month", -1, NOW_MS, "zh")).toBe("2026年7月");
 	});
 
 	it("年标题", () => {
-		expect(formatPeriodLabel("year", 0, NOW_MS)).toBe("2026年（当前）");
-		expect(formatPeriodLabel("year", -1, NOW_MS)).toBe("2025年");
+		expect(formatPeriodLabel("year", 0, NOW_MS, "zh")).toBe("2026年（当前）");
+		expect(formatPeriodLabel("year", -1, NOW_MS, "zh")).toBe("2025年");
 	});
 });
 

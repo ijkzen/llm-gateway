@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type UsageWindow, useProviderUsage } from "@/hooks/use-provider-usage";
 import type { UsageEstimate } from "@/hooks/use-usage-estimate";
-import { cn, formatTokenCount } from "@/lib/utils";
+import { cn, formatTokenCount, localeOf } from "@/lib/utils";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -112,7 +112,7 @@ export function ProviderUsageCard({
 	/** 订阅周期 Token 预估（可预估时在右下角展示月 Token 总量）。 */
 	estimate?: UsageEstimate | undefined;
 }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const [refreshToken, setRefreshToken] = useState(0);
 	const { data, isLoading, isFetching, error } = useProviderUsage(providerId, refreshToken);
 
@@ -198,7 +198,7 @@ export function ProviderUsageCard({
 					<p className="text-right text-xs text-muted-foreground">
 						{t("providers.estimateMonthlyTokens")}
 						<span className="font-mono font-medium tabular-nums">
-							{formatTokenCount(monthlyTokens)}
+							{formatTokenCount(monthlyTokens, localeOf(i18n.language))}
 						</span>
 					</p>
 				)}

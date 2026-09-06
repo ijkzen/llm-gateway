@@ -3,13 +3,13 @@ import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { RaceSort, RaceSortKey } from "@/lib/race-types";
-import { formatPercent, formatTokenCount } from "@/lib/utils";
+import { type Locale, formatPercent, formatTokenCount, localeOf } from "@/lib/utils";
 
 /** 指标列定义：key / 标题键 / 格式化 / 默认方向（true=降序，耗时类默认升序）。 */
 export interface MetricColumn {
 	key: RaceSortKey;
 	labelKey: string;
-	format: (v: number) => string;
+	format: (v: number, locale: Locale) => string;
 	defaultDesc: boolean;
 }
 
@@ -18,7 +18,7 @@ export const RACE_COLUMNS: ReadonlyArray<MetricColumn> = [
 	{
 		key: "totalTokens",
 		labelKey: "race.metricLabel.totalTokens",
-		format: formatTokenCount,
+		format: (v, locale) => formatTokenCount(v, locale),
 		defaultDesc: true,
 	},
 	{
@@ -106,7 +106,8 @@ export function SortableMetricTable<T extends Record<RaceSortKey, number>>({
 	rowTitleKey,
 	rowClassName,
 }: SortableMetricTableProps<T>) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
+	const locale = localeOf(i18n.language);
 	const clickable = (item: T) => (isRowClickable ? isRowClickable(item) : Boolean(onRowClick));
 	return (
 		<div className="overflow-x-auto">
@@ -178,7 +179,7 @@ export function SortableMetricTable<T extends Record<RaceSortKey, number>>({
 										key={column.key}
 										className="px-2 py-2 text-right font-mono text-xs tabular-nums text-foreground"
 									>
-										{column.format(item[column.key])}
+										{column.format(item[column.key], locale)}
 									</td>
 								))}
 							</tr>

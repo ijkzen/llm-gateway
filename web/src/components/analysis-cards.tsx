@@ -4,7 +4,7 @@ import { SegmentedControl } from "@/components/segmented-control";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { DashboardCharts } from "@/hooks/use-dashboard-stats";
 import type { ChartGranularity } from "@/lib/race-period";
-import { formatTokenCount } from "@/lib/utils";
+import { formatTokenCount, localeOf } from "@/lib/utils";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -77,7 +77,7 @@ export function CallAnalysisCard({ charts, subtitle, granularity }: AnalysisCard
 
 /** Token 分析卡片：趋势 / 分布 / 排行三态切换。首页与供应商二级页共用。 */
 export function TokenAnalysisCard({ charts, subtitle, granularity }: AnalysisCardProps) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const [view, setView] = useState<TokenView>("trend");
 	const tokenViewOptions = TOKEN_VIEW_KEYS.map((option) => ({
 		value: option.value,
@@ -99,7 +99,7 @@ export function TokenAnalysisCard({ charts, subtitle, granularity }: AnalysisCar
 					<TrendLineChart
 						data={charts.tokenTrend}
 						label={t("overview.tokens")}
-						formatValue={formatTokenCount}
+						formatValue={(v) => formatTokenCount(v, localeOf(i18n.language))}
 						kind="tokens"
 						granularity={granularity}
 					/>
@@ -108,7 +108,7 @@ export function TokenAnalysisCard({ charts, subtitle, granularity }: AnalysisCar
 					(charts.tokenByModel.length > 0 ? (
 						<ModelPieChart
 							data={charts.tokenByModel}
-							formatValue={formatTokenCount}
+							formatValue={(v) => formatTokenCount(v, localeOf(i18n.language))}
 							kind="tokens"
 						/>
 					) : (
@@ -118,7 +118,7 @@ export function TokenAnalysisCard({ charts, subtitle, granularity }: AnalysisCar
 					(charts.tokenByModel.length > 0 ? (
 						<ModelRankBarChart
 							data={charts.tokenByModel}
-							formatValue={formatTokenCount}
+							formatValue={(v) => formatTokenCount(v, localeOf(i18n.language))}
 							kind="tokens"
 						/>
 					) : (
