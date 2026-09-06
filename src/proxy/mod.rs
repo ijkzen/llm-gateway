@@ -491,19 +491,27 @@ async fn build_upstream_call(
     forwarded: &[(HeaderName, HeaderValue)],
     request_id: &str,
     opencode_session: &str,
-) -> Result<(UpstreamCall, bool), String> {
-    let (body, json_mode_tool, sub_path) = match member.protocol {
+) -> Result<(UpstreamCall, convert::RequestFlags), String> {
+    let (body, flags, sub_path) = match member.protocol {
         Protocol::OpenAiCompat => {
             let body = openai::build_request_body(chat, &member.model_id);
-            (body, false, "chat/completions".to_string())
+            (
+                body,
+                crate::proxy::convert::RequestFlags::default(),
+                "chat/completions".to_string(),
+            )
         }
         Protocol::OpenAiResponses => {
             let body = responses::build_request_body(chat, &member.model_id)?;
-            (body, false, "responses".to_string())
+            (
+                body,
+                crate::proxy::convert::RequestFlags::default(),
+                "responses".to_string(),
+            )
         }
         Protocol::Anthropic => {
-            let (body, json_mode_tool) = anthropic::build_request_body(chat, &member.model_id)?;
-            (body, json_mode_tool, "messages".to_string())
+            let (body, anthropic_flags) = anthropic::build_request_body(chat, &member.model_id)?;
+            (body, anthropic_flags, "messages".to_string())
         }
         Protocol::Gemini => {
             let mut body = gemini::build_request_body(chat, &member.model_id)?;
@@ -516,7 +524,11 @@ async fn build_upstream_call(
             } else {
                 format!("models/{}", member.model_id)
             };
-            (body, false, format!("{model_path}:{action}"))
+            (
+                body,
+                crate::proxy::convert::RequestFlags::default(),
+                format!("{model_path}:{action}"),
+            )
         }
     };
 
@@ -554,8 +566,22 @@ async fn build_upstream_call(
             body: body_bytes,
             stream: client_stream || member.protocol == Protocol::OpenAiResponses,
         },
-        json_mode_tool,
+        flags,
     ))
+}
+
+/// 降级标记响应头：值固定为 history（工具轮历史缺签名块）。
+const THINKING_DROPPED_HEADER: &str = "x-llm-gateway-thinking-dropped";
+
+/// 按需给响应附加降级标记头。
+fn with_thinking_dropped_header(mut response: Response, dropped: bool) -> Response {
+    if dropped {
+        response.headers_mut().insert(
+            HeaderName::from_static(THINKING_DROPPED_HEADER),
+            HeaderValue::from_static("history"),
+        );
+    }
+    response
 }
 
 impl Member {
@@ -996,7 +1022,9 @@ pub async fn forward_chat(
         .unwrap_or(false);
     // exclude:true：模型照常思考，但网关剥除响应中的思考内容再交客户端
     //（OpenRouter reasoning.exclude 语义；OpenAI 直通为字节直通不生效）。
-    let reasoning_exclude = chat_reasoning(&client_body).is_some_and(|reasoning| reasoning.exclude);
+    let reasoning_exclude = chat_reasoning(&client_body)
+        .enabled()
+        .is_some_and(|reasoning| reasoning.exclude);
 
     if requested_model.is_empty() {
         return openai_error(
@@ -1166,7 +1194,7 @@ pub async fn forward_chat(
             }
         };
 
-        let (call, json_mode_tool) = match build_upstream_call(
+        let (call, flags) = match build_upstream_call(
             member,
             &client_body,
             client_stream,
@@ -1310,7 +1338,8 @@ pub async fn forward_chat(
                 reply,
                 client_stream,
                 include_usage,
-                json_mode_tool,
+                json_mode_tool: flags.json_mode_tool,
+                thinking_dropped: flags.thinking_dropped,
                 reasoning_exclude,
             },
         )
@@ -1362,6 +1391,7 @@ struct SuccessContext {
     client_stream: bool,
     include_usage: bool,
     json_mode_tool: bool,
+    thinking_dropped: bool,
     reasoning_exclude: bool,
 }
 
@@ -1479,7 +1509,7 @@ pub async fn forward_chat_direct(
         Err(e) => return fail(&format!("解密供应商密钥失败：{e}"), start_time),
     };
 
-    let (call, json_mode_tool) = match build_upstream_call(
+    let (call, flags) = match build_upstream_call(
         &member,
         &client_body,
         client_stream,
@@ -1520,7 +1550,8 @@ pub async fn forward_chat_direct(
             reply,
             client_stream,
             include_usage: false,
-            json_mode_tool,
+            json_mode_tool: flags.json_mode_tool,
+            thinking_dropped: flags.thinking_dropped,
             reasoning_exclude: false,
         },
     )
@@ -1540,6 +1571,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
         client_stream,
         include_usage,
         json_mode_tool,
+        thinking_dropped,
         reasoning_exclude,
     } = ctx;
 
@@ -1639,7 +1671,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 }
                 .insert(&db);
             });
-            sse_response(ReceiverStream::new(rx))
+            with_thinking_dropped_header(sse_response(ReceiverStream::new(rx)), thinking_dropped)
         }
         // Responses 出站：上游强制流式。
         (Protocol::OpenAiResponses, _) => {
@@ -1728,9 +1760,15 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                     }
                     let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n"))).await;
                 });
-                sse_response(ReceiverStream::new(rx))
+                with_thinking_dropped_header(
+                    sse_response(ReceiverStream::new(rx)),
+                    thinking_dropped,
+                )
             } else {
-                (StatusCode::OK, axum::Json(completion)).into_response()
+                with_thinking_dropped_header(
+                    (StatusCode::OK, axum::Json(completion)).into_response(),
+                    thinking_dropped,
+                )
             }
         }
         // Anthropic / Gemini：非流式直接转换；流式逐事件转换后转发。
@@ -1811,7 +1849,10 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                             api_key_name,
                         }
                         .insert(&state.db);
-                        (StatusCode::OK, axum::Json(completion)).into_response()
+                        with_thinking_dropped_header(
+                            (StatusCode::OK, axum::Json(completion)).into_response(),
+                            thinking_dropped,
+                        )
                     }
                     Err(message) => {
                         record_failure(
@@ -1949,7 +1990,7 @@ async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> Response {
                 }
                 .insert(&db);
             });
-            sse_response(ReceiverStream::new(rx))
+            with_thinking_dropped_header(sse_response(ReceiverStream::new(rx)), thinking_dropped)
         }
     }
 }
@@ -2095,7 +2136,7 @@ pub async fn test_model(
     });
     // test_model 无下游请求头（管理面手动触发）：透传子集为空。
     let request_id = format!("test-{}", Uuid::new_v4());
-    let (call, _json_mode_tool) = build_upstream_call(
+    let (call, _flags) = build_upstream_call(
         &member,
         &chat,
         false,
@@ -2347,7 +2388,7 @@ mod tests {
         chat: &Value,
         forwarded: &[(HeaderName, HeaderValue)],
         session: &str,
-    ) -> (UpstreamCall, bool) {
+    ) -> (UpstreamCall, convert::RequestFlags) {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

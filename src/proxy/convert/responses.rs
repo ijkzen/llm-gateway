@@ -9,9 +9,25 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{
-    chat_max_tokens, chat_messages, chat_reasoning, collect_tool_call_names, inline_defs,
-    message_text,
+    ChatReasoning, chat_max_tokens, chat_messages, chat_reasoning, collect_tool_call_names,
+    inline_defs, message_text,
 };
+
+/// OpenAI Responses 官方 effort 枚举（none/minimal/low/medium/high/xhigh）之外的
+/// 值（如 ZCode 风格的 max）原样透传会被上游 400：钳制到最近合法档。
+fn clamp_responses_effort(effort: &str) -> &str {
+    match effort {
+        "none" | "minimal" | "low" | "medium" | "high" | "xhigh" => effort,
+        "max" => "xhigh",
+        other => {
+            tracing::debug!(
+                effort = other,
+                "未知 reasoning effort，Responses 上游按 high 钳制"
+            );
+            "high"
+        }
+    }
+}
 use crate::proxy::metrics::Usage;
 
 /// 编码发往 Responses API 的请求体。
@@ -105,8 +121,16 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
     if let Some(top_k) = chat.get("top_k") {
         object.insert("top_k".to_string(), top_k.clone());
     }
-    if let Some(reasoning) = chat_reasoning(chat) {
-        object.insert("reasoning".to_string(), json!({"effort": reasoning.effort}));
+    match chat_reasoning(chat) {
+        ChatReasoning::Enabled(reasoning) => {
+            let effort = clamp_responses_effort(&reasoning.effort);
+            object.insert("reasoning".to_string(), json!({"effort": effort}));
+        }
+        // 明确关闭：Responses 缺省按默认档位思考，必须显式写 none 才关得掉。
+        ChatReasoning::Disabled => {
+            object.insert("reasoning".to_string(), json!({"effort": "none"}));
+        }
+        ChatReasoning::Unspecified => {}
     }
     if let Some(tools) = chat.get("tools").and_then(Value::as_array) {
         let converted: Vec<Value> = tools
@@ -653,11 +677,15 @@ impl ResponsesStreamConverter {
             .pointer("/input_tokens_details/cached_tokens")
             .and_then(Value::as_i64)
             .unwrap_or(0);
+        let reasoning = usage
+            .pointer("/output_tokens_details/reasoning_tokens")
+            .and_then(Value::as_i64);
         if input.is_some() || output.is_some() {
             Some(Usage {
                 input_tokens: input,
                 cache_tokens: cache.max(0),
                 output_tokens: output,
+                reasoning_tokens: reasoning,
             })
         } else {
             None
@@ -742,6 +770,41 @@ mod tests {
         assert!(body.get("stop").is_none());
         assert!(body.get("seed").is_none());
         assert!(body.get("frequency_penalty").is_none());
+    }
+
+    #[test]
+    fn reasoning_effort_clamped_to_responses_enum() {
+        // max 不是 OpenAI Responses 合法枚举，钳到 xhigh；合法档原样透传。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"max"}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert_eq!(body["reasoning"]["effort"], "xhigh");
+
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"high"}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert_eq!(body["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn disabled_reasoning_writes_effort_none() {
+        // 明确关闭：Responses 缺省按默认档位思考，必须显式写 none。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"none"}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert_eq!(body["reasoning"]["effort"], "none");
+
+        // 未指定：不写 reasoning 字段（行为与旧版一致）。
+        let chat = from_str::<Value>(r#"{"model":"m","messages":[{"role":"user","content":"x"}]}"#)
+            .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert!(body.get("reasoning").is_none());
     }
 
     #[test]

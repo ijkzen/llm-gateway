@@ -738,6 +738,78 @@ async fn anthropic_round_trips_thinking_signature_details() {
 }
 
 #[tokio::test]
+async fn anthropic_thinking_dropped_sets_response_header() {
+    // 工单 08：客户端不回传签名块（ZCode 类客户端）时 thinking 被丢弃，
+    // 响应头 x-llm-gateway-thinking-dropped: history 透出降级信号。
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, _) = common_setup_with_member(&base, 2, 0, 0).await;
+
+    let body = json!({
+        "model": "vm-x",
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "f", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "ok"}
+        ],
+        "reasoning_effort": "high",
+        "max_tokens": 4096,
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("content-type", "application/json")
+        .header("authorization", TEST_BEARER)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert_eq!(
+        response
+            .headers()
+            .get("x-llm-gateway-thinking-dropped")
+            .and_then(|v| v.to_str().ok()),
+        Some("history")
+    );
+    let upstream_bodies = captured.lock().unwrap();
+    assert!(upstream_bodies[0].get("thinking").is_none());
+}
+
+#[tokio::test]
+async fn anthropic_accepts_thinking_toggle_form() {
+    // 工单 04：thinking:{type:"enabled"}（ZCode 对未知模型的默认形态）
+    // 在 Anthropic 方向归一为 thinking 预算，且正常开启时不带降级标记头。
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (app, _) = common_setup_with_member(&base, 2, 0, 0).await;
+
+    let body = json!({
+        "model": "vm-x",
+        "messages": [{"role": "user", "content": "hi"}],
+        "thinking": {"type": "enabled"},
+        "max_tokens": 4096,
+    });
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("content-type", "application/json")
+        .header("authorization", TEST_BEARER)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert!(
+        response
+            .headers()
+            .get("x-llm-gateway-thinking-dropped")
+            .is_none()
+    );
+    let upstream_bodies = captured.lock().unwrap();
+    assert_eq!(upstream_bodies[0]["thinking"]["type"], "enabled");
+    assert_eq!(upstream_bodies[0]["thinking"]["budget_tokens"], 2048);
+}
+
+#[tokio::test]
 async fn responses_round_trips_encrypted_reasoning_details() {
     let captured = capture();
     let base = spawn_mock(captured.clone()).await;

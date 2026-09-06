@@ -198,6 +198,8 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
             "assistant" => {
                 let mut parts = Vec::new();
                 let mut function_call_positions: Vec<usize> = Vec::new();
+                // extra_content 载体契约见 extra_content_with_signature。
+                let mut extra_content_signatures: Vec<Option<String>> = Vec::new();
                 let text = message_text(content);
                 if !text.is_empty() {
                     parts.push(json!({"text": text}));
@@ -218,6 +220,12 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
                             .ok()
                             .filter(Value::is_object)
                             .unwrap_or_else(|| json!({}));
+                        extra_content_signatures.push(
+                            call.pointer("/extra_content/google/thought_signature")
+                                .and_then(Value::as_str)
+                                .filter(|signature| !signature.is_empty())
+                                .map(str::to_string),
+                        );
                         function_call_positions.push(parts.len());
                         parts.push(json!({
                             "functionCall": {
@@ -229,6 +237,15 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
                 }
                 // 回传的 thoughtSignature 按 tool_calls 下标挂回对应 functionCall
                 // part（Gemini 3 工具轮强制校验签名，缺失直接 400）。
+                // extra_content 来源优先（与 tool_call 一一对应），reasoning_details
+                // 的 index 下标来源补缺。
+                for (index, signature) in extra_content_signatures.iter().enumerate() {
+                    if let Some(signature) = signature
+                        && let Some(&position) = function_call_positions.get(index)
+                    {
+                        parts[position]["thoughtSignature"] = json!(signature);
+                    }
+                }
                 for detail in super::valid_reasoning_details(message) {
                     if detail.get("format").and_then(Value::as_str)
                         != Some(super::REASONING_FORMAT_GEMINI)
@@ -243,6 +260,12 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
                         continue;
                     }
                     let index = detail.get("index").and_then(Value::as_i64).unwrap_or(-1);
+                    if extra_content_signatures
+                        .get(index.max(0) as usize)
+                        .is_some_and(Option::is_some)
+                    {
+                        continue;
+                    }
                     if let Some(&position) = function_call_positions.get(index.max(0) as usize) {
                         parts[position]["thoughtSignature"] = json!(signature);
                     }
@@ -314,16 +337,24 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
     if let Some(seed) = chat.get("seed").and_then(Value::as_i64) {
         generation_config.insert("seed".to_string(), json!(seed));
     }
-    if let Some(reasoning) = chat_reasoning(chat) {
-        // includeThoughts=true：不开启时上游只思考不返回思考摘要，客户端收不到。
-        // reasoning.max_tokens 直传 thinkingBudget（OpenRouter Gemini 语义），否则按 effort 档位。
-        let budget = reasoning
-            .max_tokens
-            .unwrap_or_else(|| reasoning_budget(&reasoning.effort));
-        generation_config.insert(
-            "thinkingConfig".to_string(),
-            json!({"thinkingBudget": budget, "includeThoughts": true}),
-        );
+    match chat_reasoning(chat) {
+        super::ChatReasoning::Enabled(reasoning) => {
+            // includeThoughts=true：不开启时上游只思考不返回思考摘要，客户端收不到。
+            // reasoning.max_tokens 直传 thinkingBudget（OpenRouter Gemini 语义），否则按 effort 档位。
+            let budget = reasoning
+                .max_tokens
+                .unwrap_or_else(|| reasoning_budget(&reasoning.effort));
+            generation_config.insert(
+                "thinkingConfig".to_string(),
+                json!({"thinkingBudget": budget, "includeThoughts": true}),
+            );
+        }
+        // 明确关闭：Gemini 缺省动态思考仍开启，thinkingBudget=0 才是关闭语义
+        // （不支持关闭的模型由上游自行钳到最小预算）。
+        super::ChatReasoning::Disabled => {
+            generation_config.insert("thinkingConfig".to_string(), json!({"thinkingBudget": 0}));
+        }
+        super::ChatReasoning::Unspecified => {}
     }
     if let Some(presence) = chat.get("presence_penalty").and_then(Value::as_f64) {
         generation_config.insert("presencePenalty".to_string(), json!(presence));
@@ -612,7 +643,15 @@ pub fn extract_usage(usage: &Value) -> Usage {
             .unwrap_or(0)
             .max(0),
         output_tokens: output,
+        reasoning_tokens: (thoughts > 0).then_some(thoughts),
     }
+}
+
+/// AI SDK 客户端（ZCode）的 thoughtSignature 载体：tool_calls[i].extra_content
+/// .google.thought_signature。响应方向双写该字段（reasoning_details 保留给
+/// OpenRouter 风格客户端），请求方向按 tool_calls 下标读回。
+fn extra_content_with_signature(signature: &str) -> Value {
+    json!({"google": {"thought_signature": signature}})
 }
 
 /// parts → (正文, 思考文本, tool_calls, 各 tool_call 对应的 thoughtSignature)。
@@ -625,19 +664,23 @@ fn parts_to_message(parts: &[Value]) -> (String, String, Vec<Value>, Vec<Option<
         if part.get("functionCall").is_some() {
             let call = part.get("functionCall").cloned().unwrap_or(json!({}));
             let name = call.get("name").and_then(Value::as_str).unwrap_or("");
-            signatures.push(
-                part.get("thoughtSignature")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            );
-            tool_calls.push(json!({
+            let signature = part
+                .get("thoughtSignature")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            signatures.push(signature.clone());
+            let mut tool_call = json!({
                 "id": format!("call_{}", Uuid::new_v4()),
                 "type": "function",
                 "function": {
                     "name": name,
                     "arguments": call.get("args").map(|args| args.to_string()).unwrap_or_else(|| "{}".to_string()),
                 },
-            }));
+            });
+            if let Some(signature) = signature {
+                tool_call["extra_content"] = extra_content_with_signature(&signature);
+            }
+            tool_calls.push(tool_call);
             continue;
         }
         let content_text = part.get("text").and_then(Value::as_str).unwrap_or("");
@@ -846,6 +889,9 @@ impl GeminiStreamConverter {
                 self.tool_counter += 1;
                 let mut call = call;
                 call["index"] = json!(index);
+                if let Some(signature) = &signature {
+                    call["extra_content"] = extra_content_with_signature(signature);
+                }
                 out.push(super::chunk_json(
                     &self.id,
                     &self.requested_model,
@@ -1121,12 +1167,38 @@ mod tests {
             true
         );
 
+        // 明确关闭：Gemini 缺省动态思考仍开启，必须显式 thinkingBudget=0。
         let chat = from_str::<Value>(
             r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"none"}"#,
         )
         .unwrap();
         let body = build_request_body(&chat, "gemini-x").unwrap();
-        assert!(body["generationConfig"].get("thinkingConfig").is_none());
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({"thinkingBudget": 0})
+        );
+
+        // 开关形态（ZCode deepseek 家族 off 档）同样归一为关闭。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"thinking":{"type":"disabled"}}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({"thinkingBudget": 0})
+        );
+
+        // 开关开启档：medium 兜底预算。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"enable_thinking":true}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"],
+            json!({"thinkingBudget": 2048, "includeThoughts": true})
+        );
     }
 
     #[test]
@@ -1271,6 +1343,87 @@ mod tests {
         assert_eq!(function_calls.len(), 2);
         assert!(function_calls[0].get("thoughtSignature").is_none());
         assert_eq!(function_calls[1]["thoughtSignature"], "sig-2");
+    }
+
+    #[test]
+    fn extra_content_signatures_are_injected_by_tool_call_index() {
+        // AI SDK 客户端（ZCode）回传的签名载体：tool_calls[i].extra_content。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"},"extra_content":{"google":{"thought_signature":"sig-a"}}},{"id":"call_2","type":"function","function":{"name":"g","arguments":"{}"}}]}]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        let parts = &body["contents"][1]["parts"];
+        let calls: Vec<&Value> = parts
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|part| part.get("functionCall").is_some())
+            .collect();
+        assert_eq!(calls[0]["thoughtSignature"], "sig-a");
+        assert!(calls[1].get("thoughtSignature").is_none());
+    }
+
+    #[test]
+    fn extra_content_wins_over_reasoning_details() {
+        // 双来源同下标时 extra_content 优先，reasoning_details 补缺。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"},"extra_content":{"google":{"thought_signature":"sig-extra"}}}],"reasoning_details":[{"type":"reasoning.encrypted","data":"sig-detail","id":null,"format":"google-gemini-v1","index":0}]}]}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        let parts = &body["contents"][1]["parts"];
+        let call = parts
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|part| part.get("functionCall").is_some())
+            .unwrap();
+        assert_eq!(call["thoughtSignature"], "sig-extra");
+    }
+
+    #[test]
+    fn non_stream_tool_calls_dual_write_signature() {
+        let upstream = from_str::<Value>(
+            r#"{
+                "candidates": [{
+                    "content": {"parts": [
+                        {"functionCall": {"name": "f", "args": {}}, "thoughtSignature": "sig-a"}
+                    ]}
+                }],
+                "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}
+            }"#,
+        )
+        .unwrap();
+        let (completion, _) = convert_response(&upstream, "req-1", "vm-a").unwrap();
+        let call = &completion["choices"][0]["message"]["tool_calls"][0];
+        assert_eq!(
+            call["extra_content"]["google"]["thought_signature"],
+            "sig-a"
+        );
+        // reasoning_details 保留（OpenRouter 风格客户端不受影响）。
+        assert_eq!(
+            completion["choices"][0]["message"]["reasoning_details"][0]["data"],
+            "sig-a"
+        );
+    }
+
+    #[test]
+    fn stream_tool_calls_dual_write_signature() {
+        let mut converter = GeminiStreamConverter::new("req-1", "vm-a");
+        let chunks = converter
+            .convert_event(
+                r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"f","args":{}},"thoughtSignature":"sig-1"}]}}]}"#,
+            )
+            .unwrap();
+        let call = chunks
+            .iter()
+            .find_map(|chunk| chunk.pointer("/choices/0/delta/tool_calls/0"))
+            .unwrap();
+        assert_eq!(
+            call["extra_content"]["google"]["thought_signature"],
+            "sig-1"
+        );
     }
 
     #[test]

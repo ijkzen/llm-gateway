@@ -112,6 +112,16 @@ pub fn reasoning_budget(effort: &str) -> i64 {
     }
 }
 
+/// 请求构造的附加标记（目前仅 Anthropic 转换产生非默认值，其余协议 Default）。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RequestFlags {
+    /// 是否注入了 JSON 模式合成工具。
+    pub json_mode_tool: bool,
+    /// 思考参数因工具轮历史缺签名块而被丢弃（客户端推理质量静默降级，
+    /// 供管线向客户端透出可观测信号）。
+    pub thinking_dropped: bool,
+}
+
 /// 归一后的请求侧思考参数（OpenRouter `reasoning` 对象语义）。
 #[derive(Debug, PartialEq)]
 pub struct ReasoningRequest {
@@ -120,11 +130,36 @@ pub struct ReasoningRequest {
     pub exclude: bool,
 }
 
-/// 归一请求侧思考参数：OpenRouter 主形态 `reasoning` 对象
-/// （effort/max_tokens/exclude/enabled）与顶层 `reasoning_effort` 简写，
-/// 两者同传且 effort 不一致时取对象值。`enabled:false` 或 effort "none"
-/// 关闭思考；空对象等价 legacy `include_reasoning:true`（medium 兜底）。
-pub fn chat_reasoning(chat: &Value) -> Option<ReasoningRequest> {
+/// 归一后的请求侧思考状态。「未指定」与「明确关闭」必须区分：Gemini 缺省
+/// 动态思考仍开启（照计费不回显）、Responses 缺省按默认档位思考，把关闭
+/// 归一成未指定会导致客户端关不掉思考。
+#[derive(Debug, PartialEq)]
+pub enum ChatReasoning {
+    Unspecified,
+    Disabled,
+    Enabled(ReasoningRequest),
+}
+
+impl ChatReasoning {
+    /// 开启档位的参数引用；未指定/关闭返回 None。
+    pub fn enabled(&self) -> Option<&ReasoningRequest> {
+        match self {
+            ChatReasoning::Enabled(request) => Some(request),
+            _ => None,
+        }
+    }
+}
+
+/// 归一请求侧思考参数。识别的形态（优先级从高到低）：
+/// 1. OpenRouter 主形态 `reasoning` 对象（effort/max_tokens/exclude/enabled）；
+/// 2. 顶层 `reasoning_effort` 简写（与对象同传且不一致时取对象值）；
+/// 3. `thinking: {"type": "enabled"/"disabled"}`（DeepSeek/智谱风格开关，
+///    enabled 无档位概念，按 medium 兜底）；
+/// 4. `enable_thinking: true/false`（阿里百炼风格开关）。
+///
+/// `enabled:false`、effort "none"、开关关闭均归一为 `Disabled`；空 reasoning
+/// 对象等价 legacy `include_reasoning:true`（medium 兜底）；都没有是 `Unspecified`。
+pub fn chat_reasoning(chat: &Value) -> ChatReasoning {
     let empty = Map::new();
     let has_object = chat.get("reasoning").is_some_and(Value::is_object);
     let object = chat
@@ -135,54 +170,77 @@ pub fn chat_reasoning(chat: &Value) -> Option<ReasoningRequest> {
         .get("reasoning_effort")
         .and_then(Value::as_str)
         .filter(|effort| !effort.is_empty());
-    if !has_object && shorthand.is_none() {
-        return None;
-    }
-    if object.get("enabled").and_then(Value::as_bool) == Some(false) {
-        return None;
-    }
-    let max_tokens = object.get("max_tokens").and_then(Value::as_i64);
-    let exclude = object
-        .get("exclude")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let object_effort = object
-        .get("effort")
-        .and_then(Value::as_str)
-        .filter(|effort| !effort.is_empty());
-    if let Some(object_effort) = object_effort {
-        if let Some(shorthand) = shorthand
-            && shorthand != object_effort
-        {
-            tracing::debug!(
-                object_effort,
-                shorthand,
-                "reasoning.effort 与 reasoning_effort 不一致，取 reasoning.effort"
-            );
+    if has_object || shorthand.is_some() {
+        if object.get("enabled").and_then(Value::as_bool) == Some(false) {
+            return ChatReasoning::Disabled;
         }
-        if object_effort == "none" {
-            return None;
+        let max_tokens = object.get("max_tokens").and_then(Value::as_i64);
+        let exclude = object
+            .get("exclude")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let object_effort = object
+            .get("effort")
+            .and_then(Value::as_str)
+            .filter(|effort| !effort.is_empty());
+        if let Some(object_effort) = object_effort {
+            if let Some(shorthand) = shorthand
+                && shorthand != object_effort
+            {
+                tracing::debug!(
+                    object_effort,
+                    shorthand,
+                    "reasoning.effort 与 reasoning_effort 不一致，取 reasoning.effort"
+                );
+            }
+            if object_effort == "none" {
+                return ChatReasoning::Disabled;
+            }
+            return ChatReasoning::Enabled(ReasoningRequest {
+                effort: object_effort.to_string(),
+                max_tokens,
+                exclude,
+            });
         }
-        return Some(ReasoningRequest {
-            effort: object_effort.to_string(),
-            max_tokens,
-            exclude,
-        });
+        return match shorthand {
+            Some("none") => ChatReasoning::Disabled,
+            Some(effort) => ChatReasoning::Enabled(ReasoningRequest {
+                effort: effort.to_string(),
+                max_tokens,
+                exclude,
+            }),
+            // OpenRouter 语义：空对象等价 legacy include_reasoning:true。
+            None => ChatReasoning::Enabled(ReasoningRequest {
+                effort: "medium".to_string(),
+                max_tokens,
+                exclude,
+            }),
+        };
     }
-    match shorthand {
-        Some("none") => None,
-        Some(effort) => Some(ReasoningRequest {
-            effort: effort.to_string(),
-            max_tokens,
-            exclude,
-        }),
-        None if chat.get("reasoning").is_some_and(Value::is_object) => Some(ReasoningRequest {
-            effort: "medium".to_string(),
-            max_tokens,
-            exclude,
-        }),
-        None => None,
+    // 开关型形态（无档位概念，开启按 medium 兜底）。
+    if let Some(thinking_type) = chat.pointer("/thinking/type").and_then(Value::as_str) {
+        return match thinking_type {
+            "enabled" => ChatReasoning::Enabled(ReasoningRequest {
+                effort: "medium".to_string(),
+                max_tokens: None,
+                exclude: false,
+            }),
+            "disabled" => ChatReasoning::Disabled,
+            _ => ChatReasoning::Unspecified,
+        };
     }
+    if let Some(enable) = chat.get("enable_thinking").and_then(Value::as_bool) {
+        return if enable {
+            ChatReasoning::Enabled(ReasoningRequest {
+                effort: "medium".to_string(),
+                max_tokens: None,
+                exclude: false,
+            })
+        } else {
+            ChatReasoning::Disabled
+        };
+    }
+    ChatReasoning::Unspecified
 }
 
 /// 拼接上游 URL：沿用 `build_models_url` 的版本段规则
@@ -248,6 +306,13 @@ pub fn cached_client_usage_json(usage: &crate::proxy::metrics::Usage) -> Value {
     if usage.cache_tokens > 0 {
         client_usage["prompt_tokens_details"] = json!({
             "cached_tokens": usage.cache_tokens,
+        });
+    }
+    if let Some(reasoning) = usage.reasoning_tokens
+        && reasoning > 0
+    {
+        client_usage["completion_tokens_details"] = json!({
+            "reasoning_tokens": reasoning,
         });
     }
     client_usage
@@ -492,7 +557,8 @@ mod tests {
 
     #[test]
     fn chat_reasoning_parses_object_effort() {
-        let reasoning = chat_reasoning(&json!({"reasoning": {"effort": "high"}})).unwrap();
+        let reasoning = chat_reasoning(&json!({"reasoning": {"effort": "high"}}));
+        let reasoning = reasoning.enabled().expect("should be enabled");
         assert_eq!(reasoning.effort, "high");
         assert_eq!(reasoning.max_tokens, None);
         assert!(!reasoning.exclude);
@@ -502,37 +568,50 @@ mod tests {
     fn chat_reasoning_falls_back_to_shorthand() {
         assert_eq!(
             chat_reasoning(&json!({"reasoning_effort": "low"}))
-                .unwrap()
+                .enabled()
+                .expect("should be enabled")
                 .effort,
             "low"
         );
-        assert!(chat_reasoning(&json!({})).is_none());
+        assert_eq!(chat_reasoning(&json!({})), ChatReasoning::Unspecified);
     }
 
     #[test]
     fn chat_reasoning_object_wins_over_conflicting_shorthand() {
         let chat = json!({"reasoning": {"effort": "high"}, "reasoning_effort": "low"});
-        assert_eq!(chat_reasoning(&chat).unwrap().effort, "high");
+        assert_eq!(chat_reasoning(&chat).enabled().unwrap().effort, "high");
     }
 
     #[test]
     fn chat_reasoning_none_and_enabled_false_disable() {
-        assert!(chat_reasoning(&json!({"reasoning": {"effort": "none"}})).is_none());
-        assert!(
-            chat_reasoning(&json!({"reasoning": {"enabled": false, "effort": "high"}})).is_none()
+        // 明确关闭是独立状态，不等于「未指定」（Gemini/Responses 下游行为不同）。
+        assert_eq!(
+            chat_reasoning(&json!({"reasoning": {"effort": "none"}})),
+            ChatReasoning::Disabled
         );
-        assert!(chat_reasoning(&json!({"reasoning_effort": "none"})).is_none());
+        assert_eq!(
+            chat_reasoning(&json!({"reasoning": {"enabled": false, "effort": "high"}})),
+            ChatReasoning::Disabled
+        );
+        assert_eq!(
+            chat_reasoning(&json!({"reasoning_effort": "none"})),
+            ChatReasoning::Disabled
+        );
     }
 
     #[test]
     fn chat_reasoning_empty_object_defaults_to_medium() {
         // OpenRouter 语义：reasoning:{} 等价 legacy include_reasoning:true。
         assert_eq!(
-            chat_reasoning(&json!({"reasoning": {}})).unwrap().effort,
+            chat_reasoning(&json!({"reasoning": {}}))
+                .enabled()
+                .unwrap()
+                .effort,
             "medium"
         );
         assert_eq!(
             chat_reasoning(&json!({"reasoning": {"enabled": true}}))
+                .enabled()
                 .unwrap()
                 .effort,
             "medium"
@@ -542,11 +621,50 @@ mod tests {
     #[test]
     fn chat_reasoning_carries_max_tokens_and_exclude() {
         let reasoning =
-            chat_reasoning(&json!({"reasoning": {"max_tokens": 2000, "exclude": true}})).unwrap();
+            chat_reasoning(&json!({"reasoning": {"max_tokens": 2000, "exclude": true}}));
+        let reasoning = reasoning.enabled().expect("should be enabled");
         assert_eq!(reasoning.max_tokens, Some(2000));
         assert!(reasoning.exclude);
         // 无 effort 但有 max_tokens：仍视为开启，effort 以 medium 兜底。
         assert_eq!(reasoning.effort, "medium");
+    }
+
+    #[test]
+    fn chat_reasoning_thinking_toggle_form() {
+        // DeepSeek/智谱风格开关：无档位概念，开启按 medium 兜底。
+        assert_eq!(
+            chat_reasoning(&json!({"thinking": {"type": "enabled"}}))
+                .enabled()
+                .unwrap()
+                .effort,
+            "medium"
+        );
+        assert_eq!(
+            chat_reasoning(&json!({"thinking": {"type": "disabled"}})),
+            ChatReasoning::Disabled
+        );
+        // 显式 reasoning_effort 优先于开关（ZCode deepseek 家族两字段同发）。
+        let chat = json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high"});
+        assert_eq!(chat_reasoning(&chat).enabled().unwrap().effort, "high");
+        // 反向冲突：effort 显式关闭同样优先于开关开启。
+        let chat = json!({"thinking": {"type": "enabled"}, "reasoning_effort": "none"});
+        assert_eq!(chat_reasoning(&chat), ChatReasoning::Disabled);
+    }
+
+    #[test]
+    fn chat_reasoning_enable_thinking_form() {
+        // 阿里百炼风格开关。
+        assert_eq!(
+            chat_reasoning(&json!({"enable_thinking": true}))
+                .enabled()
+                .unwrap()
+                .effort,
+            "medium"
+        );
+        assert_eq!(
+            chat_reasoning(&json!({"enable_thinking": false})),
+            ChatReasoning::Disabled
+        );
     }
 
     #[test]
@@ -573,6 +691,7 @@ mod tests {
             input_tokens: Some(12),
             cache_tokens: 5,
             output_tokens: Some(6),
+            reasoning_tokens: None,
         };
 
         assert_eq!(
@@ -587,11 +706,40 @@ mod tests {
     }
 
     #[test]
+    fn client_usage_includes_reasoning_tokens_when_present() {
+        let usage = crate::proxy::metrics::Usage {
+            input_tokens: Some(12),
+            cache_tokens: 0,
+            output_tokens: Some(20),
+            reasoning_tokens: Some(8),
+        };
+        assert_eq!(
+            cached_client_usage_json(&usage)["completion_tokens_details"]["reasoning_tokens"],
+            8
+        );
+        // 总量口径不变：completion_tokens 仍含推理 token。
+        assert_eq!(cached_client_usage_json(&usage)["completion_tokens"], 20);
+
+        let usage = crate::proxy::metrics::Usage {
+            input_tokens: Some(12),
+            cache_tokens: 0,
+            output_tokens: Some(20),
+            reasoning_tokens: None,
+        };
+        assert!(
+            cached_client_usage_json(&usage)
+                .get("completion_tokens_details")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn cached_client_usage_omits_cached_tokens_when_absent() {
         let usage = crate::proxy::metrics::Usage {
             input_tokens: Some(12),
             cache_tokens: 0,
             output_tokens: Some(6),
+            reasoning_tokens: None,
         };
 
         assert!(
