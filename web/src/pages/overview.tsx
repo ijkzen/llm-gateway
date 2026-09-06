@@ -6,26 +6,28 @@ import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { ProviderModelRaceCard } from "@/components/provider-model-race/ProviderModelRaceCard";
 import { ProviderRaceCard } from "@/components/provider-race/ProviderRaceCard";
-import {
-	RaceWindowControl,
-	type RaceWindowState,
-	raceWindowBounds,
-} from "@/components/race-window-control";
+import type { RaceWindowState } from "@/components/race-window-control";
 import { StatsCard } from "@/components/stats-card";
 import { StatsCardsSkeleton } from "@/components/stats-cards-skeleton";
+import {
+	StatsSection,
+	sectionGranularity,
+	sectionWindow,
+	useSectionSubtitle,
+	useSectionWindows,
+} from "@/components/stats-section";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualModelRaceCard } from "@/components/virtual-model-race/VirtualModelRaceCard";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts, useDashboardSummary } from "@/hooks/use-dashboard-stats";
 import { OVERVIEW_PAGE } from "@/lib/pages";
-import { chartGranularity, formatPeriodLabel, periodBounds } from "@/lib/race-period";
-import { formatPercent, formatTokenCount } from "@/lib/utils";
+import { clientTzOffsetMinutes, periodBounds } from "@/lib/race-period";
+import { formatPercent, formatTokenCount, localeOf } from "@/lib/utils";
 import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-react";
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
-/** 首页调用/Token/可靠性分析共享的初始时间段（默认当天）。 */
+/** 首页调用/Token/可靠性分析共享的初始时间段（默认当天，本地 0 点起）。 */
 function defaultChartsWindow(): RaceWindowState {
 	const now = Date.now();
 	const start = new Date(now);
@@ -39,22 +41,13 @@ function defaultChartsWindow(): RaceWindowState {
 	};
 }
 
-/** 首页三块分析图的独立时间段。 */
-interface OverviewWindows {
-	call: RaceWindowState;
-	token: RaceWindowState;
-	insight: RaceWindowState;
-}
-
-function initialWindows(): OverviewWindows {
-	const initial = defaultChartsWindow();
-	return { call: { ...initial }, token: { ...initial }, insight: { ...initial } };
-}
+const SECTION_KEYS = ["call", "token", "insight"] as const;
 
 export default function OverviewPage() {
-	const { t } = useTranslation();
-	const [now] = useState(() => Date.now());
+	const { t, i18n } = useTranslation();
 	// 今日窗口：本地今日 0 点 → 当前时刻（与图表区「天」周期同一语义）。
+	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS, defaultChartsWindow);
+	const subtitle = useSectionSubtitle();
 	const todayWindow = periodBounds("day", 0, now);
 	const summaryQuery = useDashboardSummary();
 	const todaySummaryQuery = useDashboardSummary({
@@ -62,26 +55,13 @@ export default function OverviewPage() {
 		endTime: todayWindow.endTime,
 	});
 	// 调用/Token/可靠性分析各自独立时间段（默认「今天」）。
-	const [windows, setWindows] = useState<OverviewWindows>(initialWindows);
-	const callWindow = raceWindowBounds(windows.call, now);
-	const tokenWindow = raceWindowBounds(windows.token, now);
-	const insightWindow = raceWindowBounds(windows.insight, now);
-	const callGranularity = chartGranularity(
-		windows.call.period,
-		callWindow.startTime,
-		callWindow.endTime,
-	);
-	const tokenGranularity = chartGranularity(
-		windows.token.period,
-		tokenWindow.startTime,
-		tokenWindow.endTime,
-	);
-	const insightGranularity = chartGranularity(
-		windows.insight.period,
-		insightWindow.startTime,
-		insightWindow.endTime,
-	);
-	const tzOffsetMinutes = -new Date().getTimezoneOffset();
+	const callWindow = sectionWindow(windows.call, now);
+	const tokenWindow = sectionWindow(windows.token, now);
+	const insightWindow = sectionWindow(windows.insight, now);
+	const callGranularity = sectionGranularity(windows.call, callWindow);
+	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
+	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
+	const tzOffsetMinutes = clientTzOffsetMinutes();
 	const callChartsQuery = useDashboardCharts({
 		startTime: callWindow.startTime,
 		endTime: callWindow.endTime,
@@ -158,12 +138,6 @@ export default function OverviewPage() {
 
 	const summary = summaryQuery.data;
 	const todaySummary = todaySummaryQuery.data;
-	const windowSubtitle = (windowState: RaceWindowState) =>
-		windowState.period === "custom"
-			? t("overview.customWindow")
-			: formatPeriodLabel(windowState.period, windowState.offset, now);
-	const setWindow = (key: keyof OverviewWindows) => (patch: Partial<RaceWindowState>) =>
-		setWindows((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
 
 	return (
 		<div className="space-y-6">
@@ -185,7 +159,7 @@ export default function OverviewPage() {
 				<StatsCard
 					icon={Coins}
 					label={t("overview.totalTokens")}
-					value={formatTokenCount(summary.totalTokens)}
+					value={formatTokenCount(summary.totalTokens, localeOf(i18n.language))}
 					subLabel={t("overview.inputPlusOutput")}
 				/>
 				<StatsCard
@@ -212,7 +186,7 @@ export default function OverviewPage() {
 				<StatsCard
 					icon={Coins}
 					label={t("overview.totalTokens")}
-					value={formatTokenCount(todaySummary.totalTokens)}
+					value={formatTokenCount(todaySummary.totalTokens, localeOf(i18n.language))}
 					subLabel={t("overview.today")}
 				/>
 				<StatsCard
@@ -223,53 +197,47 @@ export default function OverviewPage() {
 				/>
 			</div>
 
-			{/* 调用分析：独立时间段（CallAnalysisCard 自带卡片壳） */}
-			<div className="space-y-2">
-				<div
-					className="flex flex-wrap items-center justify-between gap-2"
-					data-testid="call-window"
-				>
-					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.call)}</p>
-					<RaceWindowControl state={windows.call} now={now} onChange={setWindow("call")} />
-				</div>
+			{/* 调用分析：独立时间段（CallAnalysisCard 自带卡片壳；页面级统一门控） */}
+			<StatsSection
+				now={now}
+				windowState={windows.call}
+				onWindowChange={setWindow("call")}
+				windowTestId="call-window"
+			>
 				<CallAnalysisCard
 					charts={callChartsQuery.data}
-					subtitle={windowSubtitle(windows.call)}
+					subtitle={subtitle(windows.call, now)}
 					granularity={callGranularity}
 				/>
-			</div>
+			</StatsSection>
 
-			{/* Token 分析：独立时间段（TokenAnalysisCard 自带卡片壳） */}
-			<div className="space-y-2">
-				<div
-					className="flex flex-wrap items-center justify-between gap-2"
-					data-testid="token-window"
-				>
-					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.token)}</p>
-					<RaceWindowControl state={windows.token} now={now} onChange={setWindow("token")} />
-				</div>
+			{/* Token 分析：独立时间段（TokenAnalysisCard 自带卡片壳；页面级统一门控） */}
+			<StatsSection
+				now={now}
+				windowState={windows.token}
+				onWindowChange={setWindow("token")}
+				windowTestId="token-window"
+			>
 				<TokenAnalysisCard
 					charts={tokenChartsQuery.data}
-					subtitle={windowSubtitle(windows.token)}
+					subtitle={subtitle(windows.token, now)}
 					granularity={tokenGranularity}
 				/>
-			</div>
+			</StatsSection>
 
-			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳） */}
-			<div className="space-y-2">
-				<div
-					className="flex flex-wrap items-center justify-between gap-2"
-					data-testid="insight-window"
-				>
-					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.insight)}</p>
-					<RaceWindowControl state={windows.insight} now={now} onChange={setWindow("insight")} />
-				</div>
+			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳；页面级统一门控） */}
+			<StatsSection
+				now={now}
+				windowState={windows.insight}
+				onWindowChange={setWindow("insight")}
+				windowTestId="insight-window"
+			>
 				<InsightAnalysisCard
 					data={insightQuery.data}
-					subtitle={windowSubtitle(windows.insight)}
+					subtitle={subtitle(windows.insight, now)}
 					granularity={insightGranularity}
 				/>
-			</div>
+			</StatsSection>
 			<ApiKeyRaceCard />
 			<ProviderRaceCard />
 			<VirtualModelRaceCard />

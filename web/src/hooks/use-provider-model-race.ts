@@ -1,6 +1,4 @@
-import { type ApiResponse, api, unwrap } from "@/lib/api";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-
+import { statsKey, statsQuery } from "@/hooks/stats-query";
 import type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
 
 export type { RaceSort, RaceSortKey, RaceWindow };
@@ -34,16 +32,14 @@ export interface ProviderModelRankResponse {
 
 export const providerModelRaceKeys = {
 	rank: (window: RaceWindow, sort: RaceSort, providerId?: number, apiKey?: string) =>
-		[
-			"stats",
-			"provider-model-rank",
+		statsKey("provider-model-rank", [
 			window.startTime,
 			window.endTime,
 			sort.sortBy,
 			sort.sortOrder,
-			providerId ?? null,
-			apiKey ?? null,
-		] as const,
+			providerId,
+			apiKey,
+		]),
 };
 
 /**
@@ -61,28 +57,17 @@ export function useProviderModelRace(
 	providerId?: number,
 	apiKey?: string,
 ) {
-	return useQuery<ProviderModelRankResponse>({
-		queryKey: providerModelRaceKeys.rank(window, sort, providerId, apiKey),
-		queryFn: async () => {
-			const params = new URLSearchParams({
-				sortBy: sort.sortBy,
-				sortOrder: sort.sortOrder,
-				startTime: String(window.startTime),
-				endTime: String(window.endTime),
-			});
-			if (providerId !== undefined) {
-				params.set("providerId", String(providerId));
-			}
-			if (apiKey !== undefined) {
-				params.set("apiKey", apiKey);
-			}
-			const res = await api
-				.get(`stats/provider-model-rank?${params.toString()}`)
-				.json<ApiResponse<ProviderModelRankResponse>>();
-			return unwrap(res);
-		},
+	return statsQuery<ProviderModelRankResponse>({
+		endpoint: "stats/provider-model-rank",
+		key: providerModelRaceKeys.rank(window, sort, providerId, apiKey),
 		enabled,
-		// 切换时间窗口期间保留上一窗口数据，避免图表闪回骨架导致页面抖动。
-		placeholderData: keepPreviousData,
+		params: {
+			sortBy: sort.sortBy,
+			sortOrder: sort.sortOrder,
+			startTime: window.startTime,
+			endTime: window.endTime,
+			providerId,
+			apiKey,
+		},
 	});
 }

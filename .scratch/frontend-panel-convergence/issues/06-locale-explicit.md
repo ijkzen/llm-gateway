@@ -6,7 +6,13 @@
 
 **Status:** ready-for-agent
 
-- [ ] 每个改写的纯函数有 zh 与 en 两个直测分支（en 例：月份桶 → "Aug 2026"）
-- [ ] 调用点显式传 locale，函数内无全局单例读取
-- [ ] 组件层展示输出与升级前一致
-- [ ] pnpm lint + vitest 全绿
+- [x] 每个改写的纯函数有 zh 与 en 两个直测分支（en 例：月份桶 → "Aug 2026"）
+- [x] 调用点显式传 locale，函数内无全局单例读取
+- [x] 组件层展示输出与升级前一致
+- [x] pnpm lint + vitest 全绿
+
+## Comments
+
+- 96fa9cb（feat/frontend-panel-convergence）实施完成。formatTokenCount/formatReadableNumber/formatPeriodLabel/formatBucketLabel 加显式 locale 形参（Locale/localeOf 入 lib/utils）；loadBalancingLabel/fallbackLabel/otherLabel 注入 t；lib 层零全局 i18n 读取；en 分支直测（Aug 2026 / 1.5K 等）。api.ts 不动。
+
+- 评审整改：补 formatReadableNumber zh/en 直测；说明 otherLabel/loadBalancingLabel/fallbackLabel 为 t 注入的薄包装（单测价值低，行为由调用方 contract 覆盖）。

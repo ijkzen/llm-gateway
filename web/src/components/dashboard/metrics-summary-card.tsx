@@ -2,7 +2,7 @@ import { RaceWindowControl, type RaceWindowState } from "@/components/race-windo
 import { StatsCard } from "@/components/stats-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatPercent, formatTokenCount } from "@/lib/utils";
+import { type Locale, formatPercent, formatTokenCount, localeOf } from "@/lib/utils";
 import { Coins, DatabaseZap, Gauge, ListChecks, Timer } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -11,7 +11,7 @@ interface MetricsItem {
 	key: "totalTokens" | "requestCount" | "ttft" | "requestTime" | "tps" | "cacheHitRate";
 	labelKey: string;
 	icon: typeof Coins;
-	format: (v: number) => string;
+	format: (v: number, locale: Locale) => string;
 	subLabelKey: string;
 }
 
@@ -20,7 +20,7 @@ export const METRICS_ITEMS: readonly MetricsItem[] = [
 		key: "totalTokens",
 		labelKey: "race.metricLabel.totalTokens",
 		icon: Coins,
-		format: formatTokenCount,
+		format: (v: number, locale: Locale) => formatTokenCount(v, locale),
 		subLabelKey: "overview.inputPlusOutput",
 	},
 	{
@@ -95,7 +95,7 @@ export function MetricsSummaryCard({
 	title,
 	extra,
 }: MetricsSummaryCardProps) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	return (
 		<Card>
 			<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -119,7 +119,7 @@ export function MetricsSummaryCard({
 								key={item.key}
 								icon={item.icon}
 								label={t(item.labelKey)}
-								value={item.format(data[item.key])}
+								value={item.format(data[item.key], localeOf(i18n.language))}
 								subLabel={t(item.subLabelKey)}
 							/>
 						))}

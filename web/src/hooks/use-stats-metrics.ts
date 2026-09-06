@@ -1,5 +1,4 @@
-import { type ApiResponse, api, unwrap } from "@/lib/api";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { statsKey, statsQuery } from "@/hooks/stats-query";
 
 /** 供应商级 6 指标（与后端 GET /api/stats/provider-metrics 对齐）。 */
 export interface ProviderMetrics {
@@ -34,29 +33,22 @@ export interface MetricsWindow {
 
 export const statsMetricsKeys = {
 	provider: (providerId: number, window: MetricsWindow) =>
-		["stats", "provider-metrics", providerId, window.startTime, window.endTime] as const,
+		statsKey("provider-metrics", [providerId, window.startTime, window.endTime]),
 	virtualModel: (virtualModelId: number, window: MetricsWindow) =>
-		["stats", "virtual-model-metrics", virtualModelId, window.startTime, window.endTime] as const,
+		statsKey("virtual-model-metrics", [virtualModelId, window.startTime, window.endTime]),
 };
 
 /** 供应商级 6 指标聚合（二级页顶部指标卡）。 */
 export function useProviderMetrics(providerId: number, window: MetricsWindow, enabled = true) {
-	return useQuery<ProviderMetrics>({
-		queryKey: statsMetricsKeys.provider(providerId, window),
-		queryFn: async () => {
-			const params = new URLSearchParams({
-				providerId: String(providerId),
-				startTime: String(window.startTime),
-				endTime: String(window.endTime),
-			});
-			const res = await api
-				.get(`stats/provider-metrics?${params.toString()}`)
-				.json<ApiResponse<ProviderMetrics>>();
-			return unwrap(res);
-		},
+	return statsQuery<ProviderMetrics>({
+		endpoint: "stats/provider-metrics",
+		key: statsMetricsKeys.provider(providerId, window),
 		enabled,
-		// 切换时间窗口期间保留上一窗口数据，避免指标卡片闪回骨架。
-		placeholderData: keepPreviousData,
+		params: {
+			providerId,
+			startTime: window.startTime,
+			endTime: window.endTime,
+		},
 	});
 }
 
@@ -66,22 +58,15 @@ export function useVirtualModelMetrics(
 	window: MetricsWindow,
 	enabled = true,
 ) {
-	return useQuery<VirtualModelMetrics>({
-		queryKey: statsMetricsKeys.virtualModel(virtualModelId, window),
-		queryFn: async () => {
-			const params = new URLSearchParams({
-				virtualModelId: String(virtualModelId),
-				startTime: String(window.startTime),
-				endTime: String(window.endTime),
-			});
-			const res = await api
-				.get(`stats/virtual-model-metrics?${params.toString()}`)
-				.json<ApiResponse<VirtualModelMetrics>>();
-			return unwrap(res);
-		},
+	return statsQuery<VirtualModelMetrics>({
+		endpoint: "stats/virtual-model-metrics",
+		key: statsMetricsKeys.virtualModel(virtualModelId, window),
 		enabled,
-		// 切换时间窗口期间保留上一窗口数据，避免指标卡片闪回骨架。
-		placeholderData: keepPreviousData,
+		params: {
+			virtualModelId,
+			startTime: window.startTime,
+			endTime: window.endTime,
+		},
 	});
 }
 
@@ -98,21 +83,14 @@ export interface ApiKeyMetrics {
 }
 
 export function useApiKeyMetrics(apiKey: string | null, window: MetricsWindow, enabled = true) {
-	return useQuery<ApiKeyMetrics>({
-		queryKey: ["stats", "api-key-metrics", apiKey, window.startTime, window.endTime] as const,
-		queryFn: async () => {
-			const params = new URLSearchParams({
-				apiKey: apiKey as string,
-				startTime: String(window.startTime),
-				endTime: String(window.endTime),
-			});
-			const res = await api
-				.get(`stats/api-key-metrics?${params.toString()}`)
-				.json<ApiResponse<ApiKeyMetrics>>();
-			return unwrap(res);
-		},
+	return statsQuery<ApiKeyMetrics>({
+		endpoint: "stats/api-key-metrics",
+		key: statsKey("api-key-metrics", [apiKey, window.startTime, window.endTime]),
 		enabled: enabled && apiKey !== null,
-		// 切换时间窗口期间保留上一窗口数据，避免指标卡片闪回骨架。
-		placeholderData: keepPreviousData,
+		params: {
+			apiKey: apiKey ?? undefined,
+			startTime: window.startTime,
+			endTime: window.endTime,
+		},
 	});
 }

@@ -1,6 +1,4 @@
-import { type ApiResponse, api, unwrap } from "@/lib/api";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-
+import { statsKey, statsQuery } from "@/hooks/stats-query";
 import type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
 
 export type { RaceSort, RaceSortKey, RaceWindow };
@@ -28,7 +26,7 @@ export interface ModelMetrics {
 
 export const modelMetricsKeys = {
 	metrics: (providerId: number, modelId: string, window: RaceWindow) =>
-		["stats", "model-metrics", providerId, modelId, window.startTime, window.endTime] as const,
+		statsKey("model-metrics", [providerId, modelId, window.startTime, window.endTime]),
 };
 
 /**
@@ -44,22 +42,15 @@ export function useModelMetrics(
 	window: RaceWindow,
 	enabled = true,
 ) {
-	return useQuery<ModelMetrics>({
-		queryKey: modelMetricsKeys.metrics(providerId, modelId, window),
-		queryFn: async () => {
-			const params = new URLSearchParams({
-				providerId: String(providerId),
-				modelId,
-				startTime: String(window.startTime),
-				endTime: String(window.endTime),
-			});
-			const res = await api
-				.get(`stats/model-metrics?${params.toString()}`)
-				.json<ApiResponse<ModelMetrics>>();
-			return unwrap(res);
-		},
+	return statsQuery<ModelMetrics>({
+		endpoint: "stats/model-metrics",
+		key: modelMetricsKeys.metrics(providerId, modelId, window),
 		enabled,
-		// 切换时间窗口期间保留上一窗口数据，避免指标卡片闪回骨架导致页面抖动。
-		placeholderData: keepPreviousData,
+		params: {
+			providerId,
+			modelId,
+			startTime: window.startTime,
+			endTime: window.endTime,
+		},
 	});
 }

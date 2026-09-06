@@ -1,24 +1,48 @@
-import { formatContextLength, formatTokenCount, middleEllipsis, topWithOther } from "@/lib/utils";
+import {
+	formatContextLength,
+	formatReadableNumber,
+	formatTokenCount,
+	middleEllipsis,
+	topWithOther,
+} from "@/lib/utils";
 import { describe, expect, it } from "vitest";
 
 describe("formatTokenCount", () => {
 	it("小于 1 万原样千分位展示", () => {
-		expect(formatTokenCount(0)).toBe("0");
-		expect(formatTokenCount(999)).toBe("999");
-		expect(formatTokenCount(9999)).toBe("9,999");
+		expect(formatTokenCount(0, "zh")).toBe("0");
+		expect(formatTokenCount(999, "zh")).toBe("999");
+		expect(formatTokenCount(9999, "zh")).toBe("9,999");
 	});
 
 	it("1 万到 1 亿之间用「万」，一位小数并去尾零", () => {
-		expect(formatTokenCount(10_000)).toBe("1 万");
-		expect(formatTokenCount(12_345)).toBe("1.2 万");
-		expect(formatTokenCount(15_000)).toBe("1.5 万");
-		expect(formatTokenCount(99_990_000)).toBe("9999 万");
+		expect(formatTokenCount(10_000, "zh")).toBe("1 万");
+		expect(formatTokenCount(12_345, "zh")).toBe("1.2 万");
+		expect(formatTokenCount(15_000, "zh")).toBe("1.5 万");
+		expect(formatTokenCount(99_990_000, "zh")).toBe("9999 万");
 	});
 
 	it("大于等于 1 亿用「亿」，两位小数并去尾零", () => {
-		expect(formatTokenCount(100_000_000)).toBe("1 亿");
-		expect(formatTokenCount(123_456_789)).toBe("1.23 亿");
-		expect(formatTokenCount(1_050_000_000)).toBe("10.5 亿");
+		expect(formatTokenCount(100_000_000, "zh")).toBe("1 亿");
+		expect(formatTokenCount(123_456_789, "zh")).toBe("1.23 亿");
+		expect(formatTokenCount(1_050_000_000, "zh")).toBe("10.5 亿");
+	});
+
+	it("en 分支按 K/M 缩写（1_000 进制）", () => {
+		expect(formatTokenCount(0, "en")).toBe("0");
+		expect(formatTokenCount(999, "en")).toBe("999");
+		expect(formatTokenCount(1_500, "en")).toBe("1.5K");
+		expect(formatTokenCount(2_500_000, "en")).toBe("2.5M");
+	});
+});
+
+describe("formatReadableNumber", () => {
+	it("en 分支复用 K/M 缩写", () => {
+		expect(formatReadableNumber(2_500_000, "en")).toBe("2.5M");
+	});
+
+	it("zh 分支区分亿/千万/百万/万", () => {
+		expect(formatReadableNumber(200_000_000, "zh")).toBe("2 亿");
+		expect(formatReadableNumber(20_000_000, "zh")).toBe("2 千万");
 	});
 });
 

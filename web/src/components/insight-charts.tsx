@@ -9,7 +9,7 @@ import {
 import type { FloatTrendPoint, PercentilePoint, TrendPoint } from "@/hooks/use-dashboard-insight";
 import i18n from "@/i18n";
 import type { ChartGranularity } from "@/lib/race-period";
-import { formatPercent, formatReadableNumber } from "@/lib/utils";
+import { formatPercent, formatReadableNumber, localeOf } from "@/lib/utils";
 import type { ReactNode } from "react";
 import { Area, AreaChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 
@@ -36,11 +36,12 @@ function TooltipLabelRow({
 /** 时间桶标签（复用 dashboard-charts 的格式化与粒度推断）。 */
 function bucketLabelData(
 	data: Array<{ bucketStart: number }>,
-	granularity?: ChartGranularity,
+	granularity: ChartGranularity | undefined,
+	locale: "zh" | "en",
 ): string[] {
 	const resolved: ChartGranularity =
 		granularity ?? inferGranularity(data.map((p) => p.bucketStart));
-	return data.map((p) => formatBucketLabel(p.bucketStart, resolved));
+	return data.map((p) => formatBucketLabel(p.bucketStart, resolved, locale));
 }
 
 function labelInterval(count: number): number {
@@ -67,7 +68,7 @@ export function PercentileLineChart({
 	data: PercentilePoint[];
 	granularity?: ChartGranularity;
 }) {
-	const labels = bucketLabelData(data, granularity);
+	const labels = bucketLabelData(data, granularity, localeOf(i18n.language));
 	const chartData = data.map((point, index) => ({
 		label: labels[index],
 		p50: point.p50,
@@ -161,7 +162,7 @@ export function FailureTrendChart({
 	failureRateTrend: FloatTrendPoint[];
 	granularity?: ChartGranularity;
 }) {
-	const labels = bucketLabelData(callTrend, granularity);
+	const labels = bucketLabelData(callTrend, granularity, localeOf(i18n.language));
 	// 以调用趋势为主轴基准（三组长度一致），堆叠面积 = 成功数 + 失败数。
 	const chartData = callTrend.map((point, index) => ({
 		label: labels[index],
@@ -266,7 +267,7 @@ export function TokenStructureChart({
 	granularity?: ChartGranularity;
 	formatValue?: (value: number) => string;
 }) {
-	const labels = bucketLabelData(inputTokenTrend, granularity);
+	const labels = bucketLabelData(inputTokenTrend, granularity, localeOf(i18n.language));
 	const chartData = inputTokenTrend.map((point, index) => ({
 		label: labels[index],
 		input: point.value,
@@ -379,7 +380,7 @@ export function ThroughputChart({
 	granularity?: ChartGranularity;
 	formatValue?: (value: number) => string;
 }) {
-	const labels = bucketLabelData(rpmTrend, granularity);
+	const labels = bucketLabelData(rpmTrend, granularity, localeOf(i18n.language));
 	const chartData = rpmTrend.map((point, index) => ({
 		label: labels[index],
 		rpm: point.value,
@@ -485,7 +486,7 @@ export function OutputPerSecLineChart({
 	data: FloatTrendPoint[];
 	granularity?: ChartGranularity;
 }) {
-	const labels = bucketLabelData(data, granularity);
+	const labels = bucketLabelData(data, granularity, localeOf(i18n.language));
 	const chartData = data.map((point, index) => ({
 		label: labels[index],
 		value: point.value,
@@ -510,7 +511,7 @@ export function OutputPerSecLineChart({
 						<ChartTooltipContent
 							formatter={(value) => (
 								<span className="font-mono font-medium tabular-nums text-foreground">
-									{formatReadableNumber(Number(value))} token/s
+									{formatReadableNumber(Number(value), localeOf(i18n.language))} token/s
 								</span>
 							)}
 						/>

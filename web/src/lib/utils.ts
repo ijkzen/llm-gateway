@@ -1,7 +1,5 @@
 import { twMerge } from "tailwind-merge";
 
-import i18n from "@/i18n";
-
 /** clsx 的 ClassValue 类型（cn 的入参）。 */
 export type ClassValue =
 	| string
@@ -58,12 +56,20 @@ export function middleEllipsis(text: string, maxLength: number): string {
 	return `${chars.slice(0, head).join("")}${ellipsis}${chars.slice(-tail).join("")}`;
 }
 
+/** 格式化目标语言（zh=中文计数习惯，en=K/M 缩写）。 */
+export type Locale = "zh" | "en";
+
+/** 由 i18n 语言码推导格式化 locale（zh* → zh，其余 → en）。 */
+export function localeOf(language: string): Locale {
+	return language.startsWith("zh") ? "zh" : "en";
+}
+
 /**
  * token 数量缩写：中文按「亿/万」计数习惯（>= 1 亿两位小数、>= 1 万一位小数），
- * 英文按 K/M 缩写（1_000 进制，业界惯例）。语言取当前 i18n 语言。
+ * 英文按 K/M 缩写（1_000 进制，业界惯例）。
  */
-export function formatTokenCount(value: number): string {
-	const zh = i18n.language.startsWith("zh");
+export function formatTokenCount(value: number, locale: Locale): string {
+	const zh = locale === "zh";
 	if (!zh) {
 		if (value >= 1_000_000) {
 			return `${trimTrailingZeros((value / 1_000_000).toFixed(2))}M`;
@@ -86,10 +92,10 @@ export function formatTokenCount(value: number): string {
  * 大数便于阅读缩写（中文）：>= 1 亿 → 亿、>= 1000 万 → 千万、>= 100 万 → 百万、>= 1 万 → 万。
  * 其余原样千分位。英文按 formatTokenCount 的 K/M 缩写。
  */
-export function formatReadableNumber(value: number): string {
-	const zh = i18n.language.startsWith("zh");
+export function formatReadableNumber(value: number, locale: Locale): string {
+	const zh = locale === "zh";
 	if (!zh) {
-		return formatTokenCount(value);
+		return formatTokenCount(value, locale);
 	}
 	if (value >= 100_000_000) {
 		return `${trimTrailingZeros((value / 100_000_000).toFixed(2))} 亿`;

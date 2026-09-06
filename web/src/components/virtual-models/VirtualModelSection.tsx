@@ -117,10 +117,10 @@ export function VirtualModelSection({
 						</Badge>
 					)}
 					<Badge variant="outline" className="shrink-0">
-						{loadBalancingLabel(virtualModel.loadBalancingStrategy)}
+						{loadBalancingLabel(virtualModel.loadBalancingStrategy, t)}
 					</Badge>
 					<Badge variant="outline" className="shrink-0">
-						{fallbackLabel(virtualModel.fallbackStrategy)}
+						{fallbackLabel(virtualModel.fallbackStrategy, t)}
 					</Badge>
 				</div>
 				<DropdownMenu modal={false}>

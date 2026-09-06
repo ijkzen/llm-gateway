@@ -6,8 +6,14 @@
 
 **Status:** ready-for-agent
 
-- [ ] 区块层验证：窗口变更产生正确查询参数、错误态重试重发正确查询、载入态展示
-- [ ] 五页换用区块配置后视觉与交互不变（副标题、默认窗口、深链）
-- [ ] 页面内逐字节重复的副标题/骨架副本删净
-- [ ] 至少一个页面测试改写为经区块验证，mock 面明显收窄
-- [ ] pnpm lint + vitest 全绿
+- [x] 区块层验证：窗口变更产生正确查询参数、错误态重试重发正确查询、载入态展示
+- [x] 五页换用区块配置后视觉与交互不变（副标题、默认窗口、深链）
+- [x] 页面内逐字节重复的副标题/骨架副本删净
+- [x] 至少一个页面测试改写为经区块验证，mock 面明显收窄
+- [x] pnpm lint + vitest 全绿
+
+## Comments
+
+- be18f08（feat/frontend-panel-convergence）实施完成。useSectionWindows + useSectionSubtitle/sectionGranularity + StatsSection/CardStatsSection 收拢五页骨架；页面净减约 300 行；页面测试仅补 useSearchParams mock，352 全绿。
+
+- 评审整改：SectionBody 抽出共享三态分支；补 StatsSection 区块级测试（副标题/骨架/错误重试/窗口切换→onWindowChange/测试锚点 5 例）。
