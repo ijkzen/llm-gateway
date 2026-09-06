@@ -19,8 +19,11 @@ use crate::proxy::metrics::Usage;
 /// response_format 注入的合成 JSON 工具名。
 pub const JSON_TOOL_NAME: &str = "__structured_output__";
 
-/// 编码发往 Anthropic 的请求体。返回 (body, 是否注入了 JSON 模式合成工具)。
-pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bool), String> {
+/// 编码发往 Anthropic 的请求体。
+pub fn build_request_body(
+    chat: &Value,
+    actual_model: &str,
+) -> Result<(Value, super::RequestFlags), String> {
     let stream = chat.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let max_tokens = chat_max_tokens(chat).unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS);
     let tool_names = collect_tool_call_names(chat);
@@ -105,10 +108,12 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
                     .unwrap_or("tool_result");
                 // tool_result 仅需 tool_use_id；工具名反查保留映射能力（Anthropic 以 id 关联）。
                 let _ = tool_names;
+                // 空内容兜底：Anthropic 拒绝空 text 内容，工具无输出时填占位符（同 user 空消息规则）。
+                let text = message_text(content);
                 let block = json!({
                     "type": "tool_result",
                     "tool_use_id": tool_use_id,
-                    "content": message_text(content),
+                    "content": if text.is_empty() { " ".to_string() } else { text },
                 });
                 push_message(&mut messages, "user".to_string(), vec![block]);
             }
@@ -161,6 +166,7 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
     }
 
     let thinking = drop_thinking_without_history_blocks(chat, thinking);
+    let thinking_dropped = thinking_requested && thinking.is_none();
     let thinking_active = thinking.is_some();
     let mut tool_choice = map_tool_choice(chat);
     if thinking_active
@@ -255,7 +261,13 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<(Value, bo
     if let Some(thinking) = thinking {
         body.insert("thinking".to_string(), thinking);
     }
-    Ok((Value::Object(body), json_mode_tool))
+    Ok((
+        Value::Object(body),
+        super::RequestFlags {
+            json_mode_tool,
+            thinking_dropped,
+        },
+    ))
 }
 
 fn map_tool_choice(chat: &Value) -> Option<Value> {
@@ -286,7 +298,11 @@ fn map_tool_choice(chat: &Value) -> Option<Value> {
 }
 
 fn map_thinking(chat: &Value, max_tokens: i64) -> Option<Value> {
-    let reasoning = chat_reasoning(chat)?;
+    // 明确关闭（Disabled）与未指定（Unspecified）都不写 thinking（Anthropic 缺省即关闭）。
+    let reasoning = match chat_reasoning(chat) {
+        super::ChatReasoning::Enabled(reasoning) => reasoning,
+        _ => return None,
+    };
     if max_tokens <= 1024 {
         return None;
     }
@@ -462,6 +478,8 @@ pub fn extract_usage(usage: &Value) -> Usage {
         input_tokens: input.map(|input| input + read + creation),
         cache_tokens: read.max(0),
         output_tokens: output,
+        // Anthropic 无推理 token 单列口径（output_tokens 已含思考）。
+        reasoning_tokens: None,
     }
 }
 
@@ -812,6 +830,9 @@ impl AnthropicStreamConverter {
                                 previous.cache_tokens
                             },
                             output_tokens: extracted.output_tokens.or(previous.output_tokens),
+                            reasoning_tokens: extracted
+                                .reasoning_tokens
+                                .or(previous.reasoning_tokens),
                         },
                         None => extracted,
                     };
@@ -901,8 +922,8 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let (body, json_mode) = build_request_body(&chat, "claude-x").unwrap();
-        assert!(!json_mode);
+        let (body, flags) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(!flags.json_mode_tool);
         assert_eq!(body["model"], "claude-x");
         assert_eq!(body["max_tokens"], 512);
         assert_eq!(body["system"][0]["text"], "be nice");
@@ -917,6 +938,45 @@ mod tests {
         assert_eq!(messages[2]["content"][0]["tool_use_id"], "call_1");
         assert_eq!(body["tools"][0]["name"], "get_weather");
         assert_eq!(body["tools"][0]["input_schema"]["type"], "object");
+    }
+
+    #[test]
+    fn empty_tool_result_content_gets_placeholder() {
+        // Anthropic 拒绝空 text 内容：工具无输出时 tool_result 填占位符。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[
+                {"role":"user","content":"x"},
+                {"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+                {"role":"tool","tool_call_id":"call_1","content":""}
+            ]}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["messages"][2]["content"][0]["content"], " ");
+
+        // 空数组（content: []）同样兜底。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[
+                {"role":"user","content":"x"},
+                {"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+                {"role":"tool","tool_call_id":"call_1","content":[]}
+            ]}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["messages"][2]["content"][0]["content"], " ");
+
+        // 非空内容不受影响。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[
+                {"role":"user","content":"x"},
+                {"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+                {"role":"tool","tool_call_id":"call_1","content":"ok"}
+            ]}"#,
+        )
+        .unwrap();
+        let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+        assert_eq!(body["messages"][2]["content"][0]["content"], "ok");
     }
 
     #[test]
@@ -1073,8 +1133,8 @@ mod tests {
             r#"{"model":"m","messages":[{"role":"user","content":"x"}],"response_format":{"type":"json_schema","json_schema":{"schema":{"type":"object","properties":{"a":{"type":"string"}}}}}}"#,
         )
         .unwrap();
-        let (body, json_mode) = build_request_body(&chat, "claude-x").unwrap();
-        assert!(json_mode);
+        let (body, flags) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(flags.json_mode_tool);
         assert_eq!(body["tools"][0]["name"], JSON_TOOL_NAME);
         // thinking 模式拒绝 tool_choice，因此 json 模式不锁定 tool_choice，
         // 改为 system 强指令引导调用。
@@ -1094,8 +1154,8 @@ mod tests {
             r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning_effort":"low","response_format":{"type":"json_object"}}"#,
         )
         .unwrap();
-        let (body, json_mode) = build_request_body(&chat, "claude-x").unwrap();
-        assert!(json_mode);
+        let (body, flags) = build_request_body(&chat, "claude-x").unwrap();
+        assert!(flags.json_mode_tool);
         assert!(body["thinking"].is_object(), "thinking 与 json 模式可共存");
         assert!(body.get("tool_choice").is_none());
     }

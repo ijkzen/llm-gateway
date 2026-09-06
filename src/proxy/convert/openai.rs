@@ -21,9 +21,14 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Value {
             }
         }
         // reasoning 对象是 OpenRouter 形态，OpenAI 兼容上游不识别：
-        // 归一为 reasoning_effort 简写透传并剥离原对象。
-        if let Some(reasoning) = super::chat_reasoning(chat) {
-            object.insert("reasoning_effort".to_string(), json!(reasoning.effort));
+        // 归一为 reasoning_effort 简写透传并剥离原对象。明确关闭（Disabled）
+        // 不注入：客户端直发的 reasoning_effort:"none" 本就字节透传，
+        // 额外注入反而可能触达不支持 "none" 的上游。
+        if let Some(reasoning) = super::chat_reasoning(chat).enabled() {
+            object.insert(
+                "reasoning_effort".to_string(),
+                json!(reasoning.effort.clone()),
+            );
         }
         object.remove("reasoning");
         let stream = object
@@ -82,10 +87,14 @@ pub fn extract_usage(usage: &Value) -> Usage {
                 .and_then(Value::as_i64)
         })
         .unwrap_or(0);
+    let reasoning = usage
+        .pointer("/completion_tokens_details/reasoning_tokens")
+        .and_then(Value::as_i64);
     Usage {
         input_tokens: input,
         cache_tokens: cache.max(0),
         output_tokens: output,
+        reasoning_tokens: reasoning,
     }
 }
 

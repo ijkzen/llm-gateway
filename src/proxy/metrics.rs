@@ -14,6 +14,9 @@ pub struct Usage {
     pub cache_tokens: i64,
     /// 输出 token（含推理/思考 token）；usage 缺失时为 None。
     pub output_tokens: Option<i64>,
+    /// 推理/思考 token 明细（Responses output_tokens_details / Gemini
+    /// thoughtsTokenCount；Anthropic 无此口径恒为 None）。仅展示用途，不落库。
+    pub reasoning_tokens: Option<i64>,
 }
 
 pub fn now_ms() -> i64 {
@@ -193,6 +196,7 @@ mod tests {
                 input_tokens: None,
                 cache_tokens: 0,
                 output_tokens: output,
+                reasoning_tokens: None,
             },
             success: true,
             fail_reason: None,
