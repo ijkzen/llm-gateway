@@ -1,19 +1,8 @@
-import { MidEllipsis } from "@/components/mid-ellipsis";
-import {
-	RaceWindowControl,
-	type RaceWindowState,
-	defaultRaceWindowState,
-	raceWindowBounds,
-	windowQueryString,
-} from "@/components/race-window-control";
+import { RaceCardShell, useRaceCardWindow } from "@/components/race-card-shell";
+import { type RaceWindowState, windowQueryString } from "@/components/race-window-control";
 import { SortableMetricTable, useRaceSort } from "@/components/sortable-metric-table";
-import { Card } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
-import { useInView } from "@/hooks/use-in-view";
 import { type VirtualModelRankItem, useVirtualModelRace } from "@/hooks/use-virtual-model-race";
-import { formatPeriodLabel } from "@/lib/race-period";
 import { Layers } from "lucide-react";
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -34,88 +23,41 @@ export function VirtualModelRaceCard({
 }) {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
-	// 挂载时刻固化 now：保证「当前周期」的窗口终点稳定，不因渲染抖动重复请求。
-	const [now] = useState(() => Date.now());
-	const [windowState, setWindowState] = useState<RaceWindowState>(
-		() => initialWindow ?? defaultRaceWindowState(),
-	);
+	const view = useRaceCardWindow(initialWindow);
 
 	// 排序：默认按总计 Token 降序；点击表头切换升/降。
 	const { sort, onSort } = useRaceSort();
 
-	const window = raceWindowBounds(windowState, now);
-
-	const { ref, inView } = useInView();
-	const query = useVirtualModelRace(window, sort, inView, apiKey);
+	const query = useVirtualModelRace(view.window, sort, view.inView, apiKey);
 
 	const openVirtualModelOverview = (item: VirtualModelRankItem) => {
 		navigate(
-			`/virtual-models/${item.virtualModelId}/overview?${windowQueryString(windowState, window)}`,
+			`/virtual-models/${item.virtualModelId}/overview?${windowQueryString(view.windowState, view.window)}`,
 		);
 	};
 
 	return (
-		<Card ref={ref} className="p-5">
-			<div className="mb-4 flex flex-wrap items-center gap-3">
-				<span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-					<Layers className="h-4 w-4" />
-				</span>
-				<div className="min-w-0">
-					<h3 className="text-sm font-semibold text-foreground">
-						{t("dashboard.virtualModelRace")}
-					</h3>
-					<MidEllipsis
-						className="text-xs text-muted-foreground"
-						text={
-							windowState.period === "custom"
-								? t("overview.customWindow")
-								: formatPeriodLabel(windowState.period, windowState.offset, now)
-						}
-					/>
-				</div>
-
-				<div className="ml-auto">
-					<RaceWindowControl
-						state={windowState}
-						now={now}
-						onChange={(patch) => setWindowState((prev) => ({ ...prev, ...patch }))}
-					/>
-				</div>
-			</div>
-
-			{!inView ? (
-				<div className="flex h-[220px] items-center justify-center text-xs text-muted-foreground">
-					{t("race.loadingAfterScroll")}
-				</div>
-			) : query.isLoading ? (
-				<Skeleton className="h-[220px] rounded-lg" />
-			) : query.isError ? (
-				<div className="flex h-[220px] flex-col items-center justify-center gap-2 text-xs text-muted-foreground">
-					<span>{t("race.loadFailed")}</span>
-					<button
-						type="button"
-						className="rounded-full bg-foreground/5 px-3 py-1 text-xs font-medium hover:bg-foreground/10"
-						onClick={() => query.refetch()}
-					>
-						{t("common.retry")}
-					</button>
-				</div>
-			) : !query.data || query.data.items.length === 0 ? (
-				<div className="flex h-[220px] items-center justify-center text-xs text-muted-foreground">
-					{t("race.noData")}
-				</div>
-			) : (
-				<SortableMetricTable
-					items={query.data.items}
-					sort={sort}
-					onSort={onSort}
-					nameHeader="dashboard.virtualModelColumn"
-					renderName={(item) => item.virtualModelDisplayId || t("race.unknownVirtualModel")}
-					rowKey={(item) => item.virtualModelId}
-					onRowClick={openVirtualModelOverview}
-					rowTitleKey="race.openVirtualModelOverview"
-				/>
-			)}
-		</Card>
+		<RaceCardShell
+			view={view}
+			icon={Layers}
+			titleKey="dashboard.virtualModelRace"
+			status={{
+				isLoading: query.isLoading,
+				isError: query.isError,
+				isEmpty: !query.data || query.data.items.length === 0,
+				onRetry: () => query.refetch(),
+			}}
+		>
+			<SortableMetricTable
+				items={query.data?.items ?? []}
+				sort={sort}
+				onSort={onSort}
+				nameHeader="dashboard.virtualModelColumn"
+				renderName={(item) => item.virtualModelDisplayId || t("race.unknownVirtualModel")}
+				rowKey={(item) => item.virtualModelId}
+				onRowClick={openVirtualModelOverview}
+				rowTitleKey="race.openVirtualModelOverview"
+			/>
+		</RaceCardShell>
 	);
 }
