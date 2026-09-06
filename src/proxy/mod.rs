@@ -5,7 +5,6 @@
 //! 并把每次请求的指标异步写入 request 表。
 
 pub mod convert;
-pub mod failure_counter;
 pub mod failure_recheck;
 pub mod failure_recovery;
 pub mod metrics;

@@ -2,10 +2,10 @@ use sea_orm::DatabaseConnection;
 use tokio::sync::broadcast;
 
 use crate::app_settings::AppSettings;
+use crate::availability::FailureCounter;
 use crate::cron::log_capture::JobLogEvent;
 use crate::cron::scheduler::SchedulerRuntime;
 use crate::proxy::LbState;
-use crate::proxy::failure_counter::FailureCounter;
 use crate::proxy::failure_recheck::RecheckGate;
 use crate::proxy::pool::UpstreamPool;
 

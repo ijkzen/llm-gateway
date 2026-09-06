@@ -151,7 +151,7 @@ async fn test_state() -> AppState {
         scheduler,
         log_tx,
         lb_state: llm_gateway::proxy::LbState::default(),
-        failure_counter: llm_gateway::proxy::failure_counter::FailureCounter::default(),
+        failure_counter: llm_gateway::availability::FailureCounter::default(),
         recheck_gate: llm_gateway::proxy::failure_recheck::RecheckGate::default(),
         upstream_pool: llm_gateway::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(
             600,

@@ -179,11 +179,11 @@ pub async fn apply_usage_gate(
     // 连续失败禁用（failure_disabled）不能由普通用量刷新解除；由手动启用或自动恢复探测处理。
     if usable && !p.enable && !p.failure_disabled {
         crate::provider_repo::set_provider_enabled(db, p.id, true).await?;
-        let items = crate::provider_repo::set_items_enabled(db, p.id, true).await?;
+        let items = crate::availability::set_items_enabled(db, p.id, true).await?;
         tracing::info!(provider_id = p.id, items, "{recovered_msg}");
     } else if !usable && p.enable {
         crate::provider_repo::set_provider_enabled(db, p.id, false).await?;
-        let items = crate::provider_repo::set_items_enabled(db, p.id, false).await?;
+        let items = crate::availability::set_items_enabled(db, p.id, false).await?;
         tracing::info!(provider_id = p.id, items, "{exhausted_msg}");
     }
     Ok(())

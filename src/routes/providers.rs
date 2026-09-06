@@ -486,7 +486,7 @@ async fn update_provider(
             // （与用量额度门控共用 set_items_enabled，保证成员排序/编辑态一致）。
             if enable_changed
                 && let Err(e) =
-                    crate::provider_repo::set_items_enabled(&state.db, id, enable_new).await
+                    crate::availability::set_items_enabled(&state.db, id, enable_new).await
             {
                 tracing::warn!(provider_id = id, "级联更新虚拟模型子模型启用状态失败：{e}");
             }

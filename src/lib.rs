@@ -1,5 +1,6 @@
 pub mod app_settings;
 pub mod auth;
+pub mod availability;
 pub mod config;
 pub mod cron;
 pub mod crypto;
@@ -146,7 +147,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         scheduler: scheduler.clone(),
         log_tx: log_tx.clone(),
         lb_state: crate::proxy::LbState::default(),
-        failure_counter: crate::proxy::failure_counter::FailureCounter::default(),
+        failure_counter: crate::availability::FailureCounter::default(),
         recheck_gate: crate::proxy::failure_recheck::RecheckGate::default(),
         upstream_pool: crate::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
         settings: settings.clone(),
