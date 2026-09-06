@@ -308,6 +308,55 @@ async fn manual_disabled_provider_not_auto_restored() {
     assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("manual"));
 }
 
+/// 无豁免（ADR-0003）：手动启用一个额度仍耗尽的供应商，下轮刷新再次停用并标记 quota。
+#[tokio::test]
+async fn manual_enable_of_exhausted_provider_redisabled_on_refresh() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (pid, model_id) = seed_subscription_provider(&db).await;
+
+    // 额度耗尽 → 自动停用（quota）。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &quota_data(pid, 0.0, 80.0, 100.0))
+        .await
+        .unwrap();
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("quota"));
+
+    // 管理员强制手动启用（额度未恢复）。
+    llm_gateway::availability::enable_manual(
+        &db,
+        &llm_gateway::availability::FailureCounter::default(),
+        pid,
+    )
+    .await
+    .unwrap();
+    assert!(provider_enabled(&db, pid).await);
+
+    // 下轮刷新：额度仍耗尽 → 再次停用并标记 quota，子模型级联停用。
+    let p = provider::Entity::find_by_id(pid)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    apply_usage_gate(&db, &p, &quota_data(pid, 0.0, 80.0, 100.0))
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("quota"));
+    assert!(
+        !virtual_model_item::Entity::find()
+            .filter(virtual_model_item::Column::ModelId.eq(model_id))
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+            .enable
+    );
+}
+
 #[tokio::test]
 async fn gate_skips_unjudgeable_data() {
     let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;

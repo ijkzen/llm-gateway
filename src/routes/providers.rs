@@ -364,7 +364,11 @@ async fn create_provider(
         name: Set(req.name.trim().to_string()),
         enable: Set(req.enable),
         // 停用原因镜像不变式（ADR-0003）：创建即停用视为手动停用。
-        disabled_reason: Set((!req.enable).then(|| "manual".to_string())),
+        disabled_reason: Set((!req.enable).then(|| {
+            crate::availability::DisabledReason::Manual
+                .as_str()
+                .to_string()
+        })),
         base_url: Set(req.base_url.trim().to_string()),
         api_key: Set(crypto::encrypt(api_key)),
         custom_header: Set(req.custom_header),
@@ -477,7 +481,7 @@ async fn update_provider(
     active.updated_at = Set(chrono::Utc::now());
 
     match crate::provider_repo::update_provider(&state.db, active).await {
-        Ok(model) => {
+        Ok(_) => {
             // 启用状态切换走可用性状态机：手动启用解除任意停用并清零失败计数，
             // 手动停用标记 manual；两者都级联同步名下虚拟模型条目。
             if enable_changed {
@@ -488,12 +492,21 @@ async fn update_provider(
                 };
                 if let Err(e) = result {
                     tracing::warn!(provider_id = id, "手动启停供应商失败：{e}");
+                    return response::db_error(e.to_string());
                 }
             }
             // 凭据/字段可能变化，失效用量缓存（数据库）避免展示旧结果。
             if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {
                 tracing::warn!(provider_id = id, "用量缓存失效失败：{e}");
             }
+            // 启用状态可能已被模块动作迁移，重读后构造响应，避免返回切换前状态。
+            let model = match Entity::find_by_id(id).one(&state.db).await {
+                Ok(Some(model)) => model,
+                Ok(None) => {
+                    return response::not_found(format!("Provider {id} 不存在"));
+                }
+                Err(e) => return response::db_error(e.to_string()),
+            };
             let response = ProviderResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }

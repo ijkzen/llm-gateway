@@ -428,7 +428,12 @@ mod tests {
     #[tokio::test]
     async fn quota_disable_from_available_then_idempotent() {
         let db = setup().await;
+        let counters = FailureCounter::default();
         let (pid, mid) = seed(&db, "p1", true, None).await;
+
+        // 计数器先记两次失败：停用动作不得触碰计数（「禁用不碰计数器」规则）。
+        counters.record_failure(pid);
+        counters.record_failure(pid);
 
         assert!(disable_for_quota(&db, pid, "订阅额度").await.unwrap());
         let r = row(&db, pid).await;
@@ -437,6 +442,7 @@ mod tests {
         let it = item(&db, mid).await;
         assert!(!it.enable);
         assert!(it.cascade_disabled, "级联停用应打标记");
+        assert_eq!(counters.record_failure(pid), 3, "停用不应清零失败计数");
 
         // 已是 quota 态：幂等返回 false。
         assert!(!disable_for_quota(&db, pid, "订阅额度").await.unwrap());

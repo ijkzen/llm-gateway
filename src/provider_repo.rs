@@ -1,7 +1,7 @@
-//! Provider 域统一写操作（DAO 层）。
+//! Provider 域 CRUD 写操作（DAO 层）：插入、更新、删除与 extra 加密回填。
 //!
-//! 把「供应商及名下虚拟模型子模型」的状态变更收编到这里，接口路由与用量额度门控
-//! （`src/usage/persist.rs` 定时任务）共用同一入口，保证任何路径的变更都有日志。
+//! 供应商启用状态的变更不在本模块：可用性状态迁移（启停原因镜像、失败计数、
+//! 虚拟模型条目级联）统一由 `crate::availability` 的动作入口承载（ADR-0003）。
 //! 日志统一为结构化 tracing，api_key 一律经 `crypto::mask` 脱敏，绝不落明文。
 
 use sea_orm::{ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, Set};
