@@ -46,8 +46,9 @@ jobs:
       - name: Check release version
         run: bash scripts/check-release-version.sh "${GITHUB_REF#refs/tags/v}"
 
+      # 同 CI：单线程串行运行，规避 worker 日志链路测试的并行干扰。
       - name: Run backend tests
-        run: cargo test --all-targets
+        run: cargo test --all-targets -- --test-threads=1
 
       - name: Run frontend tests
         working-directory: web

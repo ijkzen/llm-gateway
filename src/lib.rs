@@ -58,17 +58,8 @@ async fn setup_logging(
     let file_appender = tracing_appender::rolling::daily(log_dir, "app");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    // JobLogLayer 的 on_event 是同步回调，只能走 std 同步通道；
-    // 桥接任务把事件转发到 tokio broadcast，供 worker 与 SSE 订阅。
-    // 无订阅者时 send 返回 Err（事件静默丢弃），通道关闭后 recv 退出循环。
-    // std mpsc 的 recv 会阻塞线程，因此放在 blocking 线程池上，避免占用
-    // async worker 线程。
-    let (std_tx, std_rx) = std::sync::mpsc::channel::<crate::cron::log_capture::JobLogEvent>();
-    tokio::task::spawn_blocking(move || {
-        while let Ok(event) = std_rx.recv() {
-            let _ = log_tx.send(event);
-        }
-    });
+    // JobLogLayer 直接发送到 tokio broadcast（send 同步且不阻塞），供
+    // worker 与 SSE 订阅；无订阅者时 send 返回 Err（事件静默丢弃）。
 
     tracing_subscriber::registry()
         .with(
@@ -90,7 +81,7 @@ async fn setup_logging(
         )
         // 任务日志捕获层挂在 EnvFilter 之后：捕获级别受 RUST_LOG 限制，
         // 默认只捕获 info 及以上级别的 handler 日志。
-        .with(JobLogLayer::new(std_tx))
+        .with(JobLogLayer::new(log_tx))
         .init();
 
     Ok(guard)
