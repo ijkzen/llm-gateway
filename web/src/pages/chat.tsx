@@ -26,13 +26,15 @@ function eventData(event: string): string | null {
 	return line ? line.slice(6) : null;
 }
 
-/** 解析一个 OpenAI chunk 的 delta 增量。 */
+/** 解析一个 OpenAI chunk 的 delta 增量。思考字段同时兼容 DeepSeek 风格
+ * （reasoning_content，网关透传 DeepSeek/Kimi 等原生键名）与 OpenRouter 风格
+ * （reasoning，网关透传 Command Code 等聚合器键名）。 */
 function deltaOf(data: string): { reasoning?: string; content?: string } {
 	if (data === "[DONE]") return {};
 	const parsed: unknown = JSON.parse(data);
 	const delta = (parsed as { choices?: Array<{ delta?: Record<string, unknown> }> }).choices?.[0]
 		?.delta;
-	const reasoning = delta?.reasoning_content;
+	const reasoning = delta?.reasoning_content ?? delta?.reasoning;
 	const content = delta?.content;
 	return {
 		reasoning: typeof reasoning === "string" && reasoning ? reasoning : undefined,

@@ -33,8 +33,8 @@ vi.mock("@/hooks/use-provider-models", async () => {
 	};
 });
 
-/** 构造 SSE 流式 fetch mock：chunks 逐段入队，响应 abort 信号（模拟浏览器行为）。 */
-function mockStreamingFetch(chunks: string[], holdOpen = false) {
+/** 构造 SSE 流式 fetch mock：chunks 逐段入队（stepMs 控制帧间隔），响应 abort 信号（模拟浏览器行为）。 */
+function mockStreamingFetch(chunks: string[], holdOpen = false, stepMs = 10) {
 	let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
 	const fetchMock = vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
 		const stream = new ReadableStream<Uint8Array>({
@@ -42,7 +42,7 @@ function mockStreamingFetch(chunks: string[], holdOpen = false) {
 				streamController = controller;
 				let delay = 0;
 				for (const chunk of chunks) {
-					delay += 10;
+					delay += stepMs;
 					setTimeout(() => controller.enqueue(new TextEncoder().encode(chunk)), delay);
 				}
 				if (!holdOpen) {
@@ -101,26 +101,32 @@ describe("ChatPage", () => {
 	});
 
 	it("流式渲染思考与正文，思考完毕自动折叠且可手动展开", async () => {
-		const { fetchMock } = mockStreamingFetch([
-			new TextDecoder().decode(sseFrame({ role: "assistant" })),
-			new TextDecoder().decode(sseFrame({ reasoning_content: "先想想" })),
-			new TextDecoder().decode(sseFrame({ content: "你好" })),
-			new TextDecoder().decode(sseFrame({})),
-			"data: [DONE]\n\n",
-		]);
+		const { fetchMock } = mockStreamingFetch(
+			[
+				new TextDecoder().decode(sseFrame({ role: "assistant" })),
+				new TextDecoder().decode(sseFrame({ reasoning_content: "先想想" })),
+				// OpenRouter/Command Code 风格的思考键名同样要渲染。
+				new TextDecoder().decode(sseFrame({ reasoning: "换个键名也想" })),
+				new TextDecoder().decode(sseFrame({ content: "你好" })),
+				new TextDecoder().decode(sseFrame({})),
+				"data: [DONE]\n\n",
+			],
+			false,
+			120,
+		);
 		vi.stubGlobal("fetch", fetchMock);
 		renderPage();
 		selectModelAndSend("嗨");
 
 		// 用户气泡靠右、助手气泡出现。
 		await waitFor(() => expect(screen.getByText("嗨")).toBeInTheDocument());
-		// 思考过程流式可见。
-		await waitFor(() => expect(screen.getByText("先想想")).toBeInTheDocument());
+		// 思考过程流式可见：两种键名的增量都累计。
+		await waitFor(() => expect(screen.getByText(/先想想换个键名也想/)).toBeInTheDocument());
 		// 正文到达后思考自动折叠：思考文本不可见，但可通过手动展开回看。
 		await waitFor(() => expect(screen.getByText("你好")).toBeInTheDocument());
-		await waitFor(() => expect(screen.queryByText("先想想")).not.toBeInTheDocument());
+		await waitFor(() => expect(screen.queryByText(/先想想/)).not.toBeInTheDocument());
 		fireEvent.click(screen.getByRole("button", { name: /思考过程/ }));
-		expect(screen.getByText("先想想")).toBeInTheDocument();
+		expect(screen.getByText(/先想想换个键名也想/)).toBeInTheDocument();
 		// 请求体：直连端点、供应商与模型 ID、多轮消息。
 		const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
 		const body = JSON.parse(String(init.body));

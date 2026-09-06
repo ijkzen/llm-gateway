@@ -247,8 +247,9 @@ async fn chat_stream_direct_with_reasoning_and_record() {
     // 思考增量与正文增量均透传；结束帧 finish_reason。
     assert!(text.contains("reasoning_content"), "{text}");
     assert!(text.contains("想一想"), "{text}");
-    // delta.reasoning（OpenRouter/Command Code 风格）被归一为 reasoning_content。
-    assert!(text.contains("换个键名的思考"), "{text}");
+    // delta.reasoning（OpenRouter/Command Code 风格）原样透传，后端不改写，
+    // 两种风格的思考字段由客户端自行兼容。
+    assert!(text.contains("\"reasoning\":\"换个键名的思考\""), "{text}");
     assert!(text.contains("\"content\":\"你好\""), "{text}");
     assert!(text.contains("finish_reason\":\"stop"), "{text}");
 
