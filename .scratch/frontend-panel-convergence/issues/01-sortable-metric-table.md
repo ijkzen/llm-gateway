@@ -15,3 +15,5 @@
 ## Comments
 
 - 1a7a05d（feat/frontend-panel-convergence）实施完成。RACE_COLUMNS 六指标列定义 + useRaceSort + 泛型 SortableMetricTable 收拢四卡两页；windowQueryString 深链纯函数与 initialWindowFromUrl 往返有测试；排序翻转/新列默认方向直测。
+
+- 评审整改：删除 useRaceSort/SortableMetricTable 的投机 columns 参数与 RACE_COLUMN_LABEL_KEYS（全部调用点均用默认列集），interface 收窄。

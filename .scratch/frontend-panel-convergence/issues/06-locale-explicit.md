@@ -14,3 +14,5 @@
 ## Comments
 
 - 96fa9cb（feat/frontend-panel-convergence）实施完成。formatTokenCount/formatReadableNumber/formatPeriodLabel/formatBucketLabel 加显式 locale 形参（Locale/localeOf 入 lib/utils）；loadBalancingLabel/fallbackLabel/otherLabel 注入 t；lib 层零全局 i18n 读取；en 分支直测（Aug 2026 / 1.5K 等）。api.ts 不动。
+
+- 评审整改：补 formatReadableNumber zh/en 直测；说明 otherLabel/loadBalancingLabel/fallbackLabel 为 t 注入的薄包装（单测价值低，行为由调用方 contract 覆盖）。

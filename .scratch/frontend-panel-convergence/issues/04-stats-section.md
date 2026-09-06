@@ -15,3 +15,5 @@
 ## Comments
 
 - be18f08（feat/frontend-panel-convergence）实施完成。useSectionWindows + useSectionSubtitle/sectionGranularity + StatsSection/CardStatsSection 收拢五页骨架；页面净减约 300 行；页面测试仅补 useSearchParams mock，352 全绿。
+
+- 评审整改：SectionBody 抽出共享三态分支；补 StatsSection 区块级测试（副标题/骨架/错误重试/窗口切换→onWindowChange/测试锚点 5 例）。

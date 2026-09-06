@@ -1,9 +1,5 @@
 import { defaultRaceWindowState, windowQueryString } from "@/components/race-window-control";
-import {
-	RACE_COLUMNS,
-	RACE_COLUMN_LABEL_KEYS,
-	useRaceSort,
-} from "@/components/sortable-metric-table";
+import { RACE_COLUMNS, useRaceSort } from "@/components/sortable-metric-table";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -37,7 +33,7 @@ describe("useRaceSort", () => {
 });
 
 describe("RACE_COLUMNS", () => {
-	it("六个指标列齐全且标签键可查", () => {
+	it("六个指标列齐全", () => {
 		expect(RACE_COLUMNS.map((c) => c.key)).toEqual([
 			"totalTokens",
 			"requestCount",
@@ -46,9 +42,6 @@ describe("RACE_COLUMNS", () => {
 			"tps",
 			"cacheHitRate",
 		]);
-		for (const column of RACE_COLUMNS) {
-			expect(RACE_COLUMN_LABEL_KEYS[column.key]).toBe(column.labelKey);
-		}
 	});
 });
 

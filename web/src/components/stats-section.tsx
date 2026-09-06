@@ -62,6 +62,20 @@ interface SectionStatus {
 	onRetry: () => void;
 }
 
+/** 区块内容的三态分支（骨架/错误重试/内容），两种区块壳共用。 */
+function SectionBody({ status, children }: { status?: SectionStatus; children: ReactNode }) {
+	if (!status) {
+		return <>{children}</>;
+	}
+	if (status.isLoading) {
+		return <Skeleton className="h-[260px] w-full" />;
+	}
+	if (status.isError) {
+		return <ErrorState onRetry={status.onRetry} />;
+	}
+	return <>{children}</>;
+}
+
 interface StatsSectionProps {
 	now: number;
 	windowState: RaceWindowState;
@@ -86,23 +100,13 @@ export function StatsSection({
 	children,
 }: StatsSectionProps) {
 	const subtitle = useSectionSubtitle()(windowState, now);
-	let body: ReactNode = children;
-	if (status) {
-		body = status.isLoading ? (
-			<Skeleton className="h-[260px] w-full" />
-		) : status.isError ? (
-			<ErrorState onRetry={status.onRetry} />
-		) : (
-			children
-		);
-	}
 	return (
 		<div className="space-y-2">
 			<div className="flex flex-wrap items-center justify-between gap-2" data-testid={windowTestId}>
 				<p className="text-xs text-muted-foreground">{subtitle}</p>
 				<RaceWindowControl state={windowState} now={now} onChange={onWindowChange} />
 			</div>
-			{body}
+			<SectionBody status={status}>{children}</SectionBody>
 		</div>
 	);
 }
@@ -126,16 +130,6 @@ export function CardStatsSection({
 	children,
 }: CardStatsSectionProps) {
 	const subtitle = useSectionSubtitle()(windowState, now);
-	let body: ReactNode = children;
-	if (status) {
-		body = status.isLoading ? (
-			<Skeleton className="h-[260px] w-full" />
-		) : status.isError ? (
-			<ErrorState onRetry={status.onRetry} />
-		) : (
-			children
-		);
-	}
 	return (
 		<Card>
 			<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -145,7 +139,9 @@ export function CardStatsSection({
 				</div>
 				<RaceWindowControl state={windowState} now={now} onChange={onWindowChange} />
 			</CardHeader>
-			<CardContent>{body}</CardContent>
+			<CardContent>
+				<SectionBody status={status}>{children}</SectionBody>
+			</CardContent>
 		</Card>
 	);
 }

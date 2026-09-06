@@ -1,4 +1,10 @@
-import { formatContextLength, formatTokenCount, middleEllipsis, topWithOther } from "@/lib/utils";
+import {
+	formatContextLength,
+	formatReadableNumber,
+	formatTokenCount,
+	middleEllipsis,
+	topWithOther,
+} from "@/lib/utils";
 import { describe, expect, it } from "vitest";
 
 describe("formatTokenCount", () => {
@@ -26,6 +32,17 @@ describe("formatTokenCount", () => {
 		expect(formatTokenCount(999, "en")).toBe("999");
 		expect(formatTokenCount(1_500, "en")).toBe("1.5K");
 		expect(formatTokenCount(2_500_000, "en")).toBe("2.5M");
+	});
+});
+
+describe("formatReadableNumber", () => {
+	it("en 分支复用 K/M 缩写", () => {
+		expect(formatReadableNumber(2_500_000, "en")).toBe("2.5M");
+	});
+
+	it("zh 分支区分亿/千万/百万/万", () => {
+		expect(formatReadableNumber(200_000_000, "zh")).toBe("2 亿");
+		expect(formatReadableNumber(20_000_000, "zh")).toBe("2 千万");
 	});
 });
 

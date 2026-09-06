@@ -48,20 +48,15 @@ export const RACE_COLUMNS: ReadonlyArray<MetricColumn> = [
 	},
 ];
 
-/** 指标标题键（按 key 取，供自定义列集的表头复用）。 */
-export const RACE_COLUMN_LABEL_KEYS: Record<RaceSortKey, string> = Object.fromEntries(
-	RACE_COLUMNS.map((c) => [c.key, c.labelKey]),
-) as Record<RaceSortKey, string>;
-
 /** 排序状态：默认按总计 Token 降序；点击同列翻转，点新列取该列默认方向。 */
-export function useRaceSort(columns: ReadonlyArray<MetricColumn> = RACE_COLUMNS) {
+export function useRaceSort() {
 	const [sort, setSort] = useState<RaceSort>({ sortBy: "totalTokens", sortOrder: "desc" });
 	const onSort = (key: RaceSortKey) => {
 		setSort((prev) => {
 			if (prev.sortBy === key) {
 				return { ...prev, sortOrder: prev.sortOrder === "asc" ? "desc" : "asc" };
 			}
-			const column = columns.find((c) => c.key === key);
+			const column = RACE_COLUMNS.find((c) => c.key === key);
 			return { sortBy: key, sortOrder: column?.defaultDesc ? "desc" : "asc" };
 		});
 	};
@@ -72,7 +67,6 @@ interface SortableMetricTableProps<T extends Record<RaceSortKey, number>> {
 	items: T[];
 	sort: RaceSort;
 	onSort: (key: RaceSortKey) => void;
-	columns?: ReadonlyArray<MetricColumn>;
 	/** 名称列表头（i18n key）。 */
 	nameHeader: string;
 	/** 名称单元格内容（可为富文本，如「供应商・模型 + 停用后缀」）。 */
@@ -97,7 +91,6 @@ export function SortableMetricTable<T extends Record<RaceSortKey, number>>({
 	items,
 	sort,
 	onSort,
-	columns = RACE_COLUMNS,
 	nameHeader,
 	renderName,
 	rowKey,
@@ -120,7 +113,7 @@ export function SortableMetricTable<T extends Record<RaceSortKey, number>>({
 						<th className="px-2 py-2 text-left text-xs font-medium text-muted-foreground">
 							{t(nameHeader)}
 						</th>
-						{columns.map((column) => {
+						{RACE_COLUMNS.map((column) => {
 							const active = sort.sortBy === column.key;
 							const label = t(column.labelKey);
 							return (
@@ -174,7 +167,7 @@ export function SortableMetricTable<T extends Record<RaceSortKey, number>>({
 								<td className="px-2 py-2 text-left font-medium text-foreground">
 									{renderName(item)}
 								</td>
-								{columns.map((column) => (
+								{RACE_COLUMNS.map((column) => (
 									<td
 										key={column.key}
 										className="px-2 py-2 text-right font-mono text-xs tabular-nums text-foreground"
