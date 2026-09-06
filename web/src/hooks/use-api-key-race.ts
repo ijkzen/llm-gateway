@@ -1,9 +1,7 @@
-import { type ApiResponse, api, unwrap } from "@/lib/api";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { statsFilterKeySegments, statsKey, statsQuery } from "@/hooks/stats-query";
+import type { RaceSort, RaceWindow, StatsFilter } from "@/lib/race-types";
 
-import type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
-
-export type { RaceSort, RaceSortKey, RaceWindow };
+export type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
 
 export interface ApiKeyRankItem {
 	/** 调用方 API Key 名称（Key 已删除的历史行仍按原名聚合）。 */
@@ -31,28 +29,17 @@ export interface ApiKeyRankResponse {
 }
 
 /** API Key 赛马的过滤维度：三级页（模型详情）用 providerId + modelId。 */
-export interface ApiKeyRaceFilter {
-	/** 二级页（供应商详情）：只统计该供应商。 */
-	providerId?: number;
-	/** 二级页（虚拟模型详情）：只统计该虚拟模型。 */
-	virtualModelId?: number;
-	/** 三级页（模型详情）：只统计该模型（须与 providerId 同传）。 */
-	modelId?: string;
-}
+export type ApiKeyRaceFilter = Pick<StatsFilter, "providerId" | "virtualModelId" | "modelId">;
 
 export const apiKeyRaceKeys = {
 	rank: (window: RaceWindow, sort: RaceSort, filter?: ApiKeyRaceFilter) =>
-		[
-			"stats",
-			"api-key-rank",
+		statsKey("api-key-rank", [
 			window.startTime,
 			window.endTime,
 			sort.sortBy,
 			sort.sortOrder,
-			filter?.providerId ?? null,
-			filter?.virtualModelId ?? null,
-			filter?.modelId ?? null,
-		] as const,
+			...(filter ? statsFilterKeySegments(filter).slice(0, 3) : [null, null, null]),
+		]),
 };
 
 /**
@@ -68,31 +55,18 @@ export function useApiKeyRace(
 	enabled: boolean,
 	filter?: ApiKeyRaceFilter,
 ) {
-	return useQuery<ApiKeyRankResponse>({
-		queryKey: apiKeyRaceKeys.rank(window, sort, filter),
-		queryFn: async () => {
-			const params = new URLSearchParams({
-				sortBy: sort.sortBy,
-				sortOrder: sort.sortOrder,
-				startTime: String(window.startTime),
-				endTime: String(window.endTime),
-			});
-			if (filter?.providerId !== undefined) {
-				params.set("providerId", String(filter.providerId));
-			}
-			if (filter?.virtualModelId !== undefined) {
-				params.set("virtualModelId", String(filter.virtualModelId));
-			}
-			if (filter?.modelId !== undefined) {
-				params.set("modelId", filter.modelId);
-			}
-			const res = await api
-				.get(`stats/api-key-rank?${params.toString()}`)
-				.json<ApiResponse<ApiKeyRankResponse>>();
-			return unwrap(res);
-		},
+	return statsQuery<ApiKeyRankResponse>({
+		endpoint: "stats/api-key-rank",
+		key: apiKeyRaceKeys.rank(window, sort, filter),
 		enabled,
-		// 切换时间窗口期间保留上一窗口数据，避免图表闪回骨架导致页面抖动。
-		placeholderData: keepPreviousData,
+		params: {
+			sortBy: sort.sortBy,
+			sortOrder: sort.sortOrder,
+			startTime: window.startTime,
+			endTime: window.endTime,
+			providerId: filter?.providerId,
+			virtualModelId: filter?.virtualModelId,
+			modelId: filter?.modelId,
+		},
 	});
 }

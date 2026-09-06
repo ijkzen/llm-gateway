@@ -1,6 +1,6 @@
-import { type ApiResponse, api, unwrap } from "@/lib/api";
+import { statsKey, statsQuery } from "@/hooks/stats-query";
 import type { ChartGranularity } from "@/lib/race-period";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import type { StatsFilter, TimeWindowParams } from "@/lib/race-types";
 
 /** 每桶趋势点（整数，如调用数/Token 数/失败数）。 */
 export interface TrendPoint {
@@ -49,57 +49,39 @@ export interface InsightData {
 }
 
 /** 查询参数（与 useDashboardCharts 同一套过滤/窗口/粒度）。 */
-export interface InsightParams {
-	startTime?: number;
-	endTime?: number;
-	providerId?: number;
-	virtualModelId?: number;
-	modelId?: string;
-	/** 按调用方 API Key 名称过滤（可选；API Key 数据面板用）。 */
-	apiKey?: string;
+export interface InsightParams extends TimeWindowParams, StatsFilter {
 	granularity?: ChartGranularity;
 	tzOffsetMinutes?: number;
 }
 
 export const insightKeys = {
 	all: (params: InsightParams = {}) =>
-		[
-			"stats",
-			"insight",
-			params.startTime ?? null,
-			params.endTime ?? null,
-			params.providerId ?? null,
-			params.virtualModelId ?? null,
-			params.modelId ?? null,
-			params.apiKey ?? null,
-			params.granularity ?? null,
-			params.tzOffsetMinutes ?? null,
-		] as const,
+		statsKey("insight", [
+			params.startTime,
+			params.endTime,
+			params.providerId,
+			params.virtualModelId,
+			params.modelId,
+			params.apiKey,
+			params.granularity,
+			params.tzOffsetMinutes,
+		]),
 };
 
 export function useDashboardInsight(params: InsightParams = {}, enabled = true) {
-	return useQuery<InsightData>({
-		queryKey: insightKeys.all(params),
-		queryFn: async () => {
-			const query = new URLSearchParams();
-			if (params.startTime !== undefined) query.set("startTime", String(params.startTime));
-			if (params.endTime !== undefined) query.set("endTime", String(params.endTime));
-			if (params.providerId !== undefined) query.set("providerId", String(params.providerId));
-			if (params.virtualModelId !== undefined) {
-				query.set("virtualModelId", String(params.virtualModelId));
-			}
-			if (params.modelId !== undefined) query.set("modelId", params.modelId);
-			if (params.apiKey !== undefined) query.set("apiKey", params.apiKey);
-			if (params.granularity !== undefined) query.set("granularity", params.granularity);
-			if (params.tzOffsetMinutes !== undefined) {
-				query.set("tzOffsetMinutes", String(params.tzOffsetMinutes));
-			}
-			const suffix = query.size > 0 ? `?${query.toString()}` : "";
-			const res = await api.get(`stats/insight${suffix}`).json<ApiResponse<InsightData>>();
-			return unwrap(res);
-		},
+	return statsQuery<InsightData>({
+		endpoint: "stats/insight",
+		key: insightKeys.all(params),
 		enabled,
-		// 切换时间窗口期间保留上一窗口数据，避免图表闪回骨架导致页面抖动。
-		placeholderData: keepPreviousData,
+		params: {
+			startTime: params.startTime,
+			endTime: params.endTime,
+			providerId: params.providerId,
+			virtualModelId: params.virtualModelId,
+			modelId: params.modelId,
+			apiKey: params.apiKey,
+			granularity: params.granularity,
+			tzOffsetMinutes: params.tzOffsetMinutes,
+		},
 	});
 }

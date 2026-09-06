@@ -1,6 +1,4 @@
-import { type ApiResponse, api, unwrap } from "@/lib/api";
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
-
+import { statsKey, statsQuery } from "@/hooks/stats-query";
 import type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
 
 export type { RaceSort, RaceSortKey, RaceWindow };
@@ -32,15 +30,13 @@ export interface VirtualModelRankResponse {
 
 export const virtualModelRaceKeys = {
 	rank: (window: RaceWindow, sort: RaceSort, apiKey?: string) =>
-		[
-			"stats",
-			"virtual-model-rank",
+		statsKey("virtual-model-rank", [
 			window.startTime,
 			window.endTime,
 			sort.sortBy,
 			sort.sortOrder,
-			apiKey ?? null,
-		] as const,
+			apiKey,
+		]),
 };
 
 /**
@@ -56,25 +52,16 @@ export function useVirtualModelRace(
 	enabled: boolean,
 	apiKey?: string,
 ) {
-	return useQuery<VirtualModelRankResponse>({
-		queryKey: virtualModelRaceKeys.rank(window, sort, apiKey),
-		queryFn: async () => {
-			const params = new URLSearchParams({
-				sortBy: sort.sortBy,
-				sortOrder: sort.sortOrder,
-				startTime: String(window.startTime),
-				endTime: String(window.endTime),
-			});
-			if (apiKey !== undefined) {
-				params.set("apiKey", apiKey);
-			}
-			const res = await api
-				.get(`stats/virtual-model-rank?${params.toString()}`)
-				.json<ApiResponse<VirtualModelRankResponse>>();
-			return unwrap(res);
-		},
+	return statsQuery<VirtualModelRankResponse>({
+		endpoint: "stats/virtual-model-rank",
+		key: virtualModelRaceKeys.rank(window, sort, apiKey),
 		enabled,
-		// 切换时间窗口期间保留上一窗口数据，避免图表闪回骨架导致页面抖动。
-		placeholderData: keepPreviousData,
+		params: {
+			sortBy: sort.sortBy,
+			sortOrder: sort.sortOrder,
+			startTime: window.startTime,
+			endTime: window.endTime,
+			apiKey,
+		},
 	});
 }
