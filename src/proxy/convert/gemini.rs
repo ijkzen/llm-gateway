@@ -11,8 +11,8 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use super::{
-    chat_max_tokens, chat_messages, collect_tool_call_names, inline_defs, message_text,
-    reasoning_budget,
+    chat_max_tokens, chat_messages, chat_reasoning, collect_tool_call_names, inline_defs,
+    message_text, reasoning_budget,
 };
 use crate::proxy::metrics::Usage;
 
@@ -308,17 +308,21 @@ pub fn build_request_body(chat: &Value, _actual_model: &str) -> Result<Value, St
     if let Some(top_p) = chat.get("top_p").and_then(Value::as_f64) {
         generation_config.insert("topP".to_string(), json!(top_p));
     }
+    if let Some(top_k) = chat.get("top_k").and_then(Value::as_i64) {
+        generation_config.insert("topK".to_string(), json!(top_k));
+    }
     if let Some(seed) = chat.get("seed").and_then(Value::as_i64) {
         generation_config.insert("seed".to_string(), json!(seed));
     }
-    if let Some(effort) = chat.get("reasoning_effort").and_then(Value::as_str)
-        && !effort.is_empty()
-        && effort != "none"
-    {
+    if let Some(reasoning) = chat_reasoning(chat) {
         // includeThoughts=true：不开启时上游只思考不返回思考摘要，客户端收不到。
+        // reasoning.max_tokens 直传 thinkingBudget（OpenRouter Gemini 语义），否则按 effort 档位。
+        let budget = reasoning
+            .max_tokens
+            .unwrap_or_else(|| reasoning_budget(&reasoning.effort));
         generation_config.insert(
             "thinkingConfig".to_string(),
-            json!({"thinkingBudget": reasoning_budget(effort), "includeThoughts": true}),
+            json!({"thinkingBudget": budget, "includeThoughts": true}),
         );
     }
     if let Some(presence) = chat.get("presence_penalty").and_then(Value::as_f64) {
@@ -550,12 +554,13 @@ fn image_part(url: &str) -> Option<Value> {
     Some(json!({"fileData": {"fileUri": url}}))
 }
 
-/// Gemini finishReason → OpenAI finish_reason（LiteLLM 全表）。
-pub fn map_finish_reason(reason: &str, has_tool_calls: bool) -> &'static str {
+/// Gemini finishReason → (OpenAI finish_reason, 原生值透传)（LiteLLM 全表 + native）。
+pub fn map_finish_reason(reason: &str, has_tool_calls: bool) -> (&'static str, Option<&str>) {
+    let native = Some(reason).filter(|reason| !reason.is_empty());
     if has_tool_calls {
-        return "tool_calls";
+        return ("tool_calls", native);
     }
-    match reason {
+    let finish_reason = match reason {
         "STOP"
         | "FINISH_REASON_UNSPECIFIED"
         | "MALFORMED_FUNCTION_CALL"
@@ -580,7 +585,8 @@ pub fn map_finish_reason(reason: &str, has_tool_calls: bool) -> &'static str {
             tracing::debug!("unmapped gemini finishReason: {other}");
             "stop"
         }
-    }
+    };
+    (finish_reason, native)
 }
 
 /// usageMetadata → 归一 usage：输出 = candidates + thoughts（兜底 total − prompt）。
@@ -712,18 +718,20 @@ pub fn convert_response(
     let usage = extract_usage(upstream.get("usageMetadata").unwrap_or(&Value::Null));
     let has_tool_calls = message.get("tool_calls").is_some();
     // 提示词被安全拦截时 candidates 通常为空，必须显式返回 content_filter，
-    // 否则客户端把拒答误判为正常空响应（LiteLLM 同款）。
-    let finish_reason = if upstream.pointer("/promptFeedback/blockReason").is_some() {
-        "content_filter"
-    } else {
-        candidate
-            .get("finishReason")
-            .and_then(Value::as_str)
-            .map(|reason| map_finish_reason(reason, has_tool_calls))
-            .unwrap_or(if has_tool_calls { "tool_calls" } else { "stop" })
-    };
+    // 否则客户端把拒答误判为正常空响应（LiteLLM 同款）。blockReason 不是
+    // finishReason，原生值省略。
+    let (finish_reason, native_finish_reason) =
+        if upstream.pointer("/promptFeedback/blockReason").is_some() {
+            ("content_filter", None)
+        } else {
+            candidate
+                .get("finishReason")
+                .and_then(Value::as_str)
+                .map(|reason| map_finish_reason(reason, has_tool_calls))
+                .unwrap_or((if has_tool_calls { "tool_calls" } else { "stop" }, None))
+        };
 
-    let completion = json!({
+    let mut completion = json!({
         "id": format!("chatcmpl-{}", Uuid::new_v4()),
         "object": "chat.completion",
         "created": chrono::Utc::now().timestamp(),
@@ -735,6 +743,7 @@ pub fn convert_response(
         }],
         "usage": super::cached_client_usage_json(&usage),
     });
+    super::attach_native_finish_reason(&mut completion, native_finish_reason);
     let _ = &mut tool_calls;
     Ok((completion, usage))
 }
@@ -747,6 +756,7 @@ pub struct GeminiStreamConverter {
     requested_model: String,
     started: bool,
     finish_reason: Option<&'static str>,
+    native_finish_reason: Option<String>,
     usage: Option<Usage>,
     finished: bool,
     finish_emitted: bool,
@@ -762,6 +772,7 @@ impl GeminiStreamConverter {
             requested_model: requested_model.to_string(),
             started: false,
             finish_reason: None,
+            native_finish_reason: None,
             usage: None,
             finished: false,
             finish_emitted: false,
@@ -862,12 +873,15 @@ impl GeminiStreamConverter {
             .pointer("/candidates/0/finishReason")
             .and_then(Value::as_str)
         {
-            self.finish_reason = Some(map_finish_reason(reason, self.tool_counter > 0));
+            let (finish_reason, native) = map_finish_reason(reason, self.tool_counter > 0);
+            self.finish_reason = Some(finish_reason);
+            self.native_finish_reason = native.map(str::to_string);
         }
 
         // 流式中提示词被拦截（candidates 为空）时同样要给 content_filter。
         if value.pointer("/promptFeedback/blockReason").is_some() {
             self.finish_reason = Some("content_filter");
+            self.native_finish_reason = None;
         }
 
         // Gemini 以 finishReason + usageMetadata 收尾；没有显式终止事件，
@@ -882,11 +896,12 @@ impl GeminiStreamConverter {
         }
         self.finish_emitted = true;
         self.ensure_started(&mut Vec::new());
-        Some(super::chunk_json(
+        Some(super::chunk_json_with_native(
             &self.id,
             &self.requested_model,
             json!({}),
             Some(self.finish_reason.unwrap_or("stop")),
+            self.native_finish_reason.as_deref(),
         ))
     }
 
@@ -968,18 +983,42 @@ mod tests {
 
     #[test]
     fn maps_finish_reason_table() {
-        assert_eq!(map_finish_reason("STOP", false), "stop");
-        assert_eq!(map_finish_reason("MAX_TOKENS", false), "length");
-        assert_eq!(map_finish_reason("SAFETY", false), "content_filter");
-        assert_eq!(map_finish_reason("RECITATION", false), "content_filter");
-        assert_eq!(map_finish_reason("MALFORMED_FUNCTION_CALL", false), "stop");
-        assert_eq!(map_finish_reason("STOP", true), "tool_calls");
-        assert_eq!(map_finish_reason("UNEXPECTED_TOOL_CALL", false), "stop");
-        assert_eq!(map_finish_reason("NO_IMAGE", false), "stop");
-        assert_eq!(map_finish_reason("IMAGE_OTHER", false), "content_filter");
+        assert_eq!(map_finish_reason("STOP", false), ("stop", Some("STOP")));
+        assert_eq!(
+            map_finish_reason("MAX_TOKENS", false),
+            ("length", Some("MAX_TOKENS"))
+        );
+        assert_eq!(
+            map_finish_reason("SAFETY", false),
+            ("content_filter", Some("SAFETY"))
+        );
+        assert_eq!(
+            map_finish_reason("RECITATION", false),
+            ("content_filter", Some("RECITATION"))
+        );
+        assert_eq!(
+            map_finish_reason("MALFORMED_FUNCTION_CALL", false),
+            ("stop", Some("MALFORMED_FUNCTION_CALL"))
+        );
+        assert_eq!(
+            map_finish_reason("STOP", true),
+            ("tool_calls", Some("STOP"))
+        );
+        assert_eq!(
+            map_finish_reason("UNEXPECTED_TOOL_CALL", false),
+            ("stop", Some("UNEXPECTED_TOOL_CALL"))
+        );
+        assert_eq!(
+            map_finish_reason("NO_IMAGE", false),
+            ("stop", Some("NO_IMAGE"))
+        );
+        assert_eq!(
+            map_finish_reason("IMAGE_OTHER", false),
+            ("content_filter", Some("IMAGE_OTHER"))
+        );
         assert_eq!(
             map_finish_reason("IMAGE_RECITATION", false),
-            "content_filter"
+            ("content_filter", Some("IMAGE_RECITATION"))
         );
     }
 
@@ -1027,6 +1066,43 @@ mod tests {
             body["contents"][1]["parts"][0]["functionCall"]["args"],
             json!({})
         );
+    }
+
+    #[test]
+    fn reasoning_object_maps_to_thinking_config() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning":{"effort":"high"}}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            4096
+        );
+        assert!(body["generationConfig"].get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn reasoning_max_tokens_maps_to_thinking_budget() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning":{"max_tokens":2000}}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        assert_eq!(
+            body["generationConfig"]["thinkingConfig"]["thinkingBudget"],
+            2000
+        );
+    }
+
+    #[test]
+    fn top_k_maps_to_generation_config() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"top_k":40}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gemini-x").unwrap();
+        assert_eq!(body["generationConfig"]["topK"], 40);
     }
 
     #[test]

@@ -112,6 +112,79 @@ pub fn reasoning_budget(effort: &str) -> i64 {
     }
 }
 
+/// 归一后的请求侧思考参数（OpenRouter `reasoning` 对象语义）。
+#[derive(Debug, PartialEq)]
+pub struct ReasoningRequest {
+    pub effort: String,
+    pub max_tokens: Option<i64>,
+    pub exclude: bool,
+}
+
+/// 归一请求侧思考参数：OpenRouter 主形态 `reasoning` 对象
+/// （effort/max_tokens/exclude/enabled）与顶层 `reasoning_effort` 简写，
+/// 两者同传且 effort 不一致时取对象值。`enabled:false` 或 effort "none"
+/// 关闭思考；空对象等价 legacy `include_reasoning:true`（medium 兜底）。
+pub fn chat_reasoning(chat: &Value) -> Option<ReasoningRequest> {
+    let empty = Map::new();
+    let has_object = chat.get("reasoning").is_some_and(Value::is_object);
+    let object = chat
+        .get("reasoning")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    let shorthand = chat
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .filter(|effort| !effort.is_empty());
+    if !has_object && shorthand.is_none() {
+        return None;
+    }
+    if object.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return None;
+    }
+    let max_tokens = object.get("max_tokens").and_then(Value::as_i64);
+    let exclude = object
+        .get("exclude")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let object_effort = object
+        .get("effort")
+        .and_then(Value::as_str)
+        .filter(|effort| !effort.is_empty());
+    if let Some(object_effort) = object_effort {
+        if let Some(shorthand) = shorthand
+            && shorthand != object_effort
+        {
+            tracing::debug!(
+                object_effort,
+                shorthand,
+                "reasoning.effort 与 reasoning_effort 不一致，取 reasoning.effort"
+            );
+        }
+        if object_effort == "none" {
+            return None;
+        }
+        return Some(ReasoningRequest {
+            effort: object_effort.to_string(),
+            max_tokens,
+            exclude,
+        });
+    }
+    match shorthand {
+        Some("none") => None,
+        Some(effort) => Some(ReasoningRequest {
+            effort: effort.to_string(),
+            max_tokens,
+            exclude,
+        }),
+        None if chat.get("reasoning").is_some_and(Value::is_object) => Some(ReasoningRequest {
+            effort: "medium".to_string(),
+            max_tokens,
+            exclude,
+        }),
+        None => None,
+    }
+}
+
 /// 拼接上游 URL：沿用 `build_models_url` 的版本段规则
 /// （base 末段已是 v1/v1beta/v1alpha 则直接拼，否则按协议补默认版本段）。
 pub fn build_upstream_url(base_url: &str, protocol_type: i32, sub_path: &str) -> String {
@@ -205,6 +278,35 @@ pub fn usage_chunk_json(id: &str, model: &str, usage: Value) -> Value {
         "choices": [],
         "usage": usage,
     })
+}
+
+/// 原生终止值透传上限（防上游垃圾值透给客户端；信息保真优先于白名单，
+/// 上游新枚举不会被静默丢弃）。
+const NATIVE_FINISH_REASON_MAX_CHARS: usize = 32;
+
+/// 构造携带 native_finish_reason 的 chunk（原生终止值透传，None 时省略字段）。
+pub fn chunk_json_with_native(
+    id: &str,
+    model: &str,
+    delta: Value,
+    finish_reason: Option<&str>,
+    native_finish_reason: Option<&str>,
+) -> Value {
+    let mut chunk = chunk_json(id, model, delta, finish_reason);
+    if let Some(native) = native_finish_reason {
+        chunk["choices"][0]["native_finish_reason"] =
+            json!(truncate_chars(native, NATIVE_FINISH_REASON_MAX_CHARS));
+    }
+    chunk
+}
+
+/// 非流式响应 choice 上注入 native_finish_reason（None 时省略字段）。
+pub fn attach_native_finish_reason(completion: &mut Value, native_finish_reason: Option<&str>) {
+    let Some(native) = native_finish_reason else {
+        return;
+    };
+    completion["choices"][0]["native_finish_reason"] =
+        json!(truncate_chars(native, NATIVE_FINISH_REASON_MAX_CHARS));
 }
 
 /// 从 OpenAI chat 请求体提取归一后的 max_tokens（优先 max_completion_tokens）。
@@ -386,6 +488,65 @@ mod tests {
         assert_eq!(reasoning_budget("high"), 4096);
         assert_eq!(reasoning_budget("max"), 16384);
         assert_eq!(reasoning_budget("minimal"), 128);
+    }
+
+    #[test]
+    fn chat_reasoning_parses_object_effort() {
+        let reasoning = chat_reasoning(&json!({"reasoning": {"effort": "high"}})).unwrap();
+        assert_eq!(reasoning.effort, "high");
+        assert_eq!(reasoning.max_tokens, None);
+        assert!(!reasoning.exclude);
+    }
+
+    #[test]
+    fn chat_reasoning_falls_back_to_shorthand() {
+        assert_eq!(
+            chat_reasoning(&json!({"reasoning_effort": "low"}))
+                .unwrap()
+                .effort,
+            "low"
+        );
+        assert!(chat_reasoning(&json!({})).is_none());
+    }
+
+    #[test]
+    fn chat_reasoning_object_wins_over_conflicting_shorthand() {
+        let chat = json!({"reasoning": {"effort": "high"}, "reasoning_effort": "low"});
+        assert_eq!(chat_reasoning(&chat).unwrap().effort, "high");
+    }
+
+    #[test]
+    fn chat_reasoning_none_and_enabled_false_disable() {
+        assert!(chat_reasoning(&json!({"reasoning": {"effort": "none"}})).is_none());
+        assert!(
+            chat_reasoning(&json!({"reasoning": {"enabled": false, "effort": "high"}})).is_none()
+        );
+        assert!(chat_reasoning(&json!({"reasoning_effort": "none"})).is_none());
+    }
+
+    #[test]
+    fn chat_reasoning_empty_object_defaults_to_medium() {
+        // OpenRouter 语义：reasoning:{} 等价 legacy include_reasoning:true。
+        assert_eq!(
+            chat_reasoning(&json!({"reasoning": {}})).unwrap().effort,
+            "medium"
+        );
+        assert_eq!(
+            chat_reasoning(&json!({"reasoning": {"enabled": true}}))
+                .unwrap()
+                .effort,
+            "medium"
+        );
+    }
+
+    #[test]
+    fn chat_reasoning_carries_max_tokens_and_exclude() {
+        let reasoning =
+            chat_reasoning(&json!({"reasoning": {"max_tokens": 2000, "exclude": true}})).unwrap();
+        assert_eq!(reasoning.max_tokens, Some(2000));
+        assert!(reasoning.exclude);
+        // 无 effort 但有 max_tokens：仍视为开启，effort 以 medium 兜底。
+        assert_eq!(reasoning.effort, "medium");
     }
 
     #[test]

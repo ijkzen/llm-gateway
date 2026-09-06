@@ -8,7 +8,10 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{chat_max_tokens, chat_messages, collect_tool_call_names, inline_defs, message_text};
+use super::{
+    chat_max_tokens, chat_messages, chat_reasoning, collect_tool_call_names, inline_defs,
+    message_text,
+};
 use crate::proxy::metrics::Usage;
 
 /// 编码发往 Responses API 的请求体。
@@ -99,11 +102,11 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
     if let Some(top_p) = chat.get("top_p") {
         object.insert("top_p".to_string(), top_p.clone());
     }
-    if let Some(effort) = chat.get("reasoning_effort").and_then(Value::as_str)
-        && !effort.is_empty()
-        && effort != "none"
-    {
-        object.insert("reasoning".to_string(), json!({"effort": effort}));
+    if let Some(top_k) = chat.get("top_k") {
+        object.insert("top_k".to_string(), top_k.clone());
+    }
+    if let Some(reasoning) = chat_reasoning(chat) {
+        object.insert("reasoning".to_string(), json!({"effort": reasoning.effort}));
     }
     if let Some(tools) = chat.get("tools").and_then(Value::as_array) {
         let converted: Vec<Value> = tools
@@ -1004,5 +1007,42 @@ mod tests {
             .unwrap();
         let body = build_request_body(&chat, "gpt-5").unwrap();
         assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+    }
+
+    #[test]
+    fn reasoning_object_sets_effort() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning":{"effort":"high"}}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert_eq!(body["reasoning"]["effort"], "high");
+
+        let chat = from_str::<Value>(r#"{"model":"m","messages":[{"role":"user","content":"x"}]}"#)
+            .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert!(body.get("reasoning").is_none());
+    }
+
+    #[test]
+    fn reasoning_max_tokens_is_dropped_for_responses() {
+        // Responses 的 reasoning 只接受 effort；max_tokens 无对应参数，按「不支持即忽略」丢弃。
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"reasoning":{"max_tokens":2000}}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert_eq!(body["reasoning"]["effort"], "medium");
+        assert!(body["reasoning"].get("max_tokens").is_none());
+    }
+
+    #[test]
+    fn top_k_passthrough_for_responses() {
+        let chat = from_str::<Value>(
+            r#"{"model":"m","messages":[{"role":"user","content":"x"}],"top_k":40}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-5").unwrap();
+        assert_eq!(body["top_k"], 40);
     }
 }

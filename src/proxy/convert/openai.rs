@@ -20,6 +20,12 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Value {
                 }
             }
         }
+        // reasoning 对象是 OpenRouter 形态，OpenAI 兼容上游不识别：
+        // 归一为 reasoning_effort 简写透传并剥离原对象。
+        if let Some(reasoning) = super::chat_reasoning(chat) {
+            object.insert("reasoning_effort".to_string(), json!(reasoning.effort));
+        }
+        object.remove("reasoning");
         let stream = object
             .get("stream")
             .and_then(Value::as_bool)
@@ -209,6 +215,34 @@ mod tests {
         assert!(body["messages"][0].get("reasoning_details").is_none());
         assert!(body["messages"][1].get("reasoning_details").is_none());
         assert_eq!(body["messages"][1]["content"], "hi");
+    }
+
+    #[test]
+    fn build_body_normalizes_reasoning_object() {
+        // OpenRouter reasoning 对象归一为 reasoning_effort 简写并剥离原对象。
+        let chat = from_str::<Value>(
+            r#"{"model":"vm-a","messages":[],"reasoning":{"effort":"high","exclude":true}}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-4o");
+        assert_eq!(body["reasoning_effort"], "high");
+        assert!(body.get("reasoning").is_none());
+
+        // 与显式 reasoning_effort 冲突时对象优先。
+        let chat = from_str::<Value>(
+            r#"{"model":"vm-a","messages":[],"reasoning":{"effort":"high"},"reasoning_effort":"low"}"#,
+        )
+        .unwrap();
+        let body = build_request_body(&chat, "gpt-4o");
+        assert_eq!(body["reasoning_effort"], "high");
+
+        // effort none：不注入 reasoning_effort。
+        let chat =
+            from_str::<Value>(r#"{"model":"vm-a","messages":[],"reasoning":{"effort":"none"}}"#)
+                .unwrap();
+        let body = build_request_body(&chat, "gpt-4o");
+        assert!(body.get("reasoning_effort").is_none());
+        assert!(body.get("reasoning").is_none());
     }
 
     #[test]
