@@ -1,5 +1,5 @@
 import { BILLING_MODES, PROTOCOL_TYPES } from "@/components/providers/ProtocolIcon";
-import { ProxyConfigFields } from "@/components/providers/ProxyConfigFields";
+import { ProxyConfigFields, proxySuperRefine } from "@/components/providers/ProxyConfigFields";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -59,23 +59,7 @@ function makeFormSchema(t: (key: string) => string) {
 			proxyEnabled: z.boolean(),
 			proxyAddr: z.string(),
 		})
-		.superRefine((values, ctx) => {
-			if (values.proxyEnabled) {
-				if (!values.proxyAddr.trim()) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["proxyAddr"],
-						message: t("providers.proxyAddrRequired"),
-					});
-				} else if (!values.proxyAddr.trim().startsWith("http://")) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["proxyAddr"],
-						message: t("providers.proxyAddrInvalid"),
-					});
-				}
-			}
-		});
+		.superRefine(proxySuperRefine(t));
 }
 
 type FormValues = z.infer<ReturnType<typeof makeFormSchema>>;

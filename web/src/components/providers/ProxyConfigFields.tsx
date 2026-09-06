@@ -11,6 +11,36 @@ import { Switch } from "@/components/ui/switch";
 import type { Control, FieldValues, Path } from "react-hook-form";
 import { useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
+import { z } from "zod";
+
+interface ProxyLike {
+	proxyEnabled: boolean;
+	proxyAddr: string;
+}
+
+/**
+ * proxy 校验规则（superRefine 回调）：开启时地址必填且需 http:// 开头。
+ * 与本组件的渲染字段同址——供应商编辑弹窗与模型详情弹窗共用同一规则。
+ */
+export function proxySuperRefine<T extends ProxyLike>(t: (key: string) => string) {
+	return (values: T, ctx: z.RefinementCtx) => {
+		if (!values.proxyEnabled) return;
+		if (!values.proxyAddr.trim()) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["proxyAddr"],
+				message: t("providers.proxyAddrRequired"),
+			});
+		} else if (!values.proxyAddr.trim().startsWith("http://")) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["proxyAddr"],
+				message: t("providers.proxyAddrInvalid"),
+			});
+		}
+	};
+}
+
 interface ProxyConfigFieldsProps<T extends FieldValues> {
 	control: Control<T>;
 	/** 表单中代理开关字段名（默认 proxyEnabled）。 */

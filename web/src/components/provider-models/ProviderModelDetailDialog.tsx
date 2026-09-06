@@ -2,8 +2,13 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { MidEllipsis } from "@/components/mid-ellipsis";
 import { CAPABILITIES } from "@/components/provider-models/CapabilityIcons";
 import { TestFailedDialog } from "@/components/provider-models/TestFailedDialog";
+import {
+	CapabilitySwitchGrid,
+	makeProviderModelBaseSchema,
+} from "@/components/provider-models/provider-model-form";
 import { PROTOCOL_TYPES, protocolLabel } from "@/components/providers/ProtocolIcon";
 import { ProviderProxyRow } from "@/components/providers/ProviderProxyRow";
+import { proxySuperRefine } from "@/components/providers/ProxyConfigFields";
 import { ProxyConfigFields } from "@/components/providers/ProxyConfigFields";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,7 +35,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import {
 	type ProviderModel,
 	useDeleteProviderModel,
@@ -48,44 +52,15 @@ import { Link } from "react-router-dom";
 import { z } from "zod";
 
 function makeFormSchema(t: (key: string) => string) {
-	return z
-		.object({
-			providerModelId: z.string().min(1, t("providerModels.modelIdRequired")),
-			contextLength: z.coerce
-				.number()
-				.int(t("providerModels.mustBeInt"))
-				.positive(t("providerModels.mustBePositive")),
-			maxOutputTokens: z.coerce
-				.number()
-				.int(t("providerModels.mustBeInt"))
-				.positive(t("providerModels.mustBePositive")),
-			reasoning: z.boolean(),
-			toolUse: z.boolean(),
-			imageUnderstand: z.boolean(),
-			videoUnderstand: z.boolean(),
+	return makeProviderModelBaseSchema(t)
+		.extend({
 			// 模型单独选择的协议：null=跟随供应商；0..=3=覆盖（与供应商协议枚举一致）。
 			protocolType: z.number().int().nullable(),
 			// 模型级网络代理：开启时地址必填且需 http:// 开头（与供应商代理同规则）。
 			proxyEnabled: z.boolean(),
 			proxyAddr: z.string(),
 		})
-		.superRefine((values, ctx) => {
-			if (values.proxyEnabled) {
-				if (!values.proxyAddr.trim()) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["proxyAddr"],
-						message: t("providers.proxyAddrRequired"),
-					});
-				} else if (!values.proxyAddr.trim().startsWith("http://")) {
-					ctx.addIssue({
-						code: z.ZodIssueCode.custom,
-						path: ["proxyAddr"],
-						message: t("providers.proxyAddrInvalid"),
-					});
-				}
-			}
-		});
+		.superRefine(proxySuperRefine(t));
 }
 
 type FormValues = z.infer<ReturnType<typeof makeFormSchema>>;
@@ -307,23 +282,7 @@ export function ProviderModelDetailDialog({
 										)}
 									/>
 								</div>
-								<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-									{CAPABILITIES.map(({ key, labelKey }) => (
-										<FormField
-											key={key}
-											control={form.control}
-											name={key}
-											render={({ field }) => (
-												<FormItem className="flex items-center justify-between rounded-lg border p-3">
-													<FormLabel>{t(labelKey)}</FormLabel>
-													<FormControl>
-														<Switch checked={field.value} onCheckedChange={field.onChange} />
-													</FormControl>
-												</FormItem>
-											)}
-										/>
-									))}
-								</div>
+								<CapabilitySwitchGrid control={form.control} />
 
 								{/* 模型级网络代理：开关 + 条件显示地址输入（优先于供应商代理）。 */}
 								<ProxyConfigFields control={form.control} />

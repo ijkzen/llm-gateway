@@ -21,7 +21,6 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
 	type CatalogCandidate,
 	type CatalogSuggestion,
@@ -41,32 +40,15 @@ import { RefreshCw, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
-import { z } from "zod";
-const CAPABILITY_KEYS = ["reasoning", "toolUse", "imageUnderstand", "videoUnderstand"] as const;
+import type { z } from "zod";
 
-const CAPABILITY_LABEL_KEYS: Record<(typeof CAPABILITY_KEYS)[number], string> = {
-	reasoning: "providerModels.reasoning",
-	toolUse: "providerModels.toolUse",
-	imageUnderstand: "providerModels.imageUnderstand",
-	videoUnderstand: "providerModels.videoUnderstand",
-};
+import {
+	CapabilitySwitchGrid,
+	makeProviderModelBaseSchema,
+} from "@/components/provider-models/provider-model-form";
 
 function makeManualFormSchema(t: (key: string) => string) {
-	return z.object({
-		providerModelId: z.string().min(1, t("providerModels.modelIdRequired")),
-		contextLength: z.coerce
-			.number()
-			.int(t("providerModels.mustBeInt"))
-			.positive(t("providerModels.mustBePositive")),
-		maxOutputTokens: z.coerce
-			.number()
-			.int(t("providerModels.mustBeInt"))
-			.positive(t("providerModels.mustBePositive")),
-		reasoning: z.boolean(),
-		toolUse: z.boolean(),
-		imageUnderstand: z.boolean(),
-		videoUnderstand: z.boolean(),
-	});
+	return makeProviderModelBaseSchema(t);
 }
 
 type ManualFormValues = z.infer<ReturnType<typeof makeManualFormSchema>>;
@@ -790,23 +772,7 @@ export function AddProviderModelsDialog({
 											)}
 										/>
 									</div>
-									<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-										{CAPABILITY_KEYS.map((key) => (
-											<FormField
-												key={key}
-												control={form.control}
-												name={key}
-												render={({ field }) => (
-													<FormItem className="flex items-center justify-between rounded-lg border p-3">
-														<FormLabel>{t(CAPABILITY_LABEL_KEYS[key])}</FormLabel>
-														<FormControl>
-															<Switch checked={field.value} onCheckedChange={field.onChange} />
-														</FormControl>
-													</FormItem>
-												)}
-											/>
-										))}
-									</div>
+									<CapabilitySwitchGrid control={form.control} />
 								</form>
 							</Form>
 						)}
