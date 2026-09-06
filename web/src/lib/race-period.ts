@@ -232,3 +232,8 @@ export function defaultCustomWindow(now: number): { startTime: number; endTime: 
 	end.setHours(0, 0, 0, 0);
 	return { startTime: start.getTime(), endTime: end.getTime() };
 }
+
+/** 客户端 UTC 偏移（分钟，东八区 480）；与 granularity 搭配传给后端。 */
+export function clientTzOffsetMinutes(): number {
+	return -new Date().getTimezoneOffset();
+}

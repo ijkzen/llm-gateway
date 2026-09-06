@@ -1,34 +1,26 @@
 import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { TrendLineChart } from "@/components/dashboard-charts";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
-import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
 import {
-	RaceWindowControl,
-	type RaceWindowState,
-	initialWindowFromUrl,
-	raceWindowBounds,
-} from "@/components/race-window-control";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+	CardStatsSection,
+	StatsSection,
+	sectionGranularity,
+	sectionWindow,
+	useSectionSubtitle,
+	useSectionWindows,
+} from "@/components/stats-section";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useModelMetrics } from "@/hooks/use-model-metrics";
-import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
+import { clientTzOffsetMinutes } from "@/lib/race-period";
 import { formatTokenCount } from "@/lib/utils";
 import { TrendingUp } from "lucide-react";
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams, useSearchParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 
-/** 三级页四个区块的独立时间段状态。 */
-interface ModelOverviewWindows {
-	call: RaceWindowState;
-	token: RaceWindowState;
-	metrics: RaceWindowState;
-	insight: RaceWindowState;
-}
+const SECTION_KEYS = ["call", "token", "metrics", "insight"] as const;
 
 /** 模型详情三级页：单模型指标卡片（置顶）+ 调用分析折线 + Token 折线，三块独立时间段。 */
 export default function ModelOverviewPage() {
@@ -36,42 +28,19 @@ export default function ModelOverviewPage() {
 	const { providerId: providerIdParam, modelId: modelIdParam } = useParams();
 	const providerId = Number.parseInt(providerIdParam ?? "", 10);
 	const modelId = decodeURIComponent(modelIdParam ?? "");
-	const [searchParams] = useSearchParams();
+	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS);
+	const subtitle = useSectionSubtitle();
 
-	// 五块独立时间段，初始值来自 URL（无参数默认当天）。
-	const [windows, setWindows] = useState<ModelOverviewWindows>(() => {
-		const initial = initialWindowFromUrl(searchParams);
-		return {
-			call: { ...initial },
-			token: { ...initial },
-			metrics: { ...initial },
-			insight: { ...initial },
-		};
-	});
-	const [now] = useState(() => Date.now());
-
-	const callWindow = raceWindowBounds(windows.call, now);
-	const tokenWindow = raceWindowBounds(windows.token, now);
-	const metricsWindow = raceWindowBounds(windows.metrics, now);
-	const insightWindow = raceWindowBounds(windows.insight, now);
+	const callWindow = sectionWindow(windows.call, now);
+	const tokenWindow = sectionWindow(windows.token, now);
+	const metricsWindow = sectionWindow(windows.metrics, now);
+	const insightWindow = sectionWindow(windows.insight, now);
 
 	// 图表桶粒度由所选时间窗口推导，并与本地时区偏移一起传给后端。
-	const tzOffsetMinutes = -new Date().getTimezoneOffset();
-	const callGranularity = chartGranularity(
-		windows.call.period,
-		callWindow.startTime,
-		callWindow.endTime,
-	);
-	const tokenGranularity = chartGranularity(
-		windows.token.period,
-		tokenWindow.startTime,
-		tokenWindow.endTime,
-	);
-	const insightGranularity = chartGranularity(
-		windows.insight.period,
-		insightWindow.startTime,
-		insightWindow.endTime,
-	);
+	const tzOffsetMinutes = clientTzOffsetMinutes();
+	const callGranularity = sectionGranularity(windows.call, callWindow);
+	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
+	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
 
 	const callCharts = useDashboardCharts({
 		startTime: callWindow.startTime,
@@ -104,11 +73,6 @@ export default function ModelOverviewPage() {
 		Number.isFinite(providerId) && modelId.length > 0,
 	);
 
-	const windowSubtitle = (state: RaceWindowState) =>
-		state.period === "custom"
-			? t("overview.customWindow")
-			: formatPeriodLabel(state.period, state.offset, now);
-
 	const title = `${metrics.data?.providerName || t("dashboardPage.providerFallback")}・${modelId} · ${t("dashboardPage.modelTitleSuffix")}`;
 
 	return (
@@ -121,99 +85,70 @@ export default function ModelOverviewPage() {
 				isLoading={metrics.isLoading}
 				windowState={windows.metrics}
 				now={now}
-				onWindowChange={(patch) =>
-					setWindows((prev) => ({ ...prev, metrics: { ...prev.metrics, ...patch } }))
-				}
-				subtitle={windowSubtitle(windows.metrics)}
+				onWindowChange={setWindow("metrics")}
+				subtitle={subtitle(windows.metrics, now)}
 				title={t("dashboard.modelMetric")}
 			/>
 
 			{/* 调用分析折线（仅折线）：独立时间段 */}
-			<Card>
-				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-					<div className="space-y-1">
-						<CardTitle>{t("dashboard.analysis")}</CardTitle>
-						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.call)}</p>
-					</div>
-					<RaceWindowControl
-						state={windows.call}
-						now={now}
-						onChange={(patch) =>
-							setWindows((prev) => ({ ...prev, call: { ...prev.call, ...patch } }))
-						}
-					/>
-				</CardHeader>
-				<CardContent>
-					{callCharts.isLoading ? (
-						<Skeleton className="h-[260px] w-full" />
-					) : callCharts.isError || !callCharts.data ? (
-						<ErrorState onRetry={() => callCharts.refetch()} />
-					) : (
-						<TrendLineChart
-							data={callCharts.data.callTrend}
-							label={t("overview.calls")}
-							granularity={callGranularity}
-						/>
-					)}
-				</CardContent>
-			</Card>
+			<CardStatsSection
+				title={t("dashboard.analysis")}
+				now={now}
+				windowState={windows.call}
+				onWindowChange={setWindow("call")}
+				status={{
+					isLoading: callCharts.isLoading,
+					isError: callCharts.isError || !callCharts.data,
+					onRetry: () => callCharts.refetch(),
+				}}
+			>
+				<TrendLineChart
+					data={callCharts.data?.callTrend ?? []}
+					label={t("overview.calls")}
+					granularity={callGranularity}
+				/>
+			</CardStatsSection>
 
 			{/* Token 折线（仅折线）：独立时间段 */}
-			<Card>
-				<CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-					<div className="space-y-1">
-						<CardTitle>{t("dashboard.tokenAnalysis")}</CardTitle>
-						<p className="text-xs text-muted-foreground">{windowSubtitle(windows.token)}</p>
-					</div>
-					<RaceWindowControl
-						state={windows.token}
-						now={now}
-						onChange={(patch) =>
-							setWindows((prev) => ({ ...prev, token: { ...prev.token, ...patch } }))
-						}
-					/>
-				</CardHeader>
-				<CardContent>
-					{tokenCharts.isLoading ? (
-						<Skeleton className="h-[260px] w-full" />
-					) : tokenCharts.isError || !tokenCharts.data ? (
-						<ErrorState onRetry={() => tokenCharts.refetch()} />
-					) : (
-						<TrendLineChart
-							data={tokenCharts.data.tokenTrend}
-							label={t("overview.tokens")}
-							formatValue={formatTokenCount}
-							kind="tokens"
-							granularity={tokenGranularity}
-						/>
-					)}
-				</CardContent>
-			</Card>
+			<CardStatsSection
+				title={t("dashboard.tokenAnalysis")}
+				now={now}
+				windowState={windows.token}
+				onWindowChange={setWindow("token")}
+				status={{
+					isLoading: tokenCharts.isLoading,
+					isError: tokenCharts.isError || !tokenCharts.data,
+					onRetry: () => tokenCharts.refetch(),
+				}}
+			>
+				<TrendLineChart
+					data={tokenCharts.data?.tokenTrend ?? []}
+					label={t("overview.tokens")}
+					formatValue={formatTokenCount}
+					kind="tokens"
+					granularity={tokenGranularity}
+				/>
+			</CardStatsSection>
 
 			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳） */}
-			<div className="space-y-2">
-				<div className="flex flex-wrap items-center justify-between gap-2">
-					<p className="text-xs text-muted-foreground">{windowSubtitle(windows.insight)}</p>
-					<RaceWindowControl
-						state={windows.insight}
-						now={now}
-						onChange={(patch) =>
-							setWindows((prev) => ({ ...prev, insight: { ...prev.insight, ...patch } }))
-						}
-					/>
-				</div>
-				{insightQuery.isLoading ? (
-					<Skeleton className="h-[260px] w-full" />
-				) : insightQuery.isError || !insightQuery.data ? (
-					<ErrorState onRetry={() => insightQuery.refetch()} />
-				) : (
+			<StatsSection
+				now={now}
+				windowState={windows.insight}
+				onWindowChange={setWindow("insight")}
+				status={{
+					isLoading: insightQuery.isLoading,
+					isError: insightQuery.isError || !insightQuery.data,
+					onRetry: () => insightQuery.refetch(),
+				}}
+			>
+				{insightQuery.data && (
 					<InsightAnalysisCard
 						data={insightQuery.data}
-						subtitle={windowSubtitle(windows.insight)}
+						subtitle={subtitle(windows.insight, now)}
 						granularity={insightGranularity}
 					/>
 				)}
-			</div>
+			</StatsSection>
 
 			{/* API Key 赛马：独立时间段（按当前供应商+模型过滤） */}
 			<ApiKeyRaceCard

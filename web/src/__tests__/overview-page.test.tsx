@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // ProviderRaceCard 用 useNavigate 跳转二级页，测试中 stub。
 vi.mock("react-router-dom", () => ({
 	useNavigate: () => vi.fn(),
+	useSearchParams: () => [new URLSearchParams(), vi.fn()],
 }));
 
 const mocks = vi.hoisted(() => ({
