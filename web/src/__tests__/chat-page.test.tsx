@@ -174,6 +174,11 @@ describe("ChatPage", () => {
 		// 分组内条目只显示模型 ID，不带供应商名。
 		expect(screen.getByRole("button", { name: "model-a1" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "供应商A / model-a1" })).not.toBeInTheDocument();
+		// 点击分组标题折叠：条目隐藏，再点展开恢复。
+		fireEvent.click(screen.getByRole("button", { name: /供应商A/ }));
+		expect(screen.queryByRole("button", { name: "model-a1" })).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: /供应商A/ }));
+		expect(screen.getByRole("button", { name: "model-a1" })).toBeInTheDocument();
 		// 选中后浮窗关闭，触发器回显「供应商 / 模型」。
 		fireEvent.click(screen.getByRole("button", { name: "model-a1" }));
 		expect(screen.getByRole("button", { name: "供应商A / model-a1" })).toBeInTheDocument();

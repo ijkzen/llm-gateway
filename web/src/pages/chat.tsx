@@ -4,7 +4,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useProviderModels } from "@/hooks/use-provider-models";
 import { useProviders } from "@/hooks/use-providers";
 import { cn } from "@/lib/utils";
-import { ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, Eraser, SendHorizontal, Square } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -48,6 +48,8 @@ export default function ChatPage() {
 	const [input, setInput] = useState("");
 	const [modelKey, setModelKey] = useState("");
 	const [pickerOpen, setPickerOpen] = useState(false);
+	/** 折叠的供应商分组（providerId 集合）。 */
+	const [collapsed, setCollapsed] = useState<ReadonlySet<number>>(new Set());
 	const [streaming, setStreaming] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
 	const nextIdRef = useRef(1);
@@ -187,6 +189,18 @@ export default function ChatPage() {
 		);
 	};
 
+	const toggleGroup = (providerId: number) => {
+		setCollapsed((prev) => {
+			const next = new Set(prev);
+			if (next.has(providerId)) {
+				next.delete(providerId);
+			} else {
+				next.add(providerId);
+			}
+			return next;
+		});
+	};
+
 	return (
 		<div className="flex h-[calc(100vh-10rem)] flex-col gap-4">
 			<div className="flex-1 space-y-3 overflow-y-auto rounded-xl border bg-card p-4">
@@ -234,6 +248,17 @@ export default function ChatPage() {
 			</div>
 			<div className="flex shrink-0 flex-col gap-2">
 				<div className="flex items-center justify-end gap-2">
+					<Button
+						variant="ghost"
+						size="icon"
+						className="size-8"
+						aria-label={t("chat.clear")}
+						title={t("chat.clear")}
+						onClick={() => setMessages([])}
+						disabled={streaming}
+					>
+						<Eraser className="size-4" />
+					</Button>
 					<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
 						<PopoverTrigger asChild>
 							<Button variant="outline" size="sm" className="max-w-72">
@@ -252,35 +277,49 @@ export default function ChatPage() {
 								<p className="p-3 text-sm text-muted-foreground">{t("chat.emptyHint")}</p>
 							) : (
 								<div className="max-h-72 overflow-y-auto">
-									{groups.map((group) => (
-										<div key={group.providerId}>
-											<div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
-												{group.providerName}
-											</div>
-											{group.models.map((model) => (
+									{groups.map((group) => {
+										const isCollapsed = collapsed.has(group.providerId);
+										return (
+											<div key={group.providerId}>
 												<button
-													key={model.key}
 													type="button"
-													onClick={() => {
-														setModelKey(model.key);
-														setPickerOpen(false);
-													}}
-													className={cn(
-														"flex w-full items-center rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent",
-														model.key === modelKey && "bg-accent font-medium",
-													)}
+													aria-expanded={!isCollapsed}
+													onClick={() => toggleGroup(group.providerId)}
+													className="flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 												>
-													{model.label}
+													{isCollapsed ? (
+														<ChevronRight className="size-3.5 shrink-0" />
+													) : (
+														<ChevronDown className="size-3.5 shrink-0" />
+													)}
+													{group.providerName}
 												</button>
-											))}
-										</div>
-									))}
+												{!isCollapsed &&
+													group.models.map((model) => (
+														<button
+															key={model.key}
+															type="button"
+															onClick={() => {
+																setModelKey(model.key);
+																setPickerOpen(false);
+															}}
+															className={cn(
+																"flex w-full items-center rounded-md px-2 py-1.5 pl-6 text-left text-sm transition-colors hover:bg-accent",
+																model.key === modelKey && "bg-accent font-medium",
+															)}
+														>
+															<MidEllipsis text={model.label} className="min-w-0" />
+														</button>
+													))}
+											</div>
+										);
+									})}
 								</div>
 							)}
 						</PopoverContent>
 					</Popover>
 				</div>
-				<div className="flex items-end gap-2">
+				<div className="relative">
 					<textarea
 						value={input}
 						onChange={(e) => setInput(e.target.value)}
@@ -292,20 +331,31 @@ export default function ChatPage() {
 						}}
 						placeholder={t("chat.inputPlaceholder")}
 						rows={2}
-						className="flex-1 resize-none rounded-xl border bg-background px-3 py-2 text-sm"
+						className="w-full resize-none rounded-xl border bg-background px-3 py-2 pr-12 text-sm"
 					/>
 					{streaming ? (
-						<Button variant="outline" onClick={stop}>
-							{t("chat.stop")}
+						<Button
+							variant="ghost"
+							size="icon"
+							className="absolute right-2 bottom-2 size-7"
+							aria-label={t("chat.stop")}
+							title={t("chat.stop")}
+							onClick={stop}
+						>
+							<Square className="size-3.5 fill-current" />
 						</Button>
 					) : (
-						<Button onClick={send} disabled={!input.trim() || !modelKey}>
-							{t("chat.send")}
+						<Button
+							size="icon"
+							className="absolute right-2 bottom-2 size-7"
+							aria-label={t("chat.send")}
+							title={t("chat.send")}
+							onClick={send}
+							disabled={!input.trim() || !modelKey}
+						>
+							<SendHorizontal className="size-4" />
 						</Button>
 					)}
-					<Button variant="ghost" onClick={() => setMessages([])} disabled={streaming}>
-						{t("chat.clear")}
-					</Button>
 				</div>
 			</div>
 		</div>
