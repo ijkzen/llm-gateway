@@ -120,6 +120,10 @@ function makeItem(overrides: Partial<VirtualModelItem> = {}): VirtualModelItem {
 		toolUse: false,
 		imageUnderstand: false,
 		videoUnderstand: false,
+		modelProxyEnabled: false,
+		modelProxyAddr: "",
+		providerProxyEnabled: false,
+		providerProxyAddr: "",
 		...overrides,
 	};
 }

@@ -20,6 +20,14 @@ export interface VirtualModelItem {
 	toolUse: boolean;
 	imageUnderstand: boolean;
 	videoUnderstand: boolean;
+	/** 模型级是否开启网络代理（优先于供应商代理）。 */
+	modelProxyEnabled: boolean;
+	/** 模型级 HTTP 代理地址。 */
+	modelProxyAddr: string;
+	/** 供应商级是否开启网络代理（模型级关闭时兜底生效）。 */
+	providerProxyEnabled: boolean;
+	/** 供应商级 HTTP 代理地址。 */
+	providerProxyAddr: string;
 }
 
 /** 虚拟模型：对外暴露的模型，聚合多个供应商模型。 */

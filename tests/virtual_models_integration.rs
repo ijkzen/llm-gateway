@@ -137,6 +137,68 @@ async fn test_create_and_get_virtual_models() {
     assert_eq!(body["data"]["items"].as_array().unwrap().len(), 2);
 }
 
+/// 成员条目透传模型级/供应商级网络代理字段（虚拟模型成员详情只读展示用）。
+#[tokio::test]
+async fn test_member_item_echoes_proxy_fields() {
+    let (app, db) = setup_app().await;
+    let p = seed_provider(&db, "proxy-p").await;
+    // 供应商级开启代理（http://proxy.example.com:7890）。
+    provider::ActiveModel {
+        id: Set(p),
+        proxy_enabled: Set(true),
+        proxy_addr: Set("http://proxy.example.com:7890".to_string()),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    let m = seed_provider_model(&db, p, "gpt-4o").await;
+    // 模型级开启代理（覆盖供应商级：http://model-proxy.example.com:7891）。
+    provider_model::ActiveModel {
+        model_id: Set(m),
+        proxy_enabled: Set(true),
+        proxy_addr: Set("http://model-proxy.example.com:7891".to_string()),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload("vm", &[m]),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let item = &body["data"]["items"][0];
+    assert_eq!(item["providerProxyEnabled"], true);
+    assert_eq!(item["providerProxyAddr"], "http://proxy.example.com:7890");
+    assert_eq!(item["modelProxyEnabled"], true);
+    assert_eq!(
+        item["modelProxyAddr"],
+        "http://model-proxy.example.com:7891"
+    );
+
+    // 模型级关闭但供应商级开启：只透传模型级关闭状态与供应商级地址（展示「继承」）。
+    provider_model::ActiveModel {
+        model_id: Set(m),
+        proxy_enabled: Set(false),
+        proxy_addr: Set(String::new()),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    let (_, body) = send_json(app, "GET", "/api/virtual-models", Value::Null).await;
+    let item = &body["data"][0]["items"][0];
+    assert_eq!(item["modelProxyEnabled"], false);
+    assert_eq!(item["modelProxyAddr"], "");
+    assert_eq!(item["providerProxyEnabled"], true);
+    assert_eq!(item["providerProxyAddr"], "http://proxy.example.com:7890");
+}
+
 /// 成员排序：启用成员在前、组内无用量数据时按 virtualModelItemId 升序
 /// （LB 静态基础序，与「无数据排后 + id 决平局」一致）。
 #[tokio::test]

@@ -13,6 +13,10 @@ const mocks = vi.hoisted(() => {
 		createMutate: vi.fn(),
 		updateMutate: vi.fn(),
 		deleteMutate: vi.fn(),
+		testMutate: vi.fn(),
+		testState: { isPending: false },
+		toastSuccess: vi.fn(),
+		toastError: vi.fn(),
 	};
 });
 
@@ -28,10 +32,23 @@ vi.mock("@/hooks/use-virtual-models", async () => {
 	};
 });
 
+vi.mock("@/hooks/use-provider-models", async () => {
+	const actual = await vi.importActual<typeof import("@/hooks/use-provider-models")>(
+		"@/hooks/use-provider-models",
+	);
+	return {
+		...actual,
+		useTestProviderModel: () => ({
+			mutate: mocks.testMutate,
+			isPending: mocks.testState.isPending,
+		}),
+	};
+});
+
 vi.mock("@/hooks/use-toast", () => ({
 	useToastActions: () => ({
-		toastSuccess: vi.fn(),
-		toastError: vi.fn(),
+		toastSuccess: mocks.toastSuccess,
+		toastError: mocks.toastError,
 	}),
 }));
 
@@ -104,6 +121,10 @@ function makeItem(overrides: Partial<VirtualModelItem> = {}): VirtualModelItem {
 		toolUse: false,
 		imageUnderstand: false,
 		videoUnderstand: false,
+		modelProxyEnabled: false,
+		modelProxyAddr: "",
+		providerProxyEnabled: false,
+		providerProxyAddr: "",
 		...overrides,
 	};
 }
@@ -379,7 +400,7 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 });
 
 describe("VirtualModelItemDetailDialog", () => {
-	it("只读展示条目详情与状态标记；无编辑/删除/测试按钮", () => {
+	it("只读展示条目详情、网络代理与状态标记；无编辑/删除按钮", () => {
 		render(
 			<MemoryRouter>
 				<VirtualModelItemDetailDialog
@@ -419,10 +440,107 @@ describe("VirtualModelItemDetailDialog", () => {
 		// 状态标记。
 		expect(screen.getByText(/已停用/)).toBeTruthy();
 		expect(screen.getByText(/随供应商禁用/)).toBeTruthy();
-		// 只读：无编辑/删除/测试按钮。
+		// 只读：无编辑/删除按钮，但保留测试按钮。
 		expect(screen.queryByRole("button", { name: /编辑/ })).toBeNull();
 		expect(screen.queryByRole("button", { name: /删除/ })).toBeNull();
-		expect(screen.queryByRole("button", { name: /测试/ })).toBeNull();
+		expect(screen.getByRole("button", { name: "测试" })).toBeTruthy();
+	});
+
+	it("模型级开启代理时展示地址；关闭但供应商级开启时展示「继承上层代理」", () => {
+		render(
+			<MemoryRouter>
+				<VirtualModelItemDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					virtualModel={makeVm({
+						displayId: "gpt-4o",
+						items: [
+							makeItem({
+								modelProxyEnabled: true,
+								modelProxyAddr: "http://model-proxy:7891",
+								providerProxyEnabled: true,
+								providerProxyAddr: "http://provider-proxy:7890",
+							}),
+						],
+					})}
+					item={makeItem({
+						modelProxyEnabled: true,
+						modelProxyAddr: "http://model-proxy:7891",
+						providerProxyEnabled: true,
+						providerProxyAddr: "http://provider-proxy:7890",
+					})}
+				/>
+				,
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByText("已开启")).toBeTruthy();
+		expect(screen.getByText("http://model-proxy:7891")).toBeTruthy();
+
+		// 模型级关闭、供应商级开启：地址行展示「未开启 · 继承供应商代理」。
+		render(
+			<MemoryRouter>
+				<VirtualModelItemDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					virtualModel={makeVm({
+						displayId: "o3",
+						items: [
+							makeItem({
+								providerModelId: "o3",
+								modelProxyEnabled: false,
+								providerProxyEnabled: true,
+								providerProxyAddr: "http://provider-proxy:7890",
+							}),
+						],
+					})}
+					item={makeItem({
+						providerModelId: "o3",
+						modelProxyEnabled: false,
+						providerProxyEnabled: true,
+						providerProxyAddr: "http://provider-proxy:7890",
+					})}
+				/>
+				,
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByText("未开启")).toBeTruthy();
+		expect(screen.getByText(/继承供应商代理/)).toBeTruthy();
+	});
+
+	it("点测试按钮：以该成员的 modelId 触发后端测试；失败弹出失败详情", async () => {
+		render(
+			<MemoryRouter>
+				<VirtualModelItemDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					virtualModel={makeVm({
+						displayId: "gpt-4o",
+						items: [makeItem({ modelId: 11 })],
+					})}
+					item={makeItem({ modelId: 11 })}
+				/>
+				,
+			</MemoryRouter>,
+		);
+
+		const testBtn = screen.getByRole("button", { name: "测试" });
+		expect(testBtn).toBeTruthy();
+		fireEvent.click(testBtn);
+		expect(mocks.testMutate).toHaveBeenCalledTimes(1);
+		const [modelId, options] = required(mocks.testMutate.mock.calls[0]);
+		expect(modelId).toBe(11);
+
+		required(options).onSuccess();
+		expect(mocks.toastSuccess).toHaveBeenCalledWith("模型测试成功");
+
+		mocks.testMutate.mockImplementation((_id, opts) => {
+			required(opts).onError({ message: "429 rate limited" });
+		});
+		fireEvent.click(screen.getByRole("button", { name: "测试" }));
+		expect(screen.getByText("模型测试失败")).toBeTruthy();
+		expect(screen.getByText("429 rate limited")).toBeTruthy();
 	});
 
 	it("拨动启停开关：提交翻转后的完整成员集合，其余成员不变", async () => {

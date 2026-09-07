@@ -1,20 +1,26 @@
 import { MidEllipsis } from "@/components/mid-ellipsis";
 import { CAPABILITIES } from "@/components/provider-models/CapabilityIcons";
+import { TestFailedDialog } from "@/components/provider-models/TestFailedDialog";
+import { ProviderProxyRow } from "@/components/providers/ProviderProxyRow";
+import { Button } from "@/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
 	DialogDescription,
+	DialogFooter,
 	DialogHeader,
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { useTestProviderModel } from "@/hooks/use-provider-models";
 import { useToastActions } from "@/hooks/use-toast";
 import {
 	type VirtualModel,
 	type VirtualModelItem,
 	useUpdateVirtualModel,
 } from "@/hooks/use-virtual-models";
-import { ChevronRight } from "lucide-react";
+import { ChevronRight, FlaskConical, Loader2 } from "lucide-react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
@@ -28,8 +34,9 @@ interface VirtualModelItemDetailDialogProps {
 }
 
 /**
- * 成员模型详情（只读）：展示条目信息与状态标记，并提供「在虚拟模型中启用」开关。
- * 开关成功后关闭弹窗（列表经查询失效重排），失败保持打开并报错。
+ * 成员模型详情（只读）：展示条目信息、状态标记与网络代理（模型级优先，
+ * 供应商级继承），提供「测试」按钮验证上游连通性；另提供「在虚拟模型中
+ * 启用」开关。开关成功后关闭弹窗（列表经查询失效重排），失败保持打开并报错。
  */
 export function VirtualModelItemDetailDialog({
 	open,
@@ -40,6 +47,9 @@ export function VirtualModelItemDetailDialog({
 	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const updateModel = useUpdateVirtualModel();
+	// 关闭/未选中时 providerId 兜底为 0：测试端点不会在该状态下被触发。
+	const testModel = useTestProviderModel(item?.providerId ?? 0);
+	const [testError, setTestError] = useState<string | null>(null);
 
 	if (!open || !virtualModel || !item) return null;
 
@@ -65,6 +75,14 @@ export function VirtualModelItemDetailDialog({
 				onError: (error) => toastError(t("common.updateFailed"), error),
 			},
 		);
+	};
+
+	const handleTest = () => {
+		if (testModel.isPending) return;
+		testModel.mutate(currentItem.modelId, {
+			onSuccess: () => toastSuccess(t("providerModels.testSuccess")),
+			onError: (error) => setTestError(error.message),
+		});
 	};
 
 	return (
@@ -139,6 +157,18 @@ export function VirtualModelItemDetailDialog({
 							))}
 						</dd>
 					</div>
+					<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
+						<dt className="text-sm text-muted-foreground">{t("providers.proxyEnabled")}</dt>
+						<dd>
+							<ProviderProxyRow
+								enabled={currentItem.modelProxyEnabled}
+								addr={currentItem.modelProxyAddr}
+								inherited={
+									currentItem.providerProxyEnabled ? currentItem.providerProxyAddr : undefined
+								}
+							/>
+						</dd>
+					</div>
 					<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
 						<dt className="text-sm text-muted-foreground">
 							{t("virtualModels.enableInVirtualModel")}
@@ -153,7 +183,26 @@ export function VirtualModelItemDetailDialog({
 						</dd>
 					</div>
 				</dl>
+
+				<DialogFooter className="gap-2 pt-2">
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={handleTest}
+						disabled={testModel.isPending}
+					>
+						{testModel.isPending ? (
+							<Loader2 className="mr-1.5 size-4 animate-spin" />
+						) : (
+							<FlaskConical className="mr-1.5 size-4" />
+						)}
+						{t(testModel.isPending ? "providerModels.testing" : "providerModels.test")}
+					</Button>
+				</DialogFooter>
 			</DialogContent>
+
+			<TestFailedDialog message={testError} onClose={() => setTestError(null)} />
 		</Dialog>
 	);
 }

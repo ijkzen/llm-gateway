@@ -53,6 +53,14 @@ struct VirtualModelItemResponse {
     tool_use: bool,
     image_understand: bool,
     video_understand: bool,
+    /// 成员模型级是否开启网络代理。
+    model_proxy_enabled: bool,
+    /// 成员模型级代理地址。
+    model_proxy_addr: String,
+    /// 所属供应商是否开启网络代理（模型级关闭时兜底生效）。
+    provider_proxy_enabled: bool,
+    /// 所属供应商代理地址。
+    provider_proxy_addr: String,
 }
 
 #[derive(Serialize)]
@@ -390,6 +398,10 @@ async fn load_item_responses<C: ConnectionTrait>(
                 tool_use: pm.tool_use,
                 image_understand: pm.image_understand,
                 video_understand: pm.video_understand,
+                model_proxy_enabled: pm.proxy_enabled,
+                model_proxy_addr: pm.proxy_addr.clone(),
+                provider_proxy_enabled: p.proxy_enabled,
+                provider_proxy_addr: p.proxy_addr.clone(),
             });
     }
     Ok(grouped)
