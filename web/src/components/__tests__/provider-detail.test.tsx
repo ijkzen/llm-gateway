@@ -3,6 +3,7 @@ import { ProviderSpeedTestDialog } from "@/components/providers/ProviderSpeedTes
 import type { ProviderModel } from "@/hooks/use-provider-models";
 import type { Provider } from "@/hooks/use-providers";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -67,12 +68,14 @@ const provider: Provider = {
 
 function renderDetail() {
 	render(
-		<ProviderDetail
-			provider={provider}
-			onEdit={vi.fn()}
-			onDelete={vi.fn()}
-			onSpeedTest={vi.fn()}
-		/>,
+		<MemoryRouter>
+			<ProviderDetail
+				provider={provider}
+				onEdit={vi.fn()}
+				onDelete={vi.fn()}
+				onSpeedTest={vi.fn()}
+			/>
+		</MemoryRouter>,
 	);
 }
 
@@ -81,6 +84,15 @@ beforeEach(() => {
 	vi.stubGlobal("navigator", { clipboard: { writeText: mocks.writeText } });
 	mocks.models = [];
 	mocks.modelsLoading = false;
+});
+
+describe("ProviderDetail 标题导航到数据面板", () => {
+	it("标题供应商名为链接，指向 /providers/{id}/overview，带方向键与 tooltip", () => {
+		renderDetail();
+		const titleLink = screen.getByRole("link", { name: "OpenAI" });
+		expect(titleLink).toHaveAttribute("href", "/providers/7/overview");
+		expect(titleLink).toHaveAttribute("title", "查看 OpenAI 的数据面板");
+	});
 });
 
 describe("ProviderDetail 明文 API Key 展示", () => {
@@ -151,7 +163,9 @@ describe("ProviderDetail 额外配置 / 自定义请求头折叠", () => {
 			...overrides,
 		};
 		return render(
-			<ProviderDetail provider={p} onEdit={vi.fn()} onDelete={vi.fn()} onSpeedTest={vi.fn()} />,
+			<MemoryRouter>
+				<ProviderDetail provider={p} onEdit={vi.fn()} onDelete={vi.fn()} onSpeedTest={vi.fn()} />
+			</MemoryRouter>,
 		);
 	}
 
@@ -191,12 +205,14 @@ describe("ProviderDetail 额外配置 / 自定义请求头折叠", () => {
 		const initial: Provider = { ...provider, extra: '{"refresh_token": "rt-123"}' };
 		const other: Provider = { ...provider, id: 8, name: "Anthropic", extra: '{"k": "v"}' };
 		const { rerender } = render(
-			<ProviderDetail
-				provider={initial}
-				onEdit={vi.fn()}
-				onDelete={vi.fn()}
-				onSpeedTest={vi.fn()}
-			/>,
+			<MemoryRouter>
+				<ProviderDetail
+					provider={initial}
+					onEdit={vi.fn()}
+					onDelete={vi.fn()}
+					onSpeedTest={vi.fn()}
+				/>
+			</MemoryRouter>,
 		);
 
 		fireEvent.click(screen.getByRole("button", { name: extraConfigTitle }));
@@ -206,7 +222,14 @@ describe("ProviderDetail 额外配置 / 自定义请求头折叠", () => {
 		);
 
 		rerender(
-			<ProviderDetail provider={other} onEdit={vi.fn()} onDelete={vi.fn()} onSpeedTest={vi.fn()} />,
+			<MemoryRouter>
+				<ProviderDetail
+					provider={other}
+					onEdit={vi.fn()}
+					onDelete={vi.fn()}
+					onSpeedTest={vi.fn()}
+				/>
+			</MemoryRouter>,
 		);
 		expect(screen.getByRole("button", { name: extraConfigTitle })).toHaveAttribute(
 			"aria-expanded",
@@ -226,12 +249,14 @@ describe("ProviderDetail 更多菜单测速入口", () => {
 	it("菜单含「模型测速」项（位于删除上方），点击触发 onSpeedTest", async () => {
 		const onSpeedTest = vi.fn();
 		render(
-			<ProviderDetail
-				provider={provider}
-				onEdit={vi.fn()}
-				onDelete={vi.fn()}
-				onSpeedTest={onSpeedTest}
-			/>,
+			<MemoryRouter>
+				<ProviderDetail
+					provider={provider}
+					onEdit={vi.fn()}
+					onDelete={vi.fn()}
+					onSpeedTest={onSpeedTest}
+				/>
+			</MemoryRouter>,
 		);
 
 		// Radix DropdownMenu 在 jsdom 下通过键盘事件打开。

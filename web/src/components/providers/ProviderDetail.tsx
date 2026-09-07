@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Link } from "react-router-dom";
 
 interface ProviderDetailProps {
 	provider: Provider | undefined;
@@ -159,7 +160,18 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 			<CardHeader className="border-b">
 				<div className="flex items-start justify-between gap-4">
 					<div className="min-w-0">
-						<CardTitle className="text-xl">{provider.name}</CardTitle>
+						<CardTitle className="text-xl">
+							<Link
+								to={`/providers/${provider.id}/overview`}
+								className="group inline-flex max-w-full min-w-0 items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
+								title={t("providerModels.viewProviderOverview", {
+									provider: provider.name,
+								})}
+							>
+								<MidEllipsis text={provider.name} className="min-w-0" />
+								<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
+							</Link>
+						</CardTitle>
 						<MidEllipsis
 							text={provider.baseUrl}
 							className="mt-1 text-sm font-mono text-muted-foreground"
