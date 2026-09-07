@@ -139,6 +139,7 @@ pub async fn set_items_enabled(
 pub async fn disable_for_quota(
     db: &DatabaseConnection,
     provider_id: i32,
+    provider_name: &str,
     label: &str,
 ) -> Result<bool, DbErr> {
     let now = chrono::Utc::now();
@@ -159,8 +160,9 @@ pub async fn disable_for_quota(
     let items = set_items_enabled(db, provider_id, false).await?;
     tracing::info!(
         provider_id,
+        provider_name,
         items,
-        "{label}已耗尽，自动停用供应商及其全部虚拟模型子模型"
+        "{label}已耗尽，自动停用供应商「{provider_name}」及其全部虚拟模型子模型（{items} 个）"
     );
     Ok(true)
 }
@@ -171,6 +173,7 @@ pub async fn disable_for_quota(
 pub async fn recover_quota(
     db: &DatabaseConnection,
     provider_id: i32,
+    provider_name: &str,
     label: &str,
 ) -> Result<bool, DbErr> {
     let now = chrono::Utc::now();
@@ -191,8 +194,9 @@ pub async fn recover_quota(
     let items = set_items_enabled(db, provider_id, true).await?;
     tracing::info!(
         provider_id,
+        provider_name,
         items,
-        "{label}已恢复，自动启用供应商及其全部虚拟模型子模型"
+        "{label}已恢复，自动启用供应商「{provider_name}」及其全部虚拟模型子模型（{items} 个）"
     );
     Ok(true)
 }
@@ -290,6 +294,7 @@ pub async fn recover_probe(
     db: &DatabaseConnection,
     counters: &FailureCounter,
     provider_id: i32,
+    provider_name: &str,
     expected_updated_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<bool, DbErr> {
     let txn = db.begin().await?;
@@ -312,7 +317,12 @@ pub async fn recover_probe(
     let items = set_items_enabled(&txn, provider_id, true).await?;
     txn.commit().await?;
     counters.reset(provider_id);
-    tracing::info!(provider_id, items, "自动恢复连续失败禁用供应商");
+    tracing::info!(
+        provider_id,
+        provider_name,
+        items,
+        "自动恢复连续失败禁用供应商「{provider_name}」（{items} 个子模型已启用）"
+    );
     Ok(true)
 }
 
@@ -435,7 +445,7 @@ mod tests {
         counters.record_failure(pid);
         counters.record_failure(pid);
 
-        assert!(disable_for_quota(&db, pid, "订阅额度").await.unwrap());
+        assert!(disable_for_quota(&db, pid, "p1", "订阅额度").await.unwrap());
         let r = row(&db, pid).await;
         assert!(!r.enable);
         assert_eq!(r.disabled_reason.as_deref(), Some("quota"));
@@ -445,7 +455,7 @@ mod tests {
         assert_eq!(counters.record_failure(pid), 3, "停用不应清零失败计数");
 
         // 已是 quota 态：幂等返回 false。
-        assert!(!disable_for_quota(&db, pid, "订阅额度").await.unwrap());
+        assert!(!disable_for_quota(&db, pid, "p1", "订阅额度").await.unwrap());
     }
 
     #[tokio::test]
@@ -454,9 +464,13 @@ mod tests {
         let (manual_id, _) = seed(&db, "p-manual", false, Some("manual")).await;
         let (failure_id, _) = seed(&db, "p-failure", false, Some("failure")).await;
 
-        assert!(!disable_for_quota(&db, manual_id, "订阅额度").await.unwrap());
         assert!(
-            !disable_for_quota(&db, failure_id, "订阅额度")
+            !disable_for_quota(&db, manual_id, "p-manual", "订阅额度")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !disable_for_quota(&db, failure_id, "p-failure", "订阅额度")
                 .await
                 .unwrap()
         );
@@ -479,9 +493,21 @@ mod tests {
         let (active_id, _) = seed(&db, "p-active", true, None).await;
 
         // 核心回归：manual 态不被额度刷新触碰（修复手动停用被覆盖缺陷）。
-        assert!(!recover_quota(&db, manual_id, "订阅额度").await.unwrap());
-        assert!(!recover_quota(&db, failure_id, "订阅额度").await.unwrap());
-        assert!(!recover_quota(&db, active_id, "订阅额度").await.unwrap());
+        assert!(
+            !recover_quota(&db, manual_id, "p-manual", "订阅额度")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !recover_quota(&db, failure_id, "p-failure", "订阅额度")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !recover_quota(&db, active_id, "p-active", "订阅额度")
+                .await
+                .unwrap()
+        );
         assert_eq!(
             row(&db, manual_id).await.disabled_reason.as_deref(),
             Some("manual")
@@ -491,7 +517,11 @@ mod tests {
             Some("failure")
         );
 
-        assert!(recover_quota(&db, quota_id, "订阅额度").await.unwrap());
+        assert!(
+            recover_quota(&db, quota_id, "p-quota", "订阅额度")
+                .await
+                .unwrap()
+        );
         let r = row(&db, quota_id).await;
         assert!(r.enable);
         assert_eq!(r.disabled_reason, None, "恢复后镜像不变式：启用 ⇔ NULL");
@@ -584,7 +614,11 @@ mod tests {
         counters.record_failure(pid);
 
         // 乐观锁命中：恢复 + 清零计数 + 级联恢复。
-        assert!(recover_probe(&db, &counters, pid, stale).await.unwrap());
+        assert!(
+            recover_probe(&db, &counters, pid, "p1", stale)
+                .await
+                .unwrap()
+        );
         let r = row(&db, pid).await;
         assert!(r.enable);
         assert_eq!(r.disabled_reason, None);
@@ -598,7 +632,11 @@ mod tests {
         // 乐观锁不命中（状态已被更新）。
         let (pid2, _) = seed(&db, "p2", false, Some("failure")).await;
         let wrong = chrono::Utc::now();
-        assert!(!recover_probe(&db, &counters, pid2, wrong).await.unwrap());
+        assert!(
+            !recover_probe(&db, &counters, pid2, "p2", wrong)
+                .await
+                .unwrap()
+        );
         assert_eq!(
             row(&db, pid2).await.disabled_reason.as_deref(),
             Some("failure")
@@ -608,7 +646,7 @@ mod tests {
         let (quota_id, _) = seed(&db, "p3", false, Some("quota")).await;
         let updated = row(&db, quota_id).await.updated_at;
         assert!(
-            !recover_probe(&db, &counters, quota_id, updated)
+            !recover_probe(&db, &counters, quota_id, "p3", updated)
                 .await
                 .unwrap()
         );
@@ -663,5 +701,72 @@ mod tests {
         let counter = FailureCounter::default();
         counter.reset(42);
         assert_eq!(counter.record_failure(42), 1);
+    }
+
+    /// 在注册了 JobLogLayer 的 subscriber 下执行额度停用/恢复，断言捕获到的
+    /// 日志消息点名供应商（任务日志 UI 只渲染 message 文本，名字必须拼进消息）。
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn quota_state_change_logs_name_the_provider() {
+        use crate::cron::log_capture::{JobLogEvent, JobLogLayer, SUBSCRIBER_LOCK};
+        use tokio::sync::broadcast;
+        use tracing::Instrument;
+        use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let _lock = SUBSCRIBER_LOCK.lock().unwrap();
+        let (log_tx, mut log_rx) = broadcast::channel::<JobLogEvent>(8192);
+        let keep_alive = log_tx.clone();
+        let subscriber = Registry::default().with(JobLogLayer::new(log_tx));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        // 单连接内存库：`crate::db::connect` 是 5 连接池，内存库每连接独立，
+        // seed 与停用/恢复可能落到不同连接而互不可见（并发偶发）。
+        let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+        crate::db::migrate(&db).await.unwrap();
+        let (pid, _mid) = seed(&db, "智谱GLM", true, None).await;
+        let p = provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // 与 worker 一致：异步块 instrument 到带归属字段的任务 span 内执行，
+        // JobLogLayer 才能把其中的日志归属到 usage_refresh 任务的这次运行。
+        // current_thread runtime 下整体都在同一线程，set_default 的 subscriber 恒可见。
+        let span = tracing::info_span!(
+            target: "cron_job_log",
+            "cron_job_run",
+            job_name = "usage_refresh",
+            run_id = "run-1",
+        );
+        (async {
+            disable_for_quota(&db, p.id, &p.name, "订阅额度")
+                .await
+                .unwrap();
+            recover_quota(&db, p.id, &p.name, "订阅额度").await.unwrap();
+        })
+        .instrument(span)
+        .await;
+
+        let mut messages = Vec::new();
+        while let Ok(event) = log_rx.try_recv() {
+            if let Some(m) = event.message {
+                messages.push(m);
+            }
+        }
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("订阅额度已耗尽，自动停用供应商「智谱GLM」")),
+            "停用日志未点名供应商: {messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("订阅额度已恢复，自动启用供应商「智谱GLM」")),
+            "恢复日志未点名供应商: {messages:?}"
+        );
+        drop(keep_alive);
     }
 }

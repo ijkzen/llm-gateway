@@ -134,11 +134,21 @@ pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> 
             Ok((p, Ok(data))) => {
                 ok += 1;
                 if let Err(e) = apply_usage_gate(db, &p, &data).await {
-                    tracing::warn!(provider_id = p.id, "用量额度门控执行失败：{e}");
+                    tracing::warn!(
+                        provider_id = p.id,
+                        provider_name = &p.name,
+                        "供应商「{}」用量额度门控执行失败：{e}",
+                        p.name
+                    );
                 }
             }
             Ok((p, Err(e))) => {
-                tracing::warn!(provider_id = p.id, "用量刷新失败：{e}");
+                tracing::warn!(
+                    provider_id = p.id,
+                    provider_name = &p.name,
+                    "供应商「{}」用量刷新失败：{e}",
+                    p.name
+                );
             }
             Err(e) => tracing::warn!("用量刷新任务异常：{e}"),
         }
@@ -172,9 +182,9 @@ pub async fn apply_usage_gate(
         "余额"
     };
     if usable {
-        crate::availability::recover_quota(db, p.id, label).await?;
+        crate::availability::recover_quota(db, p.id, &p.name, label).await?;
     } else {
-        crate::availability::disable_for_quota(db, p.id, label).await?;
+        crate::availability::disable_for_quota(db, p.id, &p.name, label).await?;
     }
     Ok(())
 }
@@ -426,5 +436,68 @@ mod tests {
 
         invalidate_usage_cache(&db, 1).await.unwrap();
         assert!(read_usage_cache(&db, 1).await.unwrap().is_none());
+    }
+
+    /// 刷新失败日志点名供应商（消息文本带「供应商「{name}」」，任务日志 UI
+    /// 只渲染 message，结构化字段不可见）。用不认识的 host 使抓取确定性失败，
+    /// 不触发真实网络请求。
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn refresh_failure_logs_name_the_provider() {
+        use crate::cron::log_capture::{JobLogEvent, JobLogLayer, SUBSCRIBER_LOCK};
+        use tokio::sync::broadcast;
+        use tracing::Instrument;
+        use tracing_subscriber::Registry;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let _lock = SUBSCRIBER_LOCK.lock().unwrap();
+        let (log_tx, mut log_rx) = broadcast::channel::<JobLogEvent>(8192);
+        let keep_alive = log_tx.clone();
+        let subscriber = Registry::default().with(JobLogLayer::new(log_tx));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        // 单连接内存库：多连接池的内存库每连接独立，插入与刷新查询会互相不可见。
+        let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+        crate::db::migrate(&db).await.unwrap();
+        let now = Utc::now();
+        let _p = provider::ActiveModel {
+            name: Set("失败供应商".to_string()),
+            enable: Set(true),
+            base_url: Set("https://no-such-host.invalid/v1".to_string()),
+            api_key: Set(crate::crypto::encrypt("sk-x")),
+            custom_header: Set("{}".to_string()),
+            protocol_type: Set(0),
+            billing_mode: Set(1),
+            extra: Set(r#"{"usage": true, "usage_type": 1}"#.to_string()),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let span = tracing::info_span!(
+            target: "cron_job_log",
+            "cron_job_run",
+            job_name = "usage_refresh",
+            run_id = "run-1",
+        );
+        let refreshed = refresh_all_usage(&db).instrument(span).await.unwrap();
+        assert_eq!(refreshed, 0, "唯一目标供应商抓取失败，成功数应为 0");
+
+        let mut messages = Vec::new();
+        while let Ok(event) = log_rx.try_recv() {
+            if let Some(m) = event.message {
+                messages.push(m);
+            }
+        }
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("供应商「失败供应商」用量刷新失败")),
+            "刷新失败日志未点名供应商: {messages:?}"
+        );
+        drop(keep_alive);
     }
 }
