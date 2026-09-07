@@ -442,6 +442,7 @@ const en: Translation = {
 			openaiCompat: "OpenAI Compatible",
 			responses: "Responses",
 			messages: "Messages (Anthropic)",
+			gemini: "Gemini (reserved)",
 			fullCompatible: "Full Compatible",
 		},
 		interfaceChangeTitle: "Change Interface Type",

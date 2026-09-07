@@ -934,7 +934,7 @@ async fn test_interface_type_crud_and_validation() {
     assert_eq!(status, 200);
     assert_eq!(body["data"]["interfaceType"], 2);
 
-    // Full Compatible 合法；Gemini(3) 为保留值（无端点可服务），显式拒绝。
+    // Full Compatible 与 Gemini 均合法（编号与协议类型对齐）。
     let (status, body) = send_json(
         app.clone(),
         "PUT",
@@ -944,14 +944,15 @@ async fn test_interface_type_crud_and_validation() {
     .await;
     assert_eq!(status, 200);
     assert_eq!(body["data"]["interfaceType"], 4);
-    let (status, _) = send_json(
+    let (status, body) = send_json(
         app.clone(),
         "PUT",
         &format!("/api/virtual-models/{vm_id}"),
         json!({ "interfaceType": 3 }),
     )
     .await;
-    assert_eq!(status, 400);
+    assert_eq!(status, 200);
+    assert_eq!(body["data"]["interfaceType"], 3);
 
     // 越界值拒绝。
     let (status, _) = send_json(

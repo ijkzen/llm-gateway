@@ -502,7 +502,7 @@ export function VirtualModelEditDialog({
 												</SelectTrigger>
 											</FormControl>
 											<SelectContent>
-												{INTERFACE_TYPES.filter((type) => type.value !== 3).map((type) => (
+												{INTERFACE_TYPES.map((type) => (
 													<SelectItem key={type.value} value={String(type.value)}>
 														{t(type.labelKey)}
 													</SelectItem>

@@ -436,6 +436,7 @@ const zhCN = {
 			openaiCompat: "OpenAI Compatible",
 			responses: "Responses",
 			messages: "Messages（Anthropic）",
+			gemini: "Gemini（预留）",
 			fullCompatible: "Full Compatible",
 		},
 		interfaceChangeTitle: "切换接口类型",

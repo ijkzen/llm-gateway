@@ -18,11 +18,12 @@ export const FALLBACK_STRATEGIES = [
 	{ value: 1, labelKey: "virtualModels.strategies.retryOthers" },
 ] as const;
 
-/** 虚拟模型接口类型（取值与后端对齐：0-2 与供应商协议编号一致，4=Full Compatible；3=Gemini 为后端保留值，暂不开放）。 */
+/** 虚拟模型接口类型（取值与后端对齐：0-3 与供应商协议编号一致，4=Full Compatible）。 */
 export const INTERFACE_TYPES = [
 	{ value: 0, labelKey: "virtualModels.interfaceTypes.openaiCompat" },
 	{ value: 1, labelKey: "virtualModels.interfaceTypes.responses" },
 	{ value: 2, labelKey: "virtualModels.interfaceTypes.messages" },
+	{ value: 3, labelKey: "virtualModels.interfaceTypes.gemini" },
 	{ value: 4, labelKey: "virtualModels.interfaceTypes.fullCompatible" },
 ] as const;
 

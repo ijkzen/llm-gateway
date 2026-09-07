@@ -112,17 +112,9 @@ struct UpdateVirtualModelRequest {
     items: Option<Vec<VirtualModelItemRequest>>,
 }
 
-/// 校验接口类型取值：0/1/2/4 合法；3=Gemini 为保留值（暂无原生端点，
-/// 可创建即产生无端点可服务的模型），显式拒绝。
+/// 校验接口类型取值（0..=4，编号与协议类型对齐），返回第一个错误消息。
 fn validate_interface_type(interface_type: i32, lang: Lang) -> Option<String> {
-    let allowed = matches!(
-        interface_type,
-        INTERFACE_OPENAI_COMPAT
-            | crate::entity::virtual_model::INTERFACE_OPENAI_RESPONSES
-            | crate::entity::virtual_model::INTERFACE_ANTHROPIC_MESSAGES
-            | INTERFACE_FULL_COMPATIBLE
-    );
-    if !allowed {
+    if !(INTERFACE_OPENAI_COMPAT..=INTERFACE_FULL_COMPATIBLE).contains(&interface_type) {
         return Some(
             lang.tr("接口类型不合法", "invalid interface type")
                 .to_string(),
