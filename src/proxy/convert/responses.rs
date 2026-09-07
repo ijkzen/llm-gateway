@@ -8,6 +8,8 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
+use crate::proxy::sse::SseSplitter;
+
 use super::{
     ChatReasoning, chat_max_tokens, chat_messages, chat_reasoning, collect_tool_call_names,
     inline_defs, message_text,
@@ -717,6 +719,49 @@ impl ResponsesStreamConverter {
     }
 }
 
+/// 原生透传流式用量扫描器：旁路解析 Responses SSE 的 data 事件。
+/// usage 取自 response.completed / response.incomplete / response.failed 的
+/// response.usage；内容打点看 output_text / reasoning_summary_text delta。
+#[derive(Default)]
+pub struct ResponsesStreamUsageScanner {
+    splitter: SseSplitter,
+    usage: Option<Usage>,
+    content_seen: bool,
+}
+
+impl ResponsesStreamUsageScanner {
+    pub fn feed(&mut self, bytes: &[u8]) {
+        for data in self.splitter.feed(&String::from_utf8_lossy(bytes)) {
+            let Ok(value) = serde_json::from_str::<Value>(&data) else {
+                continue;
+            };
+            match value.get("type").and_then(Value::as_str) {
+                Some("response.output_text.delta")
+                | Some("response.reasoning_summary_text.delta") => {
+                    self.content_seen = true;
+                }
+                Some("response.completed")
+                | Some("response.incomplete")
+                | Some("response.failed") => {
+                    if let Some(found) = value.pointer("/response/usage") {
+                        self.usage = ResponsesStreamConverter::extract_usage(found);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// 是否见过内容块（读取后清零；供 TTFT 打点）。
+    pub fn take_content_seen(&mut self) -> bool {
+        std::mem::take(&mut self.content_seen)
+    }
+
+    pub fn usage(&self) -> Option<Usage> {
+        self.usage.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1107,5 +1152,29 @@ mod tests {
         .unwrap();
         let body = build_request_body(&chat, "gpt-5").unwrap();
         assert_eq!(body["top_k"], 40);
+    }
+
+    #[test]
+    fn passthrough_scanner_captures_completed_usage_and_content() {
+        let mut scanner = ResponsesStreamUsageScanner::default();
+        scanner.feed(b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n");
+        scanner.feed(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"你\"}\n\n".as_bytes(),
+        );
+        scanner.feed(b"data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":12,\"output_tokens\":6,\"input_tokens_details\":{\"cached_tokens\":5},\"output_tokens_details\":{\"reasoning_tokens\":3}}}}\n\n");
+        assert!(scanner.take_content_seen());
+        let usage = scanner.usage().expect("usage should be captured");
+        assert_eq!(usage.input_tokens, Some(12));
+        assert_eq!(usage.cache_tokens, 5);
+        assert_eq!(usage.output_tokens, Some(6));
+        assert_eq!(usage.reasoning_tokens, Some(3));
+    }
+
+    #[test]
+    fn passthrough_scanner_without_usage_yields_none() {
+        let mut scanner = ResponsesStreamUsageScanner::default();
+        scanner.feed(b"data: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\n");
+        assert!(!scanner.take_content_seen());
+        assert!(scanner.usage().is_none());
     }
 }

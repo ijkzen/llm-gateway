@@ -657,6 +657,18 @@ pub fn is_never_outbound(name: &HeaderName) -> bool {
         .any(|reserved| name.as_str().eq_ignore_ascii_case(reserved))
 }
 
+/// 原生透传端点（/v1/messages・/v1/responses）的下游头选择：
+/// 黑名单兜底的全量透传——仅剥离剥离清单内的凭据/hop-by-hop/框架头
+/// （鉴权头由网关重新生成）；anthropic-beta、OpenAI-Beta 等 feature 头
+/// 自然透传。allowlist 机制不适用（原生客户端特性头默认不在白名单）。
+pub fn select_passthrough_headers(downstream: &HeaderMap) -> Vec<(HeaderName, HeaderValue)> {
+    downstream
+        .iter()
+        .filter(|(name, _)| !is_never_outbound(name))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
 /// 从下游请求头中选择可透传的子集（allowlist 命中项）。
 /// - allowlist 命中项 first-wins、单值（HTTP 语义上重复等同逗号列表的项我们不透传）。
 /// - 剥离清单命中项即使 allowlist 里写了也不透传（黑名单优先）。
@@ -1060,6 +1072,17 @@ pub async fn forward_chat(
             );
         }
     };
+
+    // chat/completions 只服务 OpenAI Compatible / Full Compatible 类型；
+    // Responses/Messages 专用模型按模型不存在处理（与 /v1/models 过滤一致）。
+    if !virtual_model::CHAT_SERVED_TYPES.contains(&virtual_model.interface_type) {
+        return openai_error(
+            StatusCode::NOT_FOUND,
+            format!("The model '{requested_model}' does not exist"),
+            "invalid_request_error",
+            "model_not_found",
+        );
+    }
 
     let members = match load_members(&state.db, virtual_model.virtual_model_id).await {
         Ok(members) => members,
@@ -1556,6 +1579,531 @@ pub async fn forward_chat_direct(
         },
     )
     .await
+}
+
+// ─── /v1/messages・/v1/responses 原生协议透传 ───
+
+/// 原生透传端点：请求/响应体不做协议转换，仅改写 model 并原样中继。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeEndpoint {
+    /// Anthropic Messages（/v1/messages → 虚拟模型接口类型 2）。
+    AnthropicMessages,
+    /// OpenAI Responses（/v1/responses → 虚拟模型接口类型 1）。
+    OpenAiResponses,
+}
+
+impl NativeEndpoint {
+    fn interface_type(self) -> i32 {
+        match self {
+            NativeEndpoint::AnthropicMessages => virtual_model::INTERFACE_ANTHROPIC_MESSAGES,
+            NativeEndpoint::OpenAiResponses => virtual_model::INTERFACE_OPENAI_RESPONSES,
+        }
+    }
+
+    fn sub_path(self) -> &'static str {
+        match self {
+            NativeEndpoint::AnthropicMessages => "messages",
+            NativeEndpoint::OpenAiResponses => "responses",
+        }
+    }
+
+    fn member_protocol(self) -> Protocol {
+        match self {
+            NativeEndpoint::AnthropicMessages => Protocol::Anthropic,
+            NativeEndpoint::OpenAiResponses => Protocol::OpenAiResponses,
+        }
+    }
+
+    /// 原生错误响应（Anthropic type/error 结构 / OpenAI error 结构）。
+    fn error(self, status: StatusCode, error_type: &str, message: impl Into<String>) -> Response {
+        match self {
+            NativeEndpoint::AnthropicMessages => {
+                crate::auth::anthropic_error(status, error_type, message)
+            }
+            NativeEndpoint::OpenAiResponses => {
+                // OpenAI 枚举没有 not_found_error，映射为 invalid_request_error。
+                let openai_type = if error_type == "not_found_error" {
+                    "invalid_request_error"
+                } else {
+                    error_type
+                };
+                openai_error(status, message, openai_type, "upstream_error")
+            }
+        }
+    }
+}
+
+/// POST /v1/messages・/v1/responses：原生协议透传转发。
+///
+/// 与 `forward_chat` 共用虚拟模型路由、LB 排序与 failover 骨架；差异：
+/// 请求体仅改写 model 字段（无协议转换）、下游头黑名单兜底全量透传、
+/// usage 从原生响应解析（旁路扫描）、错误响应用端点对应协议的原生格式。
+pub async fn forward_native(
+    state: &AppState,
+    api_key: AuthedApiKey,
+    endpoint: NativeEndpoint,
+    downstream_headers: &HeaderMap,
+    body_bytes: Bytes,
+) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let opencode_session = opencode_session_fallback(&api_key.name);
+    let body: Value = match serde_json::from_slice::<Value>(&body_bytes) {
+        Ok(value) if value.is_object() => value,
+        _ => {
+            return endpoint.error(
+                StatusCode::BAD_REQUEST,
+                "invalid_request_error",
+                "请求体不是合法的 JSON 对象",
+            );
+        }
+    };
+    let requested_model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if requested_model.is_empty() {
+        return endpoint.error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request_error",
+            "请求缺少 model 字段",
+        );
+    }
+    let client_stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let forwarded = select_passthrough_headers(downstream_headers);
+
+    // 路由：display_id 精确匹配 + 接口类型严格对应（鉴权失败与路由未命中不落 request 表）。
+    let virtual_model = match virtual_model::Entity::find()
+        .filter(virtual_model::Column::DisplayId.eq(&requested_model))
+        .filter(virtual_model::Column::Enable.eq(true))
+        .one(&state.db)
+        .await
+    {
+        Ok(Some(model)) => model,
+        Ok(None) => {
+            return endpoint.error(
+                StatusCode::NOT_FOUND,
+                "not_found_error",
+                format!("model '{requested_model}' does not exist"),
+            );
+        }
+        Err(e) => {
+            return endpoint.error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                format!("查询虚拟模型失败：{e}"),
+            );
+        }
+    };
+    if virtual_model.interface_type != endpoint.interface_type() {
+        return endpoint.error(
+            StatusCode::NOT_FOUND,
+            "not_found_error",
+            format!("model '{requested_model}' does not exist"),
+        );
+    }
+
+    let members = match load_members(&state.db, virtual_model.virtual_model_id).await {
+        Ok(members) => members,
+        Err(e) => {
+            return endpoint.error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "api_error",
+                format!("查询模型成员失败：{e}"),
+            );
+        }
+    };
+    // 防御性过滤：成员协议须与端点对应（成员匹配规则保证，兜底跳过异协议成员）。
+    let members: Vec<_> = members
+        .into_iter()
+        .filter(|member| member.protocol == endpoint.member_protocol())
+        .collect();
+    if members.is_empty() {
+        return endpoint.error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "api_error",
+            format!("虚拟模型 '{requested_model}' 没有可用的成员"),
+        );
+    }
+
+    let ordered = order_members(
+        state,
+        members,
+        virtual_model.load_balancing_strategy,
+        &state.lb_state,
+        virtual_model.virtual_model_id,
+        &request_id,
+    )
+    .await;
+    let retry_enabled = virtual_model.fallback_strategy == 1;
+    tracing::info!(
+        request_id,
+        virtual_model_id = virtual_model.virtual_model_id,
+        requested_model = %requested_model,
+        endpoint = ?endpoint,
+        member_count = ordered.len(),
+        selected_provider_id = ordered[0].provider_id,
+        selected_model_id = %ordered[0].model_id,
+        "原生透传 LB 选路结果",
+    );
+
+    let mut last_failure: Option<(Member, String, StatusCode)> = None;
+    let mut counted_failures: HashSet<i32> = HashSet::new();
+    for (index, member) in ordered.iter().enumerate() {
+        let has_more = index + 1 < ordered.len();
+        let start_time = now_ms();
+        let record_degraded = |message: &str, ttft_start_ms: i64| {
+            record_failure(
+                &state.db,
+                &format!("{request_id}-{}", index + 1),
+                virtual_model.virtual_model_id,
+                member,
+                &api_key.name,
+                start_time,
+                false,
+                client_stream,
+                message,
+                ttft_start_ms,
+            );
+        };
+
+        let decrypted_key = match crypto::decrypt(&member.api_key_encrypted) {
+            Ok(key) => key,
+            Err(e) => {
+                let message = format!("解密供应商密钥失败：{e}");
+                note_member_failure(state, member, &request_id, &mut counted_failures).await;
+                if retry_enabled && has_more {
+                    record_degraded(&message, start_time);
+                    last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
+                    continue;
+                }
+                record_failure(
+                    &state.db,
+                    &request_id,
+                    virtual_model.virtual_model_id,
+                    member,
+                    &api_key.name,
+                    start_time,
+                    client_stream,
+                    client_stream,
+                    &message,
+                    start_time,
+                );
+                return endpoint.error(StatusCode::BAD_GATEWAY, "api_error", message);
+            }
+        };
+
+        let call = match build_native_upstream_call(
+            endpoint,
+            member,
+            &body,
+            client_stream,
+            &decrypted_key,
+            &forwarded,
+            &request_id,
+            &opencode_session,
+        ) {
+            Ok(call) => call,
+            Err(message) => {
+                note_member_failure(state, member, &request_id, &mut counted_failures).await;
+                if retry_enabled && has_more {
+                    record_degraded(&message, start_time);
+                    last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
+                    continue;
+                }
+                record_failure(
+                    &state.db,
+                    &request_id,
+                    virtual_model.virtual_model_id,
+                    member,
+                    &api_key.name,
+                    start_time,
+                    client_stream,
+                    client_stream,
+                    &message,
+                    start_time,
+                );
+                return endpoint.error(StatusCode::BAD_GATEWAY, "api_error", message);
+            }
+        };
+
+        let proxy = member.proxy_enabled.then_some(member.proxy_addr.as_str());
+        let reply = match upstream::call(call, &state.upstream_pool, proxy).await {
+            Ok(reply) => reply,
+            Err(e) => {
+                let message = e.fail_reason();
+                note_member_failure(state, member, &request_id, &mut counted_failures).await;
+                if retry_enabled && has_more {
+                    record_degraded(&message, start_time);
+                    last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
+                    continue;
+                }
+                record_failure(
+                    &state.db,
+                    &request_id,
+                    virtual_model.virtual_model_id,
+                    member,
+                    &api_key.name,
+                    start_time,
+                    client_stream,
+                    client_stream,
+                    &message,
+                    start_time,
+                );
+                return endpoint.error(StatusCode::BAD_GATEWAY, "api_error", message);
+            }
+        };
+
+        if reply.status.as_u16() >= 400 {
+            let body = upstream::read_body(reply.body).await.unwrap_or_default();
+            let message = extract_error_message(&String::from_utf8_lossy(&body));
+            let status = reply.status;
+            note_member_failure(state, member, &request_id, &mut counted_failures).await;
+            if retry_enabled && is_retryable_status(status) && has_more {
+                record_degraded(&message, reply.start_at_ms);
+                last_failure = Some((member.clone(), message, status));
+                continue;
+            }
+            record_failure(
+                &state.db,
+                &request_id,
+                virtual_model.virtual_model_id,
+                member,
+                &api_key.name,
+                start_time,
+                client_stream,
+                client_stream,
+                &message,
+                reply.start_at_ms,
+            );
+            let error_type = if status == StatusCode::NOT_FOUND {
+                "not_found_error"
+            } else if status.is_client_error() {
+                "invalid_request_error"
+            } else {
+                "api_error"
+            };
+            return endpoint.error(status, error_type, message);
+        }
+
+        // 成功即清零连续失败计数，随后原样中继响应。
+        state.failure_counter.reset(member.provider_id);
+        return dispatch_native_success(
+            state,
+            endpoint,
+            request_id,
+            virtual_model.virtual_model_id,
+            api_key.name.clone(),
+            start_time,
+            member.clone(),
+            reply,
+            client_stream,
+        )
+        .await;
+    }
+
+    let (member, message, status) = last_failure.unwrap_or_else(|| {
+        (
+            ordered[0].clone(),
+            "上游全部成员失败".to_string(),
+            StatusCode::BAD_GATEWAY,
+        )
+    });
+    record_failure(
+        &state.db,
+        &request_id,
+        virtual_model.virtual_model_id,
+        &member,
+        &api_key.name,
+        now_ms(),
+        client_stream,
+        client_stream,
+        &message,
+        now_ms(),
+    );
+    endpoint.error(status, "api_error", message)
+}
+
+/// 构造原生透传上游调用：仅改写 model，其余字段与下游头原样出站
+/// （剥离清单兜底 + 协议鉴权头由网关注入）。
+#[allow(clippy::too_many_arguments)]
+fn build_native_upstream_call(
+    endpoint: NativeEndpoint,
+    member: &Member,
+    client_body: &Value,
+    client_stream: bool,
+    api_key: &str,
+    forwarded: &[(HeaderName, HeaderValue)],
+    request_id: &str,
+    opencode_session: &str,
+) -> Result<UpstreamCall, String> {
+    let mut body = client_body.clone();
+    body["model"] = Value::String(member.model_id.clone());
+    let url = build_upstream_url(
+        &member.base_url,
+        member.protocol_code(),
+        endpoint.sub_path(),
+    );
+    let upstream_host = provider_template::host_of(&member.base_url).unwrap_or_default();
+    let mut headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
+    headers.extend_from_slice(forwarded);
+    merge_custom_headers(
+        &member.custom_header,
+        member.protocol,
+        request_id,
+        &mut headers,
+    );
+    merge_template_default_headers(&upstream_host, &mut headers);
+    apply_protocol_auth_headers(member.protocol, api_key, &mut headers);
+    if provider_template::is_opencode_host(&upstream_host)
+        && !headers
+            .iter()
+            .any(|(n, _)| n.as_str().eq_ignore_ascii_case(OPENCODE_SESSION_HEADER))
+        && let Ok(value) = HeaderValue::from_str(opencode_session)
+    {
+        headers.push((HeaderName::from_static(OPENCODE_SESSION_HEADER), value));
+    }
+    Ok(UpstreamCall {
+        url,
+        headers,
+        body: Bytes::from(body.to_string()),
+        stream: client_stream,
+    })
+}
+
+/// 原生透传流式用量扫描器分派。
+enum NativeUsageScanner {
+    Anthropic(convert::anthropic::AnthropicStreamUsageScanner),
+    Responses(convert::responses::ResponsesStreamUsageScanner),
+}
+
+impl NativeUsageScanner {
+    fn feed(&mut self, bytes: &[u8]) {
+        match self {
+            NativeUsageScanner::Anthropic(scanner) => scanner.feed(bytes),
+            NativeUsageScanner::Responses(scanner) => scanner.feed(bytes),
+        }
+    }
+
+    fn take_content_seen(&mut self) -> bool {
+        match self {
+            NativeUsageScanner::Anthropic(scanner) => scanner.take_content_seen(),
+            NativeUsageScanner::Responses(scanner) => scanner.take_content_seen(),
+        }
+    }
+
+    fn usage(&self) -> Option<Usage> {
+        match self {
+            NativeUsageScanner::Anthropic(scanner) => scanner.usage(),
+            NativeUsageScanner::Responses(scanner) => scanner.usage(),
+        }
+    }
+}
+
+/// 原生透传成功路径：非流式读全量响应体解析 usage 后原样返回；
+/// 流式按原始字节中继 SSE（不重帧，`event:` 行保持原样），旁路扫描 usage。
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_native_success(
+    state: &AppState,
+    endpoint: NativeEndpoint,
+    request_id: String,
+    virtual_model_id: i32,
+    api_key_name: String,
+    start_time: i64,
+    member: Member,
+    reply: UpstreamReply,
+    client_stream: bool,
+) -> Response {
+    if !client_stream {
+        let body = upstream::read_body(reply.body).await.unwrap_or_default();
+        let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        let usage = match endpoint {
+            NativeEndpoint::AnthropicMessages => parsed
+                .get("usage")
+                .filter(|usage| usage.is_object())
+                .map(convert::anthropic::extract_usage)
+                .unwrap_or_default(),
+            NativeEndpoint::OpenAiResponses => parsed
+                .get("usage")
+                .and_then(convert::responses::ResponsesStreamConverter::extract_usage)
+                .unwrap_or_default(),
+        };
+        let end_time = now_ms();
+        RequestRecord {
+            request_id,
+            virtual_model_id,
+            provider_id: member.provider_id,
+            model_id: member.model_id.clone(),
+            stream: false,
+            ttft: None,
+            output_tokens_time: Some((end_time - reply.start_at_ms).max(0)),
+            ttft_start_ms: reply.start_at_ms,
+            start_time,
+            end_time,
+            usage,
+            success: true,
+            fail_reason: None,
+            api_key_name,
+        }
+        .insert(&state.db);
+        return (StatusCode::OK, [("content-type", "application/json")], body).into_response();
+    }
+
+    // 流式：原始字节直通 + 旁路 usage 扫描（SseSplitter 会丢弃 event: 行，
+    // 原生客户端依赖其语义，故不重帧）。
+    let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+    let db = state.db.clone();
+    let mut scanner = match endpoint {
+        NativeEndpoint::AnthropicMessages => {
+            NativeUsageScanner::Anthropic(convert::anthropic::AnthropicStreamUsageScanner::default())
+        }
+        NativeEndpoint::OpenAiResponses => {
+            NativeUsageScanner::Responses(convert::responses::ResponsesStreamUsageScanner::default())
+        }
+    };
+    let reply_start_at = reply.start_at_ms;
+    let mut stream_metrics = StreamMetrics::new(reply.start_at_ms);
+    tokio::spawn(async move {
+        let mut body = reply.body;
+        let mut disconnect = false;
+        'outer: while let Some(frame) = body.frame().await {
+            let bytes = match frame {
+                Ok(frame) => frame.into_data().unwrap_or_default(),
+                Err(e) => {
+                    let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
+                    break;
+                }
+            };
+            scanner.feed(&bytes);
+            if scanner.take_content_seen() {
+                stream_metrics.on_token();
+            }
+            if tx.send(Ok(bytes)).await.is_err() {
+                disconnect = true;
+                break 'outer;
+            }
+        }
+        let end_time = now_ms();
+        RequestRecord {
+            request_id,
+            virtual_model_id,
+            provider_id: member.provider_id,
+            model_id: member.model_id.clone(),
+            stream: true,
+            ttft: stream_metrics.ttft_ms(),
+            output_tokens_time: stream_metrics.output_duration_ms(),
+            ttft_start_ms: reply_start_at,
+            start_time,
+            end_time,
+            usage: scanner.usage().unwrap_or_default(),
+            success: true,
+            fail_reason: disconnect.then(|| "客户端提前断开".to_string()),
+            api_key_name,
+        }
+        .insert(&db);
+    });
+    sse_response(ReceiverStream::new(rx))
 }
 
 #[allow(clippy::too_many_lines)]

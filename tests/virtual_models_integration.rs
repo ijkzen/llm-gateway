@@ -884,3 +884,414 @@ async fn provider_disable_cascades_to_virtual_model_items_and_resorts() {
         .unwrap();
     assert!(reenabled.enable, "重新启用供应商后子模型条目应被级联恢复");
 }
+
+/// 创建带接口类型的虚拟模型请求体。
+fn vm_payload_typed(display_id: &str, model_ids: &[i32], interface_type: i32) -> Value {
+    let mut payload = vm_payload(display_id, model_ids);
+    payload["interfaceType"] = json!(interface_type);
+    payload
+}
+
+#[tokio::test]
+async fn test_interface_type_crud_and_validation() {
+    let (app, db) = setup_app().await;
+    let p0 = seed_provider_with_protocol(&db, "p-typed-oc", 0).await;
+    let m1 = seed_provider_model(&db, p0, "typed-model-1").await;
+    let m2 = seed_provider_model(&db, p0, "typed-model-2").await;
+    let p1 = seed_provider_with_protocol(&db, "p-typed-resp", 1).await;
+    let m_resp = seed_provider_model(&db, p1, "typed-model-resp").await;
+
+    // 缺省 interfaceType → 默认 0（OpenAI Compatible）。
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload("default-type", &[m1]),
+    )
+    .await;
+    assert_eq!(status, 201);
+    assert_eq!(body["data"]["interfaceType"], 0);
+
+    // 显式 Responses 类型 + 更新为 Messages 类型。
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("resp-model", &[m_resp], 1),
+    )
+    .await;
+    assert_eq!(status, 201, "body={body}");
+    assert_eq!(body["data"]["interfaceType"], 1);
+    let vm_id = body["data"]["virtualModelId"].as_i64().unwrap();
+
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/virtual-models/{vm_id}"),
+        json!({ "interfaceType": 2 }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["data"]["interfaceType"], 2);
+
+    // Full Compatible 合法；Gemini(3) 为保留值（无端点可服务），显式拒绝。
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/virtual-models/{vm_id}"),
+        json!({ "interfaceType": 4 }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["data"]["interfaceType"], 4);
+    let (status, _) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/virtual-models/{vm_id}"),
+        json!({ "interfaceType": 3 }),
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    // 越界值拒绝。
+    let (status, _) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/virtual-models/{vm_id}"),
+        json!({ "interfaceType": 5 }),
+    )
+    .await;
+    assert_eq!(status, 400);
+    let (status, _) = send_json(
+        app,
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("bad-type", &[m2], -1),
+    )
+    .await;
+    assert_eq!(status, 400);
+}
+
+#[tokio::test]
+async fn test_interface_type_filters_v1_surfaces() {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+
+    let p0 = seed_provider_with_protocol(&db, "p-filter-oc", 0).await;
+    let p1 = seed_provider_with_protocol(&db, "p-filter-resp", 1).await;
+    let p2 = seed_provider_with_protocol(&db, "p-filter-msgs", 2).await;
+    let m1 = seed_provider_model(&db, p0, "filter-model-1").await;
+    let m2 = seed_provider_model(&db, p1, "filter-model-2").await;
+    let m3 = seed_provider_model(&db, p2, "filter-model-3").await;
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload("chat-model", &[m1]),
+    )
+    .await;
+    assert_eq!(status, 201, "body={body}");
+
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("resp-only", &[m2], 1),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("msgs-only", &[m3], 2),
+    )
+    .await;
+    assert_eq!(status, 201);
+
+    // /v1/models 只返回 OpenAI Compatible / Full Compatible。
+    let (status, body) = send_v1_json(app.clone(), "GET", "/v1/models", Value::Null).await;
+    assert_eq!(status, 200);
+    let ids: Vec<&str> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, vec!["chat-model"]);
+
+    // 单查同样过滤。
+    let (status, _) = send_v1_json(app.clone(), "GET", "/v1/models/resp-only", Value::Null).await;
+    assert_eq!(status, 404);
+
+    // chat/completions 拒绝 Responses/Messages 类型（模型不存在语义）。
+    let (status, body) = send_v1_json(
+        app.clone(),
+        "POST",
+        "/v1/chat/completions",
+        json!({"model": "resp-only", "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    assert_eq!(status, 404);
+    assert_eq!(body["error"]["code"], "model_not_found");
+    let (status, _) = send_v1_json(
+        app.clone(),
+        "POST",
+        "/v1/chat/completions",
+        json!({"model": "msgs-only", "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    assert_eq!(status, 404);
+}
+
+/// 以 Bearer 凭证发送 /v1 请求。
+async fn send_v1_json(app: axum::Router, method: &str, uri: &str, body: Value) -> (u16, Value) {
+    let request: Request<Body> = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .header("authorization", common::TEST_BEARER)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let parsed: Value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+    };
+    (status, parsed)
+}
+
+/// 建指定协议的 Provider 与无覆盖的 ProviderModel。
+async fn seed_provider_with_protocol(
+    db: &sea_orm::DatabaseConnection,
+    name: &str,
+    protocol: i32,
+) -> i32 {
+    let active = provider::ActiveModel {
+        name: Set(name.to_string()),
+        enable: Set(true),
+        base_url: Set("https://api.example.com/v1".to_string()),
+        api_key: Set(llm_gateway::crypto::encrypt("sk-test")),
+        custom_header: Set("{}".to_string()),
+        protocol_type: Set(protocol),
+        billing_mode: Set(0),
+        extra: Set("{}".to_string()),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    active.insert(db).await.unwrap().id
+}
+
+#[tokio::test]
+async fn test_restricted_interface_type_rejects_protocol_mismatched_members() {
+    let (app, db) = setup_app().await;
+    // Anthropic 协议供应商（协议 2）的成员。
+    let p = seed_provider_with_protocol(&db, "p-anthropic", 2).await;
+    let m1 = seed_provider_model(&db, p, "claude-x1").await;
+    let m2 = seed_provider_model(&db, p, "claude-x2").await;
+    let m3 = seed_provider_model(&db, p, "claude-x3").await;
+
+    // OpenAI Compatible 类型（0）不能挂 Anthropic 成员。
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("oc-vm", &[m1], 0),
+    )
+    .await;
+    assert_eq!(status, 400, "body={body}");
+
+    // Responses 类型（1）同样拒绝。
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("resp-vm", &[m1], 1),
+    )
+    .await;
+    assert_eq!(status, 400);
+
+    // Messages 类型（2）接受本协议成员。
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("msgs-vm", &[m2], 2),
+    )
+    .await;
+    assert_eq!(status, 201, "body={body}");
+
+    // Full Compatible（4）接受任意协议成员。
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("full-vm", &[m3], 4),
+    )
+    .await;
+    assert_eq!(status, 201, "body={body}");
+}
+
+#[tokio::test]
+async fn test_interface_type_change_cascades_remove_mismatched_members() {
+    let (app, db) = setup_app().await;
+    let p = seed_provider_with_protocol(&db, "p-anthropic-2", 2).await;
+    let m = seed_provider_model(&db, p, "claude-y").await;
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("full-vm-2", &[m], 4),
+    )
+    .await;
+    assert_eq!(status, 201, "body={body}");
+    let vm_id = body["data"]["virtualModelId"].as_i64().unwrap();
+
+    // 改成 Messages 类型 → 不匹配成员为 0 个（本来就匹配），成员保留。
+    // 改成 OpenAI Compatible 类型 → Anthropic 成员被硬删。
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/virtual-models/{vm_id}"),
+        json!({ "interfaceType": 0 }),
+    )
+    .await;
+    assert_eq!(status, 200, "body={body}");
+    assert_eq!(body["data"]["interfaceType"], 0);
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 0);
+
+    let items = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::VirtualModelId.eq(vm_id as i32))
+        .all(&db)
+        .await
+        .unwrap();
+    assert!(items.is_empty(), "不匹配成员应被硬删");
+}
+
+#[tokio::test]
+async fn test_provider_model_protocol_change_cascades_remove_member() {
+    let (app, db) = setup_app().await;
+    // 供应商协议 0，模型级覆盖为 2 → 生效协议 2，可进 Messages 类型虚拟模型。
+    let p = seed_provider_with_protocol(&db, "p-openai-2", 0).await;
+    let m = seed_provider_model(&db, p, "dual-protocol").await;
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{p}/models/{m}"),
+        json!({
+            "providerModelId": "dual-protocol",
+            "contextLength": 128000,
+            "maxOutputTokens": 4096,
+            "protocolType": 2
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "body={body}");
+
+    let (status, body) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("msgs-vm-2", &[m], 2),
+    )
+    .await;
+    assert_eq!(status, 201, "body={body}");
+
+    // 模型级覆盖改为 0 → 生效协议 0，从 Messages 类型虚拟模型中移除。
+    // （Upsert 请求为全量字段）
+    let (status, body) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{p}/models/{m}"),
+        json!({
+            "providerModelId": "dual-protocol",
+            "contextLength": 128000,
+            "maxOutputTokens": 4096,
+            "protocolType": 0
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "body={body}");
+
+    let items = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(m))
+        .all(&db)
+        .await
+        .unwrap();
+    assert!(items.is_empty(), "生效协议变更后成员应从受限虚拟模型移除");
+}
+
+#[tokio::test]
+async fn test_provider_protocol_change_cascades_remove_member() {
+    let (app, db) = setup_app().await;
+    let p = seed_provider_with_protocol(&db, "p-anthropic-3", 2).await;
+    let m = seed_provider_model(&db, p, "claude-z").await;
+
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("msgs-vm-3", &[m], 2),
+    )
+    .await;
+    assert_eq!(status, 201);
+
+    // 供应商协议改为 0 → 成员生效协议 0，从 Messages 类型虚拟模型移除。
+    let (status, _) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{p}"),
+        json!({ "protocolType": 0 }),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let items = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(m))
+        .all(&db)
+        .await
+        .unwrap();
+    assert!(items.is_empty(), "供应商协议变更后成员应从受限虚拟模型移除");
+}
+
+#[tokio::test]
+async fn test_full_compatible_vm_keeps_members_on_protocol_change() {
+    let (app, db) = setup_app().await;
+    let p = seed_provider_with_protocol(&db, "p-anthropic-4", 2).await;
+    let m = seed_provider_model(&db, p, "claude-w").await;
+
+    let (status, _) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload_typed("full-vm-3", &[m], 4),
+    )
+    .await;
+    assert_eq!(status, 201);
+
+    // 供应商协议变更 → Full Compatible 虚拟模型不移除成员。
+    let (status, _) = send_json(
+        app.clone(),
+        "PUT",
+        &format!("/api/providers/{p}"),
+        json!({ "protocolType": 0 }),
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let items = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.eq(m))
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(items.len(), 1, "Full Compatible 不移除成员");
+}

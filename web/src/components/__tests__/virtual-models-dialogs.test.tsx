@@ -115,6 +115,7 @@ function makeVm(overrides: Partial<VirtualModel> = {}): VirtualModel {
 		enable: true,
 		loadBalancingStrategy: 0,
 		fallbackStrategy: 0,
+		interfaceType: 4,
 		items: [],
 		createdAt: "",
 		updatedAt: "",
@@ -276,6 +277,7 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 					enable: false,
 					loadBalancingStrategy: 2,
 					fallbackStrategy: 1,
+					interfaceType: 4,
 					items: [
 						makeItem({ modelId: 11, enable: false }),
 						makeItem({
@@ -434,6 +436,7 @@ describe("VirtualModelItemDetailDialog", () => {
 						displayId: "gpt-4o",
 						loadBalancingStrategy: 0,
 						fallbackStrategy: 0,
+						interfaceType: 4,
 						items: [
 							makeItem({ virtualModelItemId: 1, modelId: 11, providerModelId: "gpt-4o" }),
 							makeItem({

@@ -9,7 +9,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use serde_json::{Value, json};
 
 use crate::auth::{AuthedApiKey, openai_error};
-use crate::entity::virtual_model;
+use crate::entity::virtual_model::{self, CHAT_SERVED_TYPES};
 use crate::proxy;
 use crate::state::AppState;
 
@@ -21,6 +21,8 @@ pub fn routes() -> Router<AppState> {
         .route("/models", get(list_models))
         .route("/models/{display_id}", get(get_model))
         .route("/chat/completions", post(chat_completions))
+        .route("/messages", post(passthrough_messages))
+        .route("/responses", post(passthrough_responses))
 }
 
 /// POST /v1/chat/completions：OpenAI 兼容入口，转发到虚拟模型选中的上游成员。
@@ -39,6 +41,41 @@ async fn chat_completions(
     proxy::forward_chat(&state, api_key, body, forwarded).await
 }
 
+/// POST /v1/messages：Anthropic Messages 原生透传（仅 Messages 类型虚拟模型；
+/// 鉴权接受 x-api-key 或 Bearer）。
+async fn passthrough_messages(
+    State(state): State<AppState>,
+    Extension(api_key): Extension<AuthedApiKey>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    proxy::forward_native(
+        &state,
+        api_key,
+        proxy::NativeEndpoint::AnthropicMessages,
+        &headers,
+        body,
+    )
+    .await
+}
+
+/// POST /v1/responses：OpenAI Responses 原生透传（仅 Responses 类型虚拟模型）。
+async fn passthrough_responses(
+    State(state): State<AppState>,
+    Extension(api_key): Extension<AuthedApiKey>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    proxy::forward_native(
+        &state,
+        api_key,
+        proxy::NativeEndpoint::OpenAiResponses,
+        &headers,
+        body,
+    )
+    .await
+}
+
 /// OpenAI 格式的单个模型对象。
 fn model_object(display_id: &str, created_at: chrono::DateTime<chrono::Utc>) -> Value {
     json!({
@@ -49,10 +86,12 @@ fn model_object(display_id: &str, created_at: chrono::DateTime<chrono::Utc>) -> 
     })
 }
 
-/// GET /v1/models：返回全部启用的虚拟模型。
+/// GET /v1/models：返回全部启用且接口类型可被 chat/completions 服务的虚拟模型
+/// （OpenAI Compatible / Full Compatible；Responses/Messages 专用模型不暴露）。
 async fn list_models(State(state): State<AppState>) -> Response {
     match virtual_model::Entity::find()
         .filter(virtual_model::Column::Enable.eq(true))
+        .filter(virtual_model::Column::InterfaceType.is_in(CHAT_SERVED_TYPES))
         .order_by_asc(virtual_model::Column::VirtualModelId)
         .all(&state.db)
         .await
@@ -83,6 +122,7 @@ async fn get_model(State(state): State<AppState>, Path(display_id): Path<String>
     match virtual_model::Entity::find()
         .filter(virtual_model::Column::DisplayId.eq(display_id))
         .filter(virtual_model::Column::Enable.eq(true))
+        .filter(virtual_model::Column::InterfaceType.is_in(CHAT_SERVED_TYPES))
         .one(&state.db)
         .await
     {

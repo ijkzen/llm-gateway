@@ -434,7 +434,21 @@ const en: Translation = {
 			failFast: "Fail fast",
 			retryOthers: "Retry other enabled members",
 		},
+		interfaceType: "Interface Type",
+		selectInterfaceType: "Select interface type",
+		interfaceTypeHint:
+			"Restricted types only accept native-protocol members; Full Compatible accepts members of any protocol and is served via /v1/chat/completions conversion.",
+		interfaceTypes: {
+			openaiCompat: "OpenAI Compatible",
+			responses: "Responses",
+			messages: "Messages (Anthropic)",
+			fullCompatible: "Full Compatible",
+		},
+		interfaceChangeTitle: "Change Interface Type",
+		interfaceChangeDesc:
+			"The following member models no longer match the new interface type and will be removed automatically on save:",
 	},
+
 	apiKeys: {
 		title: "API Keys",
 		name: "Name",

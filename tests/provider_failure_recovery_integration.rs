@@ -200,6 +200,7 @@ async fn seed_failure_disabled_provider(state: &AppState, base_url: &str) -> (i3
         enable: Set(true),
         load_balancing_strategy: Set(0),
         fallback_strategy: Set(1),
+        interface_type: Set(4),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()

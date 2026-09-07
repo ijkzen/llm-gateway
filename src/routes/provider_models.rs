@@ -496,6 +496,23 @@ async fn update_provider_model(
                 protocol_type = ?model.protocol_type,
                 "更新供应商模型",
             );
+            // 协议（模型级覆盖或经由供应商的生效协议）可能变化：级联硬删不再
+            // 匹配所属受限类型虚拟模型的成员。失败不阻断更新（记 warn，成员
+            // 下次协议变更时仍会重试清理）。
+            match crate::routes::virtual_models::remove_mismatched_members(
+                &state.db,
+                &[model.model_id],
+            )
+            .await
+            {
+                Ok(removed) if !removed.is_empty() => {
+                    tracing::info!(model_id = model.model_id, removed = ?removed, "协议变更级联移除虚拟模型成员");
+                }
+                Err(e) => {
+                    tracing::warn!(model_id = model.model_id, "协议变更级联移除成员失败：{e}")
+                }
+                Ok(_) => {}
+            }
             let response = ProviderModelResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }

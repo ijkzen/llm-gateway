@@ -23,8 +23,8 @@ const TEST_USERNAME: &str = "Admin";
 const TEST_PASSWORD: &str = "Password";
 const TEST_SESSION_TOKEN: &str = "itest-session-token-0123456789abcdef";
 const TEST_COOKIE: &str = "lg_session=itest-session-token-0123456789abcdef";
-const TEST_API_KEY_PLAIN: &str = "lg-itest-api-key-0000000000000";
-const TEST_BEARER: &str = "Bearer lg-itest-api-key-0000000000000";
+pub(crate) const TEST_API_KEY_PLAIN: &str = "lg-itest-api-key-0000000000000";
+pub(crate) const TEST_BEARER: &str = "Bearer lg-itest-api-key-0000000000000";
 
 /// 集成测试共享临时库目录（进程内首次使用时创建，避免泄漏）。
 fn shared_test_db_dir() -> &'static std::path::Path {
