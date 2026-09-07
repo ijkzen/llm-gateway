@@ -1,8 +1,6 @@
-import { DataTableToolbar } from "@/components/data-table-toolbar";
 import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
-import { SearchInput } from "@/components/search-input";
 import { BackupDialog } from "@/components/settings/BackupDialog";
 import { ChangePasswordDialog } from "@/components/settings/ChangePasswordDialog";
 import { JsonSettingEditDialog } from "@/components/settings/JsonSettingEditDialog";
@@ -11,18 +9,10 @@ import { SettingEditDialog } from "@/components/settings/SettingEditDialog";
 import { SettingsTable } from "@/components/settings/SettingsTable";
 import { TableSkeleton } from "@/components/table-skeleton";
 import { Button } from "@/components/ui/button";
-import {
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-} from "@/components/ui/select";
 import { type Setting, useSettings } from "@/hooks/use-settings";
-import { SETTING_TYPES } from "@/lib/constants";
 import { SETTINGS_PAGE } from "@/lib/pages";
 import { ArchiveRestore, KeyRound } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
 export default function SettingsPage() {
@@ -31,24 +21,8 @@ export default function SettingsPage() {
 	const [deletingSetting, setDeletingSetting] = useState<Setting | null>(null);
 	const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 	const [backupOpen, setBackupOpen] = useState(false);
-	const [searchQuery, setSearchQuery] = useState("");
-	const [typeFilter, setTypeFilter] = useState("all");
 
 	const { data: settings, isLoading, isError, refetch } = useSettings();
-
-	const filteredSettings = useMemo(() => {
-		let list = settings ?? [];
-		if (searchQuery.trim()) {
-			const q = searchQuery.toLowerCase();
-			list = list.filter(
-				(s) => s.key.toLowerCase().includes(q) || s.value.toLowerCase().includes(q),
-			);
-		}
-		if (typeFilter !== "all") {
-			list = list.filter((s) => s.type === typeFilter);
-		}
-		return list;
-	}, [settings, searchQuery, typeFilter]);
 
 	if (isLoading) {
 		return (
@@ -83,32 +57,7 @@ export default function SettingsPage() {
 				</div>
 			</PageHeader>
 
-			<DataTableToolbar>
-				<SearchInput
-					value={searchQuery}
-					onChange={setSearchQuery}
-					placeholder={t("settings.searchPlaceholder")}
-				/>
-				<Select value={typeFilter} onValueChange={setTypeFilter}>
-					<SelectTrigger className="w-[160px]" aria-label={t("settings.filterByType")}>
-						<SelectValue placeholder={t("settings.allTypes")} />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="all">{t("settings.allTypes")}</SelectItem>
-						{SETTING_TYPES.map((type) => (
-							<SelectItem key={type} value={type}>
-								{type}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-			</DataTableToolbar>
-
-			<SettingsTable
-				settings={filteredSettings}
-				onEdit={setEditingSetting}
-				onDelete={setDeletingSetting}
-			/>
+			<SettingsTable settings={settings} onEdit={setEditingSetting} onDelete={setDeletingSetting} />
 
 			{/* Json 类型走结构化表单弹窗（逐行增删键值），其余类型沿用单值编辑。 */}
 			{editingSetting?.type === "Json" ? (

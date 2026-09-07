@@ -4,6 +4,7 @@ import { DataTableViewOptions } from "@/components/data-table/view-options";
 import { EmptyState } from "@/components/empty-state";
 import { MidEllipsis } from "@/components/mid-ellipsis";
 import { RelativeTime } from "@/components/relative-time";
+import { SearchInput } from "@/components/search-input";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -14,6 +15,13 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
+import {
 	Table,
 	TableBody,
 	TableCell,
@@ -23,7 +31,7 @@ import {
 } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Setting } from "@/hooks/use-settings";
-import type { SettingType } from "@/lib/constants";
+import { SETTING_TYPES, type SettingType } from "@/lib/constants";
 import {
 	type ColumnDef,
 	type PaginationState,
@@ -37,6 +45,7 @@ import {
 } from "@tanstack/react-table";
 import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface SettingsTableProps {
 	settings: Setting[] | undefined;
@@ -62,9 +71,26 @@ function getTypeBadgeVariant(type: SettingType) {
 const PLAIN_HEADER_CLASS = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
 
 export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps) {
+	const { t } = useTranslation();
+	const [searchQuery, setSearchQuery] = useState("");
+	const [typeFilter, setTypeFilter] = useState("all");
 	const [sorting, setSorting] = useState<SortingState>([]);
 	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
 	const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 10 });
+
+	const filteredSettings = useMemo(() => {
+		let list = settings ?? [];
+		if (searchQuery.trim()) {
+			const q = searchQuery.toLowerCase();
+			list = list.filter(
+				(s) => s.key.toLowerCase().includes(q) || s.value.toLowerCase().includes(q),
+			);
+		}
+		if (typeFilter !== "all") {
+			list = list.filter((s) => s.type === typeFilter);
+		}
+		return list;
+	}, [settings, searchQuery, typeFilter]);
 
 	const columns = useMemo<ColumnDef<Setting>[]>(
 		() => [
@@ -158,7 +184,7 @@ export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps
 	);
 
 	const table = useReactTable({
-		data: settings ?? [],
+		data: filteredSettings,
 		columns,
 		state: { sorting, columnVisibility, pagination },
 		onSortingChange: setSorting,
@@ -179,8 +205,28 @@ export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps
 
 	return (
 		<div className="space-y-4">
-			<div className="flex justify-end">
-				<DataTableViewOptions table={table} />
+			<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+				<SearchInput
+					value={searchQuery}
+					onChange={setSearchQuery}
+					placeholder={t("settings.searchPlaceholder")}
+				/>
+				<div className="flex items-center gap-2 sm:justify-end">
+					<Select value={typeFilter} onValueChange={setTypeFilter}>
+						<SelectTrigger className="w-[160px]" aria-label={t("settings.filterByType")}>
+							<SelectValue placeholder={t("settings.allTypes")} />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="all">{t("settings.allTypes")}</SelectItem>
+							{SETTING_TYPES.map((type) => (
+								<SelectItem key={type} value={type}>
+									{type}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+					<DataTableViewOptions table={table} />
+				</div>
 			</div>
 			{rows.length === 0 ? (
 				<EmptyState
