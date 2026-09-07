@@ -1,3 +1,4 @@
+import { Breadcrumbs } from "@/components/breadcrumbs";
 import LocaleToggle from "@/components/locale-toggle";
 import { MidEllipsis } from "@/components/mid-ellipsis";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
@@ -148,7 +149,9 @@ export default function AppLayout() {
 					<div className="app-header-inner flex h-14 items-center gap-4 px-6">
 						<SidebarTrigger className="-ml-2" aria-label={t("nav.appTitle")} />
 						<Separator orientation="vertical" className="h-6" />
-						<div className="flex flex-1 items-center justify-end gap-2">
+						{/* 数据面板详情页的结构归属面包屑（其它页不渲染，顶栏维持现状） */}
+						<Breadcrumbs className="min-w-0 flex-1" />
+						<div className="ml-auto flex shrink-0 items-center gap-2">
 							<Button
 								variant="outline"
 								size="icon"

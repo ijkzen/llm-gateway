@@ -44,9 +44,7 @@ function MemberCard({
 			onClick={(event) => {
 				const target = event.target as HTMLElement;
 				if (target.closest("[data-nav]")) {
-					navigate(
-						`/models/${item.providerId}/${encodeURIComponent(item.providerModelId)}/overview`,
-					);
+					navigate(`/models/${item.modelId}/overview`);
 					return;
 				}
 				if (target.closest("[data-static]")) return;

@@ -1,4 +1,5 @@
 import type { DashboardCharts } from "@/hooks/use-dashboard-stats";
+import type { ProviderModel } from "@/hooks/use-provider-models";
 import ModelOverviewPage from "@/pages/model-overview";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,12 +12,22 @@ const mocks = vi.hoisted(() => ({
 	metrics: undefined as Record<string, unknown> | undefined,
 	metricsLoading: false,
 	metricsError: false,
+	detail: undefined as ProviderModel | undefined,
+	detailError: false,
 }));
 
 vi.mock("react-router-dom", () => ({
-	useParams: () => ({ providerId: "3", modelId: "deepseek-v3" }),
+	useParams: () => ({ modelId: "3" }),
 	useSearchParams: () => [new URLSearchParams("period=week&offset=0"), vi.fn()],
 	useNavigate: () => vi.fn(),
+}));
+
+vi.mock("@/hooks/use-provider-models", () => ({
+	useProviderModelDetail: () => ({
+		data: mocks.detail,
+		isError: mocks.detailError,
+		refetch: vi.fn(),
+	}),
 }));
 
 vi.mock("@/hooks/use-dashboard-stats", () => ({
@@ -90,6 +101,27 @@ function makeCharts(overrides: Partial<DashboardCharts> = {}): DashboardCharts {
 	};
 }
 
+function makeDetail(overrides: Partial<ProviderModel> = {}): ProviderModel {
+	return {
+		modelId: 3,
+		providerId: 9,
+		providerName: "火山方舟",
+		providerModelId: "deepseek-v3",
+		contextLength: 128000,
+		maxOutputTokens: 4096,
+		reasoning: true,
+		toolUse: false,
+		imageUnderstand: false,
+		videoUnderstand: false,
+		proxyEnabled: false,
+		proxyAddr: "",
+		protocolType: null,
+		createdAt: "",
+		updatedAt: "",
+		...overrides,
+	};
+}
+
 function renderPage() {
 	return render(<ModelOverviewPage />);
 }
@@ -103,6 +135,8 @@ describe("ModelOverviewPage（模型详情三级页）", () => {
 		mocks.metrics = undefined;
 		mocks.metricsLoading = false;
 		mocks.metricsError = false;
+		mocks.detail = makeDetail();
+		mocks.detailError = false;
 	});
 
 	it("页头显示供应商・模型", () => {
@@ -202,5 +236,19 @@ describe("ModelOverviewPage（模型详情三级页）", () => {
 		expect(screen.getByText("平均耗时")).toBeTruthy();
 		expect(screen.getByText("缓存命中率")).toBeTruthy();
 		expect(screen.getByText("32%")).toBeTruthy();
+	});
+
+	it("模型已删除（detail 404）时显示错误态并引导返回列表", () => {
+		mocks.detailError = true;
+		renderPage();
+		expect(screen.getByText("模型数据面板不可用")).toBeTruthy();
+		expect(screen.getByRole("button", { name: "返回供应商模型列表" })).toBeTruthy();
+	});
+
+	it("detail 解析前不发指标/图表请求（显示加载标题）", () => {
+		mocks.detail = undefined;
+		renderPage();
+		expect(screen.getByText("模型数据面板")).toBeTruthy();
+		expect(screen.queryByTestId("trend-chart")).toBeNull();
 	});
 });

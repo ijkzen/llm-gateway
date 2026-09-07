@@ -50,9 +50,10 @@ function MemberModelRaceTable({
 	const query = useVirtualModelMemberRank(window, sort, true, virtualModelId);
 
 	const openModelOverview = (item: VirtualModelMemberRankItem) => {
-		navigate(
-			`/models/${item.providerId}/${encodeURIComponent(item.modelId)}/overview?${windowQueryString(windowState, window)}`,
-		);
+		if (item.modelPk === null || item.modelPk === undefined) {
+			return;
+		}
+		navigate(`/models/${item.modelPk}/overview?${windowQueryString(windowState, window)}`);
 	};
 
 	if (query.isLoading) {

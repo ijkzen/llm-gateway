@@ -37,6 +37,7 @@ function makeItem(overrides: Partial<ProviderModelRankItem> = {}): ProviderModel
 		providerId: 1,
 		providerName: "火山方舟",
 		modelId: "deepseek-v3",
+		modelPk: 11,
 		requestCount: 10,
 		totalTokens: 1_000_000,
 		ttft: 120.5,

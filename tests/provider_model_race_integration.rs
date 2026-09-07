@@ -249,6 +249,7 @@ async fn test_pm_rank_aggregates_all_six_metrics() {
     assert_eq!(a["providerId"], 1);
     assert_eq!(a["providerName"], "供应商A");
     assert_eq!(a["modelId"], "gpt-4o");
+    assert_eq!(a["modelPk"], 1);
     assert_eq!(a["requestCount"], 2); // 失败行排除
     assert_eq!(a["totalTokens"], 400.0);
     assert_eq!(a["ttft"], 200.0); // (100+300)/2
@@ -257,6 +258,7 @@ async fn test_pm_rank_aggregates_all_six_metrics() {
     assert!((a["cacheHitRate"].as_f64().unwrap() - 0.2).abs() < 0.001); // 40/200
     assert_eq!(b["providerName"], "供应商B");
     assert_eq!(b["modelId"], "claude-sonnet");
+    assert_eq!(b["modelPk"], 2);
     assert_eq!(b["requestCount"], 2);
     assert_eq!(b["totalTokens"], 200.0);
     assert_eq!(b["ttft"], 500.0); // r5 非流式被排除
@@ -469,6 +471,8 @@ async fn test_pm_rank_orphan_model_falls_back_to_raw_model_id() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["providerName"], "供应商A");
     assert_eq!(items[0]["modelId"], "orphan-model");
+    // provider_model 行不存在（已删）→ 主键为空，前端据此禁用跳转。
+    assert!(items[0]["modelPk"].is_null());
 }
 
 #[tokio::test]

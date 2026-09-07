@@ -10,6 +10,8 @@ export interface ProviderModelRankItem {
 	providerName: string;
 	/** 模型 ID（供应商侧真实 ID；provider_model 行已删时退化为原始串）。 */
 	modelId: string;
+	/** provider_model 自增主键（行已删时为 null，禁用跳转）。 */
+	modelPk: number | null;
 	/** 成功请求数。 */
 	requestCount: number;
 	/** 总计 token（成功请求的 total_tokens 合计）。 */

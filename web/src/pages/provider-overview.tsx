@@ -47,9 +47,10 @@ function InternalModelRaceTable({
 	const query = useProviderModelRace(window, sort, true, providerId);
 
 	const openModelOverview = (item: ProviderModelRankItem) => {
-		navigate(
-			`/models/${providerId}/${encodeURIComponent(item.modelId)}/overview?${windowQueryString(windowState, window)}`,
-		);
+		if (item.modelPk === null || item.modelPk === undefined) {
+			return;
+		}
+		navigate(`/models/${item.modelPk}/overview?${windowQueryString(windowState, window)}`);
 	};
 
 	return (
@@ -61,6 +62,7 @@ function InternalModelRaceTable({
 			renderName={(item) => item.modelId}
 			rowKey={(item) => item.modelId}
 			onRowClick={openModelOverview}
+			isRowClickable={(item) => item.modelPk !== null && item.modelPk !== undefined}
 			rowTitleKey="race.openModelDetail"
 		/>
 	);

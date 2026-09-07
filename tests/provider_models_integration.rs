@@ -86,6 +86,9 @@ async fn test_create_and_list_provider_models() {
     assert_eq!(body["data"]["providerModelId"], "gpt-4o");
     assert_eq!(body["data"]["contextLength"], 128000);
     assert_eq!(body["data"]["reasoning"], true);
+    // 创建响应携带所属供应商名（供应商名 JOIN 填充）。
+    assert_eq!(body["data"]["providerName"], "p1");
+    assert!(body["data"]["modelId"].is_number());
 
     let (status, body) = send_json(
         app,
@@ -96,6 +99,42 @@ async fn test_create_and_list_provider_models() {
     .await;
     assert_eq!(status, 200);
     assert_eq!(body["data"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"][0]["providerName"], "p1");
+}
+
+#[tokio::test]
+async fn test_get_provider_model_detail_by_pk() {
+    let (app, db) = setup_app().await;
+    let provider_id = seed_provider(&db, "p-detail").await;
+
+    let (status, created) = send_json(
+        app.clone(),
+        "POST",
+        &format!("/api/providers/{provider_id}/models"),
+        model_payload("deepseek-v3"),
+    )
+    .await;
+    assert_eq!(status, 201);
+    let model_id = created["data"]["modelId"].as_i64().unwrap();
+
+    // 按自增主键全局取单条：含供应商名。
+    let (status, body) = send_json(
+        app.clone(),
+        "GET",
+        &format!("/api/provider-models/{model_id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["code"], "0");
+    assert_eq!(body["data"]["modelId"], model_id);
+    assert_eq!(body["data"]["providerId"], provider_id);
+    assert_eq!(body["data"]["providerModelId"], "deepseek-v3");
+    assert_eq!(body["data"]["providerName"], "p-detail");
+
+    // 不存在的模型 → 404。
+    let (status, _) = send_json(app, "GET", "/api/provider-models/999999", Value::Null).await;
+    assert_eq!(status, 404);
 }
 
 #[tokio::test]

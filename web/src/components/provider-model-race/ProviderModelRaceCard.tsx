@@ -34,8 +34,11 @@ export function ProviderModelRaceCard({
 	const query = useProviderModelRace(view.window, sort, view.inView, undefined, apiKey);
 
 	const openModelOverview = (item: ProviderModelRankItem) => {
+		if (item.modelPk === null || item.modelPk === undefined) {
+			return;
+		}
 		navigate(
-			`/models/${item.providerId}/${encodeURIComponent(item.modelId)}/overview?${windowQueryString(view.windowState, view.window)}`,
+			`/models/${item.modelPk}/overview?${windowQueryString(view.windowState, view.window)}`,
 		);
 	};
 
@@ -59,6 +62,7 @@ export function ProviderModelRaceCard({
 				renderName={modelLabel}
 				rowKey={(item) => `${item.providerName}::${item.modelId}`}
 				onRowClick={openModelOverview}
+				isRowClickable={(item) => item.modelPk !== null && item.modelPk !== undefined}
 				rowTitleKey="race.openModelDetail"
 			/>
 		</RaceCardShell>

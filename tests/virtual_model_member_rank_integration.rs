@@ -360,7 +360,9 @@ async fn test_member_rank_sort_by_and_order() {
     assert_eq!(status, 200);
     let items = json["data"]["items"].as_array().unwrap();
     assert_eq!(items[0]["modelId"], "gpt-4o");
+    assert_eq!(items[0]["modelPk"], 1);
     assert_eq!(items.last().unwrap()["modelId"], "claude-sonnet");
+    assert_eq!(items.last().unwrap()["modelPk"], 3);
 
     // ttft 降序：deepseek-v3(500) 在前；无流量成员仍排最后。
     let (status, json) = get_json(
@@ -371,6 +373,7 @@ async fn test_member_rank_sort_by_and_order() {
     assert_eq!(status, 200);
     let items = json["data"]["items"].as_array().unwrap();
     assert_eq!(items[0]["modelId"], "deepseek-v3");
+    assert_eq!(items[0]["modelPk"], 2);
     assert_eq!(items.last().unwrap()["modelId"], "claude-sonnet");
 }
 

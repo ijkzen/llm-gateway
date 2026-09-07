@@ -1,6 +1,7 @@
 import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { TrendLineChart } from "@/components/dashboard-charts";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
+import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
 import {
@@ -11,25 +12,37 @@ import {
 	useSectionSubtitle,
 	useSectionWindows,
 } from "@/components/stats-section";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useModelMetrics } from "@/hooks/use-model-metrics";
+import { useProviderModelDetail } from "@/hooks/use-provider-models";
 import { clientTzOffsetMinutes } from "@/lib/race-period";
 import { formatTokenCount, localeOf } from "@/lib/utils";
 import { TrendingUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 const SECTION_KEYS = ["call", "token", "metrics", "insight"] as const;
 
-/** 模型详情三级页：单模型指标卡片（置顶）+ 调用分析折线 + Token 折线，三块独立时间段。 */
+/**
+ * 模型详情三级页：路由携带 provider_model 自增主键，先经 detail 取回所属供应商
+ * 与远端字符串模型 ID，再驱动各指标/图表请求（stats 侧仍按 provider + 字符串
+ * model_id 过滤，见 request 表关联键）。detail 失败（模型已删/非法 id）→ 错误态。
+ */
 export default function ModelOverviewPage() {
 	const { t, i18n } = useTranslation();
-	const { providerId: providerIdParam, modelId: modelIdParam } = useParams();
-	const providerId = Number.parseInt(providerIdParam ?? "", 10);
-	const modelId = decodeURIComponent(modelIdParam ?? "");
+	const navigate = useNavigate();
+	const { modelId: modelIdParam } = useParams();
+	const modelId = Number.parseInt(modelIdParam ?? "", 10);
+	const idValid = Number.isFinite(modelId);
 	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS);
 	const subtitle = useSectionSubtitle();
+
+	// detail 未就绪前不发任何 stats 请求（图表需要字符串 modelId 与 providerId）。
+	const detailQuery = useProviderModelDetail(idValid ? modelId : null);
+	const modelDetail = detailQuery.data;
 
 	const callWindow = sectionWindow(windows.call, now);
 	const tokenWindow = sectionWindow(windows.token, now);
@@ -42,120 +55,156 @@ export default function ModelOverviewPage() {
 	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
 	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
 
-	const callCharts = useDashboardCharts({
-		startTime: callWindow.startTime,
-		endTime: callWindow.endTime,
-		providerId,
-		modelId,
-		granularity: callGranularity,
-		tzOffsetMinutes,
-	});
-	const tokenCharts = useDashboardCharts({
-		startTime: tokenWindow.startTime,
-		endTime: tokenWindow.endTime,
-		providerId,
-		modelId,
-		granularity: tokenGranularity,
-		tzOffsetMinutes,
-	});
-	const insightQuery = useDashboardInsight({
-		startTime: insightWindow.startTime,
-		endTime: insightWindow.endTime,
-		providerId,
-		modelId,
-		granularity: insightGranularity,
-		tzOffsetMinutes,
-	});
-	const metrics = useModelMetrics(
-		Number.isFinite(providerId) ? providerId : -1,
-		modelId,
-		metricsWindow,
-		Number.isFinite(providerId) && modelId.length > 0,
-	);
+	const detailReady = modelDetail !== undefined;
+	const providerId = modelDetail?.providerId ?? -1;
+	const remoteModelId = modelDetail?.providerModelId ?? "";
 
-	const title = `${metrics.data?.providerName || t("dashboardPage.providerFallback")}・${modelId} · ${t("dashboardPage.modelTitleSuffix")}`;
+	const callCharts = useDashboardCharts(
+		{
+			startTime: callWindow.startTime,
+			endTime: callWindow.endTime,
+			providerId,
+			modelId: remoteModelId,
+			granularity: callGranularity,
+			tzOffsetMinutes,
+		},
+		detailReady,
+	);
+	const tokenCharts = useDashboardCharts(
+		{
+			startTime: tokenWindow.startTime,
+			endTime: tokenWindow.endTime,
+			providerId,
+			modelId: remoteModelId,
+			granularity: tokenGranularity,
+			tzOffsetMinutes,
+		},
+		detailReady,
+	);
+	const insightQuery = useDashboardInsight(
+		{
+			startTime: insightWindow.startTime,
+			endTime: insightWindow.endTime,
+			providerId,
+			modelId: remoteModelId,
+			granularity: insightGranularity,
+			tzOffsetMinutes,
+		},
+		detailReady,
+	);
+	const metrics = useModelMetrics(providerId, remoteModelId, metricsWindow, detailReady);
+
+	// 模型已删除 / id 非法：detail 失败即错误态（重试无意义，引导返回列表）。
+	if (!idValid || detailQuery.isError) {
+		return (
+			<div className="space-y-6">
+				<PageHeader icon={TrendingUp} title={t("providerModels.overviewNotFoundTitle")} />
+				<ErrorState description={t("providerModels.overviewNotFoundDesc")} />
+				<div className="flex justify-center">
+					<Button variant="outline" size="sm" onClick={() => navigate("/provider-models")}>
+						{t("providerModels.backToModels")}
+					</Button>
+				</div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="space-y-6">
-			<PageHeader icon={TrendingUp} title={title} />
-
-			{/* 单模型指标卡片：独立时间段（置顶，概览优先） */}
-			<MetricsSummaryCard
-				data={metrics.data}
-				isLoading={metrics.isLoading}
-				windowState={windows.metrics}
-				now={now}
-				onWindowChange={setWindow("metrics")}
-				subtitle={subtitle(windows.metrics, now)}
-				title={t("dashboard.modelMetric")}
-			/>
-
-			{/* 调用分析折线（仅折线）：独立时间段 */}
-			<CardStatsSection
-				title={t("dashboard.analysis")}
-				now={now}
-				windowState={windows.call}
-				onWindowChange={setWindow("call")}
-				status={{
-					isLoading: callCharts.isLoading,
-					isError: callCharts.isError || !callCharts.data,
-					onRetry: () => callCharts.refetch(),
-				}}
-			>
-				<TrendLineChart
-					data={callCharts.data?.callTrend ?? []}
-					label={t("overview.calls")}
-					granularity={callGranularity}
-				/>
-			</CardStatsSection>
-
-			{/* Token 折线（仅折线）：独立时间段 */}
-			<CardStatsSection
-				title={t("dashboard.tokenAnalysis")}
-				now={now}
-				windowState={windows.token}
-				onWindowChange={setWindow("token")}
-				status={{
-					isLoading: tokenCharts.isLoading,
-					isError: tokenCharts.isError || !tokenCharts.data,
-					onRetry: () => tokenCharts.refetch(),
-				}}
-			>
-				<TrendLineChart
-					data={tokenCharts.data?.tokenTrend ?? []}
-					label={t("overview.tokens")}
-					formatValue={(v) => formatTokenCount(v, localeOf(i18n.language))}
-					kind="tokens"
-					granularity={tokenGranularity}
-				/>
-			</CardStatsSection>
-
-			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳） */}
-			<StatsSection
-				now={now}
-				windowState={windows.insight}
-				onWindowChange={setWindow("insight")}
-				status={{
-					isLoading: insightQuery.isLoading,
-					isError: insightQuery.isError || !insightQuery.data,
-					onRetry: () => insightQuery.refetch(),
-				}}
-			>
-				{insightQuery.data && (
-					<InsightAnalysisCard
-						data={insightQuery.data}
-						subtitle={subtitle(windows.insight, now)}
-						granularity={insightGranularity}
-					/>
-				)}
-			</StatsSection>
-
-			{/* API Key 赛马：独立时间段（按当前供应商+模型过滤） */}
-			<ApiKeyRaceCard
-				filter={
-					Number.isFinite(providerId) && modelId.length > 0 ? { providerId, modelId } : undefined
+			<PageHeader
+				icon={TrendingUp}
+				title={
+					modelDetail
+						? `${modelDetail.providerName || t("dashboardPage.providerFallback")}・${modelDetail.providerModelId} · ${t("dashboardPage.modelTitleSuffix")}`
+						: t("providerModels.overviewLoadingTitle")
 				}
 			/>
+
+			{/* 单模型指标卡片：独立时间段（置顶，概览优先）；detail 解析后加载 */}
+			{modelDetail === undefined ? (
+				<Skeleton className="h-[240px] w-full" />
+			) : (
+				<MetricsSummaryCard
+					data={metrics.data}
+					isLoading={metrics.isLoading}
+					windowState={windows.metrics}
+					now={now}
+					onWindowChange={setWindow("metrics")}
+					subtitle={subtitle(windows.metrics, now)}
+					title={t("dashboard.modelMetric")}
+				/>
+			)}
+
+			{/* 调用分析折线（仅折线）：独立时间段 */}
+			{modelDetail !== undefined && (
+				<CardStatsSection
+					title={t("dashboard.analysis")}
+					now={now}
+					windowState={windows.call}
+					onWindowChange={setWindow("call")}
+					status={{
+						isLoading: callCharts.isLoading,
+						isError: callCharts.isError || !callCharts.data,
+						onRetry: () => callCharts.refetch(),
+					}}
+				>
+					<TrendLineChart
+						data={callCharts.data?.callTrend ?? []}
+						label={t("overview.calls")}
+						granularity={callGranularity}
+					/>
+				</CardStatsSection>
+			)}
+
+			{/* Token 折线（仅折线）：独立时间段 */}
+			{modelDetail !== undefined && (
+				<CardStatsSection
+					title={t("dashboard.tokenAnalysis")}
+					now={now}
+					windowState={windows.token}
+					onWindowChange={setWindow("token")}
+					status={{
+						isLoading: tokenCharts.isLoading,
+						isError: tokenCharts.isError || !tokenCharts.data,
+						onRetry: () => tokenCharts.refetch(),
+					}}
+				>
+					<TrendLineChart
+						data={tokenCharts.data?.tokenTrend ?? []}
+						label={t("overview.tokens")}
+						formatValue={(v) => formatTokenCount(v, localeOf(i18n.language))}
+						kind="tokens"
+						granularity={tokenGranularity}
+					/>
+				</CardStatsSection>
+			)}
+
+			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳） */}
+			{modelDetail !== undefined && (
+				<StatsSection
+					now={now}
+					windowState={windows.insight}
+					onWindowChange={setWindow("insight")}
+					status={{
+						isLoading: insightQuery.isLoading,
+						isError: insightQuery.isError || !insightQuery.data,
+						onRetry: () => insightQuery.refetch(),
+					}}
+				>
+					{insightQuery.data && (
+						<InsightAnalysisCard
+							data={insightQuery.data}
+							subtitle={subtitle(windows.insight, now)}
+							granularity={insightGranularity}
+						/>
+					)}
+				</StatsSection>
+			)}
+
+			{/* API Key 赛马：独立时间段（按当前供应商+模型过滤） */}
+			{modelDetail !== undefined && (
+				<ApiKeyRaceCard filter={{ providerId, modelId: remoteModelId }} />
+			)}
 		</div>
 	);
 }

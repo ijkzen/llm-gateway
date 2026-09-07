@@ -6,12 +6,12 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
-    Set, TransactionTrait,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait,
+    QueryFilter, QueryOrder, Set, TransactionTrait,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::crypto;
 use crate::entity::provider;
@@ -33,6 +33,8 @@ fn rfc3339(value: chrono::DateTime<chrono::Utc>) -> String {
 struct ProviderModelResponse {
     model_id: i32,
     provider_id: i32,
+    /// 所属供应商名称（供应商不存在时为空串，与 VirtualModelItemResponse 同构）。
+    provider_name: String,
     provider_model_id: String,
     context_length: i64,
     max_output_tokens: i64,
@@ -49,10 +51,11 @@ struct ProviderModelResponse {
 }
 
 impl ProviderModelResponse {
-    fn from_model(model: provider_model::Model) -> Self {
+    fn from_model(model: provider_model::Model, provider_name: &str) -> Self {
         Self {
             model_id: model.model_id,
             provider_id: model.provider_id,
+            provider_name: provider_name.to_string(),
             provider_model_id: model.provider_model_id,
             context_length: model.context_length,
             max_output_tokens: model.max_output_tokens,
@@ -143,6 +146,7 @@ pub fn scoped_routes() -> Router<AppState> {
 pub fn global_routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_all_provider_models))
+        .route("/{model_id}", get(get_provider_model_detail))
         .route("/catalog/search", get(search_catalog))
 }
 
@@ -188,17 +192,45 @@ fn validate_fields(req: &UpsertProviderModelRequest, lang: Lang) -> Option<Strin
     None
 }
 
-async fn ensure_provider_exists(db: &DatabaseConnection, provider_id: i32) -> Result<bool, DbErr> {
+/// 取单个供应商名（不存在返回 None）。
+async fn load_provider_name(
+    db: &DatabaseConnection,
+    provider_id: i32,
+) -> Result<Option<String>, DbErr> {
     Ok(provider::Entity::find_by_id(provider_id)
         .one(db)
         .await?
-        .is_some())
+        .map(|p| p.name))
+}
+
+/// 批量取供应商名（id → name；不存在的 id 记为 None，由调用方决定兜底）。
+async fn provider_names_by_id<C: ConnectionTrait>(
+    db: &C,
+    ids: &[i32],
+) -> Result<HashMap<i32, String>, DbErr> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let providers = provider::Entity::find()
+        .filter(provider::Column::Id.is_in(ids))
+        .all(db)
+        .await?;
+    Ok(providers
+        .into_iter()
+        .map(|p| (p.id, p.name))
+        .collect::<HashMap<_, _>>())
 }
 
 async fn list_provider_models(
     State(state): State<AppState>,
     Path(provider_id): Path<i32>,
 ) -> impl IntoResponse {
+    // 供应商不存在时按空列表返回（与既有语义一致：级联删除后列表为空而非 404）。
+    let provider_name = match load_provider_name(&state.db, provider_id).await {
+        Ok(Some(name)) => Some(name),
+        Ok(None) => None,
+        Err(e) => return response::db_error(e.to_string()),
+    };
     match Entity::find()
         .filter(provider_model::Column::ProviderId.eq(provider_id))
         .order_by_asc(provider_model::Column::ModelId)
@@ -208,12 +240,35 @@ async fn list_provider_models(
         Ok(models) => {
             let response: Vec<ProviderModelResponse> = models
                 .into_iter()
-                .map(ProviderModelResponse::from_model)
+                .map(|m| {
+                    let name = provider_name.as_deref().unwrap_or("");
+                    ProviderModelResponse::from_model(m, name)
+                })
                 .collect();
             (StatusCode::OK, Json(Response::success(response)))
         }
         Err(e) => response::db_error(e.to_string()),
     }
+}
+
+/// GET /api/provider-models/{model_id}：按自增主键取单条模型（含所属供应商名）。
+async fn get_provider_model_detail(
+    State(state): State<AppState>,
+    Path(model_id): Path<i32>,
+) -> impl IntoResponse {
+    let lang = state.settings.lang().await;
+    let model = match Entity::find_by_id(model_id).one(&state.db).await {
+        Ok(Some(model)) => model,
+        Ok(None) => return not_found_model(lang, model_id),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    let provider_name = match load_provider_name(&state.db, model.provider_id).await {
+        Ok(Some(name)) => name,
+        Ok(None) => String::new(),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    let response = ProviderModelResponse::from_model(model, &provider_name);
+    (StatusCode::OK, Json(Response::success(response)))
 }
 
 async fn list_all_provider_models(State(state): State<AppState>) -> impl IntoResponse {
@@ -224,9 +279,22 @@ async fn list_all_provider_models(State(state): State<AppState>) -> impl IntoRes
         .await
     {
         Ok(models) => {
+            let provider_ids: Vec<i32> = models
+                .iter()
+                .map(|m| m.provider_id)
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            let names = match provider_names_by_id(&state.db, &provider_ids).await {
+                Ok(names) => names,
+                Err(e) => return response::db_error(e.to_string()),
+            };
             let response: Vec<ProviderModelResponse> = models
                 .into_iter()
-                .map(ProviderModelResponse::from_model)
+                .map(|m| {
+                    let name = names.get(&m.provider_id).map(String::as_str).unwrap_or("");
+                    ProviderModelResponse::from_model(m, name)
+                })
                 .collect();
             (StatusCode::OK, Json(Response::success(response)))
         }
@@ -293,11 +361,11 @@ async fn create_provider_model(
     if let Some(msg) = validate_fields(&req, lang) {
         return response::bad_request(msg);
     }
-    match ensure_provider_exists(&state.db, provider_id).await {
-        Ok(true) => {}
-        Ok(false) => return not_found_provider(lang, provider_id),
+    let provider_name = match load_provider_name(&state.db, provider_id).await {
+        Ok(Some(name)) => name,
+        Ok(None) => return not_found_provider(lang, provider_id),
         Err(e) => return response::db_error(e.to_string()),
-    }
+    };
 
     let now = chrono::Utc::now();
     let active = ActiveModel {
@@ -334,7 +402,7 @@ async fn create_provider_model(
                 protocol_type = ?model.protocol_type,
                 "创建供应商模型",
             );
-            let response = ProviderModelResponse::from_model(model);
+            let response = ProviderModelResponse::from_model(model, &provider_name);
             (StatusCode::CREATED, Json(Response::success(response)))
         }
         Err(e) if crate::db::is_unique_violation(&e) => {
@@ -358,11 +426,11 @@ async fn batch_create_provider_models(
             return response::bad_request(msg);
         }
     }
-    match ensure_provider_exists(&state.db, provider_id).await {
-        Ok(true) => {}
-        Ok(false) => return not_found_provider(lang, provider_id),
+    let provider_name = match load_provider_name(&state.db, provider_id).await {
+        Ok(Some(name)) => name,
+        Ok(None) => return not_found_provider(lang, provider_id),
         Err(e) => return response::db_error(e.to_string()),
-    }
+    };
 
     // 批内按尾段去重（保留首个）；已存在于库中的（尾段忽略大小写）跳过。
     let mut seen: HashSet<String> = HashSet::new();
@@ -419,7 +487,7 @@ async fn batch_create_provider_models(
             ..Default::default()
         };
         match active.insert(&txn).await {
-            Ok(model) => created.push(ProviderModelResponse::from_model(model)),
+            Ok(model) => created.push(ProviderModelResponse::from_model(model, &provider_name)),
             Err(e) => {
                 let _ = txn.rollback().await;
                 if crate::db::is_unique_violation(&e) {
@@ -463,6 +531,11 @@ async fn update_provider_model(
     {
         Ok(Some(model)) => model,
         Ok(None) => return not_found_model(lang, model_id),
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    let provider_name = match load_provider_name(&state.db, model.provider_id).await {
+        Ok(Some(name)) => name,
+        Ok(None) => return not_found_provider(lang, model.provider_id),
         Err(e) => return response::db_error(e.to_string()),
     };
 
@@ -513,7 +586,7 @@ async fn update_provider_model(
                 }
                 Ok(_) => {}
             }
-            let response = ProviderModelResponse::from_model(model);
+            let response = ProviderModelResponse::from_model(model, &provider_name);
             (StatusCode::OK, Json(Response::success(response)))
         }
         Err(e) if crate::db::is_unique_violation(&e) => {

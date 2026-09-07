@@ -369,6 +369,10 @@ const zhCN = {
 		followProviderWith: "跟随供应商（{{protocol}}）",
 		selectProtocol: "选择协议",
 		close: "关闭",
+		overviewLoadingTitle: "模型数据面板",
+		overviewNotFoundTitle: "模型数据面板不可用",
+		overviewNotFoundDesc: "该模型可能已被删除，或链接地址有误。",
+		backToModels: "返回供应商模型列表",
 	},
 	virtualModels: {
 		title: "虚拟模型",

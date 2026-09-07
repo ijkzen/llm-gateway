@@ -76,6 +76,7 @@ function makeModel(overrides: Partial<ProviderModel> = {}): ProviderModel {
 	return {
 		modelId: 1,
 		providerId: 7,
+		providerName: "OpenAI",
 		providerModelId: "gpt-4o",
 		contextLength: 128000,
 		maxOutputTokens: 4096,
@@ -614,26 +615,8 @@ describe("ProviderModelDetailDialog 标题栏导航", () => {
 		);
 
 		const titleLink = screen.getByRole("link", { name: /gpt-4o/ }) as HTMLAnchorElement;
-		expect(titleLink.getAttribute("href")).toBe("/models/7/gpt-4o/overview");
+		expect(titleLink.getAttribute("href")).toBe("/models/1/overview");
 		expect(titleLink.querySelector("svg")).toBeTruthy();
-	});
-
-	it("模型 ID 含需转义字符时链接正确编码", () => {
-		render(
-			<MemoryRouter>
-				<ProviderModelDetailDialog
-					open
-					onOpenChange={vi.fn()}
-					providerId={7}
-					providerName="OpenAI"
-					providerProtocolType={0}
-					model={makeModel({ providerModelId: "deepseek/r1-v2" })}
-				/>
-			</MemoryRouter>,
-		);
-
-		const titleLink = screen.getByRole("link", { name: /deepseek\/r1-v2/ }) as HTMLAnchorElement;
-		expect(titleLink.getAttribute("href")).toBe("/models/7/deepseek%2Fr1-v2/overview");
 	});
 });
 

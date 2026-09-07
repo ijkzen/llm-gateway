@@ -282,6 +282,7 @@ function makeModel(overrides: Partial<ProviderModel> = {}): ProviderModel {
 	return {
 		modelId: 1,
 		providerId: 7,
+		providerName: "OpenAI",
 		providerModelId: "gpt-4o",
 		contextLength: 128000,
 		maxOutputTokens: 4096,

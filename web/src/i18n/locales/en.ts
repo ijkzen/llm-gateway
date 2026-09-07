@@ -372,6 +372,10 @@ const en: Translation = {
 		followProviderWith: "Follow provider ({{protocol}})",
 		selectProtocol: "Select protocol",
 		close: "Close",
+		overviewLoadingTitle: "Model Overview",
+		overviewNotFoundTitle: "Model Overview Unavailable",
+		overviewNotFoundDesc: "This model may have been deleted, or the link is incorrect.",
+		backToModels: "Back to Provider Models",
 	},
 	virtualModels: {
 		title: "Virtual Models",

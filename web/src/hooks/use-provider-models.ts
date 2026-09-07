@@ -6,6 +6,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 export interface ProviderModel {
 	modelId: number;
 	providerId: number;
+	/** 所属供应商名称（供应商不存在时为空串，后端 JOIN provider 填充）。 */
+	providerName: string;
 	providerModelId: string;
 	contextLength: number;
 	maxOutputTokens: number;
@@ -65,6 +67,7 @@ export interface ProviderModelPayload {
 
 export const providerModelKeys = {
 	all: ["provider-models"] as const,
+	detail: (modelId: number) => ["provider-models", modelId] as const,
 	catalogSearch: (q: string) => ["provider-models", "catalog-search", q] as const,
 };
 
@@ -104,6 +107,20 @@ export function useProviderModels() {
 			const res = await api.get("provider-models").json<ApiResponse<ProviderModel[]>>();
 			return unwrap(res);
 		},
+	});
+}
+
+export async function fetchProviderModelDetail(modelId: number): Promise<ProviderModel> {
+	const res = await api.get(`provider-models/${modelId}`).json<ApiResponse<ProviderModel>>();
+	return unwrap(res);
+}
+
+/** 单条供应商模型详情（按自增主键；模型数据面板深链先取回字符串远端 ID 与供应商名）。 */
+export function useProviderModelDetail(modelId: number | null) {
+	return useQuery<ProviderModel>({
+		queryKey: providerModelKeys.detail(modelId ?? -1),
+		queryFn: () => fetchProviderModelDetail(modelId as number),
+		enabled: modelId !== null,
 	});
 }
 

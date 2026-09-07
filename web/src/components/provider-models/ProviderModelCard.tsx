@@ -22,9 +22,7 @@ export function ProviderModelCard({ model, onOpen }: ProviderModelCardProps) {
 			onClick={(event) => {
 				const target = event.target as HTMLElement;
 				if (target.closest("[data-nav]")) {
-					navigate(
-						`/models/${model.providerId}/${encodeURIComponent(model.providerModelId)}/overview`,
-					);
+					navigate(`/models/${model.modelId}/overview`);
 					return;
 				}
 				if (target.closest("[data-static]")) return;

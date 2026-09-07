@@ -103,6 +103,7 @@ function makeModel(providerId: number, modelId: number, id: string): ProviderMod
 	return {
 		modelId,
 		providerId,
+		providerName: "OpenAI",
 		providerModelId: id,
 		contextLength: 128000,
 		maxOutputTokens: 4096,
@@ -174,7 +175,7 @@ describe("ProviderModelsPage", () => {
 
 		// 模型名称 + 箭头：点击触发编程跳转到模型数据面板（卡片内无 <a>）。
 		fireEvent.click(screen.getByText("gpt-4o"));
-		expect(mocks.navigate).toHaveBeenCalledWith("/models/1/gpt-4o/overview");
+		expect(mocks.navigate).toHaveBeenCalledWith("/models/11/overview");
 
 		// 点击卡片空白区域（button 本体）打开详情弹窗。
 		fireEvent.click(screen.getByTestId("provider-model-card-11"));

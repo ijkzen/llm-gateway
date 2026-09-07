@@ -1474,6 +1474,8 @@ struct ProviderModelRankItem {
     provider_name: String,
     /// 模型 ID（供应商侧真实 ID；provider_model 行已删时退化为 request 里的原始串）。
     model_id: String,
+    /// provider_model 自增主键（行已删时为 NULL，前端据此禁用跳转）。
+    model_pk: Option<i32>,
     /// 成功请求数。
     request_count: i64,
     /// 总计 token（成功请求的 total_tokens 合计）。
@@ -1530,7 +1532,8 @@ async fn provider_model_rank(
     let rank_sql = rank_metric_sql();
     let sql = format!(
         "SELECT r.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name, \
-                COALESCE(pm.provider_model_id, r.model_id) AS model_id,{rank_sql} \
+                COALESCE(pm.provider_model_id, r.model_id) AS model_id, \
+                pm.model_id AS model_pk,{rank_sql} \
          FROM request r \
          LEFT JOIN provider p ON p.id = r.provider_id \
          LEFT JOIN provider_model pm ON pm.provider_id = r.provider_id AND pm.provider_model_id = r.model_id \
@@ -1556,6 +1559,7 @@ async fn provider_model_rank(
             provider_id: row.try_get::<i32>("", "provider_id").unwrap_or(0),
             provider_name: row.try_get("", "provider_name").unwrap_or_default(),
             model_id: row.try_get("", "model_id").unwrap_or_default(),
+            model_pk: row.try_get("", "model_pk").unwrap_or(None),
             request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
             total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
             ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
@@ -1594,6 +1598,8 @@ struct VirtualModelMemberRankItem {
     provider_name: String,
     /// 成员模型 ID（供应商侧真实 ID）。
     model_id: String,
+    /// provider_model 自增主键（成员恒指向现存模型，恒非空）。
+    model_pk: Option<i32>,
     /// 成员是否启用（virtual_model_item.enable；停用成员可正常展示但指标多为 0）。
     member_enable: bool,
     /// 成功请求数（该虚拟模型下实际服务过该成员的行数）。
@@ -1651,6 +1657,7 @@ async fn virtual_model_member_rank(
     let sql = format!(
         "SELECT pm.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name, \
                 pm.provider_model_id AS model_id, \
+                pm.model_id AS model_pk, \
                 vmi.enable AS member_enable, \
                 COALESCE(agg.request_count, 0) AS request_count, \
                 COALESCE(agg.total_tokens, 0) AS total_tokens, \
@@ -1701,6 +1708,7 @@ async fn virtual_model_member_rank(
             provider_id: row.try_get::<i32>("", "provider_id").unwrap_or(0),
             provider_name: row.try_get("", "provider_name").unwrap_or_default(),
             model_id: row.try_get("", "model_id").unwrap_or_default(),
+            model_pk: row.try_get("", "model_pk").unwrap_or(None),
             member_enable: row.try_get::<bool>("", "member_enable").unwrap_or(true),
             request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
             total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),

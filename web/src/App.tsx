@@ -45,7 +45,7 @@ function App() {
 						path="/virtual-models/:virtualModelId/overview"
 						element={<VirtualModelOverviewPage />}
 					/>
-					<Route path="/models/:providerId/:modelId/overview" element={<ModelOverviewPage />} />
+					<Route path="/models/:modelId/overview" element={<ModelOverviewPage />} />
 					<Route path="/api-keys/:id/overview" element={<ApiKeyOverviewPage />} />
 					<Route path="/cron-jobs" element={<CronJobsPage />} />
 					<Route path="/providers" element={<ProvidersPage />} />

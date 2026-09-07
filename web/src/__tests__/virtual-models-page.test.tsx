@@ -259,7 +259,7 @@ describe("VirtualModelsPage", () => {
 
 		// 成员 ID 区 → 编程跳转模型数据面板（卡片无 <a> 内嵌）。
 		fireEvent.click(screen.getByText("gpt-4o@openai"));
-		expect(mocks.navigate).toHaveBeenCalledWith("/models/7/gpt-4o%40openai/overview");
+		expect(mocks.navigate).toHaveBeenCalledWith("/models/11/overview");
 
 		// 点击成员卡片空白仍打开详情弹窗。
 		fireEvent.click(screen.getByTestId("virtual-model-member-1"));

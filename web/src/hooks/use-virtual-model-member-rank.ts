@@ -10,6 +10,8 @@ export interface VirtualModelMemberRankItem {
 	providerName: string;
 	/** 成员模型 ID（供应商侧真实 ID）。 */
 	modelId: string;
+	/** provider_model 自增主键（成员恒指向现存模型，恒非空）。 */
+	modelPk: number | null;
 	/** 成员是否启用（virtual_model_item.enable）。 */
 	memberEnable: boolean;
 	/** 成功请求数。 */
