@@ -109,7 +109,8 @@ fn parse_coding_plan(reply: &HttpReply) -> Result<FetchOutput, UsageError> {
 
     let mut windows = empty_windows();
     for entry in entries {
-        let label = ["Window", "Label", "Type"]
+        // 实测字段是 `Level`（session/weekly/monthly）；Window/Label/Type 仅作防御式兜底。
+        let label = ["Level", "Window", "Label", "Type"]
             .iter()
             .find_map(|k| entry.get(k).and_then(Value::as_str))
             .unwrap_or_default()
@@ -214,6 +215,42 @@ mod tests {
         assert_eq!(windows[0].used_percent, Some(42.0));
         assert_eq!(windows[1].used_percent, Some(10.0));
         assert_eq!(windows[2].used_percent, Some(5.0));
+    }
+
+    #[test]
+    fn coding_plan_real_volcengine_response_with_level() {
+        // 实测 GetCodingPlanUsage 真实返回：窗口键是 `Level`，session 的
+        // ResetTimestamp=-1（未计时占位），周/月为秒级时间戳。
+        let body = r#"{
+          "ResponseMetadata": {},
+          "Result": {
+            "Status": "Running",
+            "UpdateTimestamp": 1788768130,
+            "QuotaUsage": [
+              { "Level": "session", "Percent": 12.5, "ResetTimestamp": -1, "Cap": 100, "RewardTotalPercent": 0 },
+              { "Level": "weekly", "Percent": 3.0, "ResetTimestamp": 1789315200, "Cap": 100, "RewardTotalPercent": 0 },
+              { "Level": "monthly", "Percent": 0.5, "ResetTimestamp": 1791388799, "Cap": 100, "RewardTotalPercent": 0 }
+            ],
+            "HasReward": false
+          }
+        }"#;
+        let FetchOutput::Quota { plan, windows } = parse_coding_plan(&ok_reply(body)).unwrap()
+        else {
+            panic!("expected quota")
+        };
+        assert_eq!(plan, None);
+        assert_eq!(windows.len(), 3);
+        assert!(windows.iter().all(|w| w.available));
+        // session 窗口：percent 透传，-1 重置时间应被忽略（None）。
+        assert_eq!(windows[0].used_percent, Some(12.5));
+        assert_eq!(windows[0].resets_at, None);
+        // 周/月窗口保留秒级重置时间。
+        assert_eq!(windows[1].used_percent, Some(3.0));
+        assert_eq!(
+            windows[1].resets_at,
+            Some(crate::usage::types::ts_secs(1789315200).unwrap())
+        );
+        assert_eq!(windows[2].used_percent, Some(0.5));
     }
 
     #[test]

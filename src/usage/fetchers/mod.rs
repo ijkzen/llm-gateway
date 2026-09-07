@@ -106,6 +106,11 @@ pub(crate) fn reset_ts(v: &Value) -> Option<DateTime<Utc>> {
         return None;
     }
     let n = v.as_i64()?;
+    // 非正时间戳（如火山未开始计时的 session 窗口返回 -1，或占位 0）是
+    // "无重置时间"占位，不产出 1970 附近的假时间。
+    if n <= 0 {
+        return None;
+    }
     if n > 1_000_000_000_000 {
         ts_ms(n)
     } else {
@@ -143,5 +148,14 @@ mod tests {
             ts,
             DateTime::parse_from_rfc3339("2026-09-14T04:00:00Z").unwrap()
         );
+    }
+
+    #[test]
+    fn reset_ts_negative_timestamp_is_none() {
+        // 火山未开始计时的 session 窗口返回 ResetTimestamp=-1，应视为无重置时间。
+        let v = serde_json::json!(-1);
+        assert_eq!(reset_ts(&v), None);
+        let v = serde_json::json!(0);
+        assert_eq!(reset_ts(&v), None);
     }
 }

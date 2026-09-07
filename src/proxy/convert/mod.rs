@@ -243,13 +243,20 @@ pub fn chat_reasoning(chat: &Value) -> ChatReasoning {
     ChatReasoning::Unspecified
 }
 
-/// 拼接上游 URL：沿用 `build_models_url` 的版本段规则
-/// （base 末段已是 v1/v1beta/v1alpha 则直接拼，否则按协议补默认版本段）。
+/// 拼接上游 URL：沿用 `build_models_url` 的版本段规则。
+/// base 末段已是版本段（`v1`/`v1beta`/`v1alpha`，或 OpenAI 兼容服务自定义的
+/// `v2`/`v3`/`v4` 等纯数字版本）则直接拼子路径；否则按协议补默认版本段
+/// （OpenAI Compat 补 `v1`、Gemini 补 `v1beta`）。
+/// 注意：火山 Ark / 腾讯 lkeap 的套餐端点形如 `.../api/coding/v3`，其
+/// OpenAI 兼容 chat 路径就是 `{base}/chat/completions`，不能再补一层 `/v1`。
 pub fn build_upstream_url(base_url: &str, protocol_type: i32, sub_path: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     let last = trimmed.rsplit('/').next().unwrap_or("");
-    let versioned = matches!(last, "v1" | "v1beta" | "v1alpha");
-    if versioned {
+    let is_version_segment = matches!(last, "v1" | "v1beta" | "v1alpha")
+        || (last.starts_with('v')
+            && last.len() > 1
+            && last[1..].chars().all(|c| c.is_ascii_digit()));
+    if is_version_segment {
         format!("{trimmed}/{sub_path}")
     } else if protocol_type == PROTOCOL_GEMINI {
         format!("{trimmed}/v1beta/{sub_path}")
@@ -509,6 +516,23 @@ mod tests {
                 "models/m:generateContent"
             ),
             "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent"
+        );
+        // 火山/腾讯套餐端点末段是 v3（OpenAI 兼容版本段），不能再补一层 /v1。
+        assert_eq!(
+            build_upstream_url(
+                "https://ark.cn-beijing.volces.com/api/coding/v3",
+                PROTOCOL_OPENAI_COMPATIBLE,
+                "chat/completions"
+            ),
+            "https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions"
+        );
+        assert_eq!(
+            build_upstream_url(
+                "https://api.lkeap.cloud.tencent.com/coding/v3",
+                PROTOCOL_OPENAI_COMPATIBLE,
+                "chat/completions"
+            ),
+            "https://api.lkeap.cloud.tencent.com/coding/v3/chat/completions"
         );
     }
 

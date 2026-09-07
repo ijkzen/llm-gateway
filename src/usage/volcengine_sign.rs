@@ -12,7 +12,8 @@ use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
 const ALGORITHM: &str = "HMAC-SHA256";
-const CONTENT_TYPE: &str = "application/json; charset=utf-8";
+/// 必须与 http::post_json 实际发送的 Content-Type 完全一致（火山按此校验签名）。
+const CONTENT_TYPE: &str = "application/json";
 
 pub struct VolcSignature {
     pub authorization: String,
@@ -126,7 +127,7 @@ mod tests {
     /// date, x_date = "20260830", "20260830T120000Z"
     /// ph = hashlib.sha256(b"").hexdigest()
     /// cq = "Action=GetCodingPlanUsage&Region=cn-beijing&Version=2024-01-01"
-    /// ch = ("content-type:application/json; charset=utf-8\nhost:open.volcengineapi.com\n"
+    /// ch = ("content-type:application/json\nhost:open.volcengineapi.com\n"
     ///       f"x-content-sha256:{ph}\nx-date:{x_date}\n")
     /// cr = f"POST\n/\n{cq}\n{ch}\ncontent-type;host;x-content-sha256;x-date\n{ph}"
     /// scope = f"{date}/cn-beijing/ark/request"
@@ -135,7 +136,7 @@ mod tests {
     /// print(hmac.new(k, sts.encode(), hashlib.sha256).hexdigest())
     /// ```
     const EXPECTED_SIGNATURE: &str =
-        "1384532448cea98834a6b176d8795a4fb85b49672d12303fc5fe86a5fb49f024";
+        "db390f89736537d43b9ba9d30684e61cbbfbd896bd62772d65fe8210d9e8484e";
 
     #[test]
     fn known_answer_signature() {
@@ -161,7 +162,7 @@ mod tests {
             sig.authorization
                 .ends_with(&format!("Signature={EXPECTED_SIGNATURE}"))
         );
-        assert_eq!(sig.content_type, Some("application/json; charset=utf-8"));
+        assert_eq!(sig.content_type, Some("application/json"));
     }
 
     #[test]
