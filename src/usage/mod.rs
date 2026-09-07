@@ -207,6 +207,7 @@ fn fetcher_for(host: &str, path: &str) -> Option<Fetcher> {
             Fetcher::XiaomiTokenPlan
         }
         "token.sensenova.cn" | "platform.sensenova.cn" => Fetcher::Sensenova,
+        "api.siliconflow.cn" => Fetcher::SiliconFlow,
         _ if crate::provider_template::is_krill_host(host) => Fetcher::Krill,
         _ => return None,
     })
@@ -233,6 +234,7 @@ enum Fetcher {
     AlibabaCoding { intl: bool },
     AlibabaToken { intl: bool },
     Sensenova,
+    SiliconFlow,
     Krill,
 }
 
@@ -243,7 +245,8 @@ impl Fetcher {
         creds: &Credentials<'_>,
     ) -> Result<FetchOutput, UsageError> {
         use fetchers::{
-            alibaba, api_key, balance, cloud_balance, copilot, stepfun, volcengine, xiaomi,
+            alibaba, api_key, balance, cloud_balance, copilot, siliconflow, stepfun, volcengine,
+            xiaomi,
         };
         match self {
             Fetcher::OpenCodeGo => api_key::fetch_opencode_go(http, creds).await,
@@ -301,6 +304,7 @@ impl Fetcher {
             }
             // SenseNova 在 query_provider_usage 单独处理（需要 db/provider_id 回写登录/轮换凭据）。
             Fetcher::Sensenova => Err(UsageError::Unsupported),
+            Fetcher::SiliconFlow => siliconflow::fetch_siliconflow_wallets(http, creds).await,
             // Krill 由 provider_template 模板覆盖、以 JWT 动态签发访问，无独立 fetcher。
             Fetcher::Krill => Err(UsageError::Unsupported),
         }
@@ -341,6 +345,8 @@ mod tests {
             ("coding-intl.dashscope.aliyuncs.com", true),
             ("token-plan.cn-beijing.maas.aliyuncs.com", true),
             ("token-plan.ap-southeast-1.maas.aliyuncs.com", true),
+            ("api.siliconflow.cn", true),
+            ("api.siliconflow.com", false),
             ("api.302.ai", false),
             ("dashscope.aliyuncs.com.evil.com", false),
         ] {

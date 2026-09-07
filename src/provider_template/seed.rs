@@ -1013,7 +1013,8 @@ pub const TEMPLATES: &[Template] = &[
         base_url: "https://api.siliconflow.cn/v1",
         protocol_type: 0,
         billing_mode: 0,
-        extra: "{}",
+        // 用量查询：CookieCloud 登录态（cloud.siliconflow.cn）+ 用户手动填的 x_subject_id。
+        extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"x_subject_id\": \"\", \"usage\": true, \"usage_type\": 0}",
     },
     Template {
         name: "Snowflake Cortex",

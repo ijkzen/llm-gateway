@@ -279,6 +279,7 @@ fn translate_balance_label(label: &str, lang: Lang) -> &str {
         "可用余额" => "Available Balance",
         "可用总余额" => "Total Available Balance",
         "钱包余额" => "Wallet Balance",
+        "账户余额" => "Account Balance",
         "福利余额" => "Welfare Balance",
         "充值余额" => "Topped-up Balance",
         "赠送余额" => "Granted Balance",

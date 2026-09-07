@@ -521,3 +521,83 @@ async fn test_backfill_only_on_first_insert_not_on_update() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn siliconflow_seed_has_usage_extra_only_on_china_template() {
+    let db = setup_db().await.unwrap();
+    upsert_templates(&db).await.unwrap();
+
+    let china = find_by_domain_all(&db, "api.siliconflow.cn")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|t| t.name == "SiliconFlow (China)")
+        .expect("SiliconFlow (China) 模板存在");
+    assert!(china.extra.contains("\"cookie_cloud_server\""));
+    assert!(china.extra.contains("\"x_subject_id\""));
+    assert!(china.extra.contains("\"usage\": true"));
+    assert!(china.extra.contains("\"usage_type\": 0"));
+
+    let intl = find_by_domain_all(&db, "api.siliconflow.com")
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|t| t.name == "SiliconFlow")
+        .expect("SiliconFlow 模板存在");
+    assert_eq!(intl.extra, "{}", "国际站模板不变");
+}
+
+#[tokio::test]
+async fn siliconflow_history_backfill_is_idempotent_and_preserves_user_values() {
+    temp_env::async_with_vars(
+        [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
+        async {
+            let db = setup_db().await.unwrap();
+            // 先 upsert 让 SiliconFlow (China) 模板入库（后续走 update 分支）。
+            upsert_templates(&db).await.unwrap();
+
+            // 模拟 extra 升级前创建的历史 provider：缺 uuid/domain/x_subject_id，
+            // 且已手动填过部分凭据（回填不得覆盖）。
+            insert_provider_with_billing(
+                &db,
+                "SiliconFlow-历史",
+                "https://api.siliconflow.cn/v1",
+                r#"{"custom":"keep","usage":true,"usage_type":0,"cookie_cloud_server":"https://my.cc.example","password":"saved-pw"}"#,
+                0,
+            )
+            .await;
+            // 其它 host 的 provider 不受影响。
+            insert_provider(
+                &db,
+                "SiliconFlow-其他host",
+                "https://api.siliconflow.com/v1",
+                r#"{"own":1}"#,
+            )
+            .await;
+
+            // 再次 upsert（模板走 update 分支），历史 provider 仍应被无条件对齐。
+            upsert_templates(&db).await.unwrap();
+            upsert_templates(&db).await.unwrap();
+
+            let extra = provider_extra(&db, "SiliconFlow-历史").await;
+            assert_eq!(
+                extra["cookie_cloud_server"], "https://my.cc.example",
+                "已填的 cookie_cloud_server 不被覆盖"
+            );
+            assert_eq!(extra["password"], "saved-pw", "已填的 password 不被覆盖");
+            assert_eq!(extra["uuid"], "");
+            assert_eq!(extra["domain"], "");
+            assert_eq!(extra["x_subject_id"], "");
+            assert_eq!(extra["usage"], true);
+            assert_eq!(extra["custom"], "keep", "未知键保留");
+
+            let other = provider_extra(&db, "SiliconFlow-其他host").await;
+            assert_eq!(
+                other,
+                serde_json::json!({ "own": 1 }),
+                "国际站 .com host 不动（仅 .cn 回填）"
+            );
+        },
+    )
+    .await;
+}

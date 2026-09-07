@@ -10,6 +10,7 @@ pub mod cloud_balance;
 pub mod copilot;
 pub mod krill;
 pub mod sensenova;
+pub mod siliconflow;
 pub mod stepfun;
 pub mod volcengine;
 pub mod xiaomi;

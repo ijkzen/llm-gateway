@@ -57,6 +57,7 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
 
     backfill_krill_provider_extra(db).await?;
     backfill_sensenova_provider_extra(db).await?;
+    backfill_siliconflow_provider_extra(db).await?;
     tracing::info!("Provider templates seeded: {inserted} inserted, {updated} updated");
     Ok(inserted + updated)
 }
@@ -74,6 +75,11 @@ pub(crate) fn is_krill_host(host: &str) -> bool {
 
 pub(crate) fn is_sensenova_host(host: &str) -> bool {
     matches!(host, "token.sensenova.cn" | "platform.sensenova.cn")
+}
+
+/// SiliconFlow 中国站 API host（用量查询仅支持 .cn，国际站 .com 不覆盖）。
+pub(crate) fn is_siliconflow_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("api.siliconflow.cn")
 }
 
 /// OpenCode 上游 host（模板含 OpenCode Zen / OpenCode Go 两个入口，同域）。
@@ -236,6 +242,32 @@ async fn backfill_sensenova_provider_extra(db: &DatabaseConnection) -> Result<()
             extra.entry(key.to_string()).or_insert_with(|| "".into());
         }
         extra.entry("usage".to_string()).or_insert(true.into());
+        *extra != before
+    })
+    .await
+    .map(|_| ())
+}
+
+/// 每次启动幂等对齐历史 SiliconFlow (China) Provider 的凭据结构与用量开关。
+///
+/// SiliconFlow (China) 模板早已随早期版本 upsert 进库，extra 由 `{}` 升级为
+/// cookie 类 + x_subject_id 结构后走的是 update 分支（不触发模板首次插入回填），
+/// 历史 provider 的 extra 不会补入缺失键；这里仿 Krill/SenseNova 每次启动无条件对齐。
+/// 只补缺、不覆盖：已填的 cookie_cloud_server/uuid/password/domain/x_subject_id 一律保留。
+async fn backfill_siliconflow_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
+    backfill_host_extras(db, "SiliconFlow", is_siliconflow_host, |extra, provider| {
+        let before = extra.clone();
+        for key in [
+            "cookie_cloud_server",
+            "uuid",
+            "password",
+            "domain",
+            "x_subject_id",
+        ] {
+            extra.entry(key.to_string()).or_insert_with(|| "".into());
+        }
+        extra.entry("usage".to_string()).or_insert(true.into());
+        extra.insert("usage_type".to_string(), provider.billing_mode.into());
         *extra != before
     })
     .await
