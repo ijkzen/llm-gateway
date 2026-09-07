@@ -3,6 +3,7 @@
 //! 每个 fetcher 形如 `fetch(http, creds) -> Result<FetchOutput, UsageError>`，
 //! 真实端点为模块内 const；解析逻辑拆成纯函数便于夹具单测。
 
+pub mod agentrouter;
 pub mod alibaba;
 pub mod api_key;
 pub mod balance;

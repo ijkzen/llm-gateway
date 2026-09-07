@@ -39,7 +39,8 @@ pub const TEMPLATES: &[Template] = &[
         base_url: "https://agentrouter.org/v1",
         protocol_type: 0,
         billing_mode: 0,
-        extra: "{}",
+        // 用量查询：CookieCloud 登录态（agentrouter.org）+ 用户手动填的 new_api_user（New-Api-User 头）。
+        extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"new_api_user\": \"\", \"usage\": true, \"usage_type\": 0}",
     },
     Template {
         name: "Agnes AI",
