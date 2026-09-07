@@ -152,8 +152,9 @@ async fn test_estimate_full_coverage() {
         )
         .await;
     }
-    // 第 4 个桶（now 当天）的数据：明确在 now 之前。
-    seed_request(&db, "r-recent", 1, now - 3_600_000, 200).await;
+    // 第 4 个桶（now 所在的 UTC 天桶）的数据：now-1ms 恒与 now 同桶且早于
+    // elapsed_end（=now）；不能用 now-1h——UTC 午夜后 1 小时内会掉进前一天的桶。
+    seed_request(&db, "r-recent", 1, now - 1, 200).await;
 
     let (status, body) = send_get(&app, "/api/providers/1/usage/estimate").await;
     assert_eq!(status, StatusCode::OK);
