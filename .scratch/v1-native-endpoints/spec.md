@@ -39,7 +39,7 @@ Status: ready-for-agent
 
 ## Implementation Decisions
 
-1. **接口类型枚举与存储**：virtual_model 表新增整数接口类型列，编号与协议类型对齐：0=OpenAI Compatible（新行默认）、1=Responses、2=Messages、3=Gemini（保留值，暂无对应端点）、4=Full Compatible。启动迁移把存量行回填为 4；迁移版本号从 16 号段起编（生产 schema_migrations 残留旧 14/15 号段记录，撞号会被版本守卫静默吞掉）。
+1. **接口类型枚举与存储**：virtual_model 表新增整数接口类型列，编号与协议类型对齐：0=OpenAI Compatible（新行默认）、1=Responses、2=Messages、3=Gemini（可选，暂无对应服务端点）、4=Full Compatible。启动迁移把存量行回填为 4；迁移版本号从 16 号段起编（生产 schema_migrations 残留旧 14/15 号段记录，撞号会被版本守卫静默吞掉）。
 2. **端点-类型对应**（严格）：/v1/chat/completions 接受类型 ∈ {0, 4}；/v1/responses 只接受类型 1；/v1/messages 只接受类型 2。不匹配时返回对应协议原生格式错误（/v1/responses 用 OpenAI error 结构，/v1/messages 用 Anthropic type/error 结构），语义为模型不存在/不可用。
 3. **成员协议匹配**：受限类型的候选成员按生效协议过滤——模型级协议覆盖优先，其次供应商协议。0 类型←生效协议 0；1 类型←生效协议 1；2 类型←生效协议 2；3 类型不限。Gemini（协议 3）成员只能加入 Full Compatible。
 4. **协议变更级联移除**：供应商模型协议（模型级覆盖或供应商级协议）发生变更后，若其所属虚拟模型为受限类型且生效协议不再匹配，硬删该成员行（成员回到未分配状态可重新添加）；Full Compatible 虚拟模型不移除。挂载点覆盖两条路径：模型编辑与供应商协议编辑。
