@@ -127,6 +127,7 @@ async fn seed_vm_with_member(
         enable: Set(true),
         load_balancing_strategy: Set(3),
         fallback_strategy: Set(0),
+        interface_type: Set(4),
         created_at: Set(chrono::Utc::now()),
         updated_at: Set(chrono::Utc::now()),
         ..Default::default()

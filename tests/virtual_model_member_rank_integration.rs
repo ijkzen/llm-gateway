@@ -22,6 +22,7 @@ async fn seed_virtual_model(db: &DatabaseConnection, id: i32, display_id: &str) 
         enable: Set(true),
         load_balancing_strategy: Set(0),
         fallback_strategy: Set(0),
+        interface_type: Set(4),
         created_at: Set(now),
         updated_at: Set(now),
     }

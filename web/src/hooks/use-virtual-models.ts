@@ -29,6 +29,8 @@ export interface VirtualModel {
 	enable: boolean;
 	loadBalancingStrategy: number;
 	fallbackStrategy: number;
+	/** 接口类型：0=OpenAI Compat、1=Responses、2=Messages、3=Gemini（预留）、4=Full Compatible。 */
+	interfaceType: number;
 	items: VirtualModelItem[];
 	createdAt: string;
 	updatedAt: string;
@@ -44,6 +46,8 @@ export interface VirtualModelPayload {
 	enable?: boolean;
 	loadBalancingStrategy: number;
 	fallbackStrategy: number;
+	/** 缺省视为 OpenAI Compatible（0）。 */
+	interfaceType?: number;
 	items?: VirtualModelItemPayload[];
 }
 
@@ -53,6 +57,7 @@ export interface UpdateVirtualModelPayload {
 	enable?: boolean;
 	loadBalancingStrategy?: number;
 	fallbackStrategy?: number;
+	interfaceType?: number;
 	items?: VirtualModelItemPayload[];
 }
 

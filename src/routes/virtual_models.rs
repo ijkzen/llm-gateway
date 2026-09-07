@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::entity::provider;
 use crate::entity::provider_model;
-use crate::entity::virtual_model::{self, ActiveModel, Entity};
+use crate::entity::virtual_model::{
+    self, ActiveModel, Entity, INTERFACE_FULL_COMPATIBLE, INTERFACE_OPENAI_COMPAT,
+};
 use crate::entity::virtual_model_item;
 use crate::i18n::Lang;
 use crate::response::{self, Response};
@@ -61,6 +63,9 @@ struct VirtualModelResponse {
     enable: bool,
     load_balancing_strategy: i32,
     fallback_strategy: i32,
+    /// 接口类型：0=OpenAI Compat、1=Responses、2=Anthropic Messages、
+    /// 3=Gemini（保留）、4=Full Compatible。
+    interface_type: i32,
     items: Vec<VirtualModelItemResponse>,
     created_at: String,
     updated_at: String,
@@ -88,6 +93,9 @@ struct CreateVirtualModelRequest {
     enable: bool,
     load_balancing_strategy: i32,
     fallback_strategy: i32,
+    /// 缺省视为 OpenAI Compatible。
+    #[serde(default)]
+    interface_type: i32,
     items: Vec<VirtualModelItemRequest>,
 }
 
@@ -98,8 +106,21 @@ struct UpdateVirtualModelRequest {
     enable: Option<bool>,
     load_balancing_strategy: Option<i32>,
     fallback_strategy: Option<i32>,
+    /// 接口类型；缺省表示不修改。
+    interface_type: Option<i32>,
     /// 传入时以该集合为最终成员（diff 更新）；缺省表示不修改成员。
     items: Option<Vec<VirtualModelItemRequest>>,
+}
+
+/// 校验接口类型取值（0..=4，编号与协议类型对齐），返回第一个错误消息。
+fn validate_interface_type(interface_type: i32, lang: Lang) -> Option<String> {
+    if !(INTERFACE_OPENAI_COMPAT..=INTERFACE_FULL_COMPATIBLE).contains(&interface_type) {
+        return Some(
+            lang.tr("接口类型不合法", "invalid interface type")
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// 校验负载均衡与降级策略取值，返回第一个错误消息（None 表示通过）。
@@ -121,6 +142,128 @@ fn validate_strategies(
         );
     }
     None
+}
+
+/// 成员生效协议映射（model_id → 协议）：模型级 protocol_type 覆盖优先，
+/// 否则跟随所属供应商协议。
+pub(crate) async fn effective_protocols<C: ConnectionTrait>(
+    db: &C,
+    model_ids: &[i32],
+) -> Result<HashMap<i32, i32>, DbErr> {
+    if model_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let pms = provider_model::Entity::find()
+        .filter(provider_model::Column::ModelId.is_in(model_ids.to_vec()))
+        .all(db)
+        .await?;
+    let provider_ids: Vec<i32> = pms
+        .iter()
+        .map(|pm| pm.provider_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let providers = provider::Entity::find()
+        .filter(provider::Column::Id.is_in(provider_ids))
+        .all(db)
+        .await?;
+    let provider_protocol: HashMap<i32, i32> = providers
+        .into_iter()
+        .map(|p| (p.id, p.protocol_type))
+        .collect();
+    Ok(pms
+        .into_iter()
+        .map(|pm| {
+            let protocol = pm
+                .protocol_type
+                .unwrap_or_else(|| provider_protocol.get(&pm.provider_id).copied().unwrap_or(0));
+            (pm.model_id, protocol)
+        })
+        .collect())
+}
+
+/// 校验成员生效协议与虚拟模型接口类型匹配（Full Compatible 接受全部协议），
+/// 返回第一个不匹配提示（None 表示通过）。
+pub(crate) async fn validate_members_match_interface_type<C: ConnectionTrait>(
+    db: &C,
+    interface_type: i32,
+    model_ids: &[i32],
+    lang: Lang,
+) -> Result<Option<String>, DbErr> {
+    if interface_type == INTERFACE_FULL_COMPATIBLE {
+        return Ok(None);
+    }
+    let protocols = effective_protocols(db, model_ids).await?;
+    for model_id in model_ids {
+        if protocols.get(model_id) != Some(&interface_type) {
+            return Ok(Some(
+                lang.tr(
+                    "成员模型协议与虚拟模型接口类型不匹配",
+                    "member model protocol does not match the virtual model interface type",
+                )
+                .to_string(),
+            ));
+        }
+    }
+    Ok(None)
+}
+
+/// 硬删生效协议不再匹配所属受限类型虚拟模型的成员行（Full Compatible 豁免）。
+/// 用于成员/供应商协议中途变更与虚拟模型改类型的级联清理；返回被移除的
+/// (virtual_model_id, model_id) 列表。
+pub(crate) async fn remove_mismatched_members<C: ConnectionTrait>(
+    db: &C,
+    model_ids: &[i32],
+) -> Result<Vec<(i32, i32)>, DbErr> {
+    if model_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let items = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.is_in(model_ids.to_vec()))
+        .all(db)
+        .await?;
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+    let vm_ids: Vec<i32> = items
+        .iter()
+        .map(|item| item.virtual_model_id)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let vms = Entity::find()
+        .filter(virtual_model::Column::VirtualModelId.is_in(vm_ids))
+        .all(db)
+        .await?;
+    let protocols = effective_protocols(db, model_ids).await?;
+
+    let remove_item_ids: Vec<i32> = items
+        .iter()
+        .filter(|item| {
+            let Some(vm) = vms
+                .iter()
+                .find(|v| v.virtual_model_id == item.virtual_model_id)
+            else {
+                return false;
+            };
+            vm.interface_type != INTERFACE_FULL_COMPATIBLE
+                && protocols.get(&item.model_id) != Some(&vm.interface_type)
+        })
+        .map(|item| item.virtual_model_item_id)
+        .collect();
+    if remove_item_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let removed: Vec<(i32, i32)> = items
+        .iter()
+        .filter(|item| remove_item_ids.contains(&item.virtual_model_item_id))
+        .map(|item| (item.virtual_model_id, item.model_id))
+        .collect();
+    virtual_model_item::Entity::delete_many()
+        .filter(virtual_model_item::Column::VirtualModelItemId.is_in(remove_item_ids))
+        .exec(db)
+        .await?;
+    Ok(removed)
 }
 
 /// 按 model_id 去重（保留首次出现的 enable 设置）。
@@ -332,6 +475,7 @@ fn virtual_model_response(
         enable: model.enable,
         load_balancing_strategy: model.load_balancing_strategy,
         fallback_strategy: model.fallback_strategy,
+        interface_type: model.interface_type,
         items,
         created_at: model.created_at.to_rfc3339(),
         updated_at: model.updated_at.to_rfc3339(),
@@ -449,6 +593,9 @@ async fn create_virtual_model(
     {
         return response::bad_request(msg);
     }
+    if let Some(msg) = validate_interface_type(req.interface_type, lang) {
+        return response::bad_request(msg);
+    }
     if req.items.is_empty() {
         return response::bad_request(
             lang.tr("至少选择一个成员模型", "select at least one member model"),
@@ -457,6 +604,13 @@ async fn create_virtual_model(
     let items = dedupe_items(&req.items);
     let model_ids: Vec<i32> = items.iter().map(|item| item.model_id).collect();
     match validate_item_model_ids(&state.db, &model_ids, None, lang).await {
+        Ok(Some(msg)) => return response::bad_request(msg),
+        Ok(None) => {}
+        Err(e) => return response::db_error(e.to_string()),
+    }
+    match validate_members_match_interface_type(&state.db, req.interface_type, &model_ids, lang)
+        .await
+    {
         Ok(Some(msg)) => return response::bad_request(msg),
         Ok(None) => {}
         Err(e) => return response::db_error(e.to_string()),
@@ -472,6 +626,7 @@ async fn create_virtual_model(
         enable: Set(req.enable),
         load_balancing_strategy: Set(req.load_balancing_strategy),
         fallback_strategy: Set(req.fallback_strategy),
+        interface_type: Set(req.interface_type),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
@@ -542,6 +697,10 @@ async fn update_virtual_model(
     if let Some(msg) = validate_strategies(load_balancing_strategy, fallback_strategy, lang) {
         return response::bad_request::<()>(msg).into_response();
     }
+    let interface_type = req.interface_type.unwrap_or(existing.interface_type);
+    if let Some(msg) = validate_interface_type(interface_type, lang) {
+        return response::bad_request::<()>(msg).into_response();
+    }
 
     let txn = match state.db.begin().await {
         Ok(txn) => txn,
@@ -562,6 +721,13 @@ async fn update_virtual_model(
         let items = dedupe_items(req_items);
         let model_ids: Vec<i32> = items.iter().map(|item| item.model_id).collect();
         match validate_item_model_ids(&txn, &model_ids, Some(id), lang).await {
+            Ok(Some(msg)) => return response::bad_request::<()>(msg).into_response(),
+            Ok(None) => {}
+            Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
+        }
+        // 传入 items 即最终成员集合：全部成员须匹配最终接口类型（前端已先行
+        // 确认级联移除并过滤候选，此处不信任前端）。
+        match validate_members_match_interface_type(&txn, interface_type, &model_ids, lang).await {
             Ok(Some(msg)) => return response::bad_request::<()>(msg).into_response(),
             Ok(None) => {}
             Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
@@ -624,15 +790,34 @@ async fn update_virtual_model(
         }
     }
 
+    // 未传 items 但接口类型变化：级联硬删不再匹配的现有成员（事务内，
+    // 在虚拟模型行更新后执行，使豁免判断读到新接口类型）。
+    let mut protocol_removed: Vec<(i32, i32)> = Vec::new();
+    let interface_type_changed = interface_type != existing.interface_type;
     let enable = req.enable.unwrap_or(existing.enable);
     let mut active: ActiveModel = existing.into();
     active.display_id = Set(display_id.to_string());
     active.enable = Set(enable);
     active.load_balancing_strategy = Set(load_balancing_strategy);
     active.fallback_strategy = Set(fallback_strategy);
+    active.interface_type = Set(interface_type);
     active.updated_at = Set(chrono::Utc::now());
     match active.update(&txn).await {
         Ok(model) => {
+            if req.items.is_none() && interface_type_changed {
+                let current_ids: Vec<i32> = match virtual_model_item::Entity::find()
+                    .filter(virtual_model_item::Column::VirtualModelId.eq(id))
+                    .all(&txn)
+                    .await
+                {
+                    Ok(items) => items.into_iter().map(|item| item.model_id).collect(),
+                    Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
+                };
+                match remove_mismatched_members(&txn, &current_ids).await {
+                    Ok(removed) => protocol_removed = removed,
+                    Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
+                }
+            }
             if let Err(e) = txn.commit().await {
                 return response::db_error::<()>(e.to_string()).into_response();
             }
@@ -644,6 +829,7 @@ async fn update_virtual_model(
                 fallback_strategy = model.fallback_strategy,
                 added_members = ?added,
                 removed_members = ?removed,
+                protocol_removed_members = ?protocol_removed,
                 toggled_members = ?toggled,
                 "更新虚拟模型",
             );

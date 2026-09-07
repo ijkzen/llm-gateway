@@ -54,6 +54,7 @@ async fn seed_subscription_provider(db: &sea_orm::DatabaseConnection) -> (i32, i
         enable: Set(true),
         load_balancing_strategy: Set(0),
         fallback_strategy: Set(1),
+        interface_type: Set(4),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()
@@ -118,6 +119,7 @@ async fn seed_balance_provider(db: &sea_orm::DatabaseConnection) -> (i32, i32) {
         enable: Set(true),
         load_balancing_strategy: Set(0),
         fallback_strategy: Set(1),
+        interface_type: Set(4),
         created_at: Set(now),
         updated_at: Set(now),
         ..Default::default()

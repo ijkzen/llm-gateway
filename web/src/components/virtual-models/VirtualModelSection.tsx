@@ -12,7 +12,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { ItemCapabilityIcons } from "@/components/virtual-models/ItemCapabilityIcons";
 import type { VirtualModel, VirtualModelItem } from "@/hooks/use-virtual-models";
-import { fallbackLabel, loadBalancingLabel } from "@/lib/constants";
+import { fallbackLabel, interfaceTypeLabel, loadBalancingLabel } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { ChevronRight, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -116,6 +116,9 @@ export function VirtualModelSection({
 							{t("common.disabled")}
 						</Badge>
 					)}
+					<Badge variant="outline" className="shrink-0">
+						{interfaceTypeLabel(virtualModel.interfaceType, t)}
+					</Badge>
 					<Badge variant="outline" className="shrink-0">
 						{loadBalancingLabel(virtualModel.loadBalancingStrategy, t)}
 					</Badge>

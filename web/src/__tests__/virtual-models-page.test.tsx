@@ -131,6 +131,7 @@ function makeVm(overrides: Partial<VirtualModel> = {}): VirtualModel {
 		enable: true,
 		loadBalancingStrategy: 0,
 		fallbackStrategy: 0,
+		interfaceType: 4,
 		items: [],
 		createdAt: "",
 		updatedAt: "",

@@ -25,3 +25,20 @@ export interface DraftMember {
 export function compareDraftMembers(a: DraftMember, b: DraftMember): number {
 	return Number(b.draft.enable) - Number(a.draft.enable);
 }
+
+/** 成员生效协议：模型级覆盖优先，否则供应商协议（与后端口径一致）。 */
+export function effectiveProtocol(
+	model: Pick<ProviderModel, "protocolType">,
+	providerProtocol: number | undefined,
+): number {
+	return model.protocolType ?? providerProtocol ?? 0;
+}
+
+/** 接口类型是否接受该协议成员（Full Compatible 接受任意协议）。 */
+export function acceptsProtocol(
+	interfaceType: number,
+	protocol: number,
+	fullCompatible: number,
+): boolean {
+	return interfaceType === fullCompatible || protocol === interfaceType;
+}

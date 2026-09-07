@@ -173,12 +173,20 @@ async fn current_lang() -> Lang {
     }
 }
 
-/// 校验 Bearer API Key。命中启用的 key 返回其信息，否则返回 401 信封错误。
+/// 校验 API Key 凭证。命中启用的 key 返回其信息，否则返回 401 信封错误。
+/// `allow_x_api_key`：/v1/messages 额外接受 `x-api-key` 头（Anthropic SDK 风格），
+/// 其余 /v1 端点仅认 Bearer。
 pub async fn authorize_api_key(
     db: &DatabaseConnection,
     headers: &HeaderMap,
+    allow_x_api_key: bool,
 ) -> Result<AuthedApiKey, Response<()>> {
-    let Some(token) = extract_bearer(headers) else {
+    let token = if allow_x_api_key {
+        extract_api_token(headers)
+    } else {
+        extract_bearer(headers)
+    };
+    let Some(token) = token else {
         return Err(unauthorized_api_key().await);
     };
     let key_hash = hash_token(&token);
@@ -221,6 +229,17 @@ fn extract_bearer(headers: &HeaderMap) -> Option<String> {
     }
 }
 
+/// /v1 凭证提取：Bearer 优先，其次 `x-api-key`（Anthropic SDK 风格，
+/// /v1/messages 原生客户端默认发该头）。两者等价，走同一 api_key 校验。
+fn extract_api_token(headers: &HeaderMap) -> Option<String> {
+    if let Some(token) = extract_bearer(headers) {
+        return Some(token);
+    }
+    let value = headers.get("x-api-key")?.to_str().ok()?;
+    let token = value.trim();
+    (!token.is_empty()).then(|| token.to_string())
+}
+
 async fn unauthorized_api_key() -> Response<()> {
     let lang = current_lang().await;
     let msg = lang.tr("无效的 API Key", "invalid API Key");
@@ -253,7 +272,8 @@ pub async fn auth_middleware(
     }
 
     if path.starts_with("/v1/") {
-        return match authorize_api_key(&state.db, req.headers()).await {
+        let allow_x_api_key = path.starts_with("/v1/messages");
+        return match authorize_api_key(&state.db, req.headers(), allow_x_api_key).await {
             Ok(key) => {
                 let mut req = req;
                 req.extensions_mut().insert(key);
@@ -265,7 +285,7 @@ pub async fn auth_middleware(
                 } else {
                     StatusCode::UNAUTHORIZED
                 };
-                openai_error_response(status, &body.error_message, &body.error_code)
+                v1_error_response(path, status, &body.error_message, &body.error_code)
             }
         };
     }
@@ -317,6 +337,16 @@ fn openai_error_response(status: StatusCode, message: &str, code: &str) -> AxumR
         .into_response()
 }
 
+/// 按路径选择 /v1 错误格式：/v1/messages 用 Anthropic 原生结构，
+/// 其余（/v1/models、/v1/chat/completions、/v1/responses）用 OpenAI 结构。
+fn v1_error_response(path: &str, status: StatusCode, message: &str, code: &str) -> AxumResponse {
+    if path.starts_with("/v1/messages") {
+        anthropic_error(status, "authentication_error", message)
+    } else {
+        openai_error_response(status, message, code)
+    }
+}
+
 /// OpenAI 格式错误响应，供 /v1 路由复用。
 pub fn openai_error(
     status: StatusCode,
@@ -327,6 +357,21 @@ pub fn openai_error(
     (
         status,
         Json(json!({ "error": { "message": message.into(), "type": error_type, "code": code } })),
+    )
+        .into_response()
+}
+
+/// Anthropic 原生错误格式（/v1/messages 透传端点用）。
+pub fn anthropic_error(
+    status: StatusCode,
+    error_type: &str,
+    message: impl Into<String>,
+) -> AxumResponse {
+    (
+        status,
+        Json(
+            json!({ "type": "error", "error": { "type": error_type, "message": message.into() } }),
+        ),
     )
         .into_response()
 }

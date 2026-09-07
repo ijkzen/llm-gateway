@@ -25,6 +25,18 @@ pub enum FallbackStrategy {
     RetryEnabledMembers = 1,
 }
 
+/// 虚拟模型接口类型（编号与供应商协议类型对齐）。
+pub const INTERFACE_OPENAI_COMPAT: i32 = 0;
+pub const INTERFACE_OPENAI_RESPONSES: i32 = 1;
+pub const INTERFACE_ANTHROPIC_MESSAGES: i32 = 2;
+/// 保留值：暂无 Gemini 原生端点，仅占位对齐协议编号。
+pub const INTERFACE_GEMINI: i32 = 3;
+pub const INTERFACE_FULL_COMPATIBLE: i32 = 4;
+
+/// /v1/chat/completions 与 /v1/models 服务的接口类型
+/// （OpenAI Compatible 与 Full Compatible）。
+pub const CHAT_SERVED_TYPES: [i32; 2] = [INTERFACE_OPENAI_COMPAT, INTERFACE_FULL_COMPATIBLE];
+
 /// VirtualModel:对外暴露的虚拟模型，聚合多个供应商模型条目。
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]
 #[sea_orm(table_name = "virtual_model")]
@@ -44,6 +56,10 @@ pub struct Model {
     /// 降级策略:0=直接失败、1=依次重试其他启用成员。
     #[sea_orm(default_value = "0")]
     pub fallback_strategy: i32,
+    /// 接口类型:0=OpenAI Compat、1=Responses、2=Anthropic Messages、
+    /// 3=Gemini(保留)、4=Full Compatible。历史行由迁移 23 回填 4。
+    #[sea_orm(default_value = "0")]
+    pub interface_type: i32,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

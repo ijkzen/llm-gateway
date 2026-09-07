@@ -9,6 +9,8 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+use crate::proxy::sse::SseSplitter;
+
 use super::{
     ANTHROPIC_DEFAULT_MAX_TOKENS, cached_client_usage_json, chat_max_tokens, chat_messages,
     chat_reasoning, collect_tool_call_names, inline_defs, message_text, reasoning_budget,
@@ -901,6 +903,59 @@ impl AnthropicStreamConverter {
     }
 }
 
+/// 原生透传流式用量扫描器：旁路解析 Anthropic SSE 的 data 事件
+/// （`event:` 行可有可无，事件类型以 data JSON 的 `type` 为准）。
+/// usage 合并口径：message_start（输入侧，含缓存读/写）⊕ message_delta（output_tokens）。
+#[derive(Default)]
+pub struct AnthropicStreamUsageScanner {
+    splitter: SseSplitter,
+    merged: Option<Value>,
+    usage: Option<Usage>,
+    content_seen: bool,
+}
+
+impl AnthropicStreamUsageScanner {
+    pub fn feed(&mut self, bytes: &[u8]) {
+        for data in self.splitter.feed(&String::from_utf8_lossy(bytes)) {
+            let Ok(value) = serde_json::from_str::<Value>(&data) else {
+                continue;
+            };
+            match value.get("type").and_then(Value::as_str) {
+                Some("message_start") => {
+                    self.merged = value
+                        .pointer("/message/usage")
+                        .filter(|u| u.is_object())
+                        .cloned();
+                }
+                Some("message_delta") => {
+                    if let Some(delta_usage) = value.get("usage").filter(|u| u.is_object()) {
+                        let target = self.merged.get_or_insert_with(|| Value::Object(Map::new()));
+                        if let Some(map) = target.as_object_mut() {
+                            for (key, val) in delta_usage.as_object().expect("checked object") {
+                                map.insert(key.clone(), val.clone());
+                            }
+                        }
+                    }
+                }
+                Some("content_block_delta") => self.content_seen = true,
+                _ => {}
+            }
+            if let Some(current) = self.merged.as_ref() {
+                self.usage = Some(extract_usage(current));
+            }
+        }
+    }
+
+    /// 是否见过内容块（读取后清零；供 TTFT 打点）。
+    pub fn take_content_seen(&mut self) -> bool {
+        std::mem::take(&mut self.content_seen)
+    }
+
+    pub fn usage(&self) -> Option<Usage> {
+        self.usage.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1423,5 +1478,31 @@ mod tests {
             })
             .collect();
         assert_eq!(reasoning, "想");
+    }
+
+    #[test]
+    fn passthrough_scanner_merges_stream_usage() {
+        let mut scanner = AnthropicStreamUsageScanner::default();
+        scanner.feed(b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":3,\"cache_creation_input_tokens\":2}}}\n\n");
+        scanner.feed("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"你\"}}\n\n".as_bytes());
+        scanner.feed(b"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n");
+        scanner.feed(b"data: {\"type\":\"message_stop\"}\n\n");
+        assert!(scanner.take_content_seen());
+        let usage = scanner.usage().expect("usage should be captured");
+        assert_eq!(usage.input_tokens, Some(15));
+        assert_eq!(usage.cache_tokens, 3);
+        assert_eq!(usage.output_tokens, Some(5));
+    }
+
+    #[test]
+    fn passthrough_scanner_handles_split_feeds_and_no_usage() {
+        let mut scanner = AnthropicStreamUsageScanner::default();
+        let text = "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n\ndata: {\"type\":\"message_stop\"}\n\n";
+        let bytes = text.as_bytes();
+        let (a, b) = bytes.split_at(bytes.len() / 2);
+        scanner.feed(a);
+        scanner.feed(b);
+        assert!(scanner.take_content_seen());
+        assert!(scanner.usage().is_none());
     }
 }

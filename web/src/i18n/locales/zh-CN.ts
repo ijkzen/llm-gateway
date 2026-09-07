@@ -428,6 +428,19 @@ const zhCN = {
 			failFast: "直接失败",
 			retryOthers: "依次重试其他启用成员",
 		},
+		interfaceType: "接口类型",
+		selectInterfaceType: "选择接口类型",
+		interfaceTypeHint:
+			"受限类型只能添加本协议成员；Full Compatible 接受任意协议成员，经 chat/completions 转换服务。",
+		interfaceTypes: {
+			openaiCompat: "OpenAI Compatible",
+			responses: "Responses",
+			messages: "Messages（Anthropic）",
+			gemini: "Gemini（预留）",
+			fullCompatible: "Full Compatible",
+		},
+		interfaceChangeTitle: "切换接口类型",
+		interfaceChangeDesc: "以下成员模型的协议与新接口类型不匹配，保存后将自动从虚拟模型中移除：",
 	},
 	apiKeys: {
 		title: "API Keys",

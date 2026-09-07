@@ -448,6 +448,7 @@ async fn update_provider(
         return response::bad_request(msg);
     }
     let protocol_type = req.protocol_type.unwrap_or(model.protocol_type);
+    let protocol_changed = protocol_type != model.protocol_type;
     let billing_mode = req.billing_mode.unwrap_or(model.billing_mode);
     if let Some(msg) = validate_protocol_billing(protocol_type, billing_mode, lang) {
         return response::bad_request(msg);
@@ -493,6 +494,32 @@ async fn update_provider(
                 if let Err(e) = result {
                     tracing::warn!(provider_id = id, "手动启停供应商失败：{e}");
                     return response::db_error(e.to_string());
+                }
+            }
+            // 供应商协议变更：名下未做模型级覆盖的成员生效协议随之变化，
+            // 级联硬删不再匹配所属受限类型虚拟模型的成员（失败不阻断，记 warn）。
+            if protocol_changed {
+                let model_ids: Vec<i32> = match provider_model::Entity::find()
+                    .filter(provider_model::Column::ProviderId.eq(id))
+                    .all(&state.db)
+                    .await
+                {
+                    Ok(pms) => pms.into_iter().map(|pm| pm.model_id).collect(),
+                    Err(e) => {
+                        tracing::warn!(provider_id = id, "协议变更级联移除成员前置查询失败：{e}");
+                        Vec::new()
+                    }
+                };
+                match crate::routes::virtual_models::remove_mismatched_members(
+                    &state.db, &model_ids,
+                )
+                .await
+                {
+                    Ok(removed) if !removed.is_empty() => {
+                        tracing::info!(provider_id = id, removed = ?removed, "供应商协议变更级联移除虚拟模型成员");
+                    }
+                    Err(e) => tracing::warn!(provider_id = id, "协议变更级联移除成员失败：{e}"),
+                    Ok(_) => {}
                 }
             }
             // 凭据/字段可能变化，失效用量缓存（数据库）避免展示旧结果。

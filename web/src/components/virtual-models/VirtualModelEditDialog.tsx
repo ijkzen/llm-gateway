@@ -1,3 +1,4 @@
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { MidEllipsis } from "@/components/mid-ellipsis";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +32,8 @@ import {
 	type DraftItem,
 	type DraftMember,
 	compareDraftMembers,
+	effectiveProtocol,
+	acceptsProtocol as protocolAccepted,
 } from "@/components/virtual-models/draft-members";
 import type { ProviderModel } from "@/hooks/use-provider-models";
 import type { Provider } from "@/hooks/use-providers";
@@ -41,7 +44,12 @@ import {
 	useCreateVirtualModel,
 	useUpdateVirtualModel,
 } from "@/hooks/use-virtual-models";
-import { FALLBACK_STRATEGIES, LOAD_BALANCING_STRATEGIES } from "@/lib/constants";
+import {
+	FALLBACK_STRATEGIES,
+	INTERFACE_FULL_COMPATIBLE,
+	INTERFACE_TYPES,
+	LOAD_BALANCING_STRATEGIES,
+} from "@/lib/constants";
 import { cn, formatContextLength } from "@/lib/utils";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
@@ -56,6 +64,7 @@ function makeFormSchema(t: (key: string) => string) {
 		enable: z.boolean(),
 		loadBalancingStrategy: z.number(),
 		fallbackStrategy: z.number(),
+		interfaceType: z.number(),
 	});
 }
 
@@ -117,6 +126,10 @@ export function VirtualModelEditDialog({
 	const [collapsedGroups, setCollapsedGroups] = useState<Set<number>>(new Set());
 	/** 组内「展开候选区」的供应商 id 集合（已使用 Tab 内继续添加）。 */
 	const [openAddGroups, setOpenAddGroups] = useState<Set<number>>(new Set());
+	/** 接口类型切换确认：待生效类型与将被移除的不匹配成员。 */
+	const [pendingInterfaceType, setPendingInterfaceType] = useState<number | null>(null);
+	const [pendingRemovals, setPendingRemovals] = useState<ProviderModel[]>([]);
+	const [interfaceConfirmOpen, setInterfaceConfirmOpen] = useState(false);
 
 	const form = useForm<FormValues>({
 		resolver: zodResolver(formSchema),
@@ -125,8 +138,11 @@ export function VirtualModelEditDialog({
 			enable: true,
 			loadBalancingStrategy: 0,
 			fallbackStrategy: 0,
+			interfaceType: 0,
 		},
 	});
+	// watch 订阅：接口类型变化时候选过滤即时生效。
+	const interfaceType = form.watch("interfaceType");
 
 	// 打开弹窗时以目标虚拟模型重置全部暂存状态。
 	useEffect(() => {
@@ -136,6 +152,7 @@ export function VirtualModelEditDialog({
 			enable: virtualModel?.enable ?? true,
 			loadBalancingStrategy: virtualModel?.loadBalancingStrategy ?? 0,
 			fallbackStrategy: virtualModel?.fallbackStrategy ?? 0,
+			interfaceType: virtualModel?.interfaceType ?? 0,
 		});
 		setDraftItems(
 			(virtualModel?.items ?? []).map((item) => ({
@@ -151,6 +168,46 @@ export function VirtualModelEditDialog({
 	}, [open, virtualModel, form]);
 
 	const modelById = new Map(providerModels.map((model) => [model.modelId, model]));
+	const providerById = new Map(providers.map((provider) => [provider.id, provider]));
+
+	/** 成员生效协议：模型级覆盖优先，否则供应商协议。 */
+	const protocolOf = (model: ProviderModel): number =>
+		effectiveProtocol(model, providerById.get(model.providerId)?.protocolType);
+
+	/** 接口类型是否接受该成员协议（Full Compatible 接受全部）。 */
+	const acceptsProtocol = (model: ProviderModel): boolean =>
+		protocolAccepted(interfaceType, protocolOf(model), INTERFACE_FULL_COMPATIBLE);
+
+	/** 暂存成员中与指定接口类型不匹配的成员（类型切换确认用）。 */
+	const mismatchedDrafts = (nextType: number): ProviderModel[] => {
+		if (nextType === INTERFACE_FULL_COMPATIBLE) return [];
+		return draftItems.flatMap((draft) => {
+			const model = modelById.get(draft.modelId);
+			return model && protocolOf(model) !== nextType ? [model] : [];
+		});
+	};
+
+	/** 切换接口类型：存在不匹配成员时先确认（确认后移除），否则直接生效。 */
+	const onInterfaceTypeChange = (next: number) => {
+		const mismatched = mismatchedDrafts(next);
+		if (mismatched.length === 0) {
+			form.setValue("interfaceType", next);
+			return;
+		}
+		setPendingInterfaceType(next);
+		setPendingRemovals(mismatched);
+		setInterfaceConfirmOpen(true);
+	};
+
+	const confirmInterfaceChange = () => {
+		if (pendingInterfaceType === null) return;
+		const removalIds = new Set(pendingRemovals.map((model) => model.modelId));
+		setDraftItems((prev) => prev.filter((draft) => !removalIds.has(draft.modelId)));
+		form.setValue("interfaceType", pendingInterfaceType);
+		setInterfaceConfirmOpen(false);
+		setPendingInterfaceType(null);
+		setPendingRemovals([]);
+	};
 
 	const addDraftItem = (modelId: number) => {
 		setDraftItems((prev) => [...prev, { virtualModelItemId: null, modelId, enable: true }]);
@@ -202,11 +259,12 @@ export function VirtualModelEditDialog({
 		});
 	};
 
-	// 候选 = 该供应商名下、未被其他虚拟模型占用且尚未加入暂存的模型。
+	// 候选 = 该供应商名下、协议匹配当前接口类型、未被其他虚拟模型占用且尚未加入暂存的模型。
 	const candidatesOf = (providerId: number) =>
 		providerModels.filter(
 			(model) =>
 				model.providerId === providerId &&
+				acceptsProtocol(model) &&
 				!mappedModelIds.has(model.modelId) &&
 				!draftItems.some((draft) => draft.modelId === model.modelId),
 		);
@@ -251,6 +309,7 @@ export function VirtualModelEditDialog({
 			enable: values.enable,
 			loadBalancingStrategy: values.loadBalancingStrategy,
 			fallbackStrategy: values.fallbackStrategy,
+			interfaceType: values.interfaceType,
 			items,
 		};
 		const options = {
@@ -427,6 +486,36 @@ export function VirtualModelEditDialog({
 									</FormItem>
 								)}
 							/>
+							<FormField
+								control={form.control}
+								name="interfaceType"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>{t("virtualModels.interfaceType")}</FormLabel>
+										<Select
+											onValueChange={(v) => onInterfaceTypeChange(Number(v))}
+											value={String(field.value)}
+										>
+											<FormControl>
+												<SelectTrigger>
+													<SelectValue placeholder={t("virtualModels.selectInterfaceType")} />
+												</SelectTrigger>
+											</FormControl>
+											<SelectContent>
+												{INTERFACE_TYPES.map((type) => (
+													<SelectItem key={type.value} value={String(type.value)}>
+														{t(type.labelKey)}
+													</SelectItem>
+												))}
+											</SelectContent>
+										</Select>
+										<p className="text-xs text-muted-foreground">
+											{t("virtualModels.interfaceTypeHint")}
+										</p>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
 							<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
 								<FormField
 									control={form.control}
@@ -564,6 +653,32 @@ export function VirtualModelEditDialog({
 						{virtualModel ? t("common.save") : t("common.create")}
 					</Button>
 				</DialogFooter>
+
+				<ConfirmDialog
+					open={interfaceConfirmOpen}
+					onOpenChange={(open) => {
+						setInterfaceConfirmOpen(open);
+						if (!open) {
+							setPendingInterfaceType(null);
+							setPendingRemovals([]);
+						}
+					}}
+					title={t("virtualModels.interfaceChangeTitle")}
+					desc={t("virtualModels.interfaceChangeDesc")}
+					destructive
+					handleConfirm={confirmInterfaceChange}
+				>
+					<ul className="max-h-40 space-y-1 overflow-y-auto rounded-lg border p-3 font-mono text-sm">
+						{pendingRemovals.map((model) => (
+							<li key={model.modelId} className="flex items-center justify-between gap-2">
+								<MidEllipsis text={model.providerModelId} className="min-w-0" />
+								<span className="shrink-0 text-xs text-muted-foreground">
+									{providerById.get(model.providerId)?.name}
+								</span>
+							</li>
+						))}
+					</ul>
+				</ConfirmDialog>
 			</DialogContent>
 		</Dialog>
 	);

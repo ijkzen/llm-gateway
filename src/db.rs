@@ -470,6 +470,19 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         changed |= ensure_migration(db, 22, &migration_22_statements).await?;
     }
 
+    // Migration 23: virtual_model.interface_type 接口类型（编号与协议类型对齐：
+    // 0=OpenAI Compat / 1=Responses / 2=Anthropic Messages / 3=Gemini 保留 /
+    // 4=Full Compatible）。存量行回填 4 —— 升级前所有虚拟模型都是「任意协议成员 +
+    // chat/completions 转换」语义；新行默认 0 由实体建表/default 提供。
+    let mut migration_23_statements: Vec<&str> = Vec::new();
+    if !column_exists(db, "virtual_model", "interface_type").await? {
+        migration_23_statements.extend([
+            "ALTER TABLE virtual_model ADD COLUMN interface_type integer NOT NULL DEFAULT 0",
+            "UPDATE virtual_model SET interface_type = 4",
+        ]);
+    }
+    changed |= ensure_migration(db, 23, &migration_23_statements).await?;
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)
@@ -701,6 +714,47 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    /// 历史库迁移：virtual_model.interface_type 接口类型。存量行回填 4
+    /// （Full Compatible —— 升级前全部虚拟模型均为全协议转换语义）。
+    #[tokio::test]
+    async fn migration_23_backfills_interface_type_on_legacy_db() {
+        let db = connect("sqlite::memory:").await.unwrap();
+
+        migrate(&db).await.unwrap();
+        // 模拟历史库：删列 + 移除版本记录 + 插入存量行。
+        db.execute_unprepared("ALTER TABLE virtual_model DROP COLUMN interface_type")
+            .await
+            .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 23")
+            .await
+            .unwrap();
+        db.execute_unprepared(
+            "INSERT INTO virtual_model (display_id, enable, created_at, updated_at) VALUES
+                ('legacy-a', 1, datetime('now'), datetime('now')),
+                ('legacy-b', 1, datetime('now'), datetime('now'))",
+        )
+        .await
+        .unwrap();
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        let rows = db
+            .query_all_raw(Statement::from_string(
+                db.get_database_backend(),
+                "SELECT interface_type FROM virtual_model ORDER BY display_id",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            assert_eq!(
+                row.try_get::<i32>("", "interface_type").unwrap(),
+                4,
+                "存量虚拟模型应回填 Full Compatible"
+            );
+        }
     }
 
     /// 历史库迁移：provider.disabled_reason 四值停用原因（ADR-0003）。存量回填规则：
