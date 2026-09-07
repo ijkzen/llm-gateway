@@ -143,7 +143,8 @@ export default function AppLayout() {
 					</div>
 				</SidebarFooter>
 			</Sidebar>
-			<SidebarInset className="overflow-hidden">
+			{/* overflow-anchor:none 防止内容变化时滚动位置跳动；不能用 overflow-hidden，否则 sticky 顶栏失效 */}
+			<SidebarInset className="[overflow-anchor:none]">
 				{/* 吸顶样式由 CSS scroll-state 查询驱动，见 sticky-header.css 的 .app-header */}
 				<header className="app-header sticky top-0 z-10 shrink-0">
 					<div className="app-header-inner flex h-14 items-center gap-4 px-6">
