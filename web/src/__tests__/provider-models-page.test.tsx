@@ -1,7 +1,7 @@
 import type { ProviderModel } from "@/hooks/use-provider-models";
 import type { Provider } from "@/hooks/use-providers";
 import ProviderModelsPage from "@/pages/provider-models";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -214,6 +214,35 @@ describe("ProviderModelsPage", () => {
 
 		fireEvent.pointerDown(screen.getByRole("heading", { name: "供应商模型" }));
 		expect(screen.queryByRole("button", { name: "gpt-4o" })).toBeNull();
+	});
+
+	it("搜索分组标题可折叠/展开，默认全展开", () => {
+		mocks.providers = [makeProvider(1, "OpenAI"), makeProvider(2, "DeepSeek")];
+		mocks.models = [makeModel(1, 11, "gpt-4o"), makeModel(2, 21, "deepseek-chat")];
+		renderPage();
+
+		fireEvent.change(screen.getByRole("searchbox", { name: "搜索供应商模型" }), {
+			target: { value: "gpt" },
+		});
+		// 关键词 gpt 只命中 OpenAI 组。
+		const group1 = screen.getByTestId("provider-model-search-group-1");
+		const header1 = within(group1).getByRole("button", { name: "OpenAI" });
+		expect(header1).toHaveAttribute("aria-expanded", "true");
+		// 默认全展开：组内成员可见。
+		expect(within(group1).getByRole("button", { name: "gpt-4o" })).toBeTruthy();
+		expect(screen.queryByTestId("provider-model-search-group-2")).toBeNull();
+
+		// 折叠 OpenAI 组：标题保留，成员隐藏。
+		fireEvent.click(header1);
+		expect(within(group1).getByRole("button", { name: "OpenAI" })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+		expect(within(group1).queryByRole("button", { name: "gpt-4o" })).toBeNull();
+
+		// 再点展开恢复成员。
+		fireEvent.click(within(group1).getByRole("button", { name: "OpenAI" }));
+		expect(within(group1).getByRole("button", { name: "gpt-4o" })).toBeTruthy();
 	});
 
 	it("供应商开关立即更新，失败时回滚", () => {

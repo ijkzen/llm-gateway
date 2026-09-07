@@ -309,6 +309,39 @@ describe("RequestLogsTable", () => {
 		expect(screen.getByRole("checkbox", { name: "gemini-2.5-pro" })).toBeInTheDocument();
 	});
 
+	it("上游模型分组可折叠：折叠一组后该组模型不在弹层内", () => {
+		mocks.useProviders.mockReturnValue({
+			data: [
+				{ id: 2, name: "Provider Beta" },
+				{ id: 3, name: "Provider Alpha" },
+			],
+		});
+		mocks.useProviderModels.mockReturnValue({
+			data: [
+				makeProviderModel(10, 2, "gpt-4o"),
+				makeProviderModel(11, 3, "gpt-4o"),
+				makeProviderModel(12, 3, "gemini-2.5-pro"),
+			],
+		});
+		mockQuery({ items: [], total: 0 });
+		render(<RequestLogsTable />);
+
+		fireEvent.click(screen.getByRole("button", { name: "按供应商模型过滤" }));
+		// 折叠 Provider Beta 组：其下 gpt-4o 只剩 Provider Alpha 组那一个。
+		fireEvent.click(screen.getByRole("button", { name: "Provider Beta" }));
+		expect(screen.getByRole("button", { name: "Provider Beta" })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+		expect(screen.getAllByRole("checkbox", { name: "gpt-4o" })).toHaveLength(1);
+		// Provider Alpha 组不受影响。
+		expect(screen.getByRole("checkbox", { name: "gemini-2.5-pro" })).toBeInTheDocument();
+
+		// 再点展开恢复两个 gpt-4o。
+		fireEvent.click(screen.getByRole("button", { name: "Provider Beta" }));
+		expect(screen.getAllByRole("checkbox", { name: "gpt-4o" })).toHaveLength(2);
+	});
+
 	it("选中供应商后模型下拉只剩该供应商分组", () => {
 		mocks.useProviders.mockReturnValue({
 			data: [

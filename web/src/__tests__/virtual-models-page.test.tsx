@@ -441,6 +441,48 @@ describe("VirtualModelsPage", () => {
 		expect(screen.getByText(/未找到匹配/)).toBeTruthy();
 	});
 
+	it("搜索分组标题可折叠/展开，默认全展开", () => {
+		mocks.virtualModels = [
+			makeVm({
+				virtualModelId: 1,
+				displayId: "gpt-4o",
+				items: [makeItem({ modelId: 11, providerModelId: "gpt-deepseek" })],
+			}),
+			makeVm({
+				virtualModelId: 2,
+				displayId: "deepseek",
+				items: [makeItem({ modelId: 12, providerModelId: "deepseek-chat" })],
+			}),
+		];
+		renderPage();
+
+		fireEvent.change(screen.getByRole("searchbox", { name: "搜索虚拟模型成员" }), {
+			target: { value: "deepseek" },
+		});
+		const group1 = screen.getByTestId("virtual-model-search-group-1");
+		const group2 = screen.getByTestId("virtual-model-search-group-2");
+		// 默认全展开：两组标题 aria-expanded=true 且成员可见。
+		const header1 = within(group1).getByRole("button", { name: "gpt-4o" });
+		const header2 = within(group2).getByRole("button", { name: "deepseek" });
+		expect(header1).toHaveAttribute("aria-expanded", "true");
+		expect(header2).toHaveAttribute("aria-expanded", "true");
+		expect(within(group1).getByRole("button", { name: /gpt-deepseek/ })).toBeTruthy();
+		expect(within(group2).getByRole("button", { name: /deepseek-chat/ })).toBeTruthy();
+
+		// 折叠 group1：标题保留、成员隐藏；group2 不受影响。
+		fireEvent.click(header1);
+		expect(within(group1).getByRole("button", { name: "gpt-4o" })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+		expect(within(group1).queryByRole("button", { name: /gpt-deepseek/ })).toBeNull();
+		expect(within(group2).getByRole("button", { name: /deepseek-chat/ })).toBeTruthy();
+
+		// 再点展开恢复。
+		fireEvent.click(within(group1).getByRole("button", { name: "gpt-4o" }));
+		expect(within(group1).getByRole("button", { name: /gpt-deepseek/ })).toBeTruthy();
+	});
+
 	it("点击搜索结果区域外收起结果面板", () => {
 		mocks.virtualModels = [
 			makeVm({

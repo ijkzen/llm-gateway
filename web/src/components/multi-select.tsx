@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { ChevronDown, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -28,6 +28,8 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const [keyword, setKeyword] = useState("");
+	/** 折叠的分组标题（group 标签集合）；默认空 = 全展开。 */
+	const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(new Set());
 
 	const allValues = useMemo(() => options.map((o) => o.value), [options]);
 	// 空选择 = 全部（隐式全选）。selected 为空时视为勾满全部，UI 上只有「全选」为勾选态，
@@ -63,6 +65,18 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 		return options.filter((o) => o.label.toLowerCase().includes(kw));
 	}, [keyword, options]);
 
+	const toggleGroup = (group: string) => {
+		setCollapsedGroups((prev) => {
+			const next = new Set(prev);
+			if (next.has(group)) {
+				next.delete(group);
+			} else {
+				next.add(group);
+			}
+			return next;
+		});
+	};
+
 	type Row = { kind: "header"; label: string } | { kind: "option"; option: MultiSelectOption };
 	const rows = useMemo<Row[]>(() => {
 		const result: Row[] = [];
@@ -72,10 +86,12 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 				result.push({ kind: "header", label: option.group });
 				lastGroup = option.group;
 			}
+			// 折叠组内的选项不渲染。
+			if (option.group !== undefined && collapsedGroups.has(option.group)) continue;
 			result.push({ kind: "option", option });
 		}
 		return result;
-	}, [visible]);
+	}, [visible, collapsedGroups]);
 
 	const triggerLabel =
 		selected.length === 0
@@ -130,12 +146,20 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 				<div className="max-h-64 space-y-0.5 overflow-y-auto">
 					{rows.map((row) =>
 						row.kind === "header" ? (
-							<p
+							<button
 								key={`header-${row.label}`}
-								className="px-1.5 pt-1 pb-0.5 text-xs text-muted-foreground"
+								type="button"
+								aria-expanded={!collapsedGroups.has(row.label)}
+								onClick={() => toggleGroup(row.label)}
+								className="flex w-full cursor-pointer items-center gap-1 rounded-md px-1.5 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 							>
+								{collapsedGroups.has(row.label) ? (
+									<ChevronRight className="size-3.5 shrink-0" />
+								) : (
+									<ChevronDown className="size-3.5 shrink-0" />
+								)}
 								{row.label}
-							</p>
+							</button>
 						) : (
 							<label
 								key={row.option.value}

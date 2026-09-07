@@ -106,3 +106,83 @@ describe("MultiSelect", () => {
 		expect(onChange).toHaveBeenCalledWith([]);
 	});
 });
+
+describe("MultiSelect 分组折叠", () => {
+	const grouped: MultiSelectOption[] = [
+		{ value: "p1-a", label: "A-1", group: "Provider One" },
+		{ value: "p1-b", label: "B-1", group: "Provider One" },
+		{ value: "p2-c", label: "C-2", group: "Provider Two" },
+	];
+
+	function open() {
+		fireEvent.click(screen.getByRole("button", { name: "测试分组多选" }));
+	}
+
+	it("带 group 选项：分组标题为可点按钮，默认全展开", () => {
+		const onChange = vi.fn();
+		render(
+			<MultiSelect options={grouped} selected={[]} onChange={onChange} aria-label="测试分组多选" />,
+		);
+		open();
+		// 标题按钮（非 checkbox 的「全选」按钮）
+		const g1 = screen.getByRole("button", { name: /Provider One/ });
+		const g2 = screen.getByRole("button", { name: /Provider Two/ });
+		expect(g1).toHaveAttribute("aria-expanded", "true");
+		expect(g2).toHaveAttribute("aria-expanded", "true");
+		// 默认全展开：组内选项可见
+		expect(screen.getByText("A-1")).toBeInTheDocument();
+		expect(screen.getByText("C-2")).toBeInTheDocument();
+	});
+
+	it("点击分组标题折叠后组内选项消失，再点展开恢复", () => {
+		const onChange = vi.fn();
+		render(
+			<MultiSelect options={grouped} selected={[]} onChange={onChange} aria-label="测试分组多选" />,
+		);
+		open();
+		fireEvent.click(screen.getByRole("button", { name: /Provider One/ }));
+		expect(screen.getByRole("button", { name: /Provider One/ })).toHaveAttribute(
+			"aria-expanded",
+			"false",
+		);
+		expect(screen.queryByText("A-1")).not.toBeInTheDocument();
+		expect(screen.queryByText("B-1")).not.toBeInTheDocument();
+		// 另一组不受影响
+		expect(screen.getByText("C-2")).toBeInTheDocument();
+		// 再点展开
+		fireEvent.click(screen.getByRole("button", { name: /Provider One/ }));
+		expect(screen.getByText("A-1")).toBeInTheDocument();
+	});
+
+	it("无 group 的选项不渲染分组标题按钮", () => {
+		setup([]);
+		openPopover();
+		expect(screen.queryByRole("button", { name: /Provider/ })).not.toBeInTheDocument();
+		// 平铺选项仍在
+		expect(screen.getByText("Alpha")).toBeInTheDocument();
+	});
+
+	it("折叠分组不影响「全选」行与其它组勾选", () => {
+		const onChange = vi.fn();
+		render(
+			<MultiSelect
+				options={[
+					{ value: "a", label: "Alpha" },
+					{ value: "b", label: "Beta" },
+					{ value: "c", label: "Gamma" },
+					{ value: "c2", label: "Gamma-2", group: "组二" },
+				]}
+				selected={["a", "c"]}
+				onChange={onChange}
+				aria-label="混合多选"
+			/>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "混合多选" }));
+		fireEvent.click(screen.getByRole("button", { name: /组二/ }));
+		expect(screen.getByRole("checkbox", { name: "全选" })).toBeInTheDocument();
+		expect(screen.queryByText("Gamma-2")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: /组二/ }));
+		fireEvent.click(screen.getByText("Gamma-2"));
+		expect(onChange).toHaveBeenCalledWith(["a", "c", "c2"]);
+	});
+});

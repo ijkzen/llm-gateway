@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { type ProviderModel, useProviderModels } from "@/hooks/use-provider-models";
 import { type Provider, useProviders } from "@/hooks/use-providers";
 import { PROVIDER_MODELS_PAGE } from "@/lib/pages";
-import { RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
@@ -33,6 +33,8 @@ export default function ProviderModelsPage() {
 	const [selected, setSelected] = useState<SelectedModelRef | null>(null);
 	const [search, setSearch] = useState("");
 	const [searchOpen, setSearchOpen] = useState(false);
+	/** 折叠的搜索结果供应商分组（providerId 集合）；默认空 = 全展开。 */
+	const [collapsedProviders, setCollapsedProviders] = useState<ReadonlySet<number>>(new Set());
 	const searchRef = useRef<HTMLDivElement>(null);
 
 	const {
@@ -74,6 +76,18 @@ export default function ProviderModelsPage() {
 			return matchingModels.length > 0 ? [{ provider, models: matchingModels }] : [];
 		});
 	}, [models, providers, search]);
+
+	const toggleGroup = (providerId: number) => {
+		setCollapsedProviders((prev) => {
+			const next = new Set(prev);
+			if (next.has(providerId)) {
+				next.delete(providerId);
+			} else {
+				next.add(providerId);
+			}
+			return next;
+		});
+	};
 
 	useEffect(() => {
 		const closeSearch = (event: PointerEvent) => {
@@ -154,28 +168,45 @@ export default function ProviderModelsPage() {
 								</p>
 							) : (
 								<div className="space-y-3" data-testid="provider-model-search-results">
-									{searchGroups.map(({ provider, models: matchingModels }) => (
-										<div
-											key={provider.id}
-											data-testid={`provider-model-search-group-${provider.id}`}
-										>
-											<p className="px-3 py-1 text-xs font-medium text-muted-foreground">
-												{provider.name}
-											</p>
-											{matchingModels.map((model) => (
+									{searchGroups.map(({ provider, models: matchingModels }) => {
+										const isCollapsed = collapsedProviders.has(provider.id);
+										return (
+											<div
+												key={provider.id}
+												data-testid={`provider-model-search-group-${provider.id}`}
+											>
 												<button
-													key={model.modelId}
 													type="button"
-													onClick={() =>
-														setSelected({ providerId: provider.id, modelId: model.modelId })
-													}
-													className="flex w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+													aria-expanded={!isCollapsed}
+													onClick={() => toggleGroup(provider.id)}
+													className="flex w-full items-center gap-1 rounded-md px-3 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 												>
-													{model.providerModelId}
+													{isCollapsed ? (
+														<ChevronRight className="size-3.5 shrink-0" />
+													) : (
+														<ChevronDown className="size-3.5 shrink-0" />
+													)}
+													{provider.name}
 												</button>
-											))}
-										</div>
-									))}
+												{!isCollapsed &&
+													matchingModels.map((model) => (
+														<button
+															key={model.modelId}
+															type="button"
+															onClick={() =>
+																setSelected({
+																	providerId: provider.id,
+																	modelId: model.modelId,
+																})
+															}
+															className="flex w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+														>
+															{model.providerModelId}
+														</button>
+													))}
+											</div>
+										);
+									})}
 								</div>
 							)}
 						</div>

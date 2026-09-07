@@ -18,7 +18,7 @@ import {
 	useVirtualModels,
 } from "@/hooks/use-virtual-models";
 import { VIRTUAL_MODELS_PAGE } from "@/lib/pages";
-import { Plus, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -39,6 +39,8 @@ export default function VirtualModelsPage() {
 	} | null>(null);
 	const [search, setSearch] = useState("");
 	const [searchOpen, setSearchOpen] = useState(false);
+	/** 折叠的搜索结果虚拟模型分组（virtualModelId 集合）；默认空 = 全展开。 */
+	const [collapsedModels, setCollapsedModels] = useState<ReadonlySet<number>>(new Set());
 	const searchRef = useRef<HTMLDivElement>(null);
 
 	const { data: virtualModels, isLoading, isError, refetch } = useVirtualModels();
@@ -77,6 +79,18 @@ export default function VirtualModelsPage() {
 			return matchingItems.length > 0 ? [{ virtualModel: vm, items: matchingItems }] : [];
 		});
 	}, [search, virtualModels]);
+
+	const toggleGroup = (virtualModelId: number) => {
+		setCollapsedModels((prev) => {
+			const next = new Set(prev);
+			if (next.has(virtualModelId)) {
+				next.delete(virtualModelId);
+			} else {
+				next.add(virtualModelId);
+			}
+			return next;
+		});
+	};
 
 	useEffect(() => {
 		const closeSearch = (event: PointerEvent) => {
@@ -143,30 +157,47 @@ export default function VirtualModelsPage() {
 								</p>
 							) : (
 								<div className="space-y-3" data-testid="virtual-model-search-results">
-									{searchGroups.map(({ virtualModel, items }) => (
-										<div
-											key={virtualModel.virtualModelId}
-											data-testid={`virtual-model-search-group-${virtualModel.virtualModelId}`}
-										>
-											<p className="px-3 py-1 text-xs font-medium text-muted-foreground">
-												{virtualModel.displayId}
-											</p>
-											{items.map((item) => (
+									{searchGroups.map(({ virtualModel, items }) => {
+										const isCollapsed = collapsedModels.has(virtualModel.virtualModelId);
+										return (
+											<div
+												key={virtualModel.virtualModelId}
+												data-testid={`virtual-model-search-group-${virtualModel.virtualModelId}`}
+											>
 												<button
-													key={item.virtualModelItemId}
 													type="button"
-													onClick={() => setDetail({ virtualModel, item })}
-													className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+													aria-expanded={!isCollapsed}
+													onClick={() => toggleGroup(virtualModel.virtualModelId)}
+													className="flex w-full items-center gap-1 rounded-md px-3 py-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
 												>
-													<MidEllipsis text={item.providerModelId} className="min-w-0 font-mono" />
-													<MidEllipsis
-														text={item.providerName}
-														className="shrink-0 text-xs text-muted-foreground"
-													/>
+													{isCollapsed ? (
+														<ChevronRight className="size-3.5 shrink-0" />
+													) : (
+														<ChevronDown className="size-3.5 shrink-0" />
+													)}
+													{virtualModel.displayId}
 												</button>
-											))}
-										</div>
-									))}
+												{!isCollapsed &&
+													items.map((item) => (
+														<button
+															key={item.virtualModelItemId}
+															type="button"
+															onClick={() => setDetail({ virtualModel, item })}
+															className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+														>
+															<MidEllipsis
+																text={item.providerModelId}
+																className="min-w-0 font-mono"
+															/>
+															<MidEllipsis
+																text={item.providerName}
+																className="shrink-0 text-xs text-muted-foreground"
+															/>
+														</button>
+													))}
+											</div>
+										);
+									})}
 								</div>
 							)}
 						</div>
