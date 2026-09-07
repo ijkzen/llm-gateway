@@ -193,7 +193,7 @@ export function ProviderModelDetailDialog({
 						<DialogTitle className="min-w-0">
 							<Link
 								to={`/models/${providerId}/${encodeURIComponent(model.providerModelId)}/overview`}
-								className="group flex min-w-0 items-center justify-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60 sm:justify-start"
+								className="group inline-flex max-w-full min-w-0 items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
 								title={t("providerModels.viewModelOverview", { model: model.providerModelId })}
 							>
 								<MidEllipsis text={model.providerModelId} className="min-w-0" />

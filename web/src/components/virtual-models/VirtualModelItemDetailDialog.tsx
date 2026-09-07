@@ -74,7 +74,7 @@ export function VirtualModelItemDetailDialog({
 					<DialogTitle className="min-w-0">
 						<Link
 							to={`/models/${currentItem.providerId}/${encodeURIComponent(currentItem.providerModelId)}/overview`}
-							className="group flex min-w-0 items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
+							className="group inline-flex max-w-full min-w-0 items-center gap-0.5 rounded-md px-1 py-0.5 transition-colors hover:bg-muted/60"
 							title={t("providerModels.viewModelOverview", {
 								model: currentItem.providerModelId,
 							})}
