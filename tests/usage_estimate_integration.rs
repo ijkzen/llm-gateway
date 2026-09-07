@@ -134,22 +134,23 @@ async fn seed_usage_cache(db: &DatabaseConnection, provider_id: i32, resets_at_m
     .unwrap();
 }
 
-/// 可预估：weekly 窗口已过去时段内的每个相对天桶都有请求数据，比例 0.5。
+/// 可预估：weekly 窗口已完整过去的整天每天都有请求数据，比例 0.5。
 ///
-/// resets_at = now + 4 天 + 16 小时（不对齐 UTC 日边界），窗口起点 =
-/// resets_at − 7 天 = now − 3 天 + 16 小时。已过去时长 = 3 天 − 16 小时，
-/// 相对口径下应覆盖 ceil(≈2.33) = 3 个整天。旧实现按 UTC 自然日分桶时，
-/// 窗口起点落在 UTC 16:00 会被折算到前一自然日、多算应覆盖天数而误判缺口。
+/// resets_at = now + 3 天 + 16 小时（不对齐 UTC 日边界），窗口起点 =
+/// resets_at − 7 天 = now − 4 天 + 16 小时。已过去时长 = 4 天 − 16 小时，
+/// 已完整过去的整天 = 3（进行中的不满一天不计入应覆盖）。请求覆盖
+/// 相对桶 rel0/1/2 各一条。旧实现按 UTC 自然日分桶时，窗口起点落在
+/// UTC 16:00 会被折算到前一自然日、多算应覆盖天数而误判缺口。
 #[tokio::test]
 async fn test_estimate_full_coverage() {
     let (app, db) = setup_app().await;
     seed_provider(&db, 1, "sub-provider", 1).await;
     let now = chrono::Utc::now().timestamp_millis();
-    let resets_at = now + 4 * DAY_MS + 16 * 3_600_000;
+    let resets_at = now + 3 * DAY_MS + 16 * 3_600_000;
     seed_usage_cache(&db, 1, resets_at).await;
 
-    let window_start = resets_at - 7 * DAY_MS; // = now − 3 天 + 16 小时
-    // 已过去时段的 3 个相对天桶（0/1/2）各放一条，落在 UTC 日边界两侧以验证
+    let window_start = resets_at - 7 * DAY_MS; // = now − 4 天 + 16 小时
+    // 已完整过去的 3 个相对天桶（0/1/2）各放一条，落在 UTC 日边界两侧以验证
     // 相对分桶不被 UTC 自然日干扰。
     for day in 0..3 {
         seed_request(
@@ -169,7 +170,7 @@ async fn test_estimate_full_coverage() {
     assert_eq!(data["window"], "weekly");
     assert_eq!(
         data["estimatable"], true,
-        "已过去时段完整覆盖应可预估：{data}"
+        "已完整过去的整天覆盖完整应可预估：{data}"
     );
     // 已用 token = 3 * 100 = 300；比例 0.5 → 预估总量 600。
     assert_eq!(data["usedTokens"], 300);
@@ -178,17 +179,17 @@ async fn test_estimate_full_coverage() {
     assert_eq!(data["totalDays"], 3);
 }
 
-/// 覆盖缺口：已过去时段内的相对天桶只有 2 天有数据（应覆盖 3 天）→ 无法预估。
+/// 覆盖缺口：已完整过去的相对天桶缺一个（应覆盖 3 天、只有 2 天有数据）→ 无法预估。
 #[tokio::test]
 async fn test_estimate_gap_coverage_not_estimatable() {
     let (app, db) = setup_app().await;
     seed_provider(&db, 1, "sub-provider", 1).await;
     let now = chrono::Utc::now().timestamp_millis();
-    let resets_at = now + 4 * DAY_MS + 16 * 3_600_000;
+    let resets_at = now + 3 * DAY_MS + 16 * 3_600_000;
     seed_usage_cache(&db, 1, resets_at).await;
 
-    // 已过去 3 个相对天桶中只有 2 个有数据（缺第 3 个）。
-    let window_start = resets_at - 7 * DAY_MS; // = now − 3 天 + 16 小时
+    // 已完整过去的 3 个相对天桶中只有 2 个有数据（缺 rel2 —— 一个完整过去的天）。
+    let window_start = resets_at - 7 * DAY_MS; // = now − 4 天 + 16 小时
     for day in 0..2 {
         seed_request(
             &db,

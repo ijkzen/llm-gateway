@@ -959,14 +959,14 @@ async fn get_provider_usage_estimate(
     let used_tokens: i64 = row.try_get("", "used_tokens").unwrap_or(0);
     let covered_days: i64 = row.try_get("", "covered_days").unwrap_or(0);
 
-    // 覆盖检查：只要求「已过去的时段」每天都有请求数据。
-    // 窗口终点可能在未来（如本周还没结束），未来的天数不应计入应覆盖天数，
-    // 否则会把「未来还没发生的请求」误判为数据缺口。
-    // 应覆盖天数 = 已过去时段按相对窗口起点的整天向上取整，与 covered_days
-    // 的相对分桶口径一致：窗口起点不在 UTC 日边界时（如 16:00）也不会被
-    // 折算成跨两个自然日。
+    // 覆盖检查：只要求「已完整过去的整天」每天都有请求数据。
+    // 进行中的最后一段（不足一天）允许为空——窗口起点时刻之后尚未来流量
+    // 属正常（如请求集中在每天窗口起点时刻之前），把这一段向上取整成整天
+    // 会把「今天刚开始、还没有请求」误判为数据缺口（SenseNova 回归）。
+    // covered_days 的相对分桶以整天为界，应覆盖天数取已过去时段的整天数
+    // （向下取整）与之对齐；不足一天时按 1 天兜底（开窗初期只要求当天有数据）。
     let elapsed_ms = elapsed_end - window_start;
-    let elapsed_days = (elapsed_ms + DAY_MS - 1) / DAY_MS;
+    let elapsed_days = elapsed_ms / DAY_MS;
     let total_days = elapsed_days.max(1);
     let covered = covered_days >= total_days;
 
