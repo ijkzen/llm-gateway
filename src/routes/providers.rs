@@ -917,12 +917,15 @@ async fn get_provider_usage_estimate(
     let window_end = qw.resets_at.map(|t| t.timestamp_millis()).unwrap_or(now_ms);
     let window_start = window_end - window_len_ms;
 
-    // 请求表统计：已过去时段内该供应商成功请求的 token 总量 + 覆盖天数（按天分桶）。
+    // 请求表统计：已过去时段内该供应商成功请求的 token 总量 + 覆盖天数。
     // 统计上限取 min(窗口终点, now)：未来时段不应计入已用 token 与覆盖检查。
+    // 覆盖天数按「距窗口起点的相对天」分桶，而不是 UTC 自然日——窗口是厂商定义的
+    // 重置周期，起点不一定落在 UTC 日边界（如东八区 24:00 = UTC 16:00），用自然日
+    // 分桶会把不足一天的窗口误判成横跨两个日桶、多算应覆盖天数。
     let elapsed_end = window_end.min(now_ms);
     let sql = format!(
         "SELECT COALESCE(SUM(r.total_tokens), 0) AS used_tokens, \
-                COUNT(DISTINCT r.start_time / {DAY_MS}) AS covered_days \
+                COUNT(DISTINCT (r.start_time - {window_start}) / {DAY_MS}) AS covered_days \
          FROM request r \
          WHERE r.provider_id = ? AND r.success = 1 \
            AND r.start_time >= ? AND r.start_time < ?"
@@ -952,9 +955,11 @@ async fn get_provider_usage_estimate(
     // 覆盖检查：只要求「已过去的时段」每天都有请求数据。
     // 窗口终点可能在未来（如本周还没结束），未来的天数不应计入应覆盖天数，
     // 否则会把「未来还没发生的请求」误判为数据缺口。
-    // 应覆盖天数按「整数天分桶」对齐 covered_days 的统计口径：
-    // 从 window_start 所在桶到 elapsed_end 所在桶的桶数（含两端）。
-    let elapsed_days = elapsed_end / DAY_MS - window_start / DAY_MS + 1;
+    // 应覆盖天数 = 已过去时段按相对窗口起点的整天向上取整，与 covered_days
+    // 的相对分桶口径一致：窗口起点不在 UTC 日边界时（如 16:00）也不会被
+    // 折算成跨两个自然日。
+    let elapsed_ms = elapsed_end - window_start;
+    let elapsed_days = (elapsed_ms + DAY_MS - 1) / DAY_MS;
     let total_days = elapsed_days.max(1);
     let covered = covered_days >= total_days;
 

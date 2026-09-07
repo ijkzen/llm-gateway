@@ -93,6 +93,11 @@ async fn seed_request(
 }
 
 /// 写入用量缓存（weekly 窗口：used=50, limit=100，resets_at 指定）。
+///
+/// resets_at 故意不落在 UTC 日边界（= now + 7 天 + 16 小时），使窗口起点
+/// （resets_at − 7 天）同样偏离 UTC 日边界——复现生产 provider 26 的
+/// 周窗口形态（东八区 24:00 重置 = UTC 16:00）。旧实现按 UTC 自然日分桶会把
+/// 刚开窗不足一天的时段误判成横跨两个日桶。
 async fn seed_usage_cache(db: &DatabaseConnection, provider_id: i32, resets_at_ms: i64) {
     let now = chrono::Utc::now();
     let usage_json = json!({
@@ -129,19 +134,23 @@ async fn seed_usage_cache(db: &DatabaseConnection, provider_id: i32, resets_at_m
     .unwrap();
 }
 
-/// 可预估：weekly 窗口已过去的天数每天都有请求数据，比例 0.5。
+/// 可预估：weekly 窗口已过去时段内的每个相对天桶都有请求数据，比例 0.5。
+///
+/// resets_at = now + 4 天 + 16 小时（不对齐 UTC 日边界），窗口起点 =
+/// resets_at − 7 天 = now − 3 天 + 16 小时。已过去时长 = 3 天 − 16 小时，
+/// 相对口径下应覆盖 ceil(≈2.33) = 3 个整天。旧实现按 UTC 自然日分桶时，
+/// 窗口起点落在 UTC 16:00 会被折算到前一自然日、多算应覆盖天数而误判缺口。
 #[tokio::test]
 async fn test_estimate_full_coverage() {
     let (app, db) = setup_app().await;
     seed_provider(&db, 1, "sub-provider", 1).await;
-    // 窗口 = [now-3天, now+4天]（resets_at 在未来 4 天，窗口起点 = now-3 天）。
-    // 已过去区间 = [now-3天, now]，共 4 天。
     let now = chrono::Utc::now().timestamp_millis();
-    let resets_at = now + 4 * DAY_MS;
+    let resets_at = now + 4 * DAY_MS + 16 * 3_600_000;
     seed_usage_cache(&db, 1, resets_at).await;
 
-    let window_start = resets_at - 7 * DAY_MS; // = now - 3 天
-    // 已过去的 4 个整数天桶（now-3天 .. now）各有一条数据。
+    let window_start = resets_at - 7 * DAY_MS; // = now − 3 天 + 16 小时
+    // 已过去时段的 3 个相对天桶（0/1/2）各放一条，落在 UTC 日边界两侧以验证
+    // 相对分桶不被 UTC 自然日干扰。
     for day in 0..3 {
         seed_request(
             &db,
@@ -152,9 +161,6 @@ async fn test_estimate_full_coverage() {
         )
         .await;
     }
-    // 第 4 个桶（now 所在的 UTC 天桶）的数据：now-1ms 恒与 now 同桶且早于
-    // elapsed_end（=now）；不能用 now-1h——UTC 午夜后 1 小时内会掉进前一天的桶。
-    seed_request(&db, "r-recent", 1, now - 1, 200).await;
 
     let (status, body) = send_get(&app, "/api/providers/1/usage/estimate").await;
     assert_eq!(status, StatusCode::OK);
@@ -165,31 +171,30 @@ async fn test_estimate_full_coverage() {
         data["estimatable"], true,
         "已过去时段完整覆盖应可预估：{data}"
     );
-    // 已用 token = 3*100 + 200 = 500；比例 0.5 → 预估总量 1000。
-    assert_eq!(data["usedTokens"], 500);
-    assert_eq!(data["estimatedTotalTokens"], 1000);
-    // 应覆盖天数 = 已过去天数 = 4（而非整个窗口 7 天）。
-    assert_eq!(data["coveredDays"], 4);
-    assert_eq!(data["totalDays"], 4);
+    // 已用 token = 3 * 100 = 300；比例 0.5 → 预估总量 600。
+    assert_eq!(data["usedTokens"], 300);
+    assert_eq!(data["estimatedTotalTokens"], 600);
+    assert_eq!(data["coveredDays"], 3);
+    assert_eq!(data["totalDays"], 3);
 }
 
-/// 覆盖缺口：已过去时段内只有 3 天数据（应覆盖 4 天）→ 无法预估。
+/// 覆盖缺口：已过去时段内的相对天桶只有 2 天有数据（应覆盖 3 天）→ 无法预估。
 #[tokio::test]
 async fn test_estimate_gap_coverage_not_estimatable() {
     let (app, db) = setup_app().await;
     seed_provider(&db, 1, "sub-provider", 1).await;
     let now = chrono::Utc::now().timestamp_millis();
-    let resets_at = now + 4 * DAY_MS;
+    let resets_at = now + 4 * DAY_MS + 16 * 3_600_000;
     seed_usage_cache(&db, 1, resets_at).await;
 
-    // 已过去 4 天中只有 3 天有数据（缺第 4 天）。
-    let window_start = resets_at - 7 * DAY_MS; // = now - 3 天
-    for day in 0..3 {
+    // 已过去 3 个相对天桶中只有 2 个有数据（缺第 3 个）。
+    let window_start = resets_at - 7 * DAY_MS; // = now − 3 天 + 16 小时
+    for day in 0..2 {
         seed_request(
             &db,
             &format!("r-{day}"),
             1,
-            window_start + day * DAY_MS,
+            window_start + day * DAY_MS + 1000,
             100,
         )
         .await;
@@ -199,8 +204,8 @@ async fn test_estimate_gap_coverage_not_estimatable() {
     assert_eq!(status, StatusCode::OK);
     let data = &body["data"];
     assert_eq!(data["estimatable"], false, "覆盖缺口应无法预估：{data}");
-    assert_eq!(data["coveredDays"], 3);
-    assert_eq!(data["totalDays"], 4);
+    assert_eq!(data["coveredDays"], 2);
+    assert_eq!(data["totalDays"], 3);
     assert!(
         data["estimatedTotalTokens"].is_null(),
         "无预估值时该字段为 null"
