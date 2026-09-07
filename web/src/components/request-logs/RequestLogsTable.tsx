@@ -451,7 +451,10 @@ export function RequestLogsTable() {
 								setPage(1);
 							}}
 						>
-							<SelectTrigger className="w-[100px]" aria-label={t("requestLogs.filterByStatus")}>
+							<SelectTrigger
+								className="w-[100px] border-white/70"
+								aria-label={t("requestLogs.filterByStatus")}
+							>
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
