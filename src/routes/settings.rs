@@ -56,7 +56,8 @@ struct UpdateSettingRequest {
 /// Validates `value` against the setting's declared type. String (and
 /// unknown legacy type values) accept anything; `language` and `timezone`
 /// get extra value-level validation on top.
-fn validate_setting_value(
+/// 供备份导入复用：恢复的设置值必须与设置页同口径校验。
+pub(crate) fn validate_setting_value(
     setting_type: i32,
     key: &str,
     value: &str,

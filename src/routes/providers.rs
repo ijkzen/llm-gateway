@@ -130,7 +130,12 @@ struct UpdateProviderRequest {
 }
 
 /// 校验协议类型与付费模式是否在合法枚举范围内。
-fn validate_protocol_billing(protocol_type: i32, billing_mode: i32, lang: Lang) -> Option<String> {
+/// 备份导入复用：备份中的供应商/模型取值须与创建接口同口径。
+pub(crate) fn validate_protocol_billing(
+    protocol_type: i32,
+    billing_mode: i32,
+    lang: Lang,
+) -> Option<String> {
     if !(0..=3).contains(&protocol_type) {
         return Some(
             lang.tr("协议类型不合法", "invalid protocol type")
@@ -227,7 +232,8 @@ pub(crate) fn validate_proxy(proxy_enabled: bool, proxy_addr: &str, lang: Lang) 
 
 /// extra 校验：必须是合法 JSON 对象；当 usage 开启时，模板中值为空的
 /// 推荐字段必须全部填写（允许 `usage`/`usage_type` 标记和后端派生的 `jwt` 为空）。
-fn validate_extra(extra: &str, lang: Lang) -> Option<String> {
+/// 备份导入复用：恢复的 extra 须与创建接口同口径。
+pub(crate) fn validate_extra(extra: &str, lang: Lang) -> Option<String> {
     let parsed = match serde_json::from_str::<Value>(extra) {
         Ok(Value::Object(map)) => map,
         Ok(_) => {
@@ -286,7 +292,8 @@ fn validate_extra(extra: &str, lang: Lang) -> Option<String> {
 }
 
 /// 校验字段值是否为合法 JSON（允许 `{}` 空对象）。
-fn validate_json_field(label: &str, value: &str, lang: Lang) -> Option<String> {
+/// 备份导入复用：custom_header 等 JSON 字符串须与创建接口同口径。
+pub(crate) fn validate_json_field(label: &str, value: &str, lang: Lang) -> Option<String> {
     if serde_json::from_str::<Value>(value).is_err() {
         Some(if lang == Lang::En {
             format!("{label} is not valid JSON")

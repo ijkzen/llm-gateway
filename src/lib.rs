@@ -1,6 +1,7 @@
 pub mod app_settings;
 pub mod auth;
 pub mod availability;
+pub mod backup;
 pub mod config;
 pub mod cron;
 pub mod crypto;

@@ -3,6 +3,7 @@ import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { SearchInput } from "@/components/search-input";
+import { BackupDialog } from "@/components/settings/BackupDialog";
 import { ChangePasswordDialog } from "@/components/settings/ChangePasswordDialog";
 import { JsonSettingEditDialog } from "@/components/settings/JsonSettingEditDialog";
 import { SettingDeleteDialog } from "@/components/settings/SettingDeleteDialog";
@@ -20,7 +21,7 @@ import {
 import { type Setting, useSettings } from "@/hooks/use-settings";
 import { SETTING_TYPES } from "@/lib/constants";
 import { SETTINGS_PAGE } from "@/lib/pages";
-import { KeyRound } from "lucide-react";
+import { ArchiveRestore, KeyRound } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -29,6 +30,7 @@ export default function SettingsPage() {
 	const [editingSetting, setEditingSetting] = useState<Setting | null>(null);
 	const [deletingSetting, setDeletingSetting] = useState<Setting | null>(null);
 	const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+	const [backupOpen, setBackupOpen] = useState(false);
 	const [searchQuery, setSearchQuery] = useState("");
 	const [typeFilter, setTypeFilter] = useState("all");
 
@@ -69,10 +71,16 @@ export default function SettingsPage() {
 	return (
 		<div className="space-y-6">
 			<PageHeader icon={SETTINGS_PAGE.icon} title={t(SETTINGS_PAGE.titleKey)}>
-				<Button variant="outline" size="sm" onClick={() => setChangePasswordOpen(true)}>
-					<KeyRound className="size-4" />
-					{t("settings.changePassword")}
-				</Button>
+				<div className="flex items-center gap-2">
+					<Button variant="outline" size="sm" onClick={() => setBackupOpen(true)}>
+						<ArchiveRestore className="size-4" />
+						{t("backup.title")}
+					</Button>
+					<Button variant="outline" size="sm" onClick={() => setChangePasswordOpen(true)}>
+						<KeyRound className="size-4" />
+						{t("settings.changePassword")}
+					</Button>
+				</div>
 			</PageHeader>
 
 			<DataTableToolbar>
@@ -124,6 +132,8 @@ export default function SettingsPage() {
 			/>
 
 			<ChangePasswordDialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen} />
+
+			<BackupDialog open={backupOpen} onOpenChange={setBackupOpen} />
 		</div>
 	);
 }
