@@ -657,3 +657,58 @@ async fn agentrouter_history_backfill_is_idempotent_and_preserves_user_values() 
     )
     .await;
 }
+
+#[tokio::test]
+async fn tokenrhythm_history_backfill_is_idempotent_and_preserves_user_values() {
+    temp_env::async_with_vars(
+        [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
+        async {
+            let db = setup_db().await.unwrap();
+            // 先 upsert 让 TokenRhythm 模板入库（后续走 update 分支）。
+            upsert_templates(&db).await.unwrap();
+
+            // 模拟模板引入前手动创建的历史 provider：缺 cookie 键，
+            // 且已手动填过部分凭据（回填不得覆盖）。
+            insert_provider_with_billing(
+                &db,
+                "TokenRhythm-历史",
+                "https://tokenrhythm.studio/v1",
+                r#"{"custom":"keep","cookie_cloud_server":"https://my.cc.example"}"#,
+                0,
+            )
+            .await;
+            // 其它 host 的 provider 不受影响。
+            insert_provider(
+                &db,
+                "TokenRhythm-其他host",
+                "https://sub.tokenrhythm.studio/v1",
+                r#"{"own":1}"#,
+            )
+            .await;
+
+            // 再次 upsert（模板走 update 分支），历史 provider 仍应被无条件对齐。
+            upsert_templates(&db).await.unwrap();
+            upsert_templates(&db).await.unwrap();
+
+            let extra = provider_extra(&db, "TokenRhythm-历史").await;
+            assert_eq!(
+                extra["cookie_cloud_server"], "https://my.cc.example",
+                "已填的 cookie_cloud_server 不被覆盖"
+            );
+            assert_eq!(extra["uuid"], "");
+            assert_eq!(extra["password"], "");
+            assert_eq!(extra["domain"], "");
+            assert_eq!(extra["usage"], true);
+            assert_eq!(extra["usage_type"], 0);
+            assert_eq!(extra["custom"], "keep", "未知键保留");
+
+            let other = provider_extra(&db, "TokenRhythm-其他host").await;
+            assert_eq!(
+                other,
+                serde_json::json!({ "own": 1 }),
+                "子域 sub.tokenrhythm.studio 不动（仅精确 host tokenrhythm.studio 回填）"
+            );
+        },
+    )
+    .await;
+}

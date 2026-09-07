@@ -209,6 +209,7 @@ fn fetcher_for(host: &str, path: &str) -> Option<Fetcher> {
         "token.sensenova.cn" | "platform.sensenova.cn" => Fetcher::Sensenova,
         "api.siliconflow.cn" => Fetcher::SiliconFlow,
         "agentrouter.org" => Fetcher::AgentRouter,
+        "tokenrhythm.studio" => Fetcher::TokenRhythm,
         _ if crate::provider_template::is_krill_host(host) => Fetcher::Krill,
         _ => return None,
     })
@@ -237,6 +238,7 @@ enum Fetcher {
     Sensenova,
     SiliconFlow,
     AgentRouter,
+    TokenRhythm,
     Krill,
 }
 
@@ -248,7 +250,7 @@ impl Fetcher {
     ) -> Result<FetchOutput, UsageError> {
         use fetchers::{
             agentrouter, alibaba, api_key, balance, cloud_balance, copilot, siliconflow, stepfun,
-            volcengine, xiaomi,
+            tokenrhythm, volcengine, xiaomi,
         };
         match self {
             Fetcher::OpenCodeGo => api_key::fetch_opencode_go(http, creds).await,
@@ -308,6 +310,7 @@ impl Fetcher {
             Fetcher::Sensenova => Err(UsageError::Unsupported),
             Fetcher::SiliconFlow => siliconflow::fetch_siliconflow_wallets(http, creds).await,
             Fetcher::AgentRouter => agentrouter::fetch_agentrouter(http, creds).await,
+            Fetcher::TokenRhythm => tokenrhythm::fetch_tokenrhythm_wallet(http, creds).await,
             // Krill 由 provider_template 模板覆盖、以 JWT 动态签发访问，无独立 fetcher。
             Fetcher::Krill => Err(UsageError::Unsupported),
         }
@@ -352,6 +355,8 @@ mod tests {
             ("api.siliconflow.com", false),
             ("agentrouter.org", true),
             ("agentrouter.org.evil.com", false),
+            ("tokenrhythm.studio", true),
+            ("sub.tokenrhythm.studio", false),
             ("api.302.ai", false),
             ("dashscope.aliyuncs.com.evil.com", false),
         ] {

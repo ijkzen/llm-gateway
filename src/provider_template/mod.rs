@@ -59,6 +59,7 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
     backfill_sensenova_provider_extra(db).await?;
     backfill_siliconflow_provider_extra(db).await?;
     backfill_agentrouter_provider_extra(db).await?;
+    backfill_tokenrhythm_provider_extra(db).await?;
     tracing::info!("Provider templates seeded: {inserted} inserted, {updated} updated");
     Ok(inserted + updated)
 }
@@ -86,6 +87,11 @@ pub(crate) fn is_siliconflow_host(host: &str) -> bool {
 /// AgentRouter（agentrouter.org，New-API 公益站）用量查询 host。
 pub(crate) fn is_agentrouter_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("agentrouter.org")
+}
+
+/// TokenRhythm（tokenrhythm.studio，「基元律动」自研路由站）用量查询 host。
+pub(crate) fn is_tokenrhythm_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("tokenrhythm.studio")
 }
 
 /// OpenCode 上游 host（模板含 OpenCode Zen / OpenCode Go 两个入口，同域）。
@@ -297,6 +303,27 @@ async fn backfill_agentrouter_provider_extra(db: &DatabaseConnection) -> Result<
             "domain",
             "new_api_user",
         ] {
+            extra.entry(key.to_string()).or_insert_with(|| "".into());
+        }
+        extra.entry("usage".to_string()).or_insert(true.into());
+        extra.insert("usage_type".to_string(), provider.billing_mode.into());
+        *extra != before
+    })
+    .await
+    .map(|_| ())
+}
+
+/// 每次启动幂等对齐历史 TokenRhythm Provider 的凭据结构与用量开关。
+///
+/// TokenRhythm 模板本次新增，但生产已有手动创建的 provider（base_url host
+/// tokenrhythm.studio）。模板首次插入会触发 backfill_provider_extra，这里仍
+/// 仿 AgentRouter/Krill/SiliconFlow 每次启动无条件对齐，防模板已存在走
+/// update 分支（不触发首次插入回填）时历史 provider 漏补。只补缺、不覆盖：
+/// 已填的 cookie_cloud_server/uuid/password/domain 一律保留。
+async fn backfill_tokenrhythm_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
+    backfill_host_extras(db, "TokenRhythm", is_tokenrhythm_host, |extra, provider| {
+        let before = extra.clone();
+        for key in ["cookie_cloud_server", "uuid", "password", "domain"] {
             extra.entry(key.to_string()).or_insert_with(|| "".into());
         }
         extra.entry("usage".to_string()).or_insert(true.into());

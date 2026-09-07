@@ -1144,6 +1144,14 @@ pub const TEMPLATES: &[Template] = &[
         extra: "{}",
     },
     Template {
+        name: "TokenRhythm",
+        base_url: "https://tokenrhythm.studio/v1",
+        protocol_type: 0,
+        billing_mode: 0,
+        // 用量查询：CookieCloud 登录态（tokenrhythm.studio 钱包接口）。
+        extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 0}",
+    },
+    Template {
         name: "TrustedRouter",
         base_url: "https://api.trustedrouter.com/v1",
         protocol_type: 0,

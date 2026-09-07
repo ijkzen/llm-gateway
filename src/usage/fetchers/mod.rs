@@ -13,6 +13,7 @@ pub mod krill;
 pub mod sensenova;
 pub mod siliconflow;
 pub mod stepfun;
+pub mod tokenrhythm;
 pub mod volcengine;
 pub mod xiaomi;
 
