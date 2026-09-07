@@ -239,7 +239,7 @@ function ModelLegendContent({
 		return null;
 	}
 	return (
-		<div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 pt-3">
+		<div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 pt-2">
 			{payload.map((item) => (
 				<ModelLegendItem
 					key={item.value}
@@ -276,7 +276,7 @@ export function ModelPieChart({ data, formatValue, kind = "calls" }: ModelChartP
 	const activeIndex = ranked.findIndex((item) => item.label === activeLabel);
 
 	return (
-		<ChartContainer config={toPieConfig(ranked)} className="mx-auto h-[260px] w-full">
+		<ChartContainer config={toPieConfig(ranked)} className="mx-auto h-[290px] w-full">
 			<PieChart>
 				<ChartTooltip
 					content={
