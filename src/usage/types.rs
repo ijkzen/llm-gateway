@@ -172,24 +172,31 @@ impl UsageData {
         }
     }
 
-    /// 订阅制「当前是否可用」判定：全部厂商已提供的窗口剩余 > 0 → true；
-    /// 任一已提供窗口剩余为 0 → false；无任何可用窗口数据（无法判定）→ None。
-    /// 调用方在 None 时必须保持原状，避免上游抖动误伤。
-    /// （用量门控 `src/usage/persist.rs` 与 LB 选路 `src/proxy/mod.rs` 共用。）
+    /// 订阅制「当前是否可用」判定：全部可推导剩余 > 0 → true；任一可推导窗口
+    /// 剩余为 0 → false；无任何可推导窗口数据（无法判定）→ None。调用方在 None
+    /// 时必须保持原状，避免上游抖动误伤。available 但无法推导的窗口不计入判定
+    /// （无从判断耗尽）。逐层取最差走 [`Self::worst_window`]，与 FEFO 排序共用
+    /// 同一扫描实现，两口径一致性由 usage_rank 测试锁定。
     pub fn subscription_usable(&self) -> Option<bool> {
         if self.kind != UsageKind::Quota {
             return None;
         }
-        let mut saw_available = false;
+        let mut saw_derivable = false;
+        let mut kinds: Vec<WindowKind> = Vec::new();
         for window in &self.windows {
-            if let Some(p) = window.remaining_percent_value() {
-                saw_available = true;
-                if p <= 0.0 {
+            if !kinds.contains(&window.window) {
+                kinds.push(window.window);
+            }
+        }
+        for kind in kinds {
+            if let Some(window) = self.worst_window(kind) {
+                saw_derivable = true;
+                if window.remaining_percent_value().is_some_and(|p| p <= 0.0) {
                     return Some(false);
                 }
             }
         }
-        saw_available.then_some(true)
+        saw_derivable.then_some(true)
     }
 
     /// LB 比较用的主余额金额：取 fetcher 标记的 primary 条目；旧缓存数据无
@@ -214,6 +221,19 @@ impl UsageData {
         }
         let amount = self.primary_balance()?;
         Some(amount > 0.0)
+    }
+
+    /// 某窗口层的最差剩余窗口：同类窗口可能多条（如商汤各积分池独立产出），
+    /// 取剩余最少且可推导的那条参与判定；该层窗口全部不可用/无法推导 → None。
+    /// 额度耗尽判定（[`Self::subscription_usable`]）与 FEFO 排序
+    /// （`src/proxy/usage_rank.rs`）共用的同一扫描实现，两侧不再各自推导口径。
+    pub fn worst_window(&self, kind: WindowKind) -> Option<&QuotaWindow> {
+        self.windows
+            .iter()
+            .filter(|w| w.window == kind)
+            .filter_map(|w| w.remaining_percent_value().map(|p| (p, w)))
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(_, w)| w)
     }
 
     /// 返回 remaining_percent 已按 remaining_percent_value() 推导并取整的副本：
@@ -518,5 +538,82 @@ mod tests {
             balances: vec![],
         };
         assert_eq!(quota.balance_usable(), None);
+    }
+
+    #[test]
+    fn worst_window_takes_worst_remaining_of_kind() {
+        // 商汤式多池：同类窗口多条取最差剩余（5h 0% 那条）。
+        let data = UsageData {
+            provider_id: 1,
+            fetched_at: Utc::now(),
+            kind: UsageKind::Quota,
+            plan: None,
+            windows: vec![
+                QuotaWindow::from_remaining_percent(WindowKind::FiveHour, 90.0, None),
+                QuotaWindow::from_remaining_percent(WindowKind::FiveHour, 0.0, None),
+                QuotaWindow::from_remaining_percent(WindowKind::Weekly, 50.0, None),
+                QuotaWindow::unavailable(WindowKind::Monthly),
+            ],
+            balances: vec![],
+        };
+        assert_eq!(
+            data.worst_window(WindowKind::FiveHour)
+                .and_then(QuotaWindow::remaining_percent_value),
+            Some(0.0)
+        );
+        assert_eq!(
+            data.worst_window(WindowKind::Weekly)
+                .and_then(QuotaWindow::remaining_percent_value),
+            Some(50.0)
+        );
+        // 该层只有不可用窗口 → None（无从判定，不视为耗尽）。
+        assert!(data.worst_window(WindowKind::Monthly).is_none());
+        // 未提供的窗口层 → None。
+        assert!(data.worst_window(WindowKind::Daily).is_none());
+    }
+
+    #[test]
+    fn available_but_underivable_window_is_neutral_for_usable() {
+        // available=true 但 used/limit/percent 全缺 → 剩余无法推导：
+        // worst_window 与 subscription_usable 都对该窗口中立（不视为耗尽）。
+        let underivable = QuotaWindow {
+            window: WindowKind::Weekly,
+            available: true,
+            used_percent: None,
+            remaining_percent: None,
+            resets_at: None,
+            used: None,
+            limit: None,
+            unit: None,
+            label: None,
+        };
+        let data = UsageData {
+            provider_id: 1,
+            fetched_at: Utc::now(),
+            kind: UsageKind::Quota,
+            plan: None,
+            windows: vec![
+                QuotaWindow::from_remaining_percent(WindowKind::FiveHour, 80.0, None),
+                underivable.clone(),
+            ],
+            balances: vec![],
+        };
+        assert!(data.worst_window(WindowKind::Weekly).is_none());
+        assert_eq!(
+            data.subscription_usable(),
+            Some(true),
+            "5h 层可推导且未耗尽"
+        );
+
+        // 全部窗口都无法推导 → 无法判定（None），不是耗尽。
+        let all_underivable = UsageData {
+            provider_id: 2,
+            fetched_at: Utc::now(),
+            kind: UsageKind::Quota,
+            plan: None,
+            windows: vec![underivable],
+            balances: vec![],
+        };
+        assert_eq!(all_underivable.subscription_usable(), None);
     }
 }

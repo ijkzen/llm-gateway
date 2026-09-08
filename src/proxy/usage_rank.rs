@@ -10,7 +10,7 @@
 
 use std::cmp::Ordering;
 
-use crate::usage::types::{QuotaWindow, UsageData, WindowKind};
+use crate::usage::types::{UsageData, WindowKind};
 
 /// 订阅制窗口层序：从最短滚动窗口到最长。
 const QUOTA_LAYERS: [WindowKind; 4] = [
@@ -49,10 +49,11 @@ pub fn cmp_quota_deadline_priority(a: Option<&UsageData>, b: Option<&UsageData>)
     }
 }
 
-/// 该层是否有可用额度：窗口存在、剩余可推导且 > 0。多窗口取最差剩余口径
-/// （与额度门控 `subscription_usable` 一致：任一容器耗尽即视为该层无额度）。
+/// 该层是否有可用额度：该层窗口存在、剩余可推导且 > 0。多窗口取最差剩余口径
+/// （与额度门控一致：任一容器耗尽即视为该层无额度）；窗口扫描实现收敛在
+/// `UsageData::worst_window`（见 usage/types.rs），排序与判定共用同一访问器。
 fn has_quota(data: &UsageData, kind: WindowKind) -> bool {
-    worst_window(data, kind)
+    data.worst_window(kind)
         .and_then(|w| w.remaining_percent_value())
         .is_some_and(|p| p > 0.0)
 }
@@ -61,8 +62,8 @@ fn has_quota(data: &UsageData, kind: WindowKind) -> bool {
 /// 无 resets_at）→ 有者可判定者优先；都缺失判平（由调用方继续往更上层比较）。
 fn cmp_deadline(x: &UsageData, y: &UsageData, kind: WindowKind) -> Ordering {
     match (
-        worst_window(x, kind).and_then(|w| w.resets_at),
-        worst_window(y, kind).and_then(|w| w.resets_at),
+        x.worst_window(kind).and_then(|w| w.resets_at),
+        y.worst_window(kind).and_then(|w| w.resets_at),
     ) {
         (Some(xr), Some(yr)) => yr.cmp(&xr),
         (Some(_), None) => Ordering::Greater,
@@ -85,8 +86,8 @@ fn cmp_remaining_percent(x: &UsageData, y: &UsageData) -> Ordering {
 fn cmp_window(x: &UsageData, y: &UsageData, kind: WindowKind) -> Ordering {
     // 缺失/不可用的窗口视为平局（进入下一层比较），而不是判负：
     // 厂商不提供某窗口不代表该供应商更差（如 Kimi 无月窗）。
-    let xw = worst_window(x, kind);
-    let yw = worst_window(y, kind);
+    let xw = x.worst_window(kind);
+    let yw = y.worst_window(kind);
     let (Some(xw), Some(yw)) = (xw, yw) else {
         return Ordering::Equal;
     };
@@ -103,17 +104,6 @@ fn cmp_window(x: &UsageData, y: &UsageData, kind: WindowKind) -> Ordering {
         (Some(xr), Some(yr)) => yr.cmp(&xr),
         _ => Ordering::Equal,
     }
-}
-
-/// 同类窗口可能有多条（如商汤各积分池独立产出），取最差剩余的那条参与比较：
-/// 任一容器耗尽即接近不可用，与额度门控的逐窗口判定口径一致。
-fn worst_window(data: &UsageData, kind: WindowKind) -> Option<&QuotaWindow> {
-    data.windows
-        .iter()
-        .filter(|w| w.window == kind)
-        .filter_map(|w| w.remaining_percent_value().map(|p| (p, w)))
-        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal))
-        .map(|(_, w)| w)
 }
 
 /// 按量付费比较用金额（fetcher 标记的主余额字段）；非 balance 形态或无数据返回 0.0。
@@ -154,7 +144,7 @@ mod tests {
     }
 
     fn window(kind: WindowKind, remaining: f64) -> crate::usage::types::QuotaWindow {
-        QuotaWindow::from_remaining_percent(kind, remaining, None)
+        crate::usage::types::QuotaWindow::from_remaining_percent(kind, remaining, None)
     }
 
     fn window_reset_at(
@@ -162,7 +152,7 @@ mod tests {
         remaining: f64,
         resets_at: chrono::DateTime<chrono::Utc>,
     ) -> crate::usage::types::QuotaWindow {
-        QuotaWindow::from_remaining_percent(kind, remaining, Some(resets_at))
+        crate::usage::types::QuotaWindow::from_remaining_percent(kind, remaining, Some(resets_at))
     }
 
     fn quota(
@@ -515,5 +505,63 @@ mod tests {
             item.primary = false;
         }
         assert_eq!(balance_amount(Some(&legacy)), 10.0);
+    }
+
+    // ── 与额度门控口径一致性（防漂移回归） ──
+
+    /// 排序的逐层判定与 `subscription_usable` 对同一窗口矩阵给出一致结论：
+    /// 「全局可用」⇔「每一可推导窗口层都有额度」。available 但剩余无法推导的
+    /// 窗口（如 used/limit 均缺）不计入判定，两种口径对它一致地保持中立。
+    #[test]
+    fn layer_quota_verdict_consistent_with_subscription_usable() {
+        // weekly 为 available 但无法推导（无 used/limit/percent 字段）。
+        let underivable = crate::usage::types::QuotaWindow {
+            window: WindowKind::Weekly,
+            available: true,
+            used_percent: None,
+            remaining_percent: None,
+            resets_at: None,
+            used: None,
+            limit: None,
+            unit: None,
+            label: None,
+        };
+        let mut with_underivable = quota(5, Some(80.0), None, None).unwrap();
+        with_underivable.windows.push(underivable);
+
+        let fixtures: Vec<Option<UsageData>> = vec![
+            quota(1, Some(50.0), Some(50.0), Some(50.0)),
+            quota(2, Some(0.0), Some(50.0), Some(50.0)),
+            quota(3, Some(50.0), Some(0.0), None),
+            quota(4, Some(0.0), Some(0.0), Some(0.0)),
+            quota(5, Some(80.0), None, None),
+            quota(6, None, Some(20.0), None),
+            quota(7, Some(0.0), None, None),
+            Some(with_underivable),
+        ];
+        for data in fixtures {
+            let data = data.unwrap();
+            // 只把「能推导出剩余」的窗口层纳入对照：全局判定对无法推导的窗口中立。
+            let derivable_layers_all_have_quota = QUOTA_LAYERS
+                .iter()
+                .filter(|kind| data.worst_window(**kind).is_some())
+                .all(|kind| has_quota(&data, *kind));
+            assert_eq!(
+                data.subscription_usable() == Some(true),
+                derivable_layers_all_have_quota,
+                "provider {} 逐层判定与全局可用不一致",
+                data.provider_id
+            );
+        }
+    }
+
+    /// 商汤式多池（同类窗口多条、其一耗尽）在排序层与全局判定都视为无额度/不可用。
+    #[test]
+    fn duplicate_pool_worst_consistent_with_usable() {
+        let mut multi = quota(1, Some(90.0), Some(50.0), None).unwrap();
+        multi.windows.push(window(WindowKind::FiveHour, 0.0));
+        assert_eq!(multi.subscription_usable(), Some(false));
+        assert!(!has_quota(&multi, WindowKind::FiveHour));
+        assert!(has_quota(&multi, WindowKind::Weekly));
     }
 }

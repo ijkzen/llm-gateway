@@ -109,3 +109,7 @@ _Avoid_: 实时刷新、重查、二次确认
 **自动恢复探测 (Automatic Recovery Probe)**:
 对连续失败禁用的供应商定期执行的健康确认：可查询用量者须先确认仍有剩余，再通过一次真实模型请求验证；成功即解除连续失败禁用并恢复级联停用的虚拟模型条目。
 _Avoid_: 用量恢复、自动重试、半开
+
+**选路可用 (Traffic-Eligible)**:
+供应商「此刻能否参与选路」的只读判定，分两层：实体层 = 启用 ∧ 停用原因为 None（读侧统一经 availability 模块 `traffic_available` 谓词，调用点不再各自拼 `enable`/`disabled_reason` 组合；写入侧镜像不变式由该模块动作保证）；用量层 = 按付费模式经 `UsageData::subscription_usable` / `balance_usable` 判定，查不到用量（无法判定）视为可用避免上游抖动误伤。窗口级「同类取最差剩余」扫描收敛在 `UsageData::worst_window`，额度耗尽判定与 FEFO 排序共用，两口径一致性有测试锁定。
+_Avoid_: 熔断（状态变更动作，见连续失败禁用）、可用状态（裸称）
