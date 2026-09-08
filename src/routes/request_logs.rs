@@ -182,8 +182,10 @@ async fn list_request_logs(
         where_sql.push_str(" AND r.start_time >= ?");
         params.push(start.into());
     }
+    // end_time 为开区间下界（[start, end)），与 stats 各端点同一语义：
+    // 日志列表与数据面板对同一截止时刻给出相同过滤结果。
     if let Some(end) = query.end_time {
-        where_sql.push_str(" AND r.start_time <= ?");
+        where_sql.push_str(" AND r.start_time < ?");
         params.push(end.into());
     }
 
