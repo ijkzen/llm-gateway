@@ -78,7 +78,9 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
                 // SQLite 写操作是串行的，过长的 busy_timeout 会掩盖锁竞争。
                 .busy_timeout(Duration::from_secs(5))
                 .foreign_keys(true)
-                // 约 256 MB 页缓存，提升读性能。
+                // cache_size 负值按 KiB 计：-64000 ≈ 62.5 MiB/连接
+                // （max_connections 5 全活跃约 0.3GB，SQLite 逐连接生效，
+                // 此前注释误算为 256MB）。
                 .pragma("cache_size", "-64000")
                 // 临时表/排序全部走内存。
                 .pragma("temp_store", "2")
