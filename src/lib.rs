@@ -151,6 +151,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         recheck_gate: crate::proxy::failure_recheck::RecheckGate::default(),
         upstream_pool: crate::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
         settings: settings.clone(),
+        usage_mem: Default::default(),
     };
 
     // 用量刷新 handler：刷新全部已开启用量展示的供应商用量并落库、执行订阅

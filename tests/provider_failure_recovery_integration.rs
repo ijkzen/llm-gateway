@@ -157,6 +157,7 @@ async fn test_state() -> AppState {
             600,
         )),
         settings: llm_gateway::app_settings::AppSettings::default(),
+        usage_mem: Default::default(),
     }
 }
 

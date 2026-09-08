@@ -205,6 +205,7 @@ mod tests {
                 600,
             )),
             settings: crate::app_settings::AppSettings::default(),
+            usage_mem: Default::default(),
         }
     }
 

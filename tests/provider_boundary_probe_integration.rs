@@ -158,6 +158,7 @@ fn test_state(
             600,
         )),
         settings: Default::default(),
+        usage_mem: Default::default(),
     }
 }
 

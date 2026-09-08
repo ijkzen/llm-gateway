@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::usage::persist::read_usage_cache_many;
+
 /// 上游协议（provider.protocol_type）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
@@ -390,8 +392,9 @@ pub(crate) async fn rank_by_balance_with(
     members
 }
 
-/// 收集成员用量：10 分钟数据库缓存新鲜即用；缺失/过期并发真实抓取并落库，
-/// 抓取失败按无数据处理（排在本组末尾）。
+/// 收集成员用量：内存缓存 → 一次批量数据库读 → 单飞真实抓取 三层取数。
+/// 任一层的缓存新鲜口径一致（fetched_at 10 分钟）；抓取失败按无数据处理
+/// （排在本组末尾）。
 pub(crate) async fn resolve_usage_map(
     state: &AppState,
     members: &[Member],
@@ -403,24 +406,45 @@ pub(crate) async fn resolve_usage_map(
         .filter(|id| seen.insert(*id))
         .collect();
 
-    let mut map = HashMap::new();
-    let mut stale = Vec::new();
-    for id in provider_ids {
-        let cached = read_usage_cache(&state.db, id).await.ok().flatten();
-        if let Some(data) = cached {
-            map.insert(id, Some(data));
-        } else {
-            stale.push(id);
-        }
+    let mut map: HashMap<i32, Option<UsageData>> = HashMap::new();
+
+    // 第一层：内存缓存（命中免 DB 往返）。
+    let from_mem = state.usage_mem.read_many(&provider_ids).await;
+    for (id, data) in &from_mem {
+        map.insert(*id, Some(data.clone()));
     }
+    let missing: Vec<i32> = provider_ids
+        .iter()
+        .copied()
+        .filter(|id| !map.contains_key(id))
+        .collect();
+    if missing.is_empty() {
+        return map;
+    }
+
+    // 第二层：一次 `WHERE provider_id IN (...)` 批量读数据库缓存，直出回填内存。
+    let from_db = read_usage_cache_many(&state.db, &missing)
+        .await
+        .unwrap_or_default();
+    for (id, data) in &from_db {
+        map.insert(*id, Some(data.clone()));
+        state.usage_mem.store(data.clone()).await;
+    }
+    let stale: Vec<i32> = missing
+        .iter()
+        .copied()
+        .filter(|id| !map.contains_key(id))
+        .collect();
     if stale.is_empty() {
         return map;
     }
 
+    // 第三层：缺失/过期并发真实抓取（同 provider 单飞，成功回填内存 + 数据库）。
     let mut set = tokio::task::JoinSet::new();
     for id in stale {
+        let mem = state.usage_mem.clone();
         let db = state.db.clone();
-        set.spawn(async move { (id, fetch_and_store(&db, id).await.ok()) });
+        set.spawn(async move { (id, mem.fetch_shared(&db, id).await) });
     }
     while let Some(outcome) = set.join_next().await {
         if let Ok((id, data)) = outcome {

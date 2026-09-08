@@ -10,6 +10,7 @@ use crate::cron::scheduler::SchedulerRuntime;
 use crate::proxy::LbState;
 use crate::proxy::failure_recheck::RecheckGate;
 use crate::proxy::pool::UpstreamPool;
+use crate::usage::persist::UsageMemCache;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,6 +27,8 @@ pub struct AppState {
     pub recheck_gate: RecheckGate,
     /// /v1 上游连接池（按 host 隔离，空闲 10 分钟释放）。
     pub upstream_pool: UpstreamPool,
+    /// 用量选路内存缓存（10 分钟 TTL + provider 单飞抓取，P3）。
+    pub usage_mem: UsageMemCache,
     /// 语言/时区设置缓存（设置页更新后热刷新）。
     pub settings: AppSettings,
 }

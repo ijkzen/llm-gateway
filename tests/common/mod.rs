@@ -94,6 +94,7 @@ pub fn build_app_with_settings(
         upstream_pool: llm_gateway::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(
             600,
         )),
+        usage_mem: Default::default(),
         settings,
     };
     routes::create_app(&state)

@@ -530,10 +530,11 @@ async fn update_provider(
                     Ok(_) => {}
                 }
             }
-            // 凭据/字段可能变化，失效用量缓存（数据库）避免展示旧结果。
+            // 凭据/字段可能变化，失效用量缓存（数据库 + 内存）避免展示旧结果。
             if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {
                 tracing::warn!(provider_id = id, "用量缓存失效失败：{e}");
             }
+            state.usage_mem.invalidate(id).await;
             // 启用状态可能已被模块动作迁移，重读后构造响应，避免返回切换前状态。
             let model = match Entity::find_by_id(id).one(&state.db).await {
                 Ok(Some(model)) => model,
@@ -684,6 +685,7 @@ async fn delete_provider(State(state): State<AppState>, Path(id): Path<i32>) -> 
                 if let Err(e) = crate::usage::persist::invalidate_usage_cache(&state.db, id).await {
                     tracing::warn!(provider_id = id, "用量缓存失效失败：{e}");
                 }
+                state.usage_mem.invalidate(id).await;
                 (StatusCode::OK, Json(Response::success(())))
             }
             Err(e) => response::db_error(e.to_string()),
