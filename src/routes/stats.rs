@@ -76,6 +76,15 @@ impl ChartWindow {
         let offset_ms = i64::from(self.tz_offset_minutes) * 60_000;
         bucket * self.bucket_ms - offset_ms
     }
+
+    /// 桶索引区间（含两端）：小时/天桶补零用。tz 偏移并入（桶对齐本地边界），
+    /// end 为开区间故末桶取 end-1；窗口内恒至少一个桶（start 桶兜底）。
+    fn bucket_range(&self) -> std::ops::RangeInclusive<i64> {
+        let offset_ms = i64::from(self.tz_offset_minutes) * 60_000;
+        let first = (self.start + offset_ms) / self.bucket_ms;
+        let last = ((self.end - 1 + offset_ms).max(self.start + offset_ms)) / self.bucket_ms;
+        first..=last
+    }
 }
 
 /// 解析图表窗口参数（与 charts 端点同一套缺省/回退规则）：
@@ -468,12 +477,7 @@ async fn charts(
         explicit_granularity,
         tz_offset_minutes,
     );
-    let (window_start, window_end, bucket_ms, granularity) = (
-        window.start,
-        window.end,
-        window.bucket_ms,
-        window.granularity,
-    );
+    let (window_start, window_end, granularity) = (window.start, window.end, window.granularity);
 
     // WHERE 公共条件：时间窗口（半开）+ 可选供应商过滤。
     let mut where_sql = String::from("r.start_time >= ? AND r.start_time < ?");
@@ -579,12 +583,10 @@ async fn charts(
         (call_trend, token_trend)
     } else {
         // 小时/天：直接按桶索引区间补零（桶对齐本地边界，tz 偏移已并入表达式）。
-        let first_bucket = (window_start + i64::from(tz_offset_minutes) * 60_000) / bucket_ms;
-        let last_bucket = (window_end - 1 + i64::from(tz_offset_minutes) * 60_000)
-            .max(window_start + i64::from(tz_offset_minutes) * 60_000)
-            / bucket_ms;
+        let buckets = window.bucket_range();
         let fill_trend = |map: &std::collections::HashMap<i64, i64>| {
-            (first_bucket..=last_bucket)
+            buckets
+                .clone()
                 .map(|bucket| TrendPoint {
                     bucket_start: window.bucket_start_ms(bucket),
                     value: map.get(&bucket).copied().unwrap_or(0),
@@ -844,12 +846,8 @@ async fn insight(
                 })
                 .collect()
         } else {
-            let first_bucket =
-                (window.start + i64::from(tz_offset_minutes) * 60_000) / window.bucket_ms;
-            let last_bucket = (window.end - 1 + i64::from(tz_offset_minutes) * 60_000)
-                .max(window.start + i64::from(tz_offset_minutes) * 60_000)
-                / window.bucket_ms;
-            (first_bucket..=last_bucket)
+            window
+                .bucket_range()
                 .map(|bucket| TrendPoint {
                     bucket_start: window.bucket_start_ms(bucket),
                     value: map.get(&bucket).copied().unwrap_or(0.0).round() as i64,
@@ -882,12 +880,8 @@ async fn insight(
                 })
                 .collect()
         } else {
-            let first_bucket =
-                (window.start + i64::from(tz_offset_minutes) * 60_000) / window.bucket_ms;
-            let last_bucket = (window.end - 1 + i64::from(tz_offset_minutes) * 60_000)
-                .max(window.start + i64::from(tz_offset_minutes) * 60_000)
-                / window.bucket_ms;
-            (first_bucket..=last_bucket)
+            window
+                .bucket_range()
                 .map(|bucket| FloatTrendPoint {
                     bucket_start: window.bucket_start_ms(bucket),
                     value: map.get(&bucket).copied().unwrap_or(0.0),
@@ -1050,12 +1044,8 @@ async fn insight(
             buckets.entry(bucket).or_default().push(value);
         }
         // 按桶补零对齐（无样本桶输出 0）。
-        let first_bucket =
-            (window.start + i64::from(tz_offset_minutes) * 60_000) / window.bucket_ms;
-        let last_bucket = (window.end - 1 + i64::from(tz_offset_minutes) * 60_000)
-            .max(window.start + i64::from(tz_offset_minutes) * 60_000)
-            / window.bucket_ms;
-        (first_bucket..=last_bucket)
+        window
+            .bucket_range()
             .map(|bucket| {
                 let mut values = buckets.get(&bucket).cloned().unwrap_or_default();
                 values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -1225,6 +1215,27 @@ fn weighted_ratio(part: f64, total: f64) -> f64 {
     round_5(part / total)
 }
 
+/// 解析必填时间窗口 [start, end)：缺失或 end <= start 返回双语错误文案。
+/// rank 与四个 metrics 端点共用，避免各自手抄同一段校验。
+fn required_time_range(
+    start_time: Option<i64>,
+    end_time: Option<i64>,
+) -> Result<(i64, i64), &'static str> {
+    let (Some(start), Some(end)) = (start_time, end_time) else {
+        return Err(AppSettings::lang_sync().tr(
+            "缺少 startTime / endTime 参数",
+            "missing startTime / endTime parameters",
+        ));
+    };
+    if end <= start {
+        return Err(AppSettings::lang_sync().tr(
+            "endTime 必须大于 startTime",
+            "endTime must be greater than startTime",
+        ));
+    }
+    Ok((start, end))
+}
+
 /// 从查询参数解析排序指标与方向；参数缺失/非法返回错误响应。
 /// T 为调用方成功响应的 data 类型（错误响应的 data 为空，仅用于类型对齐）。
 fn parse_rank_query<T>(
@@ -1235,18 +1246,8 @@ fn parse_rank_query<T>(
             AppSettings::lang_sync().tr("sortBy 参数非法", "invalid sortBy parameter"),
         )
     })?;
-    let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
-        return Err(response::bad_request(AppSettings::lang_sync().tr(
-            "缺少 startTime / endTime 参数",
-            "missing startTime / endTime parameters",
-        )));
-    };
-    if end <= start {
-        return Err(response::bad_request(AppSettings::lang_sync().tr(
-            "endTime 必须大于 startTime",
-            "endTime must be greater than startTime",
-        )));
-    }
+    let (start, end) = required_time_range(query.start_time, query.end_time)
+        .map_err(|msg| response::bad_request::<T>(msg))?;
     let order_dir = sort_direction(query.sort_order.as_deref(), sort_key);
     Ok((sort_key, order_dir, start, end))
 }
@@ -1936,18 +1937,10 @@ async fn model_metrics(
             "missing providerId / modelId parameters",
         ));
     };
-    let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
-        return response::bad_request(AppSettings::lang_sync().tr(
-            "缺少 startTime / endTime 参数",
-            "missing startTime / endTime parameters",
-        ));
+    let (start, end) = match required_time_range(query.start_time, query.end_time) {
+        Ok(range) => range,
+        Err(msg) => return response::bad_request(msg),
     };
-    if end <= start {
-        return response::bad_request(AppSettings::lang_sync().tr(
-            "endTime 必须大于 startTime",
-            "endTime must be greater than startTime",
-        ));
-    }
     let db = &state.db;
 
     // 单行聚合 6 指标（无 GROUP BY），JOIN provider 出名称。
@@ -2041,18 +2034,10 @@ async fn api_key_metrics(
             AppSettings::lang_sync().tr("缺少 apiKey 参数", "missing apiKey parameter"),
         );
     };
-    let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
-        return response::bad_request(AppSettings::lang_sync().tr(
-            "缺少 startTime / endTime 参数",
-            "missing startTime / endTime parameters",
-        ));
+    let (start, end) = match required_time_range(query.start_time, query.end_time) {
+        Ok(range) => range,
+        Err(msg) => return response::bad_request(msg),
     };
-    if end <= start {
-        return response::bad_request(AppSettings::lang_sync().tr(
-            "endTime 必须大于 startTime",
-            "endTime must be greater than startTime",
-        ));
-    }
     let db = &state.db;
 
     // 单行聚合 6 指标（无 GROUP BY）：仅该 key 的成功请求。
@@ -2142,18 +2127,10 @@ async fn provider_metrics(
             AppSettings::lang_sync().tr("缺少 providerId 参数", "missing providerId parameter"),
         );
     };
-    let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
-        return response::bad_request(AppSettings::lang_sync().tr(
-            "缺少 startTime / endTime 参数",
-            "missing startTime / endTime parameters",
-        ));
+    let (start, end) = match required_time_range(query.start_time, query.end_time) {
+        Ok(range) => range,
+        Err(msg) => return response::bad_request(msg),
     };
-    if end <= start {
-        return response::bad_request(AppSettings::lang_sync().tr(
-            "endTime 必须大于 startTime",
-            "endTime must be greater than startTime",
-        ));
-    }
     let db = &state.db;
 
     let rank_sql = rank_metric_sql();
@@ -2241,18 +2218,10 @@ async fn virtual_model_metrics(
             "missing virtualModelId parameter",
         ));
     };
-    let (Some(start), Some(end)) = (query.start_time, query.end_time) else {
-        return response::bad_request(AppSettings::lang_sync().tr(
-            "缺少 startTime / endTime 参数",
-            "missing startTime / endTime parameters",
-        ));
+    let (start, end) = match required_time_range(query.start_time, query.end_time) {
+        Ok(range) => range,
+        Err(msg) => return response::bad_request(msg),
     };
-    if end <= start {
-        return response::bad_request(AppSettings::lang_sync().tr(
-            "endTime 必须大于 startTime",
-            "endTime must be greater than startTime",
-        ));
-    }
     let db = &state.db;
 
     let rank_sql = rank_metric_sql();
@@ -2401,5 +2370,77 @@ mod tests {
         assert_eq!(calls[0], 2);
         assert_eq!(starts[1], local_ms(2026, 1, 1, 0, 0));
         assert_eq!(calls[1], 4);
+    }
+
+    fn window_at(start: i64, end: i64, bucket_ms: i64, tz_offset_minutes: i32) -> ChartWindow {
+        ChartWindow {
+            start,
+            end,
+            bucket_ms,
+            granularity: Granularity::Hour,
+            tz_offset_minutes,
+        }
+    }
+
+    #[test]
+    fn bucket_range_covers_window_buckets_with_offset() {
+        // UTC+8、小时桶、start 非整点对齐：硬编码期望区间作为独立预言
+        //（1700000000000 + 8h → 首桶 472230；end=start+3h-1 开区间 → 末桶 472233，
+        //  窗口跨 4 个小时桶）。
+        let w = window_at(
+            1_700_000_000_000,
+            1_700_000_000_000 + 3 * HOUR_MS - 1,
+            HOUR_MS,
+            480,
+        );
+        assert_eq!(w.bucket_range(), 472_230..=472_233);
+        // 桶起点回算与 bucket_start_ms 互逆。
+        let offset_ms = i64::from(480) * 60_000;
+        for bucket in w.bucket_range() {
+            assert_eq!(w.bucket_start_ms(bucket) + offset_ms, bucket * HOUR_MS);
+        }
+    }
+
+    #[test]
+    fn bucket_range_never_empty_and_zero_offset() {
+        // 不足一桶的窗口：至少含 start 所在桶。
+        let w = window_at(1000, 1001, HOUR_MS, 0);
+        let mut buckets = w.bucket_range();
+        assert_eq!(buckets.next(), Some(0));
+        assert_eq!(buckets.next(), None);
+    }
+
+    #[test]
+    fn percentile_interpolates_and_handles_edges() {
+        assert_eq!(percentile(&[], 0.95), 0.0, "空样本返回 0");
+        assert_eq!(percentile(&[5.0], 0.95), 5.0);
+        let sorted = vec![10.0, 20.0, 30.0, 40.0];
+        // (n-1)·p 位置插值：p=0.5 → (4-1)*0.5=1.5 → 25。
+        assert_eq!(percentile(&sorted, 0.5), 25.0);
+        assert_eq!(percentile(&sorted, 0.0), 10.0);
+        assert_eq!(percentile(&sorted, 1.0), 40.0);
+        // p=0.75 → 位置 2.25 → 30 + 0.25*10 = 32.5。
+        assert!((percentile(&sorted, 0.75) - 32.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn round5_and_weighted_ratio_match_sql_rounding() {
+        assert_eq!(round_5(0.123456), 0.12346);
+        assert_eq!(round_5(0.123454), 0.12345);
+        assert_eq!(weighted_ratio(1.0, 3.0), 0.33333, "1/3 保留 5 位");
+        assert_eq!(weighted_ratio(3.0, 0.0), 0.0, "分母为 0 记 0");
+        assert_eq!(weighted_ratio(0.0, 5.0), 0.0);
+    }
+
+    #[test]
+    fn required_time_range_validates_pair() {
+        assert_eq!(required_time_range(Some(1), Some(2)), Ok((1, 2)));
+        assert!(required_time_range(None, Some(2)).is_err());
+        assert!(required_time_range(Some(1), None).is_err());
+        assert!(
+            required_time_range(Some(2), Some(2)).is_err(),
+            "end == start 非法"
+        );
+        assert!(required_time_range(Some(3), Some(2)).is_err());
     }
 }
