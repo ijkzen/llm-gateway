@@ -66,7 +66,6 @@
 │   ├── db.rs               # SeaORM 连接、连接池与自动建表/迁移
 │   ├── state.rs            # AppState（db + scheduler + lb_state + usage_cache）
 │   ├── logs_cleanup.rs     # 日志过期清理
-│   ├── request_retention.rs # request 指标表保留期每日清理（默认 90 天，环境变量可配）
 │   ├── response.rs         # 统一 API 响应结构
 │   ├── static_assets/mod.rs# rust-embed 内嵌前端 dist
 │   ├── middleware/mod.rs   # CORS、Trace、CatchPanic 中间件
@@ -169,7 +168,6 @@
 | `RUST_LOG` | tracing 日志级别 | `info,sqlx::query=warn` |
 | `CRON_JOB_QUEUE_SIZE` | 定时任务派发队列容量（必须为正整数） | `1000` |
 | `CRON_JOB_MAX_CONCURRENT` | 定时任务最大并发执行数（必须为正整数） | `10` |
-| `REQUEST_LOG_RETENTION_DAYS` | request 指标表保留天数（每日清理更早记录） | `90` |
 
 注意：
 
@@ -351,7 +349,7 @@ pnpm vitest run                    # 前端全量测试
 1. **前端构建产物必须存在**: 发布构建时，`rust-embed` 会内嵌 `web/dist`。如果本地手动构建后端，请先执行 `cd web && pnpm build`；Dockerfile 中已自动处理。
 2. **定时任务需要注册 Handler 才会执行**: 数据库中的任务若没有对应注册的 Handler，加载时会被跳过，且不会出现在任务列表中；实现业务功能时请先在 `scheduler` 上调用 `register_handler`。
 3. **环境变量不会自动加载 `.env`**: 当前未集成 `dotenv`，运行前请确保环境变量已导出。
-4. **日志清理**: 后端启动后会启动一个后台任务，每天清理一次日志目录中超过 30 天的文件（按修改时间判断，不区分文件类型，不要往日志目录放其他文件）。另有 request 指标表保留期清理（默认 90 天，`REQUEST_LOG_RETENTION_DAYS` 可配），每日删除更早的转发指标行。
+4. **日志清理**: 后端启动后会启动一个后台任务，每天清理一次日志目录中超过 30 天的文件（按修改时间判断，不区分文件类型，不要往日志目录放其他文件）。
 5. **Biome 配置**: `web/biome.json` 已存在，`pnpm lint` 与 `pnpm format` 使用该配置（tab 缩进、双引号、100 列最大宽度）。
 6. **健康检查**: `/api/healthz` 只表示进程存活，不检查数据库等依赖。
 
