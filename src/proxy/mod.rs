@@ -191,7 +191,9 @@ async fn load_members(
         .filter_map(|item| {
             let model = model_by_pk.get(&item.model_id)?;
             let p = provider_by_id.get(&model.provider_id)?;
-            if !p.enable {
+            // 实体层可用性（启用 ∧ 无停用原因）统一经 availability 读侧谓词；
+            // 用量层剔除见 order_members（UsageData 判定，缓存 10 分钟新鲜度）。
+            if !crate::availability::traffic_available(p) {
                 return None;
             }
             let (proxy_enabled, proxy_addr) = resolve_proxy(model, p);
@@ -308,8 +310,9 @@ async fn order_members(
             let mut subs = rank_by_quota_with(state, subs, &usage_map).await;
             let mut payg = rank_by_balance_with(state, payg, &usage_map).await;
             // 订阅制额度耗尽即跳过：任一已提供窗口剩余为 0 的订阅成员视为当前
-            // 不可用（与用量门控 apply_usage_gate 同口径），从候选里剔除，让位给
-            // 还有额度的订阅成员或按量成员；无法判定（无窗口数据）的保持原状。
+            // 不可用，从候选里剔除，让位给还有额度的订阅成员或按量成员；无法
+            // 判定（无窗口数据）的保持原状。判定口径唯一来源：
+            // `UsageData::subscription_usable`（用量门控与恢复探测同源调用）。
             let mut skipped: Vec<String> = Vec::new();
             subs.retain(|m| {
                 let usable = usage_map
@@ -325,7 +328,8 @@ async fn order_members(
                 }
             });
             // 按量付费余额耗尽即跳过：查得到余额且合计为 0 的按量成员不可用
-            // （与订阅制同口径），从候选剔除；查不到余额（无法判定）的保持原状。
+            // （口径同 `UsageData::balance_usable`），从候选剔除；查不到余额
+            // （无法判定）的保持原状。
             let mut skipped_balance: Vec<String> = Vec::new();
             payg.retain(|m| {
                 let usable = usage_map
@@ -1632,8 +1636,8 @@ pub async fn forward_chat_direct(
                 .into_response();
         }
     };
-    // 可用性口径与选路一致：启用且无停用原因。
-    if !provider.enable || provider.disabled_reason.is_some() {
+    // 可用性口径与选路一致：启用且无停用原因（读侧统一谓词）。
+    if !crate::availability::traffic_available(&provider) {
         return crate::response::bad_request::<()>(format!(
             "供应商「{}」已停用，无法对话",
             provider.name

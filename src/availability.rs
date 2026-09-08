@@ -46,6 +46,15 @@ impl DisabledReason {
     }
 }
 
+/// 读侧谓词「选路可用」（Traffic-Eligible，实体层）：供应商此刻能否参与
+/// 选路 = 启用 ∧ 无停用原因。写入侧镜像不变式（启用 ⇔ disabled_reason=None）
+/// 由本模块动作保证；读侧统一经此谓词判定，调用点不再各自拼
+/// `enable` / `disabled_reason` 组合（用量层的可用判定见 usage/types.rs
+/// `subscription_usable` / `balance_usable`，两者分层各司其职）。
+pub fn traffic_available(provider: &provider::Model) -> bool {
+    provider.enable && provider.disabled_reason.is_none()
+}
+
 /// provider 粒度的内存连续失败计数器（Clone 共享同一份状态）。
 /// 任一转发请求失败 +1（不论失败能否重试），成功/恢复/手动启用清零，进程重启清零。
 #[derive(Clone, Default)]
@@ -245,7 +254,7 @@ pub async fn enable_manual(
     let Some(row) = provider::Entity::find_by_id(provider_id).one(db).await? else {
         return Ok(false);
     };
-    if row.enable && row.disabled_reason.is_none() {
+    if traffic_available(&row) {
         return Ok(false);
     }
     let was_failure_disabled =
@@ -603,6 +612,28 @@ mod tests {
             row(&db, pid).await.disabled_reason.as_deref(),
             Some("manual")
         );
+    }
+
+    /// 读侧谓词矩阵：启用 ∧ 无停用原因才可参与选路；任一停用来源即不可选。
+    #[tokio::test]
+    async fn traffic_available_matrix() {
+        let db = setup().await;
+        let cases: [(&str, bool, Option<&str>, bool); 5] = [
+            ("p-active", true, None, true),
+            ("p-quota", false, Some("quota"), false),
+            ("p-failure", false, Some("failure"), false),
+            ("p-manual", false, Some("manual"), false),
+            ("p-inconsistent", true, Some("manual"), false),
+        ];
+        for (name, enable, reason, expected) in cases {
+            let (pid, _) = seed(&db, name, enable, reason).await;
+            let provider = row(&db, pid).await;
+            assert_eq!(
+                traffic_available(&provider),
+                expected,
+                "{name}（enable={enable}, reason={reason:?}）判定不符"
+            );
+        }
     }
 
     #[tokio::test]
