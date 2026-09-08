@@ -113,15 +113,19 @@ impl AsyncWrite for TimedStream {
     }
 }
 
-fn tls_config() -> &'static tokio_rustls::rustls::ClientConfig {
-    static CONFIG: std::sync::OnceLock<tokio_rustls::rustls::ClientConfig> =
+/// 进程级共享 TLS 配置：OnceLock 缓存 Arc，连接池 miss 建新连接时只
+/// 克隆 Arc（rustls ClientConfig 的 Clone 非纯浅拷贝，P6）。
+fn tls_config() -> &'static std::sync::Arc<tokio_rustls::rustls::ClientConfig> {
+    static CONFIG: std::sync::OnceLock<std::sync::Arc<tokio_rustls::rustls::ClientConfig>> =
         std::sync::OnceLock::new();
     CONFIG.get_or_init(|| {
         let mut roots = tokio_rustls::rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        tokio_rustls::rustls::ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth()
+        std::sync::Arc::new(
+            tokio_rustls::rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        )
     })
 }
 
@@ -206,7 +210,7 @@ async fn connect_stream(
         let server_name =
             tokio_rustls::rustls::pki_types::ServerName::try_from(host.to_string())
                 .map_err(|e| UpstreamError::Connect(format!("TLS 主机名无效（{host}）：{e}")))?;
-        let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_config().clone()));
+        let connector = tokio_rustls::TlsConnector::from(tls_config().clone());
         let tls = match tokio::time::timeout(
             TLS_HANDSHAKE_TIMEOUT,
             connector.connect(server_name, stream),
@@ -327,7 +331,7 @@ async fn connect_via_proxy(
     let tls_started = Instant::now();
     let server_name = tokio_rustls::rustls::pki_types::ServerName::try_from(host.to_string())
         .map_err(|e| UpstreamError::Connect(format!("TLS 主机名无效（{host}）：{e}")))?;
-    let connector = tokio_rustls::TlsConnector::from(std::sync::Arc::new(tls_config().clone()));
+    let connector = tokio_rustls::TlsConnector::from(tls_config().clone());
     let tls = match tokio::time::timeout(
         TLS_HANDSHAKE_TIMEOUT,
         connector.connect(server_name, stream),
