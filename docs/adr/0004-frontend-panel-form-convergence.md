@@ -12,9 +12,9 @@ accepted
 
 按自底向上顺序分步实施，每步独立提交：
 
-1. `useRaceSort` + `SortableMetricTable`（无依赖，可先单测）→ 数据层 → `RaceCardShell` → `StatsSection` 收拢五页骨架；页面退化为 section 配置。默认窗口的三种工厂语义保持现状（只收拢代码不改行为）。
+1. `useRaceSort` + `SortableMetricTable`（components/sortable-metric-table.tsx，同文件无依赖可直测）→ 数据层 → `RaceCardShell` → `StatsSection` 收拢五页骨架；页面保留逐区块 JSX 与查询调用，但每页只声明 `SECTION_KEYS` 区块配置，窗口 map、副标题、粒度与载入/错误/重试三态等重复骨架收进 `stats-section.tsx`（`useSectionWindows`/`useSectionSubtitle`/`SectionBody`/`StatsSection`/`CardStatsSection`）；四张赛马卡退化为「`useRaceCardWindow` 状态机 + 配置注入 `RaceCardShell` + `SortableMetricTable`」。默认窗口的三种工厂语义保持现状（只收拢代码不改行为）。
 2. 数据层：新增共享窗口/过滤类型（替换三种参数写法），参数拼装、query key、keepPreviousData 收进内部 `statsQuery`；typed facade 保留原名，调用方零改动。
-3. 表单：只收 zod schema、4 能力开关网格、proxy 校验规则三块（proxyRule 与 `ProxyConfigFields` 同址导出）；弹窗各自的打开/重置/toast 骨架不动。
+3. 表单：只收 zod schema（provider-models/provider-model-form.tsx 的 `makeProviderModelBaseSchema`）、4 能力开关网格（`CapabilitySwitchGrid` + `CAPABILITIES`）、proxy 校验规则三块（`proxySuperRefine` 与 `ProxyConfigFields` 同文件导出）；弹窗各自的打开/重置/toast 骨架不动。
 4. locale：纯格式化函数加显式 `locale` 形参，组件经 `useTranslation` 在边缘传入；`api.ts` 的错误文案 `i18n.t` 不动。
 
 被否决的备选：单页试点先行（收益延迟）；连弹窗骨架一起抽（弹窗间差异会逼出参数化泥潭）；formatter 工厂注入（一次性换掉所有调用点，面过大）。
