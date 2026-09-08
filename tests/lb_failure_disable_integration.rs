@@ -41,7 +41,7 @@ async fn spawn_fail_mock() -> String {
     format!("http://{addr}")
 }
 
-/// 恒定返回 400（非可重试 4xx）的 mock 上游。
+/// 恒定返回 400 的 mock 上游（4xx 失败同样计数熔断）。
 async fn spawn_bad_request_mock() -> String {
     let app = Router::new().route(
         "/v1/chat/completions",
@@ -475,7 +475,7 @@ async fn recheck_sufficient_keeps_provider_enabled() {
 }
 
 #[tokio::test]
-async fn non_retryable_4xx_counts_toward_threshold() {
+async fn client_4xx_counts_toward_threshold() {
     let base = spawn_bad_request_mock().await;
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
     scheduler.start().await.unwrap();
@@ -483,7 +483,7 @@ async fn non_retryable_4xx_counts_toward_threshold() {
     let pid = seed_provider(&db, "p-4xx", &base).await;
     seed_vm_with_member(&db, pid, "vm-4xx").await;
 
-    // 400 不进入降级循环（直接返回），但同样计入连续失败。
+    // 单成员 + fallback 0：400 直接返回（无后继成员可降级），但同样计入连续失败。
     for _ in 0..4 {
         let status = send_chat(&app, "vm-4xx").await;
         assert_eq!(status, 400);
