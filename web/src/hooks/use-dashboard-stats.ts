@@ -32,8 +32,6 @@ export interface DashboardCharts {
 export interface ChartsParams extends TimeWindowParams, StatsFilter {
 	/** 桶粒度（hour/day/month/year）。缺省由后端按窗口长度回退推断。 */
 	granularity?: ChartGranularity;
-	/** 客户端 UTC 偏移（分钟，东八区 480）。与 granularity 搭配使用。 */
-	tzOffsetMinutes?: number;
 }
 
 /** 累计指标查询参数（可选时间窗口；缺省返回全历史累计）。 */
@@ -50,7 +48,6 @@ export const dashboardStatsKeys = {
 			params.modelId,
 			params.apiKey,
 			params.granularity,
-			params.tzOffsetMinutes,
 		]),
 };
 
@@ -79,7 +76,6 @@ export function useDashboardCharts(params: ChartsParams = {}, enabled = true) {
 			modelId: params.modelId,
 			apiKey: params.apiKey,
 			granularity: params.granularity,
-			tzOffsetMinutes: params.tzOffsetMinutes,
 		},
 	});
 }

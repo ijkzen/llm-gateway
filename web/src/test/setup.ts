@@ -1,3 +1,4 @@
+import { vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 
 // Node 26 提供了实验性的全局 localStorage（未传 --localstorage-file 时为 undefined），
@@ -62,3 +63,12 @@ if (typeof window !== "undefined" && typeof window.ResizeObserver === "undefined
 if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
 	Element.prototype.scrollIntoView = () => {};
 }
+
+// 数据面板口径时区 hook 全局 mock：测试里返回运行机器本地 IANA 时区，
+// 使周期窗口推导退化为「浏览器本地」旧语义（tz 数学本身由
+// race-period.test.ts 的固定 IANA 用例覆盖）。
+vi.mock("@/hooks/use-stats-time-zone", () => ({
+	useStatsTimeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
+	DEFAULT_STATS_TIME_ZONE: "Asia/Shanghai",
+	STATS_TIME_ZONE_KEY: "timezone",
+}));

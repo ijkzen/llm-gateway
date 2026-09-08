@@ -233,3 +233,48 @@ describe("defaultCustomWindow 自定义默认窗口", () => {
 		expect(endTime - startTime).toBe(8 * 24 * 60 * 60 * 1000);
 	});
 });
+
+describe("periodBounds 指定 IANA 时区（设置表口径）", () => {
+	// Asia/Shanghai（+480 无 DST）：2026-03-16（周一）00:00 CST = 2026-03-15T16:00Z。
+	const shMar16Start = Date.UTC(2026, 2, 15, 16);
+	const shMar17Start = Date.UTC(2026, 2, 16, 16);
+
+	it("当前天按设置表 0 点起算并截到 now", () => {
+		const now = shMar16Start + 3_600_000;
+		const bounds = periodBounds("day", 0, now, "Asia/Shanghai");
+		expect(bounds).toEqual({ startTime: shMar16Start, endTime: now });
+	});
+
+	it("昨天/本周一/本月/本年起点与设置表墙钟一致", () => {
+		const now = shMar16Start + 3_600_000;
+		expect(periodBounds("day", -1, now, "Asia/Shanghai").startTime).toBe(shMar16Start - 86_400_000);
+		// 2026-03-16 是周一：本周起点即当日 0 点。
+		expect(periodBounds("week", 0, now, "Asia/Shanghai").startTime).toBe(shMar16Start);
+		// 3 月 1 日 00:00 CST。
+		expect(periodBounds("month", 0, now, "Asia/Shanghai").startTime).toBe(
+			Date.UTC(2026, 1, 28, 16),
+		);
+		expect(periodBounds("year", 0, now, "Asia/Shanghai").startTime).toBe(
+			Date.UTC(2025, 11, 31, 16),
+		);
+	});
+
+	it("夏令时区按墙钟日界（跨日长度可非 24h）", () => {
+		// America/New_York：2026-03-08 切换夏令时（当天 23h）。
+		// 3/9 00:00 EDT = 04:00Z；3/8 00:00 EST = 05:00Z。
+		const mar9Start = Date.UTC(2026, 2, 9, 4);
+		const mar8Start = Date.UTC(2026, 2, 8, 5);
+		const now = Date.UTC(2026, 2, 9, 15);
+		const yesterday = periodBounds("day", -1, now, "America/New_York");
+		expect(yesterday.startTime).toBe(mar8Start);
+		expect(yesterday.endTime).toBe(mar9Start);
+		expect(yesterday.endTime - yesterday.startTime).toBe(23 * 3_600_000);
+	});
+
+	it("标签与紧凑标题按设置时区墙钟输出", () => {
+		const now = shMar17Start + 3_600_000; // 2026-03-17 上海
+		expect(formatPeriodLabel("day", 0, now, "zh", "Asia/Shanghai")).toBe("2026年3月17日（当前）");
+		expect(formatPeriodLabel("month", 0, now, "en", "Asia/Shanghai")).toBe("Mar 2026 (current)");
+		expect(formatCompactPeriodLabel("day", 0, now, "Asia/Shanghai")).toBe("2026/03/17");
+	});
+});

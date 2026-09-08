@@ -51,7 +51,6 @@ export interface InsightData {
 /** 查询参数（与 useDashboardCharts 同一套过滤/窗口/粒度）。 */
 export interface InsightParams extends TimeWindowParams, StatsFilter {
 	granularity?: ChartGranularity;
-	tzOffsetMinutes?: number;
 }
 
 export const insightKeys = {
@@ -64,7 +63,6 @@ export const insightKeys = {
 			params.modelId,
 			params.apiKey,
 			params.granularity,
-			params.tzOffsetMinutes,
 		]),
 };
 
@@ -81,7 +79,6 @@ export function useDashboardInsight(params: InsightParams = {}, enabled = true) 
 			modelId: params.modelId,
 			apiKey: params.apiKey,
 			granularity: params.granularity,
-			tzOffsetMinutes: params.tzOffsetMinutes,
 		},
 	});
 }

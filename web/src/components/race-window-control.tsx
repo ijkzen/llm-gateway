@@ -8,6 +8,7 @@ import {
 	DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import {
 	type RacePeriod,
 	defaultCustomWindow,
@@ -81,6 +82,7 @@ export function RaceWindowControl({
 	showLabel = true,
 }: RaceWindowControlProps) {
 	const { t } = useTranslation();
+	const tz = useStatsTimeZone();
 	const { period, offset, customStart, customEnd } = state;
 	const [dialogOpen, setDialogOpen] = useState(false);
 	const [draftStart, setDraftStart] = useState(customStart);
@@ -160,7 +162,7 @@ export function RaceWindowControl({
 					</Button>
 					{showLabel && (
 						<span className="min-w-24 text-center text-xs font-medium text-foreground">
-							{formatCompactPeriodLabel(period, offset, now)}
+							{formatCompactPeriodLabel(period, offset, now, tz)}
 						</span>
 					)}
 					<Button
@@ -221,15 +223,16 @@ export function RaceWindowControl({
 	);
 }
 
-/** 由 RaceWindowState 派生查询窗口（毫秒起止）。 */
+/** 由 RaceWindowState 派生查询窗口（毫秒起止；timeZone 缺省按浏览器本地解释）。 */
 export function raceWindowBounds(
 	state: RaceWindowState,
 	now: number,
+	timeZone?: string,
 ): { startTime: number; endTime: number } {
 	if (state.period === "custom") {
 		return state.appliedCustom ?? { startTime: state.customStart, endTime: state.customEnd };
 	}
-	return periodBounds(state.period, state.offset, now);
+	return periodBounds(state.period, state.offset, now, timeZone);
 }
 
 /** 赛马卡默认窗口：当天（offset 0），自定义输入值退化为过去 1 小时。 */

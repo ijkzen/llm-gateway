@@ -292,7 +292,7 @@ describe("OverviewPage 时间组件（默认今天，调用/Token/可靠性三�
 		mocks.chartsParamsList = [];
 	});
 
-	it("默认选中「天」，调用与 Token 图表请求均携带小时粒度与本地时区偏移", () => {
+	it("默认选中「天」，调用与 Token 图表请求均携带小时粒度与显式窗口", () => {
 		render(<OverviewPage />);
 
 		// 三块控件默认「天」处于按下态。
@@ -302,11 +302,11 @@ describe("OverviewPage 时间组件（默认今天，调用/Token/可靠性三�
 				"true",
 			);
 		}
-		// 调用与 Token 各发一次 charts 请求，均携带显式窗口 + granularity=hour + tzOffsetMinutes。
+		// 调用与 Token 各发一次 charts 请求，均携带显式窗口 + granularity=hour
+		//（tzOffsetMinutes 已停发：分桶时区由后端按设置表解释）。
 		expect(mocks.chartsParamsList.length).toBe(2);
 		for (const params of mocks.chartsParamsList) {
 			expect(params?.granularity).toBe("hour");
-			expect(typeof params?.tzOffsetMinutes).toBe("number");
 			expect(params?.startTime).toBeTypeOf("number");
 			expect(params?.endTime).toBeTypeOf("number");
 		}

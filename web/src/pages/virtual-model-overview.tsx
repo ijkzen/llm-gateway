@@ -21,12 +21,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useVirtualModelMetrics } from "@/hooks/use-stats-metrics";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import {
 	type VirtualModelMemberRankItem,
 	useVirtualModelMemberRank,
 } from "@/hooks/use-virtual-model-member-rank";
 import { useVirtualModelDetail } from "@/hooks/use-virtual-models";
-import { clientTzOffsetMinutes } from "@/lib/race-period";
 import { Boxes } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
@@ -46,7 +46,8 @@ function MemberModelRaceTable({
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const { sort, onSort } = useRaceSort();
-	const window = raceWindowBounds(windowState, now);
+	const tz = useStatsTimeZone();
+	const window = raceWindowBounds(windowState, now, tz);
 	const query = useVirtualModelMemberRank(window, sort, true, virtualModelId);
 
 	const openModelOverview = (item: VirtualModelMemberRankItem) => {
@@ -100,15 +101,16 @@ export default function VirtualModelOverviewPage() {
 	const virtualModelId = Number.parseInt(virtualModelIdParam ?? "", 10);
 	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS);
 	const subtitle = useSectionSubtitle();
+	const tz = useStatsTimeZone();
 
 	const detail = useVirtualModelDetail(Number.isFinite(virtualModelId) ? virtualModelId : null);
 	const displayId =
 		detail.data?.displayId ?? t("dashboardPage.virtualModelLabel", { id: virtualModelId });
 
-	const metricsWindow = sectionWindow(windows.metrics, now);
-	const callWindow = sectionWindow(windows.call, now);
-	const tokenWindow = sectionWindow(windows.token, now);
-	const insightWindow = sectionWindow(windows.insight, now);
+	const metricsWindow = sectionWindow(windows.metrics, now, tz);
+	const callWindow = sectionWindow(windows.call, now, tz);
+	const tokenWindow = sectionWindow(windows.token, now, tz);
+	const insightWindow = sectionWindow(windows.insight, now, tz);
 
 	const vmMetrics = useVirtualModelMetrics(
 		virtualModelId,
@@ -116,8 +118,7 @@ export default function VirtualModelOverviewPage() {
 		Number.isFinite(virtualModelId),
 	);
 
-	// 图表桶粒度由所选时间窗口推导，并与本地时区偏移一起传给后端。
-	const tzOffsetMinutes = clientTzOffsetMinutes();
+	// 图表桶粒度由所选时间窗口推导（分桶时区由后端按设置表解释）。
 	const callGranularity = sectionGranularity(windows.call, callWindow);
 	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
 	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
@@ -127,21 +128,18 @@ export default function VirtualModelOverviewPage() {
 		endTime: callWindow.endTime,
 		virtualModelId,
 		granularity: callGranularity,
-		tzOffsetMinutes,
 	});
 	const tokenCharts = useDashboardCharts({
 		startTime: tokenWindow.startTime,
 		endTime: tokenWindow.endTime,
 		virtualModelId,
 		granularity: tokenGranularity,
-		tzOffsetMinutes,
 	});
 	const insightQuery = useDashboardInsight({
 		startTime: insightWindow.startTime,
 		endTime: insightWindow.endTime,
 		virtualModelId,
 		granularity: insightGranularity,
-		tzOffsetMinutes,
 	});
 
 	return (

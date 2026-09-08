@@ -8,6 +8,7 @@ import {
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInView } from "@/hooks/use-in-view";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import { formatPeriodLabel } from "@/lib/race-period";
 import type { RaceWindow } from "@/lib/race-types";
 import { localeOf } from "@/lib/utils";
@@ -32,10 +33,11 @@ export interface RaceCardWindow {
 export function useRaceCardWindow(initialWindow?: RaceWindowState): RaceCardWindow {
 	// 挂载时刻固化 now：保证「当前周期」的窗口终点稳定，不因渲染抖动重复请求。
 	const [now] = useState(() => Date.now());
+	const tz = useStatsTimeZone();
 	const [windowState, setWindowState] = useState<RaceWindowState>(
 		() => initialWindow ?? defaultRaceWindowState(),
 	);
-	const window = raceWindowBounds(windowState, now);
+	const window = raceWindowBounds(windowState, now, tz);
 	const { ref, inView } = useInView();
 	const onWindowChange = (patch: Partial<RaceWindowState>) => {
 		setWindowState((prev) => ({ ...prev, ...patch }));
@@ -72,6 +74,7 @@ export function RaceCardShell({
 	children,
 }: RaceCardShellProps) {
 	const { t, i18n } = useTranslation();
+	const tz = useStatsTimeZone();
 	const { now, windowState, onWindowChange, ref, inView } = view;
 	return (
 		<Card ref={ref} className="p-5">
@@ -91,6 +94,7 @@ export function RaceCardShell({
 										windowState.offset,
 										now,
 										localeOf(i18n.language),
+										tz,
 									)
 						}
 					/>
