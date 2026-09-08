@@ -20,7 +20,7 @@ import { useApiKeyDetail } from "@/hooks/use-api-keys";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useApiKeyMetrics } from "@/hooks/use-stats-metrics";
-import { clientTzOffsetMinutes } from "@/lib/race-period";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import { KeyRound } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
@@ -46,13 +46,13 @@ export default function ApiKeyOverviewPage() {
 	const detailQuery = useApiKeyDetail(idValid ? apiKeyId : null);
 	const keyName = detailQuery.data?.name ?? null;
 
-	const metricsWindow = sectionWindow(windows.metrics, now);
-	const callWindow = sectionWindow(windows.call, now);
-	const tokenWindow = sectionWindow(windows.token, now);
-	const insightWindow = sectionWindow(windows.insight, now);
+	const tz = useStatsTimeZone();
+	const metricsWindow = sectionWindow(windows.metrics, now, tz);
+	const callWindow = sectionWindow(windows.call, now, tz);
+	const tokenWindow = sectionWindow(windows.token, now, tz);
+	const insightWindow = sectionWindow(windows.insight, now, tz);
 
-	// 图表桶粒度由所选时间窗口推导，并与本地时区偏移一起传给后端。
-	const tzOffsetMinutes = clientTzOffsetMinutes();
+	// 图表桶粒度由所选时间窗口推导（分桶时区由后端按设置表解释）。
 	const callGranularity = sectionGranularity(windows.call, callWindow);
 	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
 	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
@@ -66,7 +66,6 @@ export default function ApiKeyOverviewPage() {
 			endTime: callWindow.endTime,
 			apiKey: keyName ?? undefined,
 			granularity: callGranularity,
-			tzOffsetMinutes,
 		},
 		keyReady,
 	);
@@ -76,7 +75,6 @@ export default function ApiKeyOverviewPage() {
 			endTime: tokenWindow.endTime,
 			apiKey: keyName ?? undefined,
 			granularity: tokenGranularity,
-			tzOffsetMinutes,
 		},
 		keyReady,
 	);
@@ -86,7 +84,6 @@ export default function ApiKeyOverviewPage() {
 			endTime: insightWindow.endTime,
 			apiKey: keyName ?? undefined,
 			granularity: insightGranularity,
-			tzOffsetMinutes,
 		},
 		keyReady,
 	);

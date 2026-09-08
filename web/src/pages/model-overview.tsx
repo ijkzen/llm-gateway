@@ -18,7 +18,7 @@ import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { useModelMetrics } from "@/hooks/use-model-metrics";
 import { useProviderModelDetail } from "@/hooks/use-provider-models";
-import { clientTzOffsetMinutes } from "@/lib/race-period";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import { formatTokenCount, localeOf } from "@/lib/utils";
 import { TrendingUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -44,13 +44,13 @@ export default function ModelOverviewPage() {
 	const detailQuery = useProviderModelDetail(idValid ? modelId : null);
 	const modelDetail = detailQuery.data;
 
-	const callWindow = sectionWindow(windows.call, now);
-	const tokenWindow = sectionWindow(windows.token, now);
-	const metricsWindow = sectionWindow(windows.metrics, now);
-	const insightWindow = sectionWindow(windows.insight, now);
+	const tz = useStatsTimeZone();
+	const callWindow = sectionWindow(windows.call, now, tz);
+	const tokenWindow = sectionWindow(windows.token, now, tz);
+	const metricsWindow = sectionWindow(windows.metrics, now, tz);
+	const insightWindow = sectionWindow(windows.insight, now, tz);
 
-	// 图表桶粒度由所选时间窗口推导，并与本地时区偏移一起传给后端。
-	const tzOffsetMinutes = clientTzOffsetMinutes();
+	// 图表桶粒度由所选时间窗口推导（分桶时区由后端按设置表解释）。
 	const callGranularity = sectionGranularity(windows.call, callWindow);
 	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
 	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
@@ -66,7 +66,6 @@ export default function ModelOverviewPage() {
 			providerId,
 			modelId: remoteModelId,
 			granularity: callGranularity,
-			tzOffsetMinutes,
 		},
 		detailReady,
 	);
@@ -77,7 +76,6 @@ export default function ModelOverviewPage() {
 			providerId,
 			modelId: remoteModelId,
 			granularity: tokenGranularity,
-			tzOffsetMinutes,
 		},
 		detailReady,
 	);
@@ -88,7 +86,6 @@ export default function ModelOverviewPage() {
 			providerId,
 			modelId: remoteModelId,
 			granularity: insightGranularity,
-			tzOffsetMinutes,
 		},
 		detailReady,
 	);

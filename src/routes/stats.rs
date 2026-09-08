@@ -5,7 +5,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use chrono::Datelike;
+use chrono::{Datelike, Offset, TimeZone};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde::{Deserialize, Serialize};
 
@@ -42,15 +42,30 @@ impl Granularity {
     }
 }
 
-/// 客户端 UTC 偏移（分钟，东八区为 480）。仅在显式 granularity 下生效：
-/// 小时/天桶按本地整点/午夜对齐，月/年桶按本地自然月/年归并。
-fn parse_tz_offset(value: Option<i32>) -> i32 {
-    value
-        .filter(|offset| (-14 * 60..=14 * 60).contains(offset))
-        .unwrap_or(0)
+/// 某时刻在指定 IANA 时区下的固定偏移（分钟）。偏移只求一次并按窗口起点
+/// 定桶：跨 DST 切换的窗口沿用起点偏移（与既有固定偏移模型一致；默认
+/// Asia/Shanghai 无 DST，管理后台为单一时区视角）。
+fn tz_offset_minutes_at(tz: chrono_tz::Tz, at_ms: i64) -> i32 {
+    let Some(dt) = chrono::DateTime::from_timestamp_millis(at_ms) else {
+        return 0;
+    };
+    tz.offset_from_utc_datetime(&dt.naive_utc())
+        .fix()
+        .local_minus_utc()
+        / 60
 }
 
-/// 解析后的图表窗口：时间区间 + 桶粒度 + 客户端时区偏移。
+/// 统计口径的固定时区偏移（分钟）：读设置表 timezone（缺省 Asia/Shanghai，
+/// 与用量口径同一来源 `timezone_sync`），按窗口起点时刻求该时区偏移；客户端
+/// 不再提供 tzOffsetMinutes。
+fn stats_tz_offset_minutes(window_start_hint: Option<i64>) -> i32 {
+    let at = window_start_hint
+        .filter(|v| *v > 0)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    tz_offset_minutes_at(crate::app_settings::timezone_sync(), at)
+}
+
+/// 解析后的图表窗口：时间区间 + 桶粒度 + 时区偏移（设置表时区在窗口起点的偏移）。
 #[derive(Clone, Copy, Debug)]
 struct ChartWindow {
     start: i64,
@@ -450,15 +465,13 @@ struct ChartsQuery {
     api_key: Option<String>,
     /// 桶粒度（hour/day/month/year）。缺省按窗口长度回退推断。
     granularity: Option<String>,
-    /// 客户端 UTC 偏移（分钟）。仅与显式 granularity 搭配使用。
-    tz_offset_minutes: Option<i32>,
 }
 
 /// 图表数据：调用/ token 的趋势 + 按上游模型的分布。
 ///
 /// 支持可选 startTime/endTime（缺省回退过去 24 小时）与 providerId 过滤；
-/// 显式 granularity + tzOffsetMinutes 时按客户端本地自然边界分桶：
-/// 小时/天桶对齐本地整点/午夜，月/年桶按自然月/年归并；两者缺省时
+/// 显式 granularity 时按设置表时区的自然边界分桶：
+/// 小时/天桶对齐本地整点/午夜，月/年桶按自然月/年归并；granularity 缺省时
 /// 按窗口长度回退（≤48h 小时桶、≤62 天天桶、其余 30 天块）。
 async fn charts(
     State(state): State<AppState>,
@@ -468,7 +481,7 @@ async fn charts(
         Ok(g) => g,
         Err(msg) => return response::bad_request(msg),
     };
-    let tz_offset_minutes = parse_tz_offset(query.tz_offset_minutes);
+    let tz_offset_minutes = stats_tz_offset_minutes(query.start_time);
     let tz = chrono::FixedOffset::east_opt(tz_offset_minutes * 60)
         .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).expect("0 偏移恒有效"));
     let window = resolve_chart_window(
@@ -663,7 +676,7 @@ async fn insight(
         Ok(g) => g,
         Err(msg) => return response::bad_request(msg),
     };
-    let tz_offset_minutes = parse_tz_offset(query.tz_offset_minutes);
+    let tz_offset_minutes = stats_tz_offset_minutes(query.start_time);
     let tz = chrono::FixedOffset::east_opt(tz_offset_minutes * 60)
         .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).expect("0 偏移恒有效"));
     let window = resolve_chart_window(
@@ -2305,15 +2318,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_tz_offset_clamps_out_of_range() {
-        assert_eq!(parse_tz_offset(None), 0);
-        assert_eq!(parse_tz_offset(Some(480)), 480);
-        assert_eq!(parse_tz_offset(Some(0)), 0);
-        assert_eq!(parse_tz_offset(Some(-330)), -330);
-        assert_eq!(parse_tz_offset(Some(900)), 0); // 超出 ±14h
-    }
-
-    #[test]
     fn merge_natural_periods_groups_and_zero_fills_months() {
         // 窗口：2026-06-25 00:00 ~ 2026-08-27 00:00（东八区）。
         let start = local_ms(2026, 6, 25, 0, 0);
@@ -2442,5 +2446,32 @@ mod tests {
             "end == start 非法"
         );
         assert!(required_time_range(Some(3), Some(2)).is_err());
+    }
+
+    #[test]
+    fn tz_offset_minutes_matches_fixed_zones() {
+        // 2024-01-15T00:00:00Z：上海 +480、东京 +540、UTC 0、纽约冬令时 -300。
+        let at = 1_705_276_800_000;
+        assert_eq!(tz_offset_minutes_at(chrono_tz::Asia::Shanghai, at), 480);
+        assert_eq!(tz_offset_minutes_at(chrono_tz::Asia::Tokyo, at), 540);
+        assert_eq!(tz_offset_minutes_at(chrono_tz::UTC, at), 0);
+        assert_eq!(tz_offset_minutes_at(chrono_tz::America::New_York, at), -300);
+        // 夏令时（2024-07-15）：纽约 -240；上海不变。
+        let summer = 1_721_001_600_000;
+        assert_eq!(
+            tz_offset_minutes_at(chrono_tz::America::New_York, summer),
+            -240
+        );
+        assert_eq!(tz_offset_minutes_at(chrono_tz::Asia::Shanghai, summer), 480);
+    }
+
+    #[test]
+    fn stats_tz_offset_defaults_to_shanghai_and_ignores_bad_hints() {
+        // 无设置时（timezone_sync 缺省 Asia/Shanghai）：+480。
+        assert_eq!(stats_tz_offset_minutes(None), 480);
+        assert_eq!(stats_tz_offset_minutes(Some(1_705_276_800_000)), 480);
+        // 非正起点提示回退 now：偏移必在合法 ±840 分钟内。
+        let offset = stats_tz_offset_minutes(Some(0));
+        assert!((-840..=840).contains(&offset));
     }
 }

@@ -21,8 +21,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { VirtualModelRaceCard } from "@/components/virtual-model-race/VirtualModelRaceCard";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts, useDashboardSummary } from "@/hooks/use-dashboard-stats";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import { OVERVIEW_PAGE } from "@/lib/pages";
-import { clientTzOffsetMinutes, periodBounds } from "@/lib/race-period";
+import { periodBounds } from "@/lib/race-period";
 import { formatPercent, formatTokenCount, localeOf } from "@/lib/utils";
 import { ChartLine, CircleCheck, Coins, DatabaseZap, ListChecks } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -45,40 +46,37 @@ const SECTION_KEYS = ["call", "token", "insight"] as const;
 
 export default function OverviewPage() {
 	const { t, i18n } = useTranslation();
-	// 今日窗口：本地今日 0 点 → 当前时刻（与图表区「天」周期同一语义）。
+	// 今日窗口：设置表时区今日 0 点 → 当前时刻（与图表区「天」周期同一语义）。
 	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS, defaultChartsWindow);
 	const subtitle = useSectionSubtitle();
-	const todayWindow = periodBounds("day", 0, now);
+	const tz = useStatsTimeZone();
+	const todayWindow = periodBounds("day", 0, now, tz);
 	const summaryQuery = useDashboardSummary();
 	const todaySummaryQuery = useDashboardSummary({
 		startTime: todayWindow.startTime,
 		endTime: todayWindow.endTime,
 	});
 	// 调用/Token/可靠性分析各自独立时间段（默认「今天」）。
-	const callWindow = sectionWindow(windows.call, now);
-	const tokenWindow = sectionWindow(windows.token, now);
-	const insightWindow = sectionWindow(windows.insight, now);
+	const callWindow = sectionWindow(windows.call, now, tz);
+	const tokenWindow = sectionWindow(windows.token, now, tz);
+	const insightWindow = sectionWindow(windows.insight, now, tz);
 	const callGranularity = sectionGranularity(windows.call, callWindow);
 	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
 	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
-	const tzOffsetMinutes = clientTzOffsetMinutes();
 	const callChartsQuery = useDashboardCharts({
 		startTime: callWindow.startTime,
 		endTime: callWindow.endTime,
 		granularity: callGranularity,
-		tzOffsetMinutes,
 	});
 	const tokenChartsQuery = useDashboardCharts({
 		startTime: tokenWindow.startTime,
 		endTime: tokenWindow.endTime,
 		granularity: tokenGranularity,
-		tzOffsetMinutes,
 	});
 	const insightQuery = useDashboardInsight({
 		startTime: insightWindow.startTime,
 		endTime: insightWindow.endTime,
 		granularity: insightGranularity,
-		tzOffsetMinutes,
 	});
 
 	const isLoading =

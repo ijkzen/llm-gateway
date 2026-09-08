@@ -23,8 +23,8 @@ import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { type ProviderModelRankItem, useProviderModelRace } from "@/hooks/use-provider-model-race";
 import { useProviderDetail } from "@/hooks/use-providers";
 import { useProviderMetrics } from "@/hooks/use-stats-metrics";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import { useUsageEstimate } from "@/hooks/use-usage-estimate";
-import { clientTzOffsetMinutes } from "@/lib/race-period";
 import { Boxes } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
@@ -43,7 +43,8 @@ function InternalModelRaceTable({
 }) {
 	const navigate = useNavigate();
 	const { sort, onSort } = useRaceSort();
-	const window = raceWindowBounds(windowState, now);
+	const tz = useStatsTimeZone();
+	const window = raceWindowBounds(windowState, now, tz);
 	const query = useProviderModelRace(window, sort, true, providerId);
 
 	const openModelOverview = (item: ProviderModelRankItem) => {
@@ -75,18 +76,18 @@ export default function ProviderOverviewPage() {
 	const providerId = Number.parseInt(providerIdParam ?? "", 10);
 	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS);
 	const subtitle = useSectionSubtitle();
+	const tz = useStatsTimeZone();
 
 	const providerDetail = useProviderDetail(Number.isFinite(providerId) ? providerId : null);
 	const providerName =
 		providerDetail.data?.name ?? t("dashboardPage.providerLabel", { id: providerId });
 
-	const metricsWindow = sectionWindow(windows.metrics, now);
-	const callWindow = sectionWindow(windows.call, now);
-	const tokenWindow = sectionWindow(windows.token, now);
-	const insightWindow = sectionWindow(windows.insight, now);
+	const metricsWindow = sectionWindow(windows.metrics, now, tz);
+	const callWindow = sectionWindow(windows.call, now, tz);
+	const tokenWindow = sectionWindow(windows.token, now, tz);
+	const insightWindow = sectionWindow(windows.insight, now, tz);
 
-	// 图表桶粒度由所选时间窗口推导，并与本地时区偏移一起传给后端。
-	const tzOffsetMinutes = clientTzOffsetMinutes();
+	// 图表桶粒度由所选时间窗口推导（分桶时区由后端按设置表解释）。
 	const callGranularity = sectionGranularity(windows.call, callWindow);
 	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
 	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
@@ -106,21 +107,18 @@ export default function ProviderOverviewPage() {
 		endTime: callWindow.endTime,
 		providerId,
 		granularity: callGranularity,
-		tzOffsetMinutes,
 	});
 	const tokenCharts = useDashboardCharts({
 		startTime: tokenWindow.startTime,
 		endTime: tokenWindow.endTime,
 		providerId,
 		granularity: tokenGranularity,
-		tzOffsetMinutes,
 	});
 	const insightQuery = useDashboardInsight({
 		startTime: insightWindow.startTime,
 		endTime: insightWindow.endTime,
 		providerId,
 		granularity: insightGranularity,
-		tzOffsetMinutes,
 	});
 
 	return (

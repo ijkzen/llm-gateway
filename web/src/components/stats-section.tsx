@@ -7,6 +7,7 @@ import {
 } from "@/components/race-window-control";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import type { ChartGranularity } from "@/lib/race-period";
 import { chartGranularity, formatPeriodLabel } from "@/lib/race-period";
 import { localeOf } from "@/lib/utils";
@@ -34,18 +35,20 @@ export function useSectionWindows<const K extends string>(
 	return { windows, now, setWindow };
 }
 
-/** 区块副标题：自定义区间文案 / 周期标签（各页逐字相同的闭包，收拢为一份）。 */
+/** 区块副标题：自定义区间文案 / 周期标签（各页逐字相同的闭包，收拢为一份）。
+ *  标签按数据面板口径时区（设置表）解释。 */
 export function useSectionSubtitle() {
 	const { t, i18n } = useTranslation();
+	const tz = useStatsTimeZone();
 	return (state: RaceWindowState, now: number) =>
 		state.period === "custom"
 			? t("overview.customWindow")
-			: formatPeriodLabel(state.period, state.offset, now, localeOf(i18n.language));
+			: formatPeriodLabel(state.period, state.offset, now, localeOf(i18n.language), tz);
 }
 
-/** 区块窗口（毫秒起止）。 */
-export function sectionWindow(state: RaceWindowState, now: number) {
-	return raceWindowBounds(state, now);
+/** 区块窗口（毫秒起止；timeZone 缺省按浏览器本地解释）。 */
+export function sectionWindow(state: RaceWindowState, now: number, timeZone?: string) {
+	return raceWindowBounds(state, now, timeZone);
 }
 
 /** 图表桶粒度（由区块窗口推导）。 */

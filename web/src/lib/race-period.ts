@@ -1,7 +1,9 @@
 /**
  * 赛马时间窗口（天/周/月/年）的自然周期计算。
  *
- * 全部按浏览器本地时区解释，返回毫秒时间戳：
+ * 默认按浏览器本地时区解释；传入 IANA `timeZone`（如设置表时区 Asia/Shanghai）
+ * 时按该时区解释（管理后台数据面板统一走设置表时区，与后端分桶口径一致）。
+ * 返回毫秒时间戳：
  * - 当前周期（offset=0）：[周期起点, now]，统计到当前时刻；
  * - 历史周期（offset<0）/未来周期（offset>0）：[周期起点, 下一周期起点) 半开区间。
  */
@@ -79,60 +81,223 @@ function periodStart(period: RacePeriod, date: Date): Date {
 	}
 }
 
+/** 时间窗口终局计算（三种调用路径共用）：当前周期截到 now，其余取完整半开区间。 */
+function boundsOf(
+	currentStart: number,
+	targetStart: number,
+	nextStart: number,
+	now: number,
+): PeriodBounds {
+	if (targetStart <= currentStart && nextStart > now) {
+		return { startTime: targetStart, endTime: now };
+	}
+	return { startTime: targetStart, endTime: nextStart };
+}
+
+// ── IANA 时区感知内核（Intl 墙钟部件 + 固定偏移模型，与后端口径一致） ──
+
+const tzFormatters = new Map<string, Intl.DateTimeFormat>();
+
+interface WallParts {
+	y: number;
+	m: number;
+	d: number;
+	hh: number;
+	mm: number;
+	ss: number;
+}
+
+function tzFormatter(tz: string): Intl.DateTimeFormat {
+	let formatter = tzFormatters.get(tz);
+	if (!formatter) {
+		formatter = new Intl.DateTimeFormat("en-US", {
+			timeZone: tz,
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+			hour: "2-digit",
+			minute: "2-digit",
+			second: "2-digit",
+			hour12: false,
+			hourCycle: "h23",
+		});
+		tzFormatters.set(tz, formatter);
+	}
+	return formatter;
+}
+
+/** 某时刻在该时区的墙钟部件。 */
+function wallParts(tz: string, ms: number): WallParts {
+	const parts = tzFormatter(tz).formatToParts(new Date(ms));
+	const num = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+	return {
+		y: num("year"),
+		m: num("month"),
+		d: num("day"),
+		hh: num("hour"),
+		mm: num("minute"),
+		ss: num("second"),
+	};
+}
+
+/** 某时刻该时区的 UTC 偏移（毫秒，东为正）：墙钟按 UTC 组装再与真实时刻相减。 */
+function tzOffsetMs(tz: string, ms: number): number {
+	const p = wallParts(tz, ms);
+	return Date.UTC(p.y, p.m - 1, p.d, p.hh, p.mm, p.ss) - ms;
+}
+
+const wallKey = (p: Pick<WallParts, "y" | "m" | "d">) => p.y * 10000 + p.m * 100 + p.d;
+
+/** 目标墙钟日（y/m/d）在指定时区的 0 点毫秒；DST 跳日/歧义时最多校正两次。 */
+function wallDayStart(tz: string, y: number, m: number, d: number): number {
+	const target = y * 10000 + m * 100 + d;
+	let start = Date.UTC(y, m - 1, d) - tzOffsetMs(tz, Date.UTC(y, m - 1, d));
+	for (let i = 0; i < 2; i++) {
+		const p = wallParts(tz, start);
+		if (wallKey(p) === target) {
+			return start;
+		}
+		start += wallKey(p) < target ? DAY_MS : -DAY_MS;
+	}
+	return start;
+}
+
+/** 墙钟日加 days 天后的该时区 0 点（Date.UTC 自动处理月/年进位）。 */
+function wallDayAdd(tz: string, p: WallParts, days: number): number {
+	return wallDayStart(tz, p.y, p.m, p.d + days);
+}
+
+/** 墙钟月加 months 月后的该时区 1 日 0 点。 */
+function wallMonthAdd(tz: string, p: WallParts, months: number): number {
+	const total = p.y * 12 + (p.m - 1) + months;
+	const y = Math.floor(total / 12);
+	return wallDayStart(tz, y, total - y * 12 + 1, 1);
+}
+
+/** 某周期起点（指定时区）。周起点为周一；月/年为 1 日/1 月 1 日。 */
+function periodStartInTz(period: RacePeriod, ms: number, tz: string): number {
+	const p = wallParts(tz, ms);
+	switch (period) {
+		case "day":
+			return wallDayStart(tz, p.y, p.m, p.d);
+		case "week": {
+			const mondayOffset = (new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay() + 6) % 7;
+			return wallDayStart(tz, p.y, p.m, p.d - mondayOffset);
+		}
+		case "month":
+			return wallDayStart(tz, p.y, p.m, 1);
+		case "year":
+			return wallDayStart(tz, p.y, 1, 1);
+	}
+}
+
+/** 周期起点偏移 offset 个周期（指定时区，基于 base 所在周期）。 */
+function shiftPeriodInTz(
+	period: RacePeriod,
+	baseStart: number,
+	offset: number,
+	tz: string,
+): number {
+	const p = wallParts(tz, baseStart);
+	switch (period) {
+		case "day":
+			return wallDayAdd(tz, p, offset);
+		case "week":
+			return wallDayAdd(tz, p, offset * 7);
+		case "month":
+			return wallMonthAdd(tz, p, offset);
+		case "year":
+			return wallDayStart(tz, p.y + offset, 1, 1);
+	}
+}
+
+/** 下周期起点（指定时区，处理月/年边界）。 */
+function nextPeriodStartInTz(period: RacePeriod, start: number, tz: string): number {
+	return shiftPeriodInTz(period, start, 1, tz);
+}
+
 /**
  * 计算偏移后的周期窗口。
  * @param period 周期类型
  * @param offset 相对当前周期的偏移（0=当前，-1=上一周期，1=下一周期）
  * @param now 当前时刻（毫秒时间戳，测试可注入）
+ * @param timeZone 可选 IANA 时区；缺省按浏览器本地时区解释
  */
-export function periodBounds(period: RacePeriod, offset: number, now: number): PeriodBounds {
+export function periodBounds(
+	period: RacePeriod,
+	offset: number,
+	now: number,
+	timeZone?: string,
+): PeriodBounds {
+	if (timeZone) {
+		const currentStart = periodStartInTz(period, now, timeZone);
+		const targetStart = shiftPeriodInTz(period, currentStart, offset, timeZone);
+		const nextStart = nextPeriodStartInTz(period, targetStart, timeZone);
+		return boundsOf(currentStart, targetStart, nextStart, now);
+	}
 	const nowDate = new Date(now);
 	const currentStart = periodStart(period, nowDate);
 	const targetStart = shiftPeriod(period, nowDate, offset);
 	const nextStart = nextPeriodStart(period, targetStart);
-
-	if (targetStart.getTime() <= currentStart.getTime() && nextStart.getTime() > now) {
-		// 当前周期（含偏移回退到当前）：终点截到 now。
-		return { startTime: targetStart.getTime(), endTime: now };
-	}
-	// 历史或未来周期：完整半开区间。
-	return { startTime: targetStart.getTime(), endTime: nextStart.getTime() };
+	return boundsOf(currentStart.getTime(), targetStart.getTime(), nextStart.getTime(), now);
 }
 
 /**
  * 周期窗口的展示标题。中文：`2026年8月（当前）`；英文：`Aug 2026 (current)`。
  * @param now 当前时刻（毫秒时间戳），用于「当前周期」标记。
+ * @param timeZone 可选 IANA 时区；缺省按浏览器本地时区解释。
  */
 export function formatPeriodLabel(
 	period: RacePeriod,
 	offset: number,
 	now: number,
 	locale: "zh" | "en",
+	timeZone?: string,
 ): string {
-	const bounds = periodBounds(period, offset, now);
-	const start = new Date(bounds.startTime);
+	const bounds = periodBounds(period, offset, now, timeZone);
+	const startMs = bounds.startTime;
 	const isCurrent = bounds.endTime === now;
-	const zh = locale === "zh";
-	const currentSuffix = isCurrent ? (zh ? "（当前）" : " (current)") : "";
+	const currentSuffix = isCurrent ? (locale === "zh" ? "（当前）" : " (current)") : "";
+	const start = new Date(startMs);
+
+	if (timeZone) {
+		const p = wallParts(timeZone, startMs);
+		switch (period) {
+			case "day":
+				return locale === "zh"
+					? `${p.y}年${p.m}月${p.d}日${currentSuffix}`
+					: `${new Intl.DateTimeFormat("en-US", { timeZone, month: "short", day: "numeric" }).format(start)}${currentSuffix}`;
+			case "week":
+				return locale === "zh"
+					? `${p.y}年第${isoWeekNumberInTz(timeZone, startMs)}周${currentSuffix}`
+					: `Week ${isoWeekNumberInTz(timeZone, startMs)}, ${p.y}${currentSuffix}`;
+			case "month":
+				return locale === "zh"
+					? `${p.y}年${p.m}月${currentSuffix}`
+					: `${monthNameInTz(timeZone, startMs)} ${p.y}${currentSuffix}`;
+			case "year":
+				return locale === "zh" ? `${p.y}年${currentSuffix}` : `${p.y}${currentSuffix}`;
+		}
+	}
 
 	switch (period) {
 		case "day":
-			return zh
+			return locale === "zh"
 				? `${start.getFullYear()}年${start.getMonth() + 1}月${start.getDate()}日${currentSuffix}`
 				: `${start.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}${currentSuffix}`;
 		case "week": {
 			// 周数按 ISO 8601：周一为一周起点。
 			const weekNumber = isoWeekNumber(start);
-			return zh
+			return locale === "zh"
 				? `${start.getFullYear()}年第${weekNumber}周${currentSuffix}`
 				: `Week ${weekNumber}, ${start.getFullYear()}${currentSuffix}`;
 		}
 		case "month":
-			return zh
+			return locale === "zh"
 				? `${start.getFullYear()}年${start.getMonth() + 1}月${currentSuffix}`
 				: `${start.toLocaleDateString("en-US", { year: "numeric", month: "short" })}${currentSuffix}`;
 		case "year":
-			return zh
+			return locale === "zh"
 				? `${start.getFullYear()}年${currentSuffix}`
 				: `${start.getFullYear()}${currentSuffix}`;
 	}
@@ -187,6 +352,19 @@ function isoWeekNumber(date: Date): number {
 	return Math.ceil(((date.getTime() - jan1.getTime()) / DAY_MS + jan1.getDay() + 1) / 7);
 }
 
+/** ISO 周数（指定时区：按该时区墙钟年的 1 月 1 日计）。 */
+function isoWeekNumberInTz(tz: string, startMs: number): number {
+	const p = wallParts(tz, startMs);
+	const jan1 = wallDayStart(tz, p.y, 1, 1);
+	const jan1Weekday = new Date(Date.UTC(p.y, 0, 1)).getUTCDay();
+	return Math.ceil((startMs - jan1) / DAY_MS + jan1Weekday + 1);
+}
+
+/** 英文月份短名（指定时区，如 Aug）。 */
+function monthNameInTz(tz: string, ms: number): string {
+	return new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short" }).format(new Date(ms));
+}
+
 /** 两位补零。 */
 function pad2(n: number): string {
 	return n.toString().padStart(2, "0");
@@ -195,10 +373,30 @@ function pad2(n: number): string {
 /**
  * 周期窗口的紧凑标题（不带「当前」标记）：
  * 天 → 2026/08/31；周 → 2026-36W；月 → 2026/08；年 → 2026。
+ * @param timeZone 可选 IANA 时区；缺省按浏览器本地时区解释。
  */
-export function formatCompactPeriodLabel(period: RacePeriod, offset: number, now: number): string {
-	const bounds = periodBounds(period, offset, now);
-	const start = new Date(bounds.startTime);
+export function formatCompactPeriodLabel(
+	period: RacePeriod,
+	offset: number,
+	now: number,
+	timeZone?: string,
+): string {
+	const bounds = periodBounds(period, offset, now, timeZone);
+	const startMs = bounds.startTime;
+	if (timeZone) {
+		const p = wallParts(timeZone, startMs);
+		switch (period) {
+			case "day":
+				return `${p.y}/${pad2(p.m)}/${pad2(p.d)}`;
+			case "week":
+				return `${p.y}-${isoWeekNumberInTz(timeZone, startMs)}W`;
+			case "month":
+				return `${p.y}/${pad2(p.m)}`;
+			case "year":
+				return `${p.y}`;
+		}
+	}
+	const start = new Date(startMs);
 	switch (period) {
 		case "day":
 			return `${start.getFullYear()}/${pad2(start.getMonth() + 1)}/${pad2(start.getDate())}`;
@@ -234,9 +432,4 @@ export function defaultCustomWindow(now: number): { startTime: number; endTime: 
 	end.setDate(end.getDate() + 1);
 	end.setHours(0, 0, 0, 0);
 	return { startTime: start.getTime(), endTime: end.getTime() };
-}
-
-/** 客户端 UTC 偏移（分钟，东八区 480）；与 granularity 搭配传给后端。 */
-export function clientTzOffsetMinutes(): number {
-	return -new Date().getTimezoneOffset();
 }

@@ -615,8 +615,8 @@ async fn test_charts_with_window_and_provider_filter() {
 async fn test_charts_day_granularity_for_long_window() {
     let (app, db) = setup_app().await;
     // 5 天窗口 → 天桶粒度（5 个桶），验证 >48h 用天桶。
-    // t0 对齐到整天起点（小时对齐后再按 24h 对齐），保证桶边界整齐。
-    let t0 = ((1_700_000_000_000i64 / HOUR_MS) / 24) * 24 * HOUR_MS;
+    // t0 对齐设置表时区（缺省 Asia/Shanghai +480）的本地午夜，桶边界整齐。
+    let t0 = ((1_700_000_000_000i64 / HOUR_MS / 24) * 24 * HOUR_MS) - 8 * HOUR_MS;
     let day_ms = 24 * HOUR_MS;
     for row in [
         SeedRow {
@@ -938,7 +938,7 @@ async fn test_virtual_model_metrics_aggregates() {
     );
 }
 
-// ---------- 显式 granularity + tzOffsetMinutes 分桶 ----------
+// ---------- 显式 granularity 分桶（设置表时区口径） ----------
 
 /// 东八区本地日期 → UTC 毫秒时间戳。
 fn local_ms_cn(y: i32, m: u32, d: u32, h: u32, min: u32) -> i64 {
@@ -979,9 +979,7 @@ async fn test_charts_hour_granularity_local_alignment() {
 
     let (status, json) = get_json(
         app,
-        &format!(
-            "/api/stats/charts?startTime={start}&endTime={end}&granularity=hour&tzOffsetMinutes=480"
-        ),
+        &format!("/api/stats/charts?startTime={start}&endTime={end}&granularity=hour"),
     )
     .await;
     assert_eq!(status, 200);
@@ -1036,9 +1034,7 @@ async fn test_charts_day_granularity_week_has_seven_points() {
 
     let (status, json) = get_json(
         app,
-        &format!(
-            "/api/stats/charts?startTime={start}&endTime={end}&granularity=day&tzOffsetMinutes=480"
-        ),
+        &format!("/api/stats/charts?startTime={start}&endTime={end}&granularity=day"),
     )
     .await;
     assert_eq!(status, 200);
@@ -1091,7 +1087,7 @@ async fn test_charts_month_granularity_natural_months() {
 
     let (status, json) = get_json(
         app,
-        &format!("/api/stats/charts?startTime={start}&endTime={end}&granularity=month&tzOffsetMinutes=480"),
+        &format!("/api/stats/charts?startTime={start}&endTime={end}&granularity=month"),
     )
     .await;
     assert_eq!(status, 200);
@@ -1147,9 +1143,7 @@ async fn test_charts_year_granularity_natural_years() {
 
     let (status, json) = get_json(
         app,
-        &format!(
-            "/api/stats/charts?startTime={start}&endTime={end}&granularity=year&tzOffsetMinutes=480"
-        ),
+        &format!("/api/stats/charts?startTime={start}&endTime={end}&granularity=year"),
     )
     .await;
     assert_eq!(status, 200);
@@ -1206,11 +1200,7 @@ async fn test_charts_granularity_without_window_defaults_to_past_24h() {
     )
     .await;
 
-    let (status, json) = get_json(
-        app,
-        "/api/stats/charts?granularity=hour&tzOffsetMinutes=480",
-    )
-    .await;
+    let (status, json) = get_json(app, "/api/stats/charts?granularity=hour").await;
     assert_eq!(status, 200);
     let data = &json["data"];
     let call_trend = data["callTrend"].as_array().unwrap();
@@ -1386,7 +1376,7 @@ async fn test_insight_failure_diagnostics() {
     let (status, json) = get_json(
         app,
         &format!(
-            "/api/stats/insight?startTime={}&endTime={}&tzOffsetMinutes=0",
+            "/api/stats/insight?startTime={}&endTime={}",
             bucket_start,
             bucket_start + HOUR_MS
         ),
@@ -1454,7 +1444,7 @@ async fn test_insight_failure_reason_empty_maps_to_no_reason() {
     let (status, json) = get_json(
         app,
         &format!(
-            "/api/stats/insight?startTime={}&endTime={}&tzOffsetMinutes=0",
+            "/api/stats/insight?startTime={}&endTime={}",
             t0,
             t0 + HOUR_MS
         ),
@@ -1503,7 +1493,7 @@ async fn test_insight_latency_percentiles() {
     let (status, json) = get_json(
         app,
         &format!(
-            "/api/stats/insight?startTime={}&endTime={}&tzOffsetMinutes=0",
+            "/api/stats/insight?startTime={}&endTime={}",
             t0,
             t0 + HOUR_MS
         ),
@@ -1566,7 +1556,7 @@ async fn test_insight_token_structure_and_throughput() {
     let (status, json) = get_json(
         app,
         &format!(
-            "/api/stats/insight?startTime={}&endTime={}&tzOffsetMinutes=0",
+            "/api/stats/insight?startTime={}&endTime={}",
             t0,
             t0 + HOUR_MS
         ),
@@ -1636,7 +1626,7 @@ async fn test_insight_filters_by_provider_vm_model() {
     let (status, json) = get_json(
         app.clone(),
         &format!(
-            "/api/stats/insight?startTime={}&endTime={}&tzOffsetMinutes=0&providerId={}",
+            "/api/stats/insight?startTime={}&endTime={}&providerId={}",
             t0,
             t0 + HOUR_MS,
             DEFAULT_PROVIDER_ID
@@ -1651,7 +1641,7 @@ async fn test_insight_filters_by_provider_vm_model() {
     let (status, json) = get_json(
         app,
         &format!(
-            "/api/stats/insight?startTime={}&endTime={}&tzOffsetMinutes=0&virtualModelId=1&modelId=gpt-4o",
+            "/api/stats/insight?startTime={}&endTime={}&virtualModelId=1&modelId=gpt-4o",
             t0,
             t0 + HOUR_MS
         ),
@@ -1749,9 +1739,7 @@ async fn test_insight_month_granularity_recomputes_ratios() {
 
     let (status, json) = get_json(
         app,
-        &format!(
-            "/api/stats/insight?startTime={start}&endTime={end}&granularity=month&tzOffsetMinutes=480"
-        ),
+        &format!("/api/stats/insight?startTime={start}&endTime={end}&granularity=month"),
     )
     .await;
     assert_eq!(status, 200);

@@ -31,6 +31,7 @@ import { useApiKeys } from "@/hooks/use-api-keys";
 import { useProviderModels } from "@/hooks/use-provider-models";
 import { useProviders } from "@/hooks/use-providers";
 import { type RequestLogRow, useRequestLogs } from "@/hooks/use-request-logs";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import { useVirtualModels } from "@/hooks/use-virtual-models";
 import {
 	type ColumnDef,
@@ -148,7 +149,8 @@ export function RequestLogsTable() {
 	// now 随重置刷新：当前周期（offset=0）的 endTime 由它派生，
 	// 若固化在挂载时刻，重置后结束时间不更新，最新日志查不到。
 	const [now, setNow] = useState(() => Date.now());
-	const timeBounds = raceWindowBounds(timeWindow, now);
+	const tz = useStatsTimeZone();
+	const timeBounds = raceWindowBounds(timeWindow, now, tz);
 
 	const { data: virtualModels } = useVirtualModels();
 	const { data: providers } = useProviders();
