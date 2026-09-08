@@ -144,6 +144,7 @@ cd web && pnpm vitest run
 | `CONTEXT.md` | 领域术语与语言约定 |
 | `AGENTS.md` | 项目结构、构建方式与开发约定 |
 | `docs/adr/` | 架构决策记录 |
+| [`docs/user-guide.md`](docs/user-guide.md) | 面向使用者的模块化使用文档（中文）：数据面板、接入配置、请求日志、定时任务、设置、备份恢复、`/v1` 接入指南 |
 
 ## 许可
 
