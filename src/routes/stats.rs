@@ -1171,6 +1171,106 @@ fn sort_rank_rows<T>(rows: &mut [T], is_asc: bool, value_of: impl Fn(&T) -> f64)
     });
 }
 
+// ── 赛马 6 指标行：公共解码 / 取值 / 过滤（五个 rank 端点共用） ──────────
+
+/// 聚合行中的 6 个指标（列名与 `rank_metric_sql` 别名一一对应）。嵌入各
+/// rank item 后经 `#[serde(flatten)]` 输出，JSON 形状与旧内联字段一致。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RankRowMetrics {
+    /// 成功请求数。
+    request_count: i64,
+    /// 总计 token（成功请求的 total_tokens 合计）。
+    total_tokens: i64,
+    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
+    ttft: f64,
+    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
+    request_time: f64,
+    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
+    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
+    tps: f64,
+    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
+    cache_hit_rate: f64,
+}
+
+impl RankRowMetrics {
+    /// 从聚合行解码（SQLite 数值列：先试 f64 再试 i64 的列在此全部按声明类型读）。
+    fn from_row(row: &sea_orm::QueryResult) -> Self {
+        Self {
+            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
+            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
+            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
+            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
+            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
+            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+        }
+    }
+}
+
+/// 排序键 → 指标数值（六个端点同一个取值口径）。
+fn rank_metric_value(key: RankSortKey, metrics: &RankRowMetrics) -> f64 {
+    match key {
+        RankSortKey::TotalTokens => metrics.total_tokens as f64,
+        RankSortKey::RequestCount => metrics.request_count as f64,
+        RankSortKey::Ttft => metrics.ttft,
+        RankSortKey::RequestTime => metrics.request_time,
+        RankSortKey::Tps => metrics.tps,
+        RankSortKey::CacheHitRate => metrics.cache_hit_rate,
+    }
+}
+
+/// 行读取小助手（聚合维度列）。
+/// 聚合行读取：整型维度列（缺省 0）。
+fn row_i32(row: &sea_orm::QueryResult, column: &str) -> i32 {
+    row.try_get::<i32>("", column).unwrap_or(0)
+}
+
+/// 聚合行读取：文本维度列（缺省空串）。
+fn row_string(row: &sea_orm::QueryResult, column: &str) -> String {
+    row.try_get("", column).unwrap_or_default()
+}
+
+/// 聚合行读取：可空整型维度列（如 provider_model/api_key 主键）。
+fn row_opt_i32(row: &sea_orm::QueryResult, column: &str) -> Option<i32> {
+    row.try_get("", column).ok()
+}
+
+/// 执行只读聚合 SQL（rank 端点共用）：DB 错误转统一响应文案。
+async fn query_group_rank(
+    db: &sea_orm::DatabaseConnection,
+    sql: &str,
+    params: Vec<sea_orm::Value>,
+) -> Result<Vec<sea_orm::QueryResult>, String> {
+    db.query_all_raw(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        sql,
+        params,
+    ))
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// 按固定顺序（providerId → virtualModelId → modelId → apiKey）追加可选过滤：
+/// 占位符与参数一一对应，五个端点共用同一拼接实现。
+fn push_rank_filters(where_sql: &mut String, params: &mut Vec<sea_orm::Value>, query: &RankQuery) {
+    if let Some(provider_id) = query.provider_id {
+        where_sql.push_str(" AND r.provider_id = ?");
+        params.push(provider_id.into());
+    }
+    if let Some(virtual_model_id) = query.virtual_model_id {
+        where_sql.push_str(" AND r.virtual_model_id = ?");
+        params.push(virtual_model_id.into());
+    }
+    if let Some(model_id) = query.model_id.as_deref() {
+        where_sql.push_str(" AND r.model_id = ?");
+        params.push(model_id.into());
+    }
+    if let Some(api_key) = query.api_key.as_deref() {
+        where_sql.push_str(" AND r.api_key_name = ?");
+        params.push(api_key.into());
+    }
+}
+
 /// 加权 TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
 /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
 fn tps_sql(alias: &str) -> String {
@@ -1272,19 +1372,8 @@ struct ProviderRankItem {
     provider_id: i32,
     /// 实际服务的供应商名称（供应商已删除时为空串）。
     provider_name: String,
-    /// 成功请求数。
-    request_count: i64,
-    /// 总计 token（成功请求的 total_tokens 合计）。
-    total_tokens: i64,
-    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
-    ttft: f64,
-    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
-    request_time: f64,
-    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
-    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
-    tps: f64,
-    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
-    cache_hit_rate: f64,
+    #[serde(flatten)]
+    metrics: RankRowMetrics,
 }
 
 #[derive(Serialize)]
@@ -1301,21 +1390,14 @@ async fn provider_rank(
     State(state): State<AppState>,
     Query(query): Query<RankQuery>,
 ) -> Result<Json<Response<ProviderRankResponse>>, response::ErrorResponse<ProviderRankResponse>> {
-    let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let (sort_key, order_dir, start, end) = parse_rank_query(&query)?;
     let db = &state.db;
 
-    // 单查询聚合全部 6 个指标：仅成功请求 + start_time 半开窗口。
     // 按 r.provider_id 分组（id 才是真实聚合维度，name 仅展示）。
-    let rank_sql = rank_metric_sql();
     let mut where_sql = String::from("r.success = 1 AND r.start_time >= ? AND r.start_time < ?");
     let mut params: Vec<sea_orm::Value> = vec![start.into(), end.into()];
-    if let Some(api_key) = query.api_key.as_deref() {
-        where_sql.push_str(" AND r.api_key_name = ?");
-        params.push(api_key.into());
-    }
+    push_rank_filters(&mut where_sql, &mut params, &query);
+    let rank_sql = rank_metric_sql();
     let sql = format!(
         "SELECT r.provider_id AS provider_id, COALESCE(p.name, '') AS provider_name,{rank_sql} \
          FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
@@ -1323,44 +1405,22 @@ async fn provider_rank(
          GROUP BY r.provider_id"
     );
 
-    let rows = match db
-        .query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            sql,
-            params,
-        ))
+    let rows = query_group_rank(db, &sql, params)
         .await
-    {
-        Ok(rows) => rows,
-        Err(e) => return Err(response::db_error(e.to_string())),
-    };
+        .map_err(response::db_error)?;
 
     let mut items = rows
         .iter()
         .map(|row| ProviderRankItem {
-            provider_id: row.try_get::<i32>("", "provider_id").unwrap_or(0),
-            provider_name: row.try_get("", "provider_name").unwrap_or_default(),
-            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
-            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
-            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
-            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
-            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
-            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+            provider_id: row_i32(row, "provider_id"),
+            provider_name: row_string(row, "provider_name"),
+            metrics: RankRowMetrics::from_row(row),
         })
         .collect::<Vec<_>>();
 
-    let is_asc = order_dir == "ASC";
-    let value_of = |item: &ProviderRankItem| -> f64 {
-        match sort_key {
-            RankSortKey::TotalTokens => item.total_tokens as f64,
-            RankSortKey::RequestCount => item.request_count as f64,
-            RankSortKey::Ttft => item.ttft,
-            RankSortKey::RequestTime => item.request_time,
-            RankSortKey::Tps => item.tps,
-            RankSortKey::CacheHitRate => item.cache_hit_rate,
-        }
-    };
-    sort_rank_rows(&mut items, is_asc, value_of);
+    sort_rank_rows(&mut items, order_dir == "ASC", |item| {
+        rank_metric_value(sort_key, &item.metrics)
+    });
 
     Ok(Json(Response::success(ProviderRankResponse {
         start_time: start,
@@ -1376,19 +1436,8 @@ struct VirtualModelRankItem {
     virtual_model_id: i32,
     /// 虚拟模型对外 ID（虚拟模型已删除时为空串）。
     virtual_model_display_id: String,
-    /// 成功请求数。
-    request_count: i64,
-    /// 总计 token（成功请求的 total_tokens 合计）。
-    total_tokens: i64,
-    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
-    ttft: f64,
-    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
-    request_time: f64,
-    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
-    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
-    tps: f64,
-    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
-    cache_hit_rate: f64,
+    #[serde(flatten)]
+    metrics: RankRowMetrics,
 }
 
 #[derive(Serialize)]
@@ -1409,20 +1458,14 @@ async fn virtual_model_rank(
     Json<Response<VirtualModelRankResponse>>,
     response::ErrorResponse<VirtualModelRankResponse>,
 > {
-    let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let (sort_key, order_dir, start, end) = parse_rank_query(&query)?;
     let db = &state.db;
 
     // 按 id 分组（同一 display_id 的虚拟模型也各自成行），JOIN 出 display_id。
-    let rank_sql = rank_metric_sql();
     let mut where_sql = String::from("r.success = 1 AND r.start_time >= ? AND r.start_time < ?");
     let mut params: Vec<sea_orm::Value> = vec![start.into(), end.into()];
-    if let Some(api_key) = query.api_key.as_deref() {
-        where_sql.push_str(" AND r.api_key_name = ?");
-        params.push(api_key.into());
-    }
+    push_rank_filters(&mut where_sql, &mut params, &query);
+    let rank_sql = rank_metric_sql();
     let sql = format!(
         "SELECT r.virtual_model_id AS virtual_model_id, \
                 COALESCE(vm.display_id, '') AS virtual_model_display_id,{rank_sql} \
@@ -1431,46 +1474,22 @@ async fn virtual_model_rank(
          GROUP BY r.virtual_model_id"
     );
 
-    let rows = match db
-        .query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            sql,
-            params,
-        ))
+    let rows = query_group_rank(db, &sql, params)
         .await
-    {
-        Ok(rows) => rows,
-        Err(e) => return Err(response::db_error(e.to_string())),
-    };
+        .map_err(response::db_error)?;
 
     let mut items = rows
         .iter()
         .map(|row| VirtualModelRankItem {
-            virtual_model_id: row.try_get::<i32>("", "virtual_model_id").unwrap_or(0),
-            virtual_model_display_id: row
-                .try_get("", "virtual_model_display_id")
-                .unwrap_or_default(),
-            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
-            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
-            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
-            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
-            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
-            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+            virtual_model_id: row_i32(row, "virtual_model_id"),
+            virtual_model_display_id: row_string(row, "virtual_model_display_id"),
+            metrics: RankRowMetrics::from_row(row),
         })
         .collect::<Vec<_>>();
 
-    let is_asc = order_dir == "ASC";
-    let value_of = |item: &VirtualModelRankItem| -> f64 {
-        match sort_key {
-            RankSortKey::TotalTokens => item.total_tokens as f64,
-            RankSortKey::RequestCount => item.request_count as f64,
-            RankSortKey::Ttft => item.ttft,
-            RankSortKey::RequestTime => item.request_time,
-            RankSortKey::Tps => item.tps,
-            RankSortKey::CacheHitRate => item.cache_hit_rate,
-        }
-    };
-    sort_rank_rows(&mut items, is_asc, value_of);
+    sort_rank_rows(&mut items, order_dir == "ASC", |item| {
+        rank_metric_value(sort_key, &item.metrics)
+    });
 
     Ok(Json(Response::success(VirtualModelRankResponse {
         start_time: start,
@@ -1490,19 +1509,8 @@ struct ProviderModelRankItem {
     model_id: String,
     /// provider_model 自增主键（行已删时为 NULL，前端据此禁用跳转）。
     model_pk: Option<i32>,
-    /// 成功请求数。
-    request_count: i64,
-    /// 总计 token（成功请求的 total_tokens 合计）。
-    total_tokens: i64,
-    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
-    ttft: f64,
-    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
-    request_time: f64,
-    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
-    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
-    tps: f64,
-    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
-    cache_hit_rate: f64,
+    #[serde(flatten)]
+    metrics: RankRowMetrics,
 }
 
 #[derive(Serialize)]
@@ -1525,23 +1533,13 @@ async fn provider_model_rank(
     Json<Response<ProviderModelRankResponse>>,
     response::ErrorResponse<ProviderModelRankResponse>,
 > {
-    let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let (sort_key, order_dir, start, end) = parse_rank_query(&query)?;
     let db = &state.db;
 
     // 可选按供应商过滤（二级页用）：有 providerId 时只聚合该供应商内部模型。
     let mut where_sql = String::from("r.success = 1 AND r.start_time >= ? AND r.start_time < ?");
     let mut params: Vec<sea_orm::Value> = vec![start.into(), end.into()];
-    if let Some(provider_id) = query.provider_id {
-        where_sql.push_str(" AND r.provider_id = ?");
-        params.push(provider_id.into());
-    }
-    if let Some(api_key) = query.api_key.as_deref() {
-        where_sql.push_str(" AND r.api_key_name = ?");
-        params.push(api_key.into());
-    }
+    push_rank_filters(&mut where_sql, &mut params, &query);
 
     let rank_sql = rank_metric_sql();
     let sql = format!(
@@ -1555,46 +1553,24 @@ async fn provider_model_rank(
          GROUP BY r.provider_id, r.model_id"
     );
 
-    let rows = match db
-        .query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            sql,
-            params,
-        ))
+    let rows = query_group_rank(db, &sql, params)
         .await
-    {
-        Ok(rows) => rows,
-        Err(e) => return Err(response::db_error(e.to_string())),
-    };
+        .map_err(response::db_error)?;
 
     let mut items = rows
         .iter()
         .map(|row| ProviderModelRankItem {
-            provider_id: row.try_get::<i32>("", "provider_id").unwrap_or(0),
-            provider_name: row.try_get("", "provider_name").unwrap_or_default(),
-            model_id: row.try_get("", "model_id").unwrap_or_default(),
-            model_pk: row.try_get("", "model_pk").unwrap_or(None),
-            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
-            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
-            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
-            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
-            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
-            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+            provider_id: row_i32(row, "provider_id"),
+            provider_name: row_string(row, "provider_name"),
+            model_id: row_string(row, "model_id"),
+            model_pk: row_opt_i32(row, "model_pk"),
+            metrics: RankRowMetrics::from_row(row),
         })
         .collect::<Vec<_>>();
 
-    let is_asc = order_dir == "ASC";
-    let value_of = |item: &ProviderModelRankItem| -> f64 {
-        match sort_key {
-            RankSortKey::TotalTokens => item.total_tokens as f64,
-            RankSortKey::RequestCount => item.request_count as f64,
-            RankSortKey::Ttft => item.ttft,
-            RankSortKey::RequestTime => item.request_time,
-            RankSortKey::Tps => item.tps,
-            RankSortKey::CacheHitRate => item.cache_hit_rate,
-        }
-    };
-    sort_rank_rows(&mut items, is_asc, value_of);
+    sort_rank_rows(&mut items, order_dir == "ASC", |item| {
+        rank_metric_value(sort_key, &item.metrics)
+    });
 
     Ok(Json(Response::success(ProviderModelRankResponse {
         start_time: start,
@@ -1616,19 +1592,8 @@ struct VirtualModelMemberRankItem {
     model_pk: Option<i32>,
     /// 成员是否启用（virtual_model_item.enable；停用成员可正常展示但指标多为 0）。
     member_enable: bool,
-    /// 成功请求数（该虚拟模型下实际服务过该成员的行数）。
-    request_count: i64,
-    /// 总计 token（成功请求的 total_tokens 合计）。
-    total_tokens: i64,
-    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
-    ttft: f64,
-    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
-    request_time: f64,
-    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
-    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
-    tps: f64,
-    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
-    cache_hit_rate: f64,
+    #[serde(flatten)]
+    metrics: RankRowMetrics,
 }
 
 #[derive(Serialize)]
@@ -1653,10 +1618,7 @@ async fn virtual_model_member_rank(
     Json<Response<VirtualModelMemberRankResponse>>,
     response::ErrorResponse<VirtualModelMemberRankResponse>,
 > {
-    let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let (sort_key, order_dir, start, end) = parse_rank_query(&query)?;
     let Some(virtual_model_id) = query.virtual_model_id else {
         return Err(response::bad_request(AppSettings::lang_sync().tr(
             "缺少 virtualModelId 参数",
@@ -1719,44 +1681,33 @@ async fn virtual_model_member_rank(
     let mut items = rows
         .iter()
         .map(|row| VirtualModelMemberRankItem {
-            provider_id: row.try_get::<i32>("", "provider_id").unwrap_or(0),
-            provider_name: row.try_get("", "provider_name").unwrap_or_default(),
-            model_id: row.try_get("", "model_id").unwrap_or_default(),
-            model_pk: row.try_get("", "model_pk").unwrap_or(None),
+            provider_id: row_i32(row, "provider_id"),
+            provider_name: row_string(row, "provider_name"),
+            model_id: row_string(row, "model_id"),
+            model_pk: row_opt_i32(row, "model_pk"),
             member_enable: row.try_get::<bool>("", "member_enable").unwrap_or(true),
-            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
-            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
-            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
-            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
-            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
-            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+            metrics: RankRowMetrics::from_row(row),
         })
         .collect::<Vec<_>>();
 
-    let is_asc = order_dir == "ASC";
-    let value_of = |item: &VirtualModelMemberRankItem| -> f64 {
-        match sort_key {
-            RankSortKey::TotalTokens => item.total_tokens as f64,
-            RankSortKey::RequestCount => item.request_count as f64,
-            RankSortKey::Ttft => item.ttft,
-            RankSortKey::RequestTime => item.request_time,
-            RankSortKey::Tps => item.tps,
-            RankSortKey::CacheHitRate => item.cache_hit_rate,
-        }
-    };
     // 无流量成员（request_count=0）始终排最后，避免升序时 0 值抢前；
-    // 有流量成员组内按指标升/降序。
+    // 有流量成员组内按指标升/降序（partial_cmp 片段与 sort_rank_rows 同源，
+    // 因 0 流量优先规则无法直接复用该 helper）。
     items.sort_by(|a, b| {
-        let a_has_traffic = a.request_count > 0;
-        let b_has_traffic = b.request_count > 0;
+        let a_has_traffic = a.metrics.request_count > 0;
+        let b_has_traffic = b.metrics.request_count > 0;
         match (a_has_traffic, b_has_traffic) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
             _ => {
-                let cmp = value_of(a)
-                    .partial_cmp(&value_of(b))
+                let cmp = rank_metric_value(sort_key, &a.metrics)
+                    .partial_cmp(&rank_metric_value(sort_key, &b.metrics))
                     .unwrap_or(std::cmp::Ordering::Equal);
-                if is_asc { cmp } else { cmp.reverse() }
+                if order_dir == "ASC" {
+                    cmp
+                } else {
+                    cmp.reverse()
+                }
             }
         }
     });
@@ -1775,19 +1726,8 @@ struct ApiKeyRaceRankItem {
     api_key_name: String,
     /// 现存 API Key 的数字主键（JOIN api_key 按 name 补出；Key 已删除时为 null，不可跳转数据面板）。
     api_key_id: Option<i32>,
-    /// 成功请求数。
-    request_count: i64,
-    /// 总计 token（成功请求的 total_tokens 合计）。
-    total_tokens: i64,
-    /// 流式请求（stream=1 且 ttft 非空）首 token 耗时均值（毫秒）。
-    ttft: f64,
-    /// 平均请求耗时（毫秒，成功请求 request_time 均值）。
-    request_time: f64,
-    /// TPS：Σ输出 token ÷ Σ网络耗时（耗时按 output_tokens/tps 反推，
-    /// 仅计入 tps>0 且 output_tokens>0 的行）；分母为 0 时记 0。
-    tps: f64,
-    /// 缓存命中率：Σ输入缓存 token ÷ Σ输入 token（加权，无输入 token 时记 0）。
-    cache_hit_rate: f64,
+    #[serde(flatten)]
+    metrics: RankRowMetrics,
 }
 
 #[derive(Serialize)]
@@ -1808,10 +1748,7 @@ async fn api_key_rank(
     Query(query): Query<RankQuery>,
 ) -> Result<Json<Response<ApiKeyRaceRankResponse>>, response::ErrorResponse<ApiKeyRaceRankResponse>>
 {
-    let (sort_key, order_dir, start, end) = match parse_rank_query(&query) {
-        Ok(v) => v,
-        Err(e) => return Err(e),
-    };
+    let (sort_key, order_dir, start, end) = parse_rank_query(&query)?;
     // 过滤组合契约：三种互斥形态（providerId / virtualModelId / providerId+modelId），
     // 组合之外（providerId+virtualModelId 同传、modelId 无 providerId）返回 400，
     // 避免静默叠加两个维度造成语义混乱。
@@ -1832,18 +1769,7 @@ async fn api_key_rank(
     // 过滤条件拼接：provider_id / virtual_model_id / provider_id + model_id 三种组合。
     let mut where_sql = String::from("r.success = 1 AND r.start_time >= ? AND r.start_time < ?");
     let mut params: Vec<sea_orm::Value> = vec![start.into(), end.into()];
-    if let Some(provider_id) = query.provider_id {
-        where_sql.push_str(" AND r.provider_id = ?");
-        params.push(provider_id.into());
-    }
-    if let Some(virtual_model_id) = query.virtual_model_id {
-        where_sql.push_str(" AND r.virtual_model_id = ?");
-        params.push(virtual_model_id.into());
-    }
-    if let Some(model_id) = query.model_id.as_deref() {
-        where_sql.push_str(" AND r.model_id = ?");
-        params.push(model_id.into());
-    }
+    push_rank_filters(&mut where_sql, &mut params, &query);
 
     let rank_sql = rank_metric_sql();
     let sql = format!(
@@ -1854,44 +1780,22 @@ async fn api_key_rank(
          GROUP BY r.api_key_name"
     );
 
-    let rows = match db
-        .query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            sql,
-            params,
-        ))
+    let rows = query_group_rank(db, &sql, params)
         .await
-    {
-        Ok(rows) => rows,
-        Err(e) => return Err(response::db_error(e.to_string())),
-    };
+        .map_err(response::db_error)?;
 
     let mut items = rows
         .iter()
         .map(|row| ApiKeyRaceRankItem {
-            api_key_name: row.try_get("", "api_key_name").unwrap_or_default(),
-            api_key_id: row.try_get("", "api_key_id").ok(),
-            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
-            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
-            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
-            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
-            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
-            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+            api_key_name: row_string(row, "api_key_name"),
+            api_key_id: row_opt_i32(row, "api_key_id"),
+            metrics: RankRowMetrics::from_row(row),
         })
         .collect::<Vec<_>>();
 
-    let is_asc = order_dir == "ASC";
-    let value_of = |item: &ApiKeyRaceRankItem| -> f64 {
-        match sort_key {
-            RankSortKey::TotalTokens => item.total_tokens as f64,
-            RankSortKey::RequestCount => item.request_count as f64,
-            RankSortKey::Ttft => item.ttft,
-            RankSortKey::RequestTime => item.request_time,
-            RankSortKey::Tps => item.tps,
-            RankSortKey::CacheHitRate => item.cache_hit_rate,
-        }
-    };
-    sort_rank_rows(&mut items, is_asc, value_of);
+    sort_rank_rows(&mut items, order_dir == "ASC", |item| {
+        rank_metric_value(sort_key, &item.metrics)
+    });
 
     Ok(Json(Response::success(ApiKeyRaceRankResponse {
         start_time: start,
