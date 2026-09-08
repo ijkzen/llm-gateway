@@ -122,6 +122,10 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         Ok(n) if n > 0 => tracing::warn!("Marked {n} interrupted run(s) as failed after restart"),
         _ => {}
     }
+    // 清理历史遗留的无 run 归属孤儿日志（prune 从 run 表倒推删不到它们）。
+    if let Err(e) = log_repo.delete_orphan_logs().await {
+        tracing::warn!("Failed to delete orphan cron job logs: {e}");
+    }
 
     let worker = JobWorker::new_with_settings(
         db.clone(),

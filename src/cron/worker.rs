@@ -169,10 +169,15 @@ async fn execute_with_logging(
     let log_repo = SeaOrmCronJobLogRepository::new(db.clone());
     let mut log_rx = log_tx.subscribe();
 
-    // 记录执行开始；失败只降级日志功能，不阻塞任务执行。
-    if let Err(e) = log_repo.insert_run(&run_id, &name, started_at).await {
-        tracing::warn!("Failed to create run record for '{}': {}", name, e);
-    }
+    // 记录执行开始；run 行创建失败时不阻塞任务执行，但跳过本 run 的全部日志
+    // 落库与收尾写库（无 run 归属的日志行会成为永不被 prune 的孤儿）。
+    let run_persisted = match log_repo.insert_run(&run_id, &name, started_at).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!("Failed to create run record for '{}': {}", name, e);
+            false
+        }
+    };
     let _ = log_tx.send(JobLogEvent::run_started(&name, &run_id, started_at));
 
     // 在带归属字段的 span 内执行 handler，JobLogLayer 据此捕获其中的日志事件。
@@ -195,7 +200,7 @@ async fn execute_with_logging(
     );
 
     let lang = settings.lang().await;
-    let mut sink = RunLogSink::new(&log_repo, &name, &run_id, lang);
+    let mut sink = RunLogSink::new(&log_repo, &name, &run_id, lang, run_persisted);
 
     // 执行期间消费日志事件并攒批落库。
     loop {
@@ -246,7 +251,7 @@ async fn execute_with_logging(
         } else {
             format!("任务执行失败：{e}")
         };
-        sink.push("ERROR".to_string(), msg, Utc::now(), true);
+        sink.append_failure(msg);
     }
 
     // run 收尾前把攒批余量统一落库（含失败日志与截断/溢出提示）。
@@ -261,14 +266,21 @@ async fn execute_with_logging(
         sink.truncated,
     ));
 
-    if let Err(e) = log_repo
-        .finish_run(&run_id, status, ended_at, sink.log_count, sink.truncated)
-        .await
-    {
-        tracing::warn!("Failed to finish run '{}' for '{}': {}", run_id, name, e);
-    }
-    if let Err(e) = log_repo.prune_old_runs(&name, MAX_RUNS_KEPT).await {
-        tracing::warn!("Failed to prune old runs for '{}': {}", name, e);
+    if run_persisted {
+        if let Err(e) = log_repo
+            .finish_run(&run_id, status, ended_at, sink.log_count, sink.truncated)
+            .await
+        {
+            tracing::warn!(
+                "Failed to finish run '{}' for '{}': {}（将随下次执行的清理回收卡死状态）",
+                run_id,
+                name,
+                e
+            );
+        }
+        if let Err(e) = log_repo.prune_old_runs(&name, MAX_RUNS_KEPT).await {
+            tracing::warn!("Failed to prune old runs for '{}': {}", name, e);
+        }
     }
 
     let repo = SeaOrmCronJobRepository::new(db);
@@ -292,6 +304,8 @@ struct RunLogSink<'a> {
     repo: &'a SeaOrmCronJobLogRepository,
     job_name: &'a str,
     run_id: &'a str,
+    /// run 行创建失败时置 false：仍消费广播（避免 Lagged），但跳过全部落库。
+    enabled: bool,
     seq: i32,
     log_count: i32,
     truncated: bool,
@@ -313,11 +327,13 @@ impl<'a> RunLogSink<'a> {
         job_name: &'a str,
         run_id: &'a str,
         lang: crate::i18n::Lang,
+        enabled: bool,
     ) -> Self {
         Self {
             repo,
             job_name,
             run_id,
+            enabled,
             seq: 0,
             log_count: 0,
             truncated: false,
@@ -329,7 +345,7 @@ impl<'a> RunLogSink<'a> {
     /// 消费一条广播事件：仅本 run 的 log 事件入队（时间戳复用事件捕获值，
     /// 与 SSE 推送同源），run_started/run_ended 事件忽略。
     async fn consume(&mut self, event: JobLogEvent) {
-        if event.run_id != self.run_id {
+        if !self.enabled || event.run_id != self.run_id {
             return;
         }
         let (Some(level), Some(message)) = (event.level, event.message) else {
@@ -343,6 +359,9 @@ impl<'a> RunLogSink<'a> {
 
     /// 追加一条真实日志；超单次上限置截断并补提示，多余日志丢弃。
     async fn append(&mut self, level: String, message: String, ts: chrono::DateTime<chrono::Utc>) {
+        if !self.enabled {
+            return;
+        }
         if self.log_count >= MAX_LOG_PER_RUN {
             if !self.truncated {
                 self.truncated = true;
@@ -359,6 +378,14 @@ impl<'a> RunLogSink<'a> {
         if self.pending.len() >= LOG_BATCH_SIZE {
             self.flush().await;
         }
+    }
+
+    /// 失败系统日志：不受单次上限限制、计入 log_count，与提示行共用 seq 通道。
+    fn append_failure(&mut self, message: String) {
+        if !self.enabled {
+            return;
+        }
+        self.push("ERROR".to_string(), message, Utc::now(), true);
     }
 
     /// 把一行日志放入攒批缓冲（由调用方保证语义正确性：真实日志/失败日志
@@ -385,24 +412,25 @@ impl<'a> RunLogSink<'a> {
             dropped,
             self.job_name
         );
-        if !self.truncated {
-            self.truncated = true;
-            let msg = if self.lang == crate::i18n::Lang::En {
-                format!("{dropped} log events dropped due to buffer overflow; log incomplete")
-            } else {
-                format!("{dropped} 条日志因缓冲溢出丢失，日志不完整")
-            };
-            self.push("WARN".to_string(), msg, Utc::now(), false);
-            if self.pending.len() >= LOG_BATCH_SIZE {
-                self.flush().await;
-            }
+        if !self.enabled || self.truncated {
+            return;
+        }
+        self.truncated = true;
+        let msg = if self.lang == crate::i18n::Lang::En {
+            format!("{dropped} log events dropped due to buffer overflow; log incomplete")
+        } else {
+            format!("{dropped} 条日志因缓冲溢出丢失，日志不完整")
+        };
+        self.push("WARN".to_string(), msg, Utc::now(), false);
+        if self.pending.len() >= LOG_BATCH_SIZE {
+            self.flush().await;
         }
     }
 
     /// 批次落库：成功才推进 seq/log_count；失败丢弃攒批内容并告警
     /// （seq 不动，后续行不会产生空洞）。
     async fn flush(&mut self) {
-        if self.pending.is_empty() {
+        if !self.enabled || self.pending.is_empty() {
             return;
         }
         let base = self.seq + 1;
@@ -864,7 +892,7 @@ mod tests {
     async fn test_sink_truncates_over_limit_with_unique_seq_notice() {
         let db = setup_db().await;
         let repo = SeaOrmCronJobLogRepository::new(db);
-        let mut sink = RunLogSink::new(&repo, "j", "r1", crate::i18n::Lang::Zh);
+        let mut sink = RunLogSink::new(&repo, "j", "r1", crate::i18n::Lang::Zh, true);
 
         for i in 0..2050 {
             sink.append("INFO".to_string(), format!("bulk {i}"), chrono::Utc::now())
@@ -892,7 +920,7 @@ mod tests {
     async fn test_sink_failure_log_after_truncation_gets_unique_seq() {
         let db = setup_db().await;
         let repo = SeaOrmCronJobLogRepository::new(db);
-        let mut sink = RunLogSink::new(&repo, "j", "r1", crate::i18n::Lang::Zh);
+        let mut sink = RunLogSink::new(&repo, "j", "r1", crate::i18n::Lang::Zh, true);
 
         for i in 0..2050 {
             sink.append("INFO".to_string(), format!("bulk {i}"), chrono::Utc::now())
@@ -926,7 +954,7 @@ mod tests {
     async fn test_sink_marks_truncated_on_lost_events() {
         let db = setup_db().await;
         let repo = SeaOrmCronJobLogRepository::new(db);
-        let mut sink = RunLogSink::new(&repo, "j", "r1", crate::i18n::Lang::Zh);
+        let mut sink = RunLogSink::new(&repo, "j", "r1", crate::i18n::Lang::Zh, true);
 
         sink.append("INFO".to_string(), "before".to_string(), chrono::Utc::now())
             .await;
@@ -943,6 +971,30 @@ mod tests {
         // 提示行不占用真实日志的计数。
         assert_eq!(sink.log_count, 1);
         assert_eq!(sink.seq, 2);
+    }
+
+    #[tokio::test]
+    async fn test_sink_disabled_skips_all_persistence() {
+        // run 行创建失败（E4）时 sink 禁用：消费/失败日志/溢出提示全部
+        // 不落库，计数不推进——不产生无 run 归属的孤儿日志行。
+        let db = setup_db().await;
+        let repo = SeaOrmCronJobLogRepository::new(db);
+        let mut sink = RunLogSink::new(&repo, "j", "r1", crate::i18n::Lang::Zh, false);
+
+        sink.append(
+            "INFO".to_string(),
+            "log one".to_string(),
+            chrono::Utc::now(),
+        )
+        .await;
+        sink.append_failure("任务执行失败：boom".to_string());
+        sink.note_lost(7).await;
+        sink.flush().await;
+
+        assert_eq!(sink.seq, 0);
+        assert_eq!(sink.log_count, 0);
+        assert!(!sink.truncated);
+        assert!(repo.list_logs("r1").await.unwrap().is_empty());
     }
 
     #[tokio::test]
