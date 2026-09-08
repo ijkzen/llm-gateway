@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-human
+**Status:** in-progress（2026-09-08 启动：用户拍板 25 项均整改，按下方建议顺序逐批执行，每批质量门全绿后独立提交；25 项复核判定见 `../FINDINGS.md`「复核判定」节，M5/S2/S4 量化断言已就地修正）
 
 **整改建议顺序**（未拍板，按性价比推荐先修 P1 项）:
 

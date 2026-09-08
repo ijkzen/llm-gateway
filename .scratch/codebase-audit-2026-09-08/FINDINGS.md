@@ -4,6 +4,7 @@
 - **范围**: `src/proxy/`（转发管线、上游客户端、连接池、SSE 工具、指标落库）、`src/cron/`（日志捕获 → broadcast → worker → 日志仓库）、`src/routes/stats.rs` / `request_logs.rs` / `providers.rs`（聚合查询）、`src/usage/persist.rs`（用量缓存）、`src/db.rs`（索引迁移）、`src/entity/`
 - **方法**: 主代理通读 proxy 全链路与 usage/persist；两个子代理分别深读 cron 日志链路与 SQL/索引侧；所有引用行号经主代理逐条抽查复核（与磁盘现状一致）
 - **状态**: 全部未整改。整改工作整体作为遗留问题登记，见 `issues/01-codebase-audit-backlog.md`
+- **复核**: 2026-09-08 四路并行逐项核验（HEAD=ed10826，EXPLAIN QUERY PLAN/代码分支实读/前端列定义交叉确认）：全 25 项行为描述均可在当前代码复现，无凭空捏造；18 项真问题、7 项部分成立。逐项判定见「复核判定」节，M5/S2/S4 量化断言已就地修正
 - **严重度**: [P1] 高（正确性/吞吐/用户可见）[P2] 中 [P3] 低
 
 ## 汇总
@@ -35,6 +36,38 @@
 | S4 | P2 | SQL | provider 单点过滤缺 provider 前缀复合索引 |
 | S5 | P2 | SQL | insight 一次窗口 ~13 次独立聚合扫描 + 分位全量逐值拉回 |
 | S6 | P3 | SQL | cron 日志 prune 全量 SELECT 无 LIMIT；(run_id) 索引不含 seq |
+
+## 复核判定（2026-09-08，全 25 项逐条对照 HEAD 代码）
+
+**没有凭空捏造的假问题**：18 项真问题、7 项部分成立（机制属实但量化/作用面/定级有误）。部分成立项中的硬性量化错误（M5 数值、S2/S4 索引断言）已就地修正原文。
+
+| 编号 | 判定 | 核验要点（修正/降级说明） |
+| --- | --- | --- |
+| M1 | 真问题 | Responses 转换对 stream=true 也整流缓冲后回放（dispatch.rs collect → spawn 回放），与 protocol-conversion-audit C2 同源 |
+| M2 | 部分成立 | 每事件多次分配 + broadcast 每订阅者克隆属实；仅 cron 日志低频路径 + 有界环，实害小，建议降 P3 |
+| M3 | 部分成立 | 容量 8192 有界、单条先裁 4096；「数十 MB」需满长×满槽极端构造；真风险是 E3 丢日志而非内存 |
+| M4 | 真问题 | 捕获时算 RFC3339 仅服务 SSE、落库另取 `Utc::now()`：双时间戳 + 一次白分配属实（漂移毫秒级） |
+| M5 | 部分成立（数值错 4 倍） | `-64000` 为 KiB 单位 = 62.5 MiB/连接（db.rs:82 注释自误为 256MB），×5 约 0.3GB 而非 ~1.3GB；mmap 仅映射上限按触页计 |
+| P1 性能 | 真问题 | 逐条 autocommit INSERT 属实；现注册任务日志极少，平时无感，P1→P2 更贴切 |
+| P2 性能 | 真问题 | 每事件 4-5 次整段拷贝 + SseSplitter drain O(n) 属实；原生透传按原始字节转发不经此链 |
+| P3 性能 | 真问题 | 每 provider 串行 DB 读 + 缓存过期当场真实抓厂商、无单飞属实；稳态被 usage_refresh 5 分钟刷新显著冲淡 |
+| P4 性能 | 真问题 | 每条记录 spawn 单行 INSERT、降级每尝试额外一行属实；高 RPS + 上游批量失败才放大 |
+| P5 性能 | 真问题 | 每轮每家新建 reqwest Client 属实；「多跳同轮不复用」略不精确——同供应商多步（登录→查询）复用同一 http 客户端 |
+| P6 性能 | 真问题 | 每新连接 `tls_config().clone()` 属实；相对 TCP+TLS 握手开销可忽略，实际收益最小 |
+| E1 | 真问题 | OpenAI Compat/原生非流式 read_body 失败 `unwrap_or_default` → 200 `{}` + success:true；Anthropic/Gemini 分支有 502 对照，同函数内不对称属实 |
+| E2 | 真问题 | 直通/转换/原生三条流式路径 frame Err 后均 success 恒 true、fail_reason 空；直通不补 [DONE]/error 帧 |
+| E3 | 真问题 | Lagged 主循环仅 warn、drain 循环静默，truncated 不置位、seq 跳号无提示 |
+| E4 | 真问题 | insert_run 失败仅 warn 仍执行 → 孤儿日志无外键永不被 prune；finish_run 失败 run 卡 running |
+| E5 | 真问题 | 先 DB 快照后 subscribe（毫秒级窗口）确会丢行；DB 保留数据、重连可补回，P2 定级偏高可议 |
+| E6 | 真问题 | seq/log_count 先自增后插 + 截断提示不回写 seq → 双 2001 冲突属实 |
+| E7 | 部分成立 | 两段式读写 + 并发双 insert 撞键路径真实，但撞键恰被「落库失败被吞」中和（偶发多抓一次无害）；「无退避反复抓取」仅 DB 持续故障显现 |
+| E8 | 真问题 | `worker_tx.send().await` 无超时，队列满 HTTP 无限悬挂属实（需长任务占满 permit，概率低） |
+| S1 | 真问题（P1 偏高） | 两条索引只建在迁移 10 老库分支内（db.rs:288-291），新库确缺（EXPLAIN 证实 temp sort）；前端表格未暴露 ttft/tps 排序列仅 API 触达 → 建议 P2 |
+| S2 | 部分成立 | model_id 确无任何索引；但 charts 分布/provider_model_rank 是整窗 GROUP BY，任何 model_id 索引都消不掉窗口扫描，修法索引只救等值过滤路径，覆盖面被夸大 |
+| S3 | 真问题（P1 偏高） | 无保留策略 + summary 无窗口全表 COUNT/SUM 属实；docstring 明示无窗口全量聚合系有意设计，风险=无上限线性增长 |
+| S4 | 部分成立 | 现成单列 `idx_request_provider_id`（db.rs:256）与 `(success, start_time)` 已被 EXPLAIN 实测使用，「只能先范围扫整窗」断言不完整；provider_rank 整窗 GROUP BY 加前缀索引也不获益 |
+| S5 | 真问题 | 同窗实际 12 次独立扫描（审计写 ~13 略多 1）；分位逐值拉回与 month_mode 后置丢弃属实（try_join 并发缓解墙钟、读放大不变） |
+| S6 | 部分成立 | 写法如实，文档亦自认「量级小、风险低」——纯风格建议，非 bug |
 
 ## 一、内存浪费
 
@@ -69,9 +102,9 @@
 
 ### M5 [P3] SQLite 页缓存按连接放大
 
-- **场景**: `cache_size=-64000`（约 256MB/连接）与 `mmap_size=256MB` 在 SQLite 中是逐连接生效的；连接池 `max_connections(5)` 全部活跃时页缓存理论最坏 ~1.3GB/进程。
-- **证据**: `src/db.rs:82`（cache_size）、`src/db.rs:90`（mmap_size）、`src/db.rs:60`（max_connections 5）
-- **修法**: 属配置认知项；如进程内存受限可按连接调小或换 SQLite 共享缓存。
+- **场景**: `cache_size=-64000`（SQLite 负值按 KiB 计 = **62.5 MiB/连接**，db.rs:82 注释「约 256 MB」系笔误，已随整改修正）与 `mmap_size=256MB` 在 SQLite 中是逐连接生效的；连接池 `max_connections(5)` 全部活跃时页缓存合计约 **0.3GB**（复核修正：原稿 ~1.3GB 夸大约 4 倍；mmap_size 仅为映射上限，按触页计非常驻内存）。
+- **证据**: `src/db.rs:82`（cache_size，注释数值有误）、`src/db.rs:90`（mmap_size）、`src/db.rs:60`（max_connections 5）
+- **修法**: 属配置认知项；修正 db.rs 注释数值；如进程内存受限可按连接调小或换 SQLite 共享缓存。
 
 ## 二、换种写法性能更好
 
@@ -173,7 +206,7 @@
 
 - **场景**: 图表模型分布 `GROUP BY p.name, r.model_id`（含 LEFT JOIN provider）与按 model_id 过滤、model_metrics 按 `provider_id + model_id` 点查、provider_model_rank 按 `provider_id, model_id` 分组、request_logs 的 `model_id IN (...)` 过滤——全部要先按时间窗范围扫窗口内所有行再做行级过滤 + temp B-tree 分组。
 - **证据**: `src/routes/stats.rs:506-509`（model_id 过滤）、`src/routes/stats.rs:524-530`（模型分布 GROUP BY）、`src/routes/stats.rs:1529` 起（provider_model_rank，GROUP BY 在 :1553）、`src/routes/stats.rs:1847` 起（model_metrics，WHERE 在 :1868）、`src/routes/request_logs.rs:159-167`（model_id IN）
-- **修法**: 建 `(provider_id, model_id, success, start_time)` 复合索引，一次覆盖 model_metrics / provider_model_rank / charts 分布与 usage 口径。
+- **修法**: 建 `(provider_id, model_id, success, start_time)` 复合索引，覆盖 model_metrics 点查 / request_logs `model_id IN` / 带 model 过滤的窗口查询等值路径（复核修正：charts 分布与 provider_model_rank 是整窗 GROUP BY，索引救不了，原文列其受益系夸大）。
 
 ### S3 [P1] request 表只增不减 + summary 默认全历史聚合
 
@@ -183,9 +216,9 @@
 
 ### S4 [P2] provider 单点过滤缺 provider 前缀复合索引
 
-- **场景**: `usage_estimate`（provider 粒度时间窗聚合）、provider_rank、provider_metrics 等只提供 `(start_time, provider_id, success)`——start_time 前缀，SQLite 只能先范围扫整个时间窗的索引项再行级过滤 provider；provider 少而窗口大（月/年）时浪费大。
+- **场景**: `usage_estimate`（provider 粒度时间窗聚合）、provider_rank、provider_metrics 等只提供 `(start_time, provider_id, success)`——start_time 前缀，SQLite 只能先范围扫整个时间窗的索引项再行级过滤 provider；provider 少而窗口大（月/年）时浪费大。（复核修正：现成单列 `idx_request_provider_id` 与 `(success, start_time)` 已被 EXPLAIN 证实实际使用，缺口=provider 点查 + 时间窗组合的最优 seek；provider_rank 整窗 GROUP BY 不获益。）
 - **证据**: `src/routes/providers.rs:925-929`（usage_estimate SQL WHERE provider_id + start_time 区间）；`src/routes/stats.rs:1389` 起（provider_rank，GROUP BY 在 :1405）；`src/routes/stats.rs:2038` 起（provider_metrics）
-- **修法**: 补 `(provider_id, success, start_time)`（provider_id 点查截取时间区间）。
+- **修法**: 补 `(provider_id, success, start_time)`（provider_id 点查截取时间区间），覆盖 usage_estimate / provider_metrics 等值路径即可。
 
 ### S5 [P2] insight 一次窗口 ~13 次独立聚合扫描 + 分位全量逐值拉回
 
