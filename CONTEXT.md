@@ -113,3 +113,7 @@ _Avoid_: 用量恢复、自动重试、半开
 **选路可用 (Traffic-Eligible)**:
 供应商「此刻能否参与选路」的只读判定，分两层：实体层 = 启用 ∧ 停用原因为 None（读侧统一经 availability 模块 `traffic_available` 谓词，调用点不再各自拼 `enable`/`disabled_reason` 组合；写入侧镜像不变式由该模块动作保证）；用量层 = 按付费模式经 `UsageData::subscription_usable` / `balance_usable` 判定，查不到用量（无法判定）视为可用避免上游抖动误伤。窗口级「同类取最差剩余」扫描收敛在 `UsageData::worst_window`，额度耗尽判定与 FEFO 排序共用，两口径一致性有测试锁定。
 _Avoid_: 熔断（状态变更动作，见连续失败禁用）、可用状态（裸称）
+
+**用量预估 (Usage Estimate)**:
+订阅制供应商「整个订阅周期 token 总量」的折算预估：网关 request 表在窗口内已用 token ÷ 用量卡已用比例（used/limit 优先、used_percent 兜底），周窗前端 ×4 折月。窗口起点由 resets_at 反推（周 −7 天 / 月 −30 天），统计上界 min(resets_at, now)。信任边界显式化：网关记录 > 0 且比例可折算才可预估（流量未全走网关时 0 记录不可折算）；按天覆盖检查不参与算术。折算算术收敛在 `usage::estimate` 纯核心。
+_Avoid_: 配额预估（裸称）、月用量

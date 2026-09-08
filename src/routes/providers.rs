@@ -810,10 +810,6 @@ async fn get_provider_usage(
     }
 }
 
-/// 订阅周期窗口长度（毫秒）：周 = 7 天，月 = 30 天。
-const WEEK_MS: i64 = 7 * 24 * 3_600_000;
-const MONTH_MS: i64 = 30 * 24 * 3_600_000;
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageEstimateResponse {
@@ -914,11 +910,9 @@ async fn get_provider_usage_estimate(
         WindowKind::Monthly => "monthly",
         _ => "other",
     };
-    let window_len_ms = if qw.window == WindowKind::Weekly {
-        WEEK_MS
-    } else {
-        MONTH_MS
-    };
+    // 窗口长度口径收在 usage::estimate::period_len_ms（周 7 天 / 月 30 天）。
+    let window_len_ms =
+        crate::usage::estimate::period_len_ms(qw.window).expect("窗口选取已限定 weekly/monthly");
 
     // 窗口终点 = resets_at（取当前时刻兜底），起点 = 终点 - 窗口长度。
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -953,17 +947,10 @@ async fn get_provider_usage_estimate(
     };
     let used_tokens: i64 = row.try_get("", "used_tokens").unwrap_or(0);
 
-    // 折算基准：优先 used/limit 绝对值，其次 used_percent。
-    let ratio: Option<f64> = match (qw.used, qw.limit) {
-        (Some(used), Some(limit)) if limit > 0.0 => Some(used / limit),
-        _ => qw.used_percent.map(|p| p / 100.0),
-    };
-    let ratio = ratio.filter(|r| *r > 0.0);
-
-    // 网关记录为 0 却已消耗配额说明前提不成立（流量未全走网关），
-    // 0/比例 折算出 0 没有意义，同样视为不可预估。
-    let estimatable = used_tokens > 0 && ratio.is_some();
-    let estimated_total_tokens = ratio.map(|r| (used_tokens as f64 / r).round() as i64);
+    // 折算比例与信任边界收在 usage::estimate 纯核心（单一实现，单测覆盖）。
+    let ratio = crate::usage::estimate::quota_ratio(qw);
+    let estimatable = crate::usage::estimate::is_estimatable(used_tokens, ratio);
+    let estimated_total_tokens = crate::usage::estimate::estimated_total(used_tokens, ratio);
 
     (
         StatusCode::OK,
