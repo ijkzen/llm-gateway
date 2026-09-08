@@ -24,10 +24,10 @@ async fn test_upsert_inserts_all_templates() {
     let db = setup_db().await.unwrap();
 
     let n = upsert_templates(&db).await.unwrap();
-    assert_eq!(n, seed::TEMPLATES.len());
+    assert_eq!(n, seed::all().count());
 
     let count = Entity::find().count(&db).await.unwrap();
-    assert_eq!(count as usize, seed::TEMPLATES.len());
+    assert_eq!(count as usize, seed::all().count());
 }
 
 #[tokio::test]
@@ -37,10 +37,10 @@ async fn test_upsert_is_idempotent() {
     upsert_templates(&db).await.unwrap();
     let n2 = upsert_templates(&db).await.unwrap();
     // 第二次全为更新，不新增
-    assert_eq!(n2, seed::TEMPLATES.len());
+    assert_eq!(n2, seed::all().count());
 
     let count = Entity::find().count(&db).await.unwrap();
-    assert_eq!(count as usize, seed::TEMPLATES.len());
+    assert_eq!(count as usize, seed::all().count());
 }
 
 #[tokio::test]
@@ -49,7 +49,7 @@ async fn test_upsert_updates_existing_template() {
     upsert_templates(&db).await.unwrap();
 
     // 模拟用户修改：把某条模板的 base_url 改掉
-    let tmpl = &seed::TEMPLATES[0];
+    let tmpl = seed::all().next().unwrap();
     let row = Entity::find()
         .filter(provider_template::Column::Name.eq(tmpl.name))
         .one(&db)
@@ -73,7 +73,7 @@ async fn test_upsert_updates_existing_template() {
 
 #[tokio::test]
 async fn test_seed_has_expected_entries() {
-    let names: Vec<&str> = seed::TEMPLATES.iter().map(|t| t.name).collect();
+    let names: Vec<&str> = seed::all().map(|t| t.name).collect();
     // 关键 provider 应存在
     for expect in [
         "DeepSeek",
@@ -91,7 +91,7 @@ async fn test_seed_has_expected_entries() {
         assert!(!names.contains(&absent), "unexpected {absent}");
     }
     // extra 至少要有 cookie 类和 oauth 类
-    let extras: Vec<&str> = seed::TEMPLATES.iter().map(|t| t.extra).collect();
+    let extras: Vec<&str> = seed::all().map(|t| t.extra).collect();
     assert!(extras.iter().any(|e| e.contains("cookie_cloud_server")));
     assert!(extras.iter().any(|e| e.contains("oauth_token")));
     assert!(extras.iter().any(|e| e.contains("\"ak\"")));

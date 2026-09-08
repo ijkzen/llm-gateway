@@ -22,7 +22,7 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
     let mut inserted = 0usize;
     let mut updated = 0usize;
 
-    for tmpl in seed::TEMPLATES {
+    for tmpl in seed::all() {
         let existing = Entity::find()
             .filter(provider_template::Column::Name.eq(tmpl.name))
             .one(db)
