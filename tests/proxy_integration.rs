@@ -1478,6 +1478,114 @@ async fn subscription_first_prefers_earlier_deadline() {
     assert_eq!(captured_a.lock().unwrap().len(), 0, "供应商 A 不应被选到");
 }
 
+/// 种入「用量缓存显示订阅窗口已耗尽」的订阅制供应商 + 模型 + 虚拟模型。
+async fn seed_exhausted_subscription(
+    db: &sea_orm::DatabaseConnection,
+    base_url: &str,
+    name: &str,
+    protocol_type: i32,
+    display_id: &str,
+    interface_type: i32,
+) {
+    let provider = seed_provider(db, name, base_url, protocol_type, 1).await;
+    let model = seed_provider_model(db, provider, "m-x").await;
+    let now = chrono::Utc::now();
+    llm_gateway::usage::persist::write_usage_cache(
+        db,
+        &llm_gateway::usage::types::UsageData {
+            provider_id: provider,
+            fetched_at: now,
+            kind: llm_gateway::usage::types::UsageKind::Quota,
+            plan: None,
+            windows: vec![
+                llm_gateway::usage::types::QuotaWindow::from_remaining_percent(
+                    llm_gateway::usage::types::WindowKind::FiveHour,
+                    0.0,
+                    None,
+                ),
+            ],
+            balances: vec![],
+        },
+    )
+    .await
+    .unwrap();
+    let vm = virtual_model::ActiveModel {
+        display_id: Set(display_id.to_string()),
+        enable: Set(true),
+        interface_type: Set(interface_type),
+        load_balancing_strategy: Set(0),
+        fallback_strategy: Set(1),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    };
+    let vm = vm.insert(db).await.unwrap();
+    virtual_model_item::ActiveModel {
+        virtual_model_id: Set(vm.virtual_model_id),
+        model_id: Set(model),
+        enable: Set(true),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+}
+
+/// 成员全部被额度剔除（订阅制窗口剩余为 0）时，chat 路径维持既有
+/// 503 语义（error.code = no_available_members）——空候选由尝试核心统一守卫。
+#[tokio::test]
+async fn chat_quota_exhausted_returns_503() {
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+    seed_exhausted_subscription(&db, &base, "p-chat-exhausted", 0, "vm-chat-exhausted", 0).await;
+
+    let (status, text) = send_chat(
+        &app,
+        json!({"model": "vm-chat-exhausted", "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    assert_eq!(status, 503, "{text}");
+    let parsed: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(parsed["error"]["code"], "no_available_members");
+}
+
+/// 回归（成员尝试核心）：成员全部被额度剔除时 /v1/messages 返回 503
+/// 而非空候选 panic——旧 forward_native 对 ordered[0] 无守卫直接索引。
+#[tokio::test]
+async fn native_messages_quota_exhausted_returns_503_instead_of_panic() {
+    let captured = capture();
+    let base = spawn_mock(captured.clone()).await;
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+    seed_exhausted_subscription(
+        &db,
+        &base,
+        "p-native-exhausted",
+        2,
+        "vm-native-exhausted",
+        2,
+    )
+    .await;
+
+    let (status, text, _content_type) = send_native(
+        &app,
+        "/v1/messages",
+        messages_body("vm-native-exhausted", false),
+        &[],
+    )
+    .await;
+    assert_eq!(status, 503, "额度耗尽应返回 503 而非 500 panic：{text}");
+    let parsed: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(parsed["type"], "error", "应使用 Anthropic 原生错误信封");
+    assert_eq!(parsed["error"]["type"], "api_error");
+}
+
 // ─── 上游出站头：透传 / 剥离 / 覆盖集成测试 ──────────────────────────────────
 
 /// seed provider，可指定 custom_header（默认 "{}"）。
