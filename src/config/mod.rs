@@ -31,8 +31,6 @@ pub struct Config {
     pub database_url: String,
     pub cron_job_queue_size: usize,
     pub cron_job_max_concurrent: usize,
-    /// request 指标表保留天数（超过即清理）。
-    pub request_log_retention_days: u64,
 }
 
 impl Config {
@@ -49,15 +47,12 @@ impl Config {
         });
         let cron_job_queue_size = parse_positive_usize_env("CRON_JOB_QUEUE_SIZE", 1000)?;
         let cron_job_max_concurrent = parse_positive_usize_env("CRON_JOB_MAX_CONCURRENT", 10)?;
-        let request_log_retention_days =
-            parse_positive_usize_env("REQUEST_LOG_RETENTION_DAYS", 90)? as u64;
         Ok(Self {
             bind_address,
             env,
             database_url,
             cron_job_queue_size,
             cron_job_max_concurrent,
-            request_log_retention_days,
         })
     }
 }
