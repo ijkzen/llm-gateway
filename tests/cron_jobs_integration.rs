@@ -8,6 +8,7 @@ use tower::ServiceExt;
 
 use llm_gateway::cron::JobContext;
 use llm_gateway::cron::repository::{CronJobRepository, JobDefinition, SeaOrmCronJobRepository};
+use sea_orm::ActiveModelTrait;
 
 async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
     let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
@@ -39,6 +40,50 @@ async fn setup_app() -> (axum::Router, sea_orm::DatabaseConnection) {
 
     let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
     (app, db)
+}
+
+/// 回归（计划单一所有者）：仅改标题的 PUT 不得触碰 next_run_at——
+/// 旧实现无条件按表达式重算，错过执行期一编辑会把计划悄悄推后。
+#[tokio::test]
+async fn test_title_only_update_keeps_next_run_at() {
+    let (app, db) = setup_app().await;
+    let repo = SeaOrmCronJobRepository::new(db.clone());
+
+    // 把 next_run_at 拨回过去（模拟错过执行的瞬间）。
+    let past = chrono::Utc::now() - chrono::TimeDelta::hours(1);
+    let model = repo.find_by_name("test_job").await.unwrap().unwrap();
+    let mut active: llm_gateway::entity::cron_job::ActiveModel = model.into();
+    active.next_run_at = sea_orm::Set(past);
+    active.updated_at = sea_orm::Set(chrono::Utc::now());
+    active.update(&db).await.unwrap();
+
+    let request: Request<Body> = Request::builder()
+        .method("PUT")
+        .uri("/api/cron-jobs/test_job")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"title":"Only Title"}"#))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+
+    let model = repo.find_by_name("test_job").await.unwrap().unwrap();
+    assert_eq!(model.title, "Only Title");
+    assert_eq!(model.next_run_at, past, "仅改标题不得重算 next_run_at");
+
+    // 对照：表达式实际变更时从当前时刻重算到未来。
+    let request: Request<Body> = Request::builder()
+        .method("PUT")
+        .uri("/api/cron-jobs/test_job")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"expression":"@daily"}"#))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), 200);
+    let model = repo.find_by_name("test_job").await.unwrap().unwrap();
+    assert!(
+        model.next_run_at > chrono::Utc::now(),
+        "表达式变更应重算到未来"
+    );
 }
 
 #[tokio::test]

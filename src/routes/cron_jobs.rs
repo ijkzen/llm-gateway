@@ -140,19 +140,30 @@ async fn update_job(
         return response::bad_request(msg);
     }
 
+    let expression_changed = req
+        .expression
+        .as_deref()
+        .is_some_and(|expression| expression != model.expression.as_str());
     let new_expression = req.expression.unwrap_or(model.expression);
 
+    // 仅表达式实际变更才重算 next_run_at（自当前时刻按新表达式求下一次，与
+    // scheduler 的表达式变更语义一致）；仅改标题/描述/启停的更新不触碰计划——
+    // 旧实现无条件重算，会在错过执行期把计划悄悄推后。
     let tz = state.settings.timezone().await;
-    let next_run_at = match crate::cron::parser::compute_next_run_tz(&new_expression, tz) {
-        Ok(next) => next,
-        Err(e) => {
-            let msg = if lang == Lang::En {
-                format!("invalid expression: {e}")
-            } else {
-                format!("表达式无效：{e}")
-            };
-            return response::bad_request(msg);
+    let next_run_at = if expression_changed {
+        match crate::cron::parser::compute_next_run_tz(&new_expression, tz) {
+            Ok(next) => next,
+            Err(e) => {
+                let msg = if lang == Lang::En {
+                    format!("invalid expression: {e}")
+                } else {
+                    format!("表达式无效：{e}")
+                };
+                return response::bad_request(msg);
+            }
         }
+    } else {
+        model.next_run_at
     };
 
     let definition = JobDefinition {
