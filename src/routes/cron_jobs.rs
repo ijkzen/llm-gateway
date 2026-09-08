@@ -332,6 +332,10 @@ async fn stream_job_logs(
 ) -> impl IntoResponse {
     let log_repo = SeaOrmCronJobLogRepository::new(state.db.clone());
 
+    // 先订阅再读库快照：快照与订阅之间产生的日志事件已入广播环，会随实时流
+    // 送达（与快照重叠部分前端按 seq 去重）；反向顺序会永久丢失该窗口。
+    let rx = state.log_tx.subscribe();
+
     let initial = match log_repo.list_runs(&name, 1).await {
         Ok(runs) => match runs.into_iter().next() {
             Some(run) if run.status == "running" => {
@@ -355,7 +359,6 @@ async fn stream_job_logs(
         Err(_) => SseEvent::default().event("idle").data("{}"),
     };
 
-    let rx = state.log_tx.subscribe();
     let updates = BroadcastStream::new(rx).filter_map(move |result| {
         let event = match result {
             Ok(event) if event.job_name == name => {

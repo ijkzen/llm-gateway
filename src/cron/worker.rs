@@ -199,6 +199,10 @@ async fn execute_with_logging(
 
     // 执行期间消费日志事件并攒批落库。
     loop {
+        // 攒批有积压时每 ~100ms 落一次库：SSE 快照/重连看到的新鲜度有界
+        // （只按批大小 flush 会在日志稀疏时积压到 run 结束）。
+        let idle_flush = tokio::time::sleep(std::time::Duration::from_millis(100));
+        tokio::pin!(idle_flush);
         tokio::select! {
             msg = log_rx.recv() => {
                 match msg {
@@ -208,6 +212,7 @@ async fn execute_with_logging(
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
+            _ = &mut idle_flush, if !sink.pending.is_empty() => sink.flush().await,
             _ = done_rx.changed() => break,
         }
     }
