@@ -14,6 +14,7 @@ pub mod provider_model;
 pub mod provider_repo;
 pub mod provider_template;
 pub mod proxy;
+pub mod request_retention;
 pub mod response;
 pub mod routes;
 pub mod state;
@@ -221,6 +222,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
     scheduler.start().await?;
 
     logs_cleanup::spawn_cleanup_task(config.env.log_dir().to_string(), LOG_RETENTION_DAYS);
+    request_retention::spawn_request_cleanup_task(db.clone(), config.request_log_retention_days);
 
     Ok(AppContext {
         log_guard,
