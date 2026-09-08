@@ -66,6 +66,7 @@
 │   ├── db.rs               # SeaORM 连接、连接池与自动建表/迁移
 │   ├── state.rs            # AppState（db + scheduler + lb_state + usage_cache）
 │   ├── logs_cleanup.rs     # 日志过期清理
+│   ├── request_retention.rs # request 指标表保留期每日清理（默认 90 天，环境变量可配）
 │   ├── response.rs         # 统一 API 响应结构
 │   ├── static_assets/mod.rs# rust-embed 内嵌前端 dist
 │   ├── middleware/mod.rs   # CORS、Trace、CatchPanic 中间件
@@ -168,6 +169,7 @@
 | `RUST_LOG` | tracing 日志级别 | `info,sqlx::query=warn` |
 | `CRON_JOB_QUEUE_SIZE` | 定时任务派发队列容量（必须为正整数） | `1000` |
 | `CRON_JOB_MAX_CONCURRENT` | 定时任务最大并发执行数（必须为正整数） | `10` |
+| `REQUEST_LOG_RETENTION_DAYS` | request 指标表保留天数（每日清理更早记录） | `90` |
 
 注意：
 
@@ -230,7 +232,7 @@ Dockerfile 为多阶段构建：
 
 ## 测试说明
 
-- **Rust 测试**: `cargo test`。795 个测试函数：src 内单元测试 454 个（`auth`、`config`、`app_settings`、`availability`（可用性状态机）、`backup`（备份 JSON 解析/校验）、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`、`logs_cleanup`、`provider_model`/`provider_repo`/`provider_template`、`proxy::convert`（四协议转换）、`proxy` 头处理、`proxy::sse`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`routes::stats`（桶归并/分位/时区）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词，含 `has_low_remaining_window` 边界判定）等模块）+ `tests/` 集成测试 341 个（30 个顶层测试文件：auth、backup、chat、proxy（本地 mock 上游四协议转换/failover/LB 用量排序/原生透传/头透传剥离）、cron_jobs、cron_job_logs、settings、providers、provider_models（CRUD/刷新/测速，含 `provider_models_test_integration` 测速端点）、virtual_models（含 openai `/v1/models`）、stats（summary/charts/insight/rank/metrics）、request_logs、model_metrics、provider_usage（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>，经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向本地 mock）、usage_estimate、provider_quota_gate（额度耗尽停用/恢复 + 种子任务被调度）、provider_boundary_probe（订阅制窗口剩余 (0,1)% 边界实测探活：失败停用/成功保持与恢复/禁用后继续探活不抖动/manual 不探活）、provider_failure_recovery（恢复探测）、lb_48_scenarios（48 场景矩阵）、lb_failure_disable、provider/provider_model/virtual_model 三个 rank 端点（`*_race_integration`）、upstream_pool（连接池：同一上游复用连接 / 空闲超时释放 / `Connection: close` 不归还，mock server 手动计数连接数）、i18n、provider_schema_check）。五个曾超 1000 行的大文件（proxy_integration/provider_models_integration/provider_usage_integration/stats_integration/virtual_models_integration）已按域拆分为同目录子模块（tests/<stem>/，由根文件 `#[path]` 引入，helpers 留在根文件），target 名与测试函数数不变。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
+- **Rust 测试**: `cargo test`。814 个测试函数：src 内单元测试 467 个（`auth`、`config`、`app_settings`、`availability`（可用性状态机）、`backup`（备份 JSON 解析/校验）、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`、`logs_cleanup`、`provider_model`/`provider_repo`/`provider_template`、`proxy::convert`（四协议转换）、`proxy` 头处理、`proxy::sse`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`routes::stats`（桶归并/分位/时区）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词，含 `has_low_remaining_window` 边界判定）等模块）+ `tests/` 集成测试 347 个（30 个顶层测试文件：auth、backup、chat、proxy（本地 mock 上游四协议转换/failover/LB 用量排序/原生透传/头透传剥离，含上游中断回归 `upstream_abort`、Responses 转换流式 live 转发 `responses_live` 子模块）、cron_jobs、cron_job_logs、settings、providers、provider_models（CRUD/刷新/测速，含 `provider_models_test_integration` 测速端点）、virtual_models（含 openai `/v1/models`）、stats（summary/charts/insight/rank/metrics）、request_logs、model_metrics、provider_usage（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>，经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向本地 mock）、usage_estimate、provider_quota_gate（额度耗尽停用/恢复 + 种子任务被调度）、provider_boundary_probe（订阅制窗口剩余 (0,1)% 边界实测探活：失败停用/成功保持与恢复/禁用后继续探活不抖动/manual 不探活）、provider_failure_recovery（恢复探测）、lb_48_scenarios（48 场景矩阵）、lb_failure_disable、provider/provider_model/virtual_model 三个 rank 端点（`*_race_integration`）、upstream_pool（连接池：同一上游复用连接 / 空闲超时释放 / `Connection: close` 不归还，mock server 手动计数连接数）、i18n、provider_schema_check）。五个曾超 1000 行的大文件（proxy_integration/provider_models_integration/provider_usage_integration/stats_integration/virtual_models_integration）已按域拆分为同目录子模块（tests/<stem>/，由根文件 `#[path]` 引入，helpers 留在根文件），target 名与测试函数数不变。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
 - 环境变量隔离使用 `temp-env`，临时目录使用 `tempfile`。
 - 调度器测试包含关键行为回归：禁用的任务不会触发（`set_stop` 在 tokio-cron-scheduler 内存存储下无效，禁用必须走移除）、启用后恢复触发、禁用任务仍可手动执行。
 - **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 55 个测试文件 417 个用例，分布于 `web/src/__tests__/`（页面级 17 个）、`web/src/components/__tests__/`（组件级 32 个）及各 race 组件、`hooks`、`lib` 下的 `__tests__`（各 1 个）（含 login 页、RequireAuth 守卫、ChangePasswordDialog、ProviderUsageCard）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
@@ -279,7 +281,7 @@ pnpm vitest run                    # 前端全量测试
 ## 数据库与迁移
 
 - 使用 SQLite，默认开启 WAL 模式、`synchronous=NORMAL`、外键、5 秒 busy timeout、约 256 MB 页缓存与 256 MB mmap。
-- 启动时 `src/db.rs::migrate()` 自动建表（`cron_jobs`、`setting`、`schema_migrations`），并按版本号执行增量迁移；schema 变化后执行一次 `ANALYZE`。
+- 启动时 `src/db.rs::migrate()` 自动建表（`cron_jobs`、`setting`、`schema_migrations`），并按版本号执行增量迁移（当前编至 25；生产库 14/15 号段被旧 lg-proxy 方案废弃占用，新迁移从 16 起编）；schema 变化后执行一次 `ANALYZE`。
 - `ensure_sqlite_dir` 会从 `DATABASE_URL` 解析出文件路径（保留绝对路径）并预先创建父目录。
 - 生产环境数据库文件位于 `/config/db/app.db`，建议挂载持久化卷。
 
@@ -349,7 +351,7 @@ pnpm vitest run                    # 前端全量测试
 1. **前端构建产物必须存在**: 发布构建时，`rust-embed` 会内嵌 `web/dist`。如果本地手动构建后端，请先执行 `cd web && pnpm build`；Dockerfile 中已自动处理。
 2. **定时任务需要注册 Handler 才会执行**: 数据库中的任务若没有对应注册的 Handler，加载时会被跳过，且不会出现在任务列表中；实现业务功能时请先在 `scheduler` 上调用 `register_handler`。
 3. **环境变量不会自动加载 `.env`**: 当前未集成 `dotenv`，运行前请确保环境变量已导出。
-4. **日志清理**: 后端启动后会启动一个后台任务，每天清理一次日志目录中超过 30 天的文件（按修改时间判断，不区分文件类型，不要往日志目录放其他文件）。
+4. **日志清理**: 后端启动后会启动一个后台任务，每天清理一次日志目录中超过 30 天的文件（按修改时间判断，不区分文件类型，不要往日志目录放其他文件）。另有 request 指标表保留期清理（默认 90 天，`REQUEST_LOG_RETENTION_DAYS` 可配），每日删除更早的转发指标行。
 5. **Biome 配置**: `web/biome.json` 已存在，`pnpm lint` 与 `pnpm format` 使用该配置（tab 缩进、双引号、100 列最大宽度）。
 6. **健康检查**: `/api/healthz` 只表示进程存活，不检查数据库等依赖。
 
