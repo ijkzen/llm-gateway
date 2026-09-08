@@ -203,26 +203,32 @@ pub(crate) async fn insight(
     }
 
     // 延迟分位：每桶逐值拉回（仅成功请求；ttft 只计流式有首 token 的行）。
-    let (ttft_rows, latency_rows) = match tokio::try_join!(
-        db.query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            format!(
-                "SELECT {bucket_expr} AS bucket, r.ttft AS value FROM request r \
-                 WHERE {where_sql} AND r.success = 1 AND r.ttft IS NOT NULL"
-            ),
-            params.clone(),
-        )),
-        db.query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            format!(
-                "SELECT {bucket_expr} AS bucket, r.request_time AS value FROM request r \
-                 WHERE {where_sql} AND r.success = 1"
-            ),
-            params.clone(),
-        )),
-    ) {
-        Ok(rows) => rows,
-        Err(e) => return response::db_error(e.to_string()),
+    // month_mode（月/年粒度）下分位恒为空数组，短路前置：不发起这两条
+    // 全窗逐值扫描（此前整窗扫完才在 group_percentiles 丢弃，S5）。
+    let (ttft_rows, latency_rows) = if month_mode {
+        (Vec::new(), Vec::new())
+    } else {
+        match tokio::try_join!(
+            db.query_all_raw(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                format!(
+                    "SELECT {bucket_expr} AS bucket, r.ttft AS value FROM request r \
+                     WHERE {where_sql} AND r.success = 1 AND r.ttft IS NOT NULL"
+                ),
+                params.clone(),
+            )),
+            db.query_all_raw(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                format!(
+                    "SELECT {bucket_expr} AS bucket, r.request_time AS value FROM request r \
+                     WHERE {where_sql} AND r.success = 1"
+                ),
+                params.clone(),
+            )),
+        ) {
+            Ok(rows) => rows,
+            Err(e) => return response::db_error(e.to_string()),
+        }
     };
 
     // ---- 归并/填充 ----
