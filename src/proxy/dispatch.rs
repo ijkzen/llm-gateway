@@ -391,7 +391,116 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
             with_thinking_dropped_header(sse_response(ReceiverStream::new(rx)), thinking_dropped)
         }
         // Responses 出站：上游强制流式。
-        (Protocol::OpenAiResponses, _) => {
+        // Responses 出站恒为上游流式；客户端 stream=true 时 live 逐事件转换
+        // 转发（不再整条缓冲后回放：TTFB=首个转换事件耗时，峰值内存=单帧）。
+        (Protocol::OpenAiResponses, true) => {
+            let mut converter = Converter::Responses(Box::new(
+                responses::ResponsesStreamConverter::new(&request_id, &requested_model),
+            ));
+            let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
+            let db = state.db.clone();
+            let reply_start_at = reply.start_at_ms;
+            let mut stream_metrics = StreamMetrics::new(reply.start_at_ms);
+            tokio::spawn(async move {
+                let mut body = reply.body;
+                let mut splitter = crate::proxy::sse::SseSplitter::default();
+                let mut disconnect = false;
+                // 上游帧错误/转换失败与客户端断开分开记账：前者补 error 帧并按
+                // 失败落库，收尾的 usage 尾块仅在无错误时补发。
+                let mut failed: Option<String> = None;
+                'outer: while let Some(frame) = body.frame().await {
+                    let bytes = match frame {
+                        Ok(frame) => frame.into_data().unwrap_or_default(),
+                        Err(e) => {
+                            let message = format!("读取上游流失败：{e}");
+                            failed = Some(message.clone());
+                            let error_frame = format!(
+                                "data: {}\n\n",
+                                json!({"error": {"message": message, "type": "api_error", "code": "upstream_error"}})
+                            );
+                            let _ = tx.send(Ok(Bytes::from(error_frame))).await;
+                            break 'outer;
+                        }
+                    };
+                    let text = String::from_utf8_lossy(&bytes).to_string();
+                    for event in splitter.feed(&text) {
+                        match converter.convert_event(&event) {
+                            Ok(chunks) => {
+                                for mut chunk in chunks {
+                                    if chunk_has_content(&chunk) {
+                                        stream_metrics.on_token();
+                                    }
+                                    if reasoning_exclude {
+                                        strip_reasoning_delta(&mut chunk);
+                                    }
+                                    let frame = crate::proxy::sse::sse_frame(&chunk.to_string());
+                                    if tx.send(Ok(Bytes::from(frame))).await.is_err() {
+                                        disconnect = true;
+                                        break 'outer;
+                                    }
+                                }
+                            }
+                            Err(message) => {
+                                // 转换失败（上游事件畸形/语义错误）：发 error 帧收尾。
+                                failed = Some(message.clone());
+                                let error_frame = format!(
+                                    "data: {}\n\n",
+                                    json!({"error": {"message": message, "type": "api_error", "code": "upstream_error"}})
+                                );
+                                let _ = tx.send(Ok(Bytes::from(error_frame))).await;
+                                break 'outer;
+                            }
+                        }
+                        if converter.is_finished() {
+                            break 'outer;
+                        }
+                    }
+                }
+                if failed.is_none()
+                    && let Some(converter_error) = converter.error()
+                {
+                    failed = Some(converter_error);
+                }
+                // 正常收尾补 usage 尾块（include_usage 注入只为统计口径透出）。
+                if failed.is_none()
+                    && include_usage
+                    && let Some(usage) = converter.usage()
+                {
+                    let frame = crate::proxy::sse::sse_frame(
+                        &usage_chunk_json(
+                            &converter.completion_id(),
+                            &converter.completion_model(),
+                            cached_client_usage_json(&usage),
+                        )
+                        .to_string(),
+                    );
+                    let _ = tx.send(Ok(Bytes::from(frame))).await;
+                }
+                let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n"))).await;
+                let end_time = now_ms();
+                let usage = converter.usage().unwrap_or_default();
+                RequestRecord {
+                    request_id,
+                    virtual_model_id,
+                    provider_id: member.provider_id,
+                    model_id: member.model_id.clone(),
+                    stream: true,
+                    ttft: stream_metrics.ttft_ms(),
+                    output_tokens_time: stream_metrics.output_duration_ms(),
+                    ttft_start_ms: reply_start_at,
+                    start_time,
+                    end_time,
+                    usage,
+                    success: failed.is_none(),
+                    fail_reason: failed.or(disconnect.then(|| "客户端提前断开".to_string())),
+                    api_key_name,
+                }
+                .insert(&db);
+            });
+            with_thinking_dropped_header(sse_response(ReceiverStream::new(rx)), thinking_dropped)
+        }
+        // Responses 出站恒为上游流式；客户端非流式时收集整条流后聚合为 JSON。
+        (Protocol::OpenAiResponses, false) => {
             let mut converter = Converter::Responses(Box::new(
                 responses::ResponsesStreamConverter::new(&request_id, &requested_model),
             ));
@@ -409,7 +518,7 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                     &member,
                     &api_key_name,
                     start_time,
-                    client_stream,
+                    false,
                     &error,
                     reply.start_at_ms,
                 );
@@ -417,75 +526,32 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                 return openai_error(status, error, "api_error", "upstream_error");
             }
             let usage = converter.usage().unwrap_or_default();
-            let completion_id = converter.completion_id();
-            let completion_model = converter.completion_model();
             let mut completion = accumulate_chunks(&events.chunks, &usage);
             if reasoning_exclude {
                 strip_reasoning_message(&mut completion);
             }
             let end_time = now_ms();
-            let usage_for_chunk = usage.clone();
             RequestRecord {
-                request_id: request_id.clone(),
+                request_id,
                 virtual_model_id,
                 provider_id: member.provider_id,
                 model_id: member.model_id.clone(),
-                stream: client_stream,
+                stream: false,
                 ttft: events.stream_metrics.ttft_ms(),
-                output_tokens_time: if client_stream {
-                    events.stream_metrics.output_duration_ms()
-                } else {
-                    Some((end_time - reply.start_at_ms).max(0))
-                },
+                output_tokens_time: Some((end_time - reply.start_at_ms).max(0)),
                 ttft_start_ms: reply.start_at_ms,
                 start_time,
                 end_time,
                 usage,
                 success: true,
-                fail_reason: events.disconnect.then(|| "客户端提前断开".to_string()),
+                fail_reason: None,
                 api_key_name,
             }
             .insert(&state.db);
-            if client_stream {
-                let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
-                tokio::spawn(async move {
-                    for mut chunk in events.chunks {
-                        if reasoning_exclude {
-                            strip_reasoning_delta(&mut chunk);
-                        }
-                        if tx
-                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(
-                                &chunk.to_string(),
-                            ))))
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    if include_usage {
-                        let frame = crate::proxy::sse::sse_frame(
-                            &usage_chunk_json(
-                                &completion_id,
-                                &completion_model,
-                                cached_client_usage_json(&usage_for_chunk),
-                            )
-                            .to_string(),
-                        );
-                        let _ = tx.send(Ok(Bytes::from(frame))).await;
-                    }
-                    let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n"))).await;
-                });
-                with_thinking_dropped_header(
-                    sse_response(ReceiverStream::new(rx)),
-                    thinking_dropped,
-                )
-            } else {
-                with_thinking_dropped_header(
-                    (StatusCode::OK, axum::Json(completion)).into_response(),
-                    thinking_dropped,
-                )
-            }
+            with_thinking_dropped_header(
+                (StatusCode::OK, axum::Json(completion)).into_response(),
+                thinking_dropped,
+            )
         }
         // Anthropic / Gemini：非流式直接转换；流式逐事件转换后转发。
         (protocol, client_stream) => {
@@ -717,12 +783,11 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
     }
 }
 
-/// 上游流式事件收集（Responses 聚合路径）。
+/// 上游流式事件收集（Responses 聚合路径，仅非流式客户端使用）。
 pub(crate) struct CollectedEvents {
     chunks: Vec<Value>,
     stream_metrics: StreamMetrics,
     error: Option<String>,
-    disconnect: bool,
 }
 
 pub(crate) async fn collect_stream_events(
@@ -733,7 +798,6 @@ pub(crate) async fn collect_stream_events(
     let mut splitter = crate::proxy::sse::SseSplitter::default();
     let mut chunks = Vec::new();
     let mut error = None;
-    let mut disconnect = false;
     'outer: while let Some(frame) = body.frame().await {
         let bytes = match frame {
             Ok(frame) => frame.into_data().unwrap_or_default(),
@@ -768,14 +832,10 @@ pub(crate) async fn collect_stream_events(
     {
         error = Some(converter_error);
     }
-    if error.is_some() {
-        disconnect = false;
-    }
     CollectedEvents {
         chunks,
         stream_metrics: std::mem::take(stream_metrics),
         error,
-        disconnect,
     }
 }
 

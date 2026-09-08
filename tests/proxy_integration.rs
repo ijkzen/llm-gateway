@@ -30,6 +30,8 @@ mod native_responses;
 mod outbound_headers;
 #[path = "proxy_integration/protocol.rs"]
 mod protocol;
+#[path = "proxy_integration/responses_live.rs"]
+mod responses_live;
 #[path = "proxy_integration/upstream_abort.rs"]
 mod upstream_abort;
 
