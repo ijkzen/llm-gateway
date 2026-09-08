@@ -559,7 +559,7 @@ mod tests {
         use tracing_subscriber::layer::SubscriberExt;
 
         let _lock = SUBSCRIBER_LOCK.lock().unwrap();
-        let (log_tx, mut log_rx) = broadcast::channel::<JobLogEvent>(8192);
+        let (log_tx, mut log_rx) = broadcast::channel::<Arc<JobLogEvent>>(8192);
         let keep_alive = log_tx.clone();
         let subscriber = Registry::default().with(JobLogLayer::new(log_tx));
         let _guard = tracing::subscriber::set_default(subscriber);
@@ -596,7 +596,7 @@ mod tests {
 
         let mut messages = Vec::new();
         while let Ok(event) = log_rx.try_recv() {
-            if let Some(m) = event.message {
+            if let Some(m) = event.message.clone() {
                 messages.push(m);
             }
         }

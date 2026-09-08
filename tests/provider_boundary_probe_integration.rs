@@ -143,7 +143,9 @@ async fn spawn_probe_mock() -> (String, Arc<Mutex<(u16, usize)>>) {
 fn test_state(
     db: sea_orm::DatabaseConnection,
     scheduler: llm_gateway::cron::scheduler::SchedulerRuntime,
-    log_tx: tokio::sync::broadcast::Sender<llm_gateway::cron::log_capture::JobLogEvent>,
+    log_tx: tokio::sync::broadcast::Sender<
+        std::sync::Arc<llm_gateway::cron::log_capture::JobLogEvent>,
+    >,
 ) -> AppState {
     AppState {
         db,

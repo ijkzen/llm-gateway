@@ -36,7 +36,11 @@ use crate::state::AppState;
 
 const LOG_RETENTION_DAYS: u64 = 30;
 const SHUTDOWN_TIMEOUT_SECS: u64 = 10;
-/// 任务日志事件广播容量：单次执行 2000 条上限下足够容纳并发任务的瞬时积压。
+/// 任务日志事件广播容量（条）：单次执行日志上限 2000 条、并发执行数默认
+/// ≤10，理论最坏 ~20000 条/瞬时——本容量不追求吞下理论峰值（超出即
+/// Lagged → worker 记截断并补溢出提示，E3 已兜底），按「worker 每 ~50 条
+/// 攒批落库、事件产生速率远低于消费速率」的实际留量取 8192：约合 4MB
+/// （单条 ≤4096 字符的 JSON），驻留有界且覆盖正常并发突发。
 const JOB_LOG_BROADCAST_CAPACITY: usize = 8192;
 
 struct AppContext {
@@ -48,7 +52,7 @@ struct AppContext {
 
 async fn setup_logging(
     env: &RuntimeEnv,
-    log_tx: broadcast::Sender<crate::cron::log_capture::JobLogEvent>,
+    log_tx: broadcast::Sender<std::sync::Arc<crate::cron::log_capture::JobLogEvent>>,
 ) -> anyhow::Result<tracing_appender::non_blocking::WorkerGuard> {
     let timer = tracing_subscriber::fmt::time::LocalTime::rfc_3339();
 

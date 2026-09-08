@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sea_orm::DatabaseConnection;
 use tokio::sync::broadcast;
 
@@ -13,8 +15,9 @@ use crate::proxy::pool::UpstreamPool;
 pub struct AppState {
     pub db: DatabaseConnection,
     pub scheduler: SchedulerRuntime,
-    /// 任务日志事件广播通道，SSE 端点订阅后按任务名过滤推送。
-    pub log_tx: broadcast::Sender<JobLogEvent>,
+    /// 任务日志事件广播通道（载荷 Arc 化，订阅者只克隆指针），SSE 端点
+    /// 订阅后按任务名过滤推送。
+    pub log_tx: broadcast::Sender<Arc<JobLogEvent>>,
     /// 虚拟模型 RoundRobin 负载均衡的轮转计数。
     pub lb_state: LbState,
     /// 连续失败计数（内存，provider 粒度）：失败 +1、成功清零，达阈值熔断。

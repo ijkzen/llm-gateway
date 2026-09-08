@@ -42,7 +42,7 @@ static DB_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::
 pub async fn setup_db_and_scheduler() -> (
     DatabaseConnection,
     SchedulerRuntime,
-    tokio::sync::broadcast::Sender<JobLogEvent>,
+    tokio::sync::broadcast::Sender<std::sync::Arc<JobLogEvent>>,
 ) {
     // 用临时文件库而非 `sqlite::memory:`：连接池 max_connections(5) 下，
     // 内存库每个连接是独立数据库，异步落库（tokio::spawn insert）与查询
@@ -55,7 +55,7 @@ pub async fn setup_db_and_scheduler() -> (
         .await
         .unwrap();
 
-    let (log_tx, _) = tokio::sync::broadcast::channel::<JobLogEvent>(64);
+    let (log_tx, _) = tokio::sync::broadcast::channel::<std::sync::Arc<JobLogEvent>>(64);
     let worker =
         JobWorker::new_with_settings(db.clone(), 2, 100, log_tx.clone(), AppSettings::default());
     let handle = worker.start();
@@ -72,7 +72,7 @@ pub async fn setup_db_and_scheduler() -> (
 pub fn build_app(
     db: DatabaseConnection,
     scheduler: SchedulerRuntime,
-    log_tx: tokio::sync::broadcast::Sender<JobLogEvent>,
+    log_tx: tokio::sync::broadcast::Sender<std::sync::Arc<JobLogEvent>>,
 ) -> axum::Router {
     build_app_with_settings(db, scheduler, log_tx, AppSettings::default())
 }
@@ -81,7 +81,7 @@ pub fn build_app(
 pub fn build_app_with_settings(
     db: DatabaseConnection,
     scheduler: SchedulerRuntime,
-    log_tx: tokio::sync::broadcast::Sender<JobLogEvent>,
+    log_tx: tokio::sync::broadcast::Sender<std::sync::Arc<JobLogEvent>>,
     settings: AppSettings,
 ) -> axum::Router {
     let state = AppState {
@@ -162,7 +162,7 @@ async fn inject_test_auth(mut req: Request, next: Next) -> Response {
 pub async fn build_authed_app(
     db: DatabaseConnection,
     scheduler: SchedulerRuntime,
-    log_tx: tokio::sync::broadcast::Sender<JobLogEvent>,
+    log_tx: tokio::sync::broadcast::Sender<std::sync::Arc<JobLogEvent>>,
 ) -> axum::Router {
     build_authed_app_with_settings(db, scheduler, log_tx, AppSettings::default()).await
 }
@@ -171,7 +171,7 @@ pub async fn build_authed_app(
 pub async fn build_authed_app_with_settings(
     db: DatabaseConnection,
     scheduler: SchedulerRuntime,
-    log_tx: tokio::sync::broadcast::Sender<JobLogEvent>,
+    log_tx: tokio::sync::broadcast::Sender<std::sync::Arc<JobLogEvent>>,
     settings: AppSettings,
 ) -> axum::Router {
     seed_default_auth(&db).await;

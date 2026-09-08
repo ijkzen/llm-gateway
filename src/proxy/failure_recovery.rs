@@ -169,6 +169,7 @@ mod tests {
     use crate::cron::scheduler::SchedulerRuntime;
     use crate::cron::worker::JobWorker;
     use sea_orm::{ActiveModelTrait, Set};
+    use std::sync::Arc;
     use tokio::sync::broadcast;
     use tracing::Instrument;
     use tracing_subscriber::Registry;
@@ -178,7 +179,7 @@ mod tests {
         // 单连接内存库：多连接池的内存库每连接独立，种子插入与任务查询互不可见。
         let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
         crate::db::migrate(&db).await.unwrap();
-        let (log_tx, _) = broadcast::channel::<JobLogEvent>(8192);
+        let (log_tx, _) = broadcast::channel::<Arc<JobLogEvent>>(8192);
         let worker = JobWorker::new_with_settings(
             db.clone(),
             2,
@@ -213,7 +214,7 @@ mod tests {
     #[allow(clippy::await_holding_lock)]
     async fn recovery_skip_logs_name_the_provider() {
         let _lock = SUBSCRIBER_LOCK.lock().unwrap();
-        let (log_tx, mut log_rx) = broadcast::channel::<JobLogEvent>(8192);
+        let (log_tx, mut log_rx) = broadcast::channel::<Arc<JobLogEvent>>(8192);
         let keep_alive = log_tx.clone();
         let subscriber = Registry::default().with(JobLogLayer::new(log_tx));
         let _guard = tracing::subscriber::set_default(subscriber);
@@ -253,7 +254,7 @@ mod tests {
 
         let mut messages = Vec::new();
         while let Ok(event) = log_rx.try_recv() {
-            if let Some(m) = event.message {
+            if let Some(m) = event.message.clone() {
                 messages.push(m);
             }
         }

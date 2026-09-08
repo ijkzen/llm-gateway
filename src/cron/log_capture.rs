@@ -6,7 +6,7 @@
 //! span 外的普通日志（启动日志、HTTP 访问日志等）不会被捕获。
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::broadcast::Sender;
 
@@ -25,6 +25,10 @@ const MAX_LOG_MESSAGE_CHARS: usize = 4096;
 const JOB_SPAN_TARGET: &str = "cron_job_log";
 
 /// 通过广播通道发布的任务日志事件，worker 与 SSE 各自按 `job_name`/`run_id` 过滤。
+///
+/// 通道载荷为 `Arc<JobLogEvent>`：on_event 每事件只分配一次，broadcast 对
+/// 每个订阅者克隆的是 Arc（1 个 worker 消费者 + 每个 SSE 连接），避免整条
+/// 事件体的逐订阅者深克隆（M2）。
 ///
 /// `kind` 取值：
 /// - `log`：handler 内捕获的一条日志（携带 `seq`/`level`/`message`）
@@ -93,13 +97,13 @@ impl JobLogEvent {
 /// （+ `run_id`）过滤订阅。直连 broadcast 保证事件在 `tracing::info!`
 /// 返回前已入队，handler 结束后 worker 的 drain 不会漏收。
 pub struct JobLogLayer {
-    sender: Sender<JobLogEvent>,
+    sender: Sender<Arc<JobLogEvent>>,
     /// span id -> (job_name, run_id)，只登记带归属字段的任务 span。
     job_spans: Mutex<HashMap<Id, (String, String)>>,
 }
 
 impl JobLogLayer {
-    pub fn new(sender: Sender<JobLogEvent>) -> Self {
+    pub fn new(sender: Sender<Arc<JobLogEvent>>) -> Self {
         Self {
             sender,
             job_spans: Mutex::new(HashMap::new()),
@@ -140,7 +144,7 @@ where
         let message = trim_and_limit(recorder.message.as_deref().unwrap_or_default());
 
         // 无订阅者时 send 返回 Err（事件静默丢弃）；通道满时丢弃最旧事件。
-        let _ = self.sender.send(JobLogEvent {
+        let _ = self.sender.send(Arc::new(JobLogEvent {
             kind: "log".to_string(),
             job_name,
             run_id,
@@ -150,7 +154,7 @@ where
             status: None,
             truncated: None,
             ts: Utc::now().to_rfc3339(),
-        });
+        }));
     }
 }
 
@@ -270,8 +274,8 @@ mod tests {
         job_name: &str,
         run_id: &str,
     ) -> (
-        tokio::sync::broadcast::Receiver<JobLogEvent>,
-        Sender<JobLogEvent>,
+        tokio::sync::broadcast::Receiver<Arc<JobLogEvent>>,
+        Sender<Arc<JobLogEvent>>,
     ) {
         let (tx, rx) = tokio::sync::broadcast::channel(16);
         // 额外保留一个 Sender，避免 subscriber 销毁后 channel 断连。

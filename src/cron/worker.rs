@@ -24,7 +24,7 @@ pub struct JobWorker {
     db: DatabaseConnection,
     max_concurrent: usize,
     queue_size: usize,
-    log_tx: broadcast::Sender<JobLogEvent>,
+    log_tx: broadcast::Sender<Arc<JobLogEvent>>,
     settings: AppSettings,
 }
 
@@ -78,7 +78,7 @@ impl JobWorker {
         db: DatabaseConnection,
         max_concurrent: usize,
         queue_size: usize,
-        log_tx: broadcast::Sender<JobLogEvent>,
+        log_tx: broadcast::Sender<Arc<JobLogEvent>>,
         settings: AppSettings,
     ) -> Self {
         Self {
@@ -156,7 +156,7 @@ impl JobWorker {
 #[allow(clippy::too_many_arguments)]
 async fn execute_with_logging(
     db: DatabaseConnection,
-    log_tx: broadcast::Sender<JobLogEvent>,
+    log_tx: broadcast::Sender<Arc<JobLogEvent>>,
     settings: AppSettings,
     name: String,
     expression: String,
@@ -178,7 +178,9 @@ async fn execute_with_logging(
             false
         }
     };
-    let _ = log_tx.send(JobLogEvent::run_started(&name, &run_id, started_at));
+    let _ = log_tx.send(Arc::new(JobLogEvent::run_started(
+        &name, &run_id, started_at,
+    )));
 
     // 在带归属字段的 span 内执行 handler，JobLogLayer 据此捕获其中的日志事件。
     let span = tracing::info_span!(
@@ -258,13 +260,13 @@ async fn execute_with_logging(
     sink.flush().await;
 
     let ended_at = Utc::now();
-    let _ = log_tx.send(JobLogEvent::run_ended(
+    let _ = log_tx.send(Arc::new(JobLogEvent::run_ended(
         &name,
         &run_id,
         status,
         ended_at,
         sink.truncated,
-    ));
+    )));
 
     if run_persisted {
         if let Err(e) = log_repo
@@ -343,18 +345,21 @@ impl<'a> RunLogSink<'a> {
     }
 
     /// 消费一条广播事件：仅本 run 的 log 事件入队（时间戳复用事件捕获值，
-    /// 与 SSE 推送同源），run_started/run_ended 事件忽略。
-    async fn consume(&mut self, event: JobLogEvent) {
+    /// 与 SSE 推送同源），run_started/run_ended 事件忽略。载荷为 Arc：
+    /// 事件体跨订阅者共享，此处只克隆实际需要写入的字段。
+    async fn consume(&mut self, event: Arc<JobLogEvent>) {
         if !self.enabled || event.run_id != self.run_id {
             return;
         }
-        let (Some(level), Some(message)) = (event.level, event.message) else {
+        let (Some(level), Some(message)) = (event.level.as_deref(), event.message.as_deref())
+        else {
             return;
         };
         let ts = chrono::DateTime::parse_from_rfc3339(&event.ts)
             .map(|dt| dt.with_timezone(&chrono::Utc))
             .unwrap_or_else(|_| Utc::now());
-        self.append(level, message, ts).await;
+        self.append(level.to_string(), message.to_string(), ts)
+            .await;
     }
 
     /// 追加一条真实日志；超单次上限置截断并补提示，多余日志丢弃。
@@ -798,7 +803,7 @@ mod tests {
     /// thread-local 的，multi-thread runtime 下 handler 在 worker 线程执行，
     /// 事件会走该线程的（空）dispatcher 而丢失。
     fn install_log_capture(
-        log_tx: broadcast::Sender<JobLogEvent>,
+        log_tx: broadcast::Sender<Arc<JobLogEvent>>,
     ) -> tracing::subscriber::DefaultGuard {
         use tracing_subscriber::layer::SubscriberExt;
 
