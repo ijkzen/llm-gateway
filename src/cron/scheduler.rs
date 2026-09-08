@@ -9,7 +9,8 @@ use tokio_cron_scheduler::{Job, JobScheduler};
 
 use crate::app_settings::AppSettings;
 use crate::cron::parser::{
-    ScheduleType, compute_frequency_secs_tz, compute_next_run_tz, parse_expression,
+    ScheduleType, compute_frequency_secs_tz, compute_next_run_from_scheduled_at_tz,
+    compute_next_run_tz, parse_expression,
 };
 use crate::cron::repository::{CronJobRepository, JobDefinition};
 use crate::cron::worker::JobInvocation;
@@ -714,6 +715,41 @@ async fn skip_missed_run<R: CronJobRepository>(
             config.name,
             e
         );
+    }
+}
+
+/// 单次执行结束后的计划推进（next_run_at / last_run_at 回写的唯一实现）。
+///
+/// next_run_at 从 `scheduled_at` 锚定重算；若任务超时/排队导致算出的时间已
+/// 过期，则从 now 重算，保证展示的 next run 恒在未来。last_run_at = now。
+/// 手动「立即执行」与调度触发同通道同语义。worker 只报告事实
+/// （name / expression / scheduled_at / tz），不自行计算或回写；
+/// 路由在表达式变更时也经 `compute_next_run_tz` 同一口径重算。
+pub async fn on_run_finished<R: CronJobRepository>(
+    repo: &R,
+    name: &str,
+    expression: &str,
+    scheduled_at: chrono::DateTime<Utc>,
+    tz: Option<chrono_tz::Tz>,
+) {
+    let now = Utc::now();
+    let next = compute_next_run_from_scheduled_at_tz(expression, scheduled_at, tz).unwrap_or(now);
+    // If the job overran its interval (or waited in the queue), the time
+    // computed from scheduled_at is already in the past; recompute from now
+    // so the displayed next run always lies in the future.
+    let next = if next <= now {
+        compute_next_run_from_scheduled_at_tz(expression, now, tz).unwrap_or(next)
+    } else {
+        next
+    };
+    match repo.update_run_times(name, now, next).await {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!("Job '{}' not found when updating run times", name)
+        }
+        Err(e) => {
+            tracing::error!("Failed to update run times for '{}': {}", name, e)
+        }
     }
 }
 

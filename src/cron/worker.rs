@@ -10,8 +10,7 @@ use crate::cron::log_capture::JobLogEvent;
 use crate::cron::log_repository::{
     CronJobLogRepository, MAX_RUNS_KEPT, SeaOrmCronJobLogRepository,
 };
-use crate::cron::parser::compute_next_run_from_scheduled_at_tz;
-use crate::cron::repository::{CronJobRepository, SeaOrmCronJobRepository};
+use crate::cron::repository::SeaOrmCronJobRepository;
 use crate::cron::{JobContext, JobHandler};
 
 /// 单次执行最多保留的日志条数，超出丢弃并标记截断。
@@ -282,27 +281,16 @@ async fn execute_with_logging(
     }
 
     let repo = SeaOrmCronJobRepository::new(db);
-    let now = Utc::now();
-    let tz = settings.timezone().await;
-    let next = compute_next_run_from_scheduled_at_tz(&expression, scheduled_at, tz).unwrap_or(now);
-    // If the job overran its interval (or waited in the
-    // queue), the time computed from scheduled_at is
-    // already in the past; recompute from now so the
-    // displayed next run always lies in the future.
-    let next = if next <= now {
-        compute_next_run_from_scheduled_at_tz(&expression, now, tz).unwrap_or(next)
-    } else {
-        next
-    };
-    match repo.update_run_times(&name, now, next).await {
-        Ok(true) => {}
-        Ok(false) => {
-            tracing::warn!("Job '{}' not found when updating run times", name)
-        }
-        Err(e) => {
-            tracing::error!("Failed to update run times for '{}': {}", name, e)
-        }
-    }
+    // 计划推进（next_run/last_run 回写）唯一实现在 scheduler::on_run_finished：
+    // worker 只报告事实，不自行计算（防止回写策略在 worker/路由两侧漂移）。
+    crate::cron::scheduler::on_run_finished(
+        &repo,
+        &name,
+        &expression,
+        scheduled_at,
+        settings.timezone().await,
+    )
+    .await;
 }
 
 /// 将一次日志事件写入该 run 的日志表；超过单次上限则标记截断并写入提示。
