@@ -236,9 +236,55 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
     match (member.protocol, client_stream) {
         // OpenAI Compat 非流式：JSON 原样透传。
         (Protocol::OpenAiCompat, false) => {
-            let body = upstream::read_body(reply.body).await.unwrap_or_default();
+            let body = match upstream::read_body(reply.body).await {
+                Ok(body) => body,
+                Err(e) => {
+                    let message = format!("读取上游响应失败：{e}");
+                    record_failure(
+                        &state.db,
+                        &request_id,
+                        virtual_model_id,
+                        &member,
+                        &api_key_name,
+                        start_time,
+                        false,
+                        &message,
+                        reply.start_at_ms,
+                    );
+                    return openai_error(
+                        StatusCode::BAD_GATEWAY,
+                        message,
+                        "api_error",
+                        "upstream_error",
+                    );
+                }
+            };
             let text = String::from_utf8_lossy(&body).to_string();
-            let parsed: Value = serde_json::from_str(&text).unwrap_or_else(|_| json!({}));
+            // 200 但响应体不是合法 JSON（空体/被截断）同样是上游故障：透传空壳会
+            // 造成客户端收到假成功，按 Anthropic/Gemini 非流式同款 502 处理。
+            let parsed: Value = match serde_json::from_str(&text) {
+                Ok(value) => value,
+                Err(e) => {
+                    let message = format!("解析上游响应失败：{e}");
+                    record_failure(
+                        &state.db,
+                        &request_id,
+                        virtual_model_id,
+                        &member,
+                        &api_key_name,
+                        start_time,
+                        false,
+                        &message,
+                        reply.start_at_ms,
+                    );
+                    return openai_error(
+                        StatusCode::BAD_GATEWAY,
+                        message,
+                        "api_error",
+                        "upstream_error",
+                    );
+                }
+            };
             let usage = parsed
                 .get("usage")
                 .filter(|u| u.is_object())
@@ -276,12 +322,21 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                 let mut body = reply.body;
                 let mut splitter = crate::proxy::sse::SseSplitter::default();
                 let mut disconnect = false;
+                // 上游流中断（hyper 帧错误/连接重置）与客户端断开是两种结局：
+                // 前者记失败并补 error 帧 + [DONE] 收尾，后者客户端已不在。
+                let mut upstream_failed: Option<String> = None;
                 'outer: while let Some(frame) = body.frame().await {
                     let bytes = match frame {
                         Ok(frame) => frame.into_data().unwrap_or_default(),
                         Err(e) => {
-                            let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
-                            break;
+                            let message = format!("读取上游流失败：{e}");
+                            upstream_failed = Some(message.clone());
+                            let error_frame = format!(
+                                "data: {}\n\n",
+                                json!({"error": {"message": message, "type": "api_error", "code": "upstream_error"}})
+                            );
+                            let _ = tx.send(Ok(Bytes::from(error_frame))).await;
+                            break 'outer;
                         }
                     };
                     let text = String::from_utf8_lossy(&bytes).to_string();
@@ -306,6 +361,12 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                         }
                     }
                 }
+                // 上游中断时补 [DONE] 收尾（正常路径 [DONE] 由上游自带）。
+                if upstream_failed.is_some() {
+                    let _ = tx
+                        .send(Ok(Bytes::from("data: [DONE]\n\n".to_string())))
+                        .await;
+                }
                 let end_time = now_ms();
                 let usage = scanner.usage.clone().unwrap_or_default();
                 RequestRecord {
@@ -320,8 +381,9 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                     start_time,
                     end_time,
                     usage,
-                    success: true,
-                    fail_reason: disconnect.then(|| "客户端提前断开".to_string()),
+                    success: upstream_failed.is_none(),
+                    fail_reason: upstream_failed
+                        .or(disconnect.then(|| "客户端提前断开".to_string())),
                     api_key_name,
                 }
                 .insert(&db);
@@ -538,12 +600,21 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                 let mut body = reply.body;
                 let mut splitter = crate::proxy::sse::SseSplitter::default();
                 let mut disconnect = false;
+                // 上游流中断与客户端断开分开记账：前者发 error 帧并按失败落库，
+                // 收尾的 finish/usage 补发仅在无错误时进行。
+                let mut upstream_failed: Option<String> = None;
                 'outer: while let Some(frame) = body.frame().await {
                     let bytes = match frame {
                         Ok(frame) => frame.into_data().unwrap_or_default(),
                         Err(e) => {
-                            let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
-                            break;
+                            let message = format!("读取上游流失败：{e}");
+                            upstream_failed = Some(message.clone());
+                            let error_frame = format!(
+                                "data: {}\n\n",
+                                json!({"error": {"message": message, "type": "api_error", "code": "upstream_error"}})
+                            );
+                            let _ = tx.send(Ok(Bytes::from(error_frame))).await;
+                            break 'outer;
                         }
                     };
                     let text = String::from_utf8_lossy(&bytes).to_string();
@@ -579,8 +650,8 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                         }
                     }
                 }
-                // 补发缺失的 finish / usage / [DONE]。
-                if converter.error().is_none() {
+                // 补发缺失的 finish / usage / [DONE]（上游中断时跳过，error 帧后仅收 [DONE]）。
+                if converter.error().is_none() && upstream_failed.is_none() {
                     if let Some(chunk) = converter.final_chunk()
                         && tx
                             .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(
@@ -619,7 +690,7 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                 }
                 let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n"))).await;
                 let end_time = now_ms();
-                let success = converter.error().is_none();
+                let success = upstream_failed.is_none() && converter.error().is_none();
                 let usage = converter.usage().unwrap_or_default();
                 RequestRecord {
                     request_id,
@@ -634,9 +705,8 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                     end_time,
                     usage,
                     success,
-                    fail_reason: converter
-                        .error()
-                        .clone()
+                    fail_reason: upstream_failed
+                        .or_else(|| converter.error().clone())
                         .or(disconnect.then(|| "客户端提前断开".to_string())),
                     api_key_name,
                 }

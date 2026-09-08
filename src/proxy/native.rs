@@ -250,7 +250,26 @@ pub(crate) async fn dispatch_native_success(
     client_stream: bool,
 ) -> Response {
     if !client_stream {
-        let body = upstream::read_body(reply.body).await.unwrap_or_default();
+        let body = match upstream::read_body(reply.body).await {
+            Ok(body) => body,
+            Err(e) => {
+                // 上游 200 后读体失败（超时/截断）：原样透传空体会造成假成功，
+                // 与 chat 各协议非流式读失败同款 502 + 失败落库。
+                let message = format!("读取上游响应失败：{e}");
+                record_failure(
+                    &state.db,
+                    &request_id,
+                    virtual_model_id,
+                    &member,
+                    &api_key_name,
+                    start_time,
+                    false,
+                    &message,
+                    reply.start_at_ms,
+                );
+                return endpoint.error(StatusCode::BAD_GATEWAY, "api_error", message);
+            }
+        };
         let parsed: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
         let usage = match endpoint {
             NativeEndpoint::AnthropicMessages => parsed
@@ -301,12 +320,17 @@ pub(crate) async fn dispatch_native_success(
     tokio::spawn(async move {
         let mut body = reply.body;
         let mut disconnect = false;
+        // 原生透传不重帧，无法补 error 帧；上游流中断时客户端收到裸截断
+        // （协议原生语义），但指标必须按失败记。
+        let mut upstream_failed: Option<String> = None;
         'outer: while let Some(frame) = body.frame().await {
             let bytes = match frame {
                 Ok(frame) => frame.into_data().unwrap_or_default(),
                 Err(e) => {
+                    let message = format!("读取上游流失败：{e}");
+                    upstream_failed = Some(message);
                     let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
-                    break;
+                    break 'outer;
                 }
             };
             scanner.feed(&bytes);
@@ -331,8 +355,8 @@ pub(crate) async fn dispatch_native_success(
             start_time,
             end_time,
             usage: scanner.usage().unwrap_or_default(),
-            success: true,
-            fail_reason: disconnect.then(|| "客户端提前断开".to_string()),
+            success: upstream_failed.is_none(),
+            fail_reason: upstream_failed.or(disconnect.then(|| "客户端提前断开".to_string())),
             api_key_name,
         }
         .insert(&db);

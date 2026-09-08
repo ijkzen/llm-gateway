@@ -30,6 +30,8 @@ mod native_responses;
 mod outbound_headers;
 #[path = "proxy_integration/protocol.rs"]
 mod protocol;
+#[path = "proxy_integration/upstream_abort.rs"]
+mod upstream_abort;
 
 const TEST_BEARER: &str = "Bearer lg-itest-api-key-0000000000000";
 
