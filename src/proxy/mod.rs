@@ -64,12 +64,7 @@ impl Protocol {
     }
 }
 
-/// 可重试的失败路径：LLM 网关惯用的 408/429/5xx（nyro 同款）。
-fn is_retryable_status(status: StatusCode) -> bool {
-    matches!(status.as_u16(), 408 | 429 | 500 | 502 | 503 | 529)
-}
-
-/// 成员请求失败后记连续失败（所有失败，含不可重试 4xx）；达到设置项
+/// 成员请求失败后记连续失败（所有失败，含 4xx）；达到设置项
 /// `max_consecutive_failures` 阈值时由可用性状态机熔断停用供应商（计数、
 /// 阈值判断与状态迁移见 `availability::on_forward_failure`）。
 /// `counted` 为本次请求已计数的 provider 集合：同一请求内同一供应商的多个
@@ -1225,25 +1220,6 @@ struct AttemptSuccess {
     flags: RequestFlags,
 }
 
-/// 失败分类：本地失败（解密/构造/传输）可无条件降级；
-/// 上游 >=400 的失败还需状态本身可重试（408/429/5xx）。
-enum FailureStage {
-    Local,
-    Http(StatusCode),
-}
-
-impl FailureStage {
-    /// 是否降级尝试下一成员：降级策略开启、还有后继成员且该阶段允许重试。
-    fn retryable(&self, retry_enabled: bool, has_more: bool) -> bool {
-        retry_enabled
-            && has_more
-            && match self {
-                FailureStage::Local => true,
-                FailureStage::Http(status) => is_retryable_status(*status),
-            }
-    }
-}
-
 /// 成员尝试循环的两类端点形态：chat 协议转换 vs 原生透传。循环体唯一，
 /// 差异（请求构建、错误/空候选响应整形）收敛在 flavor 上；
 /// 成功后的响应分派由调用方完成。
@@ -1345,7 +1321,7 @@ impl ForwardFlavor {
     }
 }
 
-/// 在排序后的成员上执行统一尝试循环：逐个 解密 → 构建 → 调用 → 失败分类，
+/// 在排序后的成员上执行统一尝试循环：逐个 解密 → 构建 → 调用 → 失败判定，
 /// 可降级则记录并重试下一成员，否则按端点协议整形终态错误；成功清零
 /// 连续失败计数并把成功上下文交给调用方分派。空候选（成员全被额度剔除）
 /// 在此统一返回 503，chat 与原生透传共享同一条语义。
@@ -1399,7 +1375,7 @@ async fn forward_through_members(
             Err(e) => {
                 let message = format!("解密供应商密钥失败：{e}");
                 note_member_failure(state, member, request_id, &mut counted_failures).await;
-                if FailureStage::Local.retryable(retry_enabled, has_more) {
+                if retry_enabled && has_more {
                     tracing::warn!(
                         request_id,
                         virtual_model_id,
@@ -1444,7 +1420,7 @@ async fn forward_through_members(
             Ok(build) => (build.call, build.flags),
             Err(message) => {
                 note_member_failure(state, member, request_id, &mut counted_failures).await;
-                if FailureStage::Local.retryable(retry_enabled, has_more) {
+                if retry_enabled && has_more {
                     tracing::warn!(
                         request_id,
                         virtual_model_id,
@@ -1482,7 +1458,7 @@ async fn forward_through_members(
             Err(e) => {
                 let message = e.fail_reason();
                 note_member_failure(state, member, request_id, &mut counted_failures).await;
-                if FailureStage::Local.retryable(retry_enabled, has_more) {
+                if retry_enabled && has_more {
                     tracing::warn!(
                         request_id,
                         virtual_model_id,
@@ -1518,7 +1494,7 @@ async fn forward_through_members(
             let message = extract_error_message(&String::from_utf8_lossy(&body));
             let status = reply.status;
             note_member_failure(state, member, request_id, &mut counted_failures).await;
-            if FailureStage::Http(status).retryable(retry_enabled, has_more) {
+            if retry_enabled && has_more {
                 tracing::warn!(
                     request_id,
                     virtual_model_id,
@@ -1527,7 +1503,7 @@ async fn forward_through_members(
                     attempt_index = index,
                     http_status = status.as_u16(),
                     fail_reason = %message,
-                    "上游成员返回可重试错误，降级重试下一成员",
+                    "上游成员返回错误，降级重试下一成员",
                 );
                 record_degraded(&message, reply.start_at_ms);
                 last_failure = Some((member.clone(), message, status));
@@ -3411,44 +3387,5 @@ mod tests {
         assert!(!joined.contains("host"), "host 应被剥离：{joined}");
         assert!(joined.contains("x-custom"), "x-custom 应保留：{joined}");
         assert!(!has_duplicate_names(&call));
-    }
-
-    // ─── 成员尝试核心：失败分类矩阵 ────────────────────────────────
-
-    #[test]
-    fn local_failure_retryable_depends_only_on_policy_and_members() {
-        // 本地失败（解密/构造/传输）无需可重试状态即可降级。
-        assert!(FailureStage::Local.retryable(true, true));
-        assert!(
-            !FailureStage::Local.retryable(false, true),
-            "降级策略关闭不降级"
-        );
-        assert!(
-            !FailureStage::Local.retryable(true, false),
-            "没有后继成员不降级"
-        );
-    }
-
-    #[test]
-    fn http_failure_retryable_requires_retryable_status() {
-        for status in [408u16, 429, 500, 502, 503, 529] {
-            assert!(
-                FailureStage::Http(StatusCode::from_u16(status).unwrap()).retryable(true, true),
-                "{status} 应可降级重试"
-            );
-        }
-        for status in [400u16, 401, 404, 422, 501] {
-            assert!(
-                !FailureStage::Http(StatusCode::from_u16(status).unwrap()).retryable(true, true),
-                "{status} 不可重试，不应降级"
-            );
-        }
-    }
-
-    #[test]
-    fn http_failure_retryable_still_honors_policy_and_members() {
-        let status = FailureStage::Http(StatusCode::SERVICE_UNAVAILABLE);
-        assert!(!status.retryable(false, true));
-        assert!(!status.retryable(true, false));
     }
 }
