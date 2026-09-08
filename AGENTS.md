@@ -70,11 +70,19 @@
 │   ├── static_assets/mod.rs# rust-embed 内嵌前端 dist
 │   ├── middleware/mod.rs   # CORS、Trace、CatchPanic 中间件
 │   ├── auth/mod.rs         # 登录认证：argon2 密码哈希、session 表、/api 与 /v1 拦截中间件
-│   ├── proxy/              # /v1 转发核心模块
-│   │   ├── mod.rs          # 转发管线：虚拟模型路由、LB 选路、failover、request 表落库
+│   ├── proxy/              # /v1 转发核心模块（按转发阶段拆分，单文件 ≤1000 行）
+│   │   ├── mod.rs          # 门面：子模块声明 + pub use 重导出（forward_chat/LbState/test_model 等路径不变）
+│   │   ├── lb.rs           # 协议枚举/LB 状态/成员加载与用量感知排序（Protocol/LbState/Member/resolve_proxy/order_members）
+│   │   ├── headers.rs      # 出站头四层组装：下游透传/自定义/模板默认/协议鉴权 + 剥离清单
+│   │   ├── calls.rs        # 上游调用组装（build_upstream_call / build_native_upstream_call）
+│   │   ├── forward.rs      # 转发入口：forward_chat（/v1 chat）+ forward_chat_direct（管理后台直连）
+│   │   ├── failover.rs     # 统一成员尝试循环 forward_through_members + ForwardFlavor/成员结局类型
+│   │   ├── native.rs       # /v1/messages・/v1/responses 原生透传（forward_native + 旁路 usage 扫描）
+│   │   ├── dispatch.rs     # 成功分派/流收集/指标落库（dispatch_success/accumulate_chunks/record_failure）
+│   │   ├── probe.rs        # 测速与探活（test_model/probe_provider/ProbeFailure）
 │   │   ├── upstream.rs     # 上游 HTTP 客户端（hyper + tokio-rustls，连接池化复用，TTFT 起点=建连开始/请求发出）
 │   │   ├── pool.rs         # 上游连接池（按 host 隔离，响应体读完归还，空闲 10 分钟释放）
-│   │   ├── convert/        # 协议转换：openai(直通)/responses/anthropic/gemini（请求+响应+流式+usage 归一）
+│   │   ├── convert/        # 协议转换：openai(直通)/responses/anthropic/gemini（每协议按 request/response(+images/stream) 拆分，xxx.rs 重导出）
 │   │   ├── metrics.rs      # request 表记录与流式指标（ttft/输出耗时）
 │   │   ├── sse.rs          # SSE 拆分/写出工具
 │   │   └── usage_rank.rs   # 用量感知排序纯比较器（订阅 5h→周→月剩余百分比 / 按量余额合计）
@@ -101,7 +109,7 @@
 │   │   ├── auth.rs         # status/init/login/logout/me/change-password
 │   │   ├── cron_jobs.rs    # 任务 CRUD + logs 列表/单次日志/SSE 实时流
 │   │   ├── openai_compat.rs# /v1/models 元数据 + /v1/chat/completions 转发入口
-│   │   ├── stats.rs        # 数据面板：/api/stats/summary 累计指标 + /api/stats/charts 24h 图表聚合
+│   │   ├── stats.rs        # 数据面板 12 路由注册（stats.rs 门面 + stats/ 子目录：window/compute/summary_charts/insight/rank/metrics，均 ≤1000 行）
 │   │   └── settings.rs
 │   └── entity/             # SeaORM 实体
 │       ├── mod.rs
@@ -117,6 +125,7 @@
 │   ├── common/mod.rs       # 集成测试共享引导（内存库 + worker + scheduler；build_authed_app 自动注入测试凭证）
 │   ├── auth_integration.rs # 认证：init/登录/拦截/改密踢会话/登出/Bearer
 │   ├── proxy_integration.rs# 转发：四协议转换、include_usage 注入、failover、落库、LB 用量排序
+│   │                       # （超 1000 行按域拆：tests/proxy_integration/ 下 protocol/failover/outbound_headers/native_messages/native_responses 子模块）
 │   ├── cron_jobs_integration.rs
 │   ├── cron_job_logs_integration.rs
 │   ├── provider_boundary_probe_integration.rs # 订阅制窗口剩余 (0,1)% 边界实测：失败停用/成功保持与恢复/禁用后继续探活不抖动/manual 不探活
@@ -221,7 +230,7 @@ Dockerfile 为多阶段构建：
 
 ## 测试说明
 
-- **Rust 测试**: `cargo test`。795 个测试函数：src 内单元测试 454 个（`auth`、`config`、`app_settings`、`availability`（可用性状态机）、`backup`（备份 JSON 解析/校验）、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`、`logs_cleanup`、`provider_model`/`provider_repo`/`provider_template`、`proxy::convert`（四协议转换）、`proxy` 头处理、`proxy::sse`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`routes::stats`（桶归并/分位/时区）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词，含 `has_low_remaining_window` 边界判定）等模块）+ `tests/` 集成测试 341 个（30 个文件：auth、backup、chat、proxy（本地 mock 上游四协议转换/failover/LB 用量排序/原生透传/头透传剥离）、cron_jobs、cron_job_logs、settings、providers、provider_models（CRUD/刷新/测速，含 `provider_models_test_integration` 测速端点）、virtual_models（含 openai `/v1/models`）、stats（summary/charts/insight/rank/metrics）、request_logs、model_metrics、provider_usage（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>，经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向本地 mock）、usage_estimate、provider_quota_gate（额度耗尽停用/恢复 + 种子任务被调度）、provider_boundary_probe（订阅制窗口剩余 (0,1)% 边界实测探活：失败停用/成功保持与恢复/禁用后继续探活不抖动/manual 不探活）、provider_failure_recovery（恢复探测）、lb_48_scenarios（48 场景矩阵）、lb_failure_disable、provider/provider_model/virtual_model 三个 rank 端点（`*_race_integration`）、upstream_pool（连接池：同一上游复用连接 / 空闲超时释放 / `Connection: close` 不归还，mock server 手动计数连接数）、i18n、provider_schema_check）。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
+- **Rust 测试**: `cargo test`。795 个测试函数：src 内单元测试 454 个（`auth`、`config`、`app_settings`、`availability`（可用性状态机）、`backup`（备份 JSON 解析/校验）、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`、`logs_cleanup`、`provider_model`/`provider_repo`/`provider_template`、`proxy::convert`（四协议转换）、`proxy` 头处理、`proxy::sse`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`routes::stats`（桶归并/分位/时区）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词，含 `has_low_remaining_window` 边界判定）等模块）+ `tests/` 集成测试 341 个（30 个顶层测试文件：auth、backup、chat、proxy（本地 mock 上游四协议转换/failover/LB 用量排序/原生透传/头透传剥离）、cron_jobs、cron_job_logs、settings、providers、provider_models（CRUD/刷新/测速，含 `provider_models_test_integration` 测速端点）、virtual_models（含 openai `/v1/models`）、stats（summary/charts/insight/rank/metrics）、request_logs、model_metrics、provider_usage（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>，经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向本地 mock）、usage_estimate、provider_quota_gate（额度耗尽停用/恢复 + 种子任务被调度）、provider_boundary_probe（订阅制窗口剩余 (0,1)% 边界实测探活：失败停用/成功保持与恢复/禁用后继续探活不抖动/manual 不探活）、provider_failure_recovery（恢复探测）、lb_48_scenarios（48 场景矩阵）、lb_failure_disable、provider/provider_model/virtual_model 三个 rank 端点（`*_race_integration`）、upstream_pool（连接池：同一上游复用连接 / 空闲超时释放 / `Connection: close` 不归还，mock server 手动计数连接数）、i18n、provider_schema_check）。五个曾超 1000 行的大文件（proxy_integration/provider_models_integration/provider_usage_integration/stats_integration/virtual_models_integration）已按域拆分为同目录子模块（tests/<stem>/，由根文件 `#[path]` 引入，helpers 留在根文件），target 名与测试函数数不变。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
 - 环境变量隔离使用 `temp-env`，临时目录使用 `tempfile`。
 - 调度器测试包含关键行为回归：禁用的任务不会触发（`set_stop` 在 tokio-cron-scheduler 内存存储下无效，禁用必须走移除）、启用后恢复触发、禁用任务仍可手动执行。
 - **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 55 个测试文件 417 个用例，分布于 `web/src/__tests__/`（页面级 17 个）、`web/src/components/__tests__/`（组件级 32 个）及各 race 组件、`hooks`、`lib` 下的 `__tests__`（各 1 个）（含 login 页、RequireAuth 守卫、ChangePasswordDialog、ProviderUsageCard）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。

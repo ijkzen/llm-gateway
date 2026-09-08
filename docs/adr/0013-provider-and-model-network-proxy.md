@@ -10,7 +10,7 @@ accepted
 
 ## Decision
 
-1. 两级配置：`provider.proxy_enabled`/`proxy_addr`（迁移 13）；`provider_model` 同名可空列（迁移 19）。转发与测速的生效代理解析统一为 `resolve_proxy`（`src/proxy/mod.rs`）：模型级开启 → 供应商级 → 直连；Member 只携带最终生效代理，消费端不做二次解析。
+1. 两级配置：`provider.proxy_enabled`/`proxy_addr`（迁移 13）；`provider_model` 同名可空列（迁移 19）。转发与测速的生效代理解析统一为 `resolve_proxy`（`src/proxy/lb.rs`，拆分自原 `src/proxy/mod.rs`）：模型级开启 → 供应商级 → 直连；Member 只携带最终生效代理，消费端不做二次解析。
 2. 代理实现一律用全代理（http 与 https 目标都走代理，禁止仅 http 代理配置导致 https 静默直连）；地址校验 `validate_proxy` 供应商/模型同一套规则（开启时地址非空为不变量）。
 3. 旁路请求支持供应商级代理透传：用量抓取（`UsageHttp::with_proxy`）、远端模型列表刷新、连通性测试；**模型级代理不影响旁路**（回归锁定）。模型详情只读态展示「继承供应商代理」，避免把回落到供应商级误读为直连。
 4. 前端供应商与模型弹窗共用 `ProxyConfigFields`（含校验规则，见 ADR-0004 表单收敛）；添加新模型暂不支持配代理。
