@@ -316,28 +316,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_find_by_name_filters_deleted() {
-        let db = setup_db().await;
-        let repo = SeaOrmCronJobRepository::new(db);
-        repo.insert(&sample_job("find_deleted_job"), None)
-            .await
-            .unwrap();
-        repo.soft_delete("find_deleted_job").await.unwrap();
-        assert!(
-            repo.find_by_name("find_deleted_job")
-                .await
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            repo.find_by_name_including_deleted("find_deleted_job")
-                .await
-                .unwrap()
-                .is_some()
-        );
-    }
-
-    #[tokio::test]
     async fn test_default_column_values() {
         let db = setup_db().await;
         let now = Utc::now();

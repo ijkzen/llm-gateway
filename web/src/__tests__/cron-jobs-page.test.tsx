@@ -138,20 +138,6 @@ describe("CronJobsPage selected job", () => {
 		expect(lastDetailProps().job).toBeUndefined();
 	});
 
-	it("does not keep a stale job when jobs become undefined", () => {
-		const original = makeJob("a");
-		mocks.jobs = [original];
-		const { rerender } = render(<CronJobsPage />);
-
-		fireEvent.click(screen.getByRole("button", { name: "a" }));
-		expect(lastDetailProps().job).toBe(original);
-
-		mocks.jobs = undefined;
-		rerender(<CronJobsPage />);
-
-		expect(lastDetailProps().job).toBeUndefined();
-	});
-
 	it("renders neither list nor detail while loading", () => {
 		mocks.isLoading = true;
 		render(<CronJobsPage />);

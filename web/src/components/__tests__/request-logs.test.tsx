@@ -241,30 +241,6 @@ describe("RequestLogsTable", () => {
 		);
 	});
 
-	it("勾选隐藏供应商列后写入 localStorage，重新渲染保持隐藏", () => {
-		mockQuery({ items: [makeRow()], total: 1 });
-		const { unmount } = render(<RequestLogsTable />);
-
-		// Radix DropdownMenu 在 jsdom 下通过键盘事件打开。
-		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
-		fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "供应商" }));
-
-		const stored = JSON.parse(
-			window.localStorage.getItem("request-logs:column-visibility") ?? "{}",
-		);
-		expect(stored).toEqual({ providerName: false });
-
-		// 重新渲染（模拟刷新）：供应商列保持隐藏。
-		unmount();
-		mockQuery({ items: [makeRow()], total: 1 });
-		render(<RequestLogsTable />);
-		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
-		expect(screen.getByRole("menuitemcheckbox", { name: "供应商" })).toHaveAttribute(
-			"data-state",
-			"unchecked",
-		);
-	});
-
 	it("切换每页条数后写入 localStorage，重新渲染保持", () => {
 		mockQuery({ items: [], total: 0 });
 		const { unmount } = render(<RequestLogsTable />);

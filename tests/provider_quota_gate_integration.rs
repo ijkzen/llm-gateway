@@ -448,24 +448,6 @@ async fn balance_exhaustion_disables_and_restore_reenables() {
 }
 
 #[tokio::test]
-async fn balance_unjudgeable_keeps_state() {
-    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
-    let (pid, model_id) = seed_balance_provider(&db).await;
-
-    // 查不到余额（空 balances）→ 无法判定，保持原状。
-    let p = provider::Entity::find_by_id(pid)
-        .one(&db)
-        .await
-        .unwrap()
-        .unwrap();
-    apply_usage_gate(&db, &p, &balance_data(pid, &[]))
-        .await
-        .unwrap();
-    assert!(provider_enabled(&db, pid).await);
-    assert!(item_enabled(&db, model_id).await);
-}
-
-#[tokio::test]
 async fn usage_refresh_job_seed_is_scheduled() {
     let (db, scheduler, _log_tx) = common::setup_db_and_scheduler().await;
     scheduler

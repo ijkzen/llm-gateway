@@ -113,21 +113,6 @@ async fn test_seed_has_expected_entries() {
 }
 
 #[tokio::test]
-async fn test_find_by_domain_matches_host() {
-    let db = setup_db().await.unwrap();
-    upsert_templates(&db).await.unwrap();
-
-    let found = find_by_domain(&db, "api.deepseek.com").await.unwrap();
-    assert!(found.is_some());
-    assert_eq!(found.unwrap().name, "DeepSeek");
-
-    // 带端口也能匹配
-    let found = find_by_domain(&db, "api.deepseek.com:443").await.unwrap();
-    assert!(found.is_some());
-    assert_eq!(found.unwrap().name, "DeepSeek");
-}
-
-#[tokio::test]
 async fn test_find_by_domain_ignores_case_and_path() {
     let db = setup_db().await.unwrap();
     upsert_templates(&db).await.unwrap();

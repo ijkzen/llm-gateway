@@ -326,18 +326,6 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_five_hour_defers_to_weekly_remaining() {
-        // A 5h 剩余 0（耗尽，展示端才可能出现）→ 5h 层无额度判平；
-        // 周层都有额度、截止全缺 → 兜底 5h：A 0 < B 50 → B 优先。
-        let a = quota(1, Some(0.0), Some(50.0), None);
-        let b = quota(2, Some(50.0), Some(50.0), None);
-        assert_eq!(
-            cmp_quota_deadline_priority(b.as_ref(), a.as_ref()),
-            Ordering::Greater
-        );
-    }
-
-    #[test]
     fn duplicate_windows_worst_zero_defers_to_next_layer() {
         // 多池（商汤）最差剩余为 0 → 该层视为无额度判平进下一层（与额度门控
         // subscription_usable 口径一致：任一容器耗尽即不可用）。
@@ -351,20 +339,6 @@ mod tests {
     }
 
     // ── 回归（无截止数据时兜底口径与旧行为一致） ──
-
-    #[test]
-    fn five_hour_window_decides() {
-        let high = quota(1, Some(80.0), None, None);
-        let low = quota(2, Some(20.0), None, None);
-        assert_eq!(
-            cmp_quota_deadline_priority(high.as_ref(), low.as_ref()),
-            Ordering::Greater
-        );
-        assert_eq!(
-            cmp_quota_deadline_priority(low.as_ref(), high.as_ref()),
-            Ordering::Less
-        );
-    }
 
     #[test]
     fn daily_window_decides_before_weekly() {

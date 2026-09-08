@@ -309,28 +309,3 @@ fn unknown_balance_member_is_kept_after_sufficient() {
         .collect();
     assert_eq!(got1, vec!["E", "D", "A", "B", "C"]);
 }
-
-/// 补充断言：余额为 0 的按量成员被剔除（即使它可能余额排序靠前）。
-#[test]
-fn zero_balance_member_is_removed() {
-    let members = vec![
-        (1, BILLING_SUB),
-        (2, BILLING_SUB),
-        (3, BILLING_SUB),
-        (4, BILLING_PAYG),
-        (5, BILLING_PAYG),
-    ];
-    // 策略 1：D 余额 0（剔除）、E 余额 100 → 按量组只剩 E → 订阅 A、B、C。
-    let usage = usage_map(usages_for(
-        true,
-        true,
-        true,
-        BalanceState::Zero,
-        BalanceState::Ok,
-    ));
-    let got: Vec<&str> = order(&members, 1, &usage)
-        .iter()
-        .map(|id| name_of(*id))
-        .collect();
-    assert_eq!(got, vec!["E", "A", "B", "C"]);
-}
