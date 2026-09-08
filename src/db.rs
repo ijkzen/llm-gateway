@@ -505,6 +505,19 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     )
     .await?;
 
+    // Migration 25: cron_job_logs 覆盖索引 (run_id, seq) —— 单 run 日志查询按
+    // run_id 过滤 + seq 排序，复合索引直接覆盖；左前缀同时替代原单列
+    // idx_cron_job_logs_run_id，故删除后者减少写放大（S6 低优先项）。
+    changed |= ensure_migration(
+        db,
+        25,
+        &[
+            "CREATE INDEX IF NOT EXISTS idx_cron_job_logs_run_seq ON cron_job_logs (run_id, seq)",
+            "DROP INDEX IF EXISTS idx_cron_job_logs_run_id",
+        ],
+    )
+    .await?;
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)

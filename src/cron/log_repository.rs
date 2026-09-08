@@ -270,35 +270,43 @@ impl CronJobLogRepository for SeaOrmCronJobLogRepository {
             .exec(&self.db)
             .await?;
 
+        // 只取 keep+1 行判阈值：不整表拉全量再 Rust 端 skip（S6）。
         let runs = cron_job_run::Entity::find()
             .filter(cron_job_run::Column::JobName.eq(job_name))
             .order_by_desc(cron_job_run::Column::StartedAt)
+            .limit(keep + 1)
             .all(&self.db)
             .await?;
         if runs.len() <= keep as usize {
             return Ok(());
         }
-        let old_run_ids: Vec<String> = runs
-            .into_iter()
-            .skip(keep as usize)
-            .map(|run| run.run_id)
-            .collect();
+        // 保留区内最旧一条的 started_at 即清理阈值：删严格更旧的执行。
+        let cutoff = runs[keep as usize - 1].started_at;
 
         let txn = self.db.begin().await?;
-        cron_job_log::Entity::delete_many()
-            .filter(
-                cron_job_log::Column::RunId
-                    .is_in(old_run_ids.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
-            )
-            .exec(&txn)
+        // 只取应删的 run（阈值之前），不整表拉全量（S6）。
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+        let rows = txn
+            .query_all_raw(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "SELECT run_id FROM cron_job_runs WHERE job_name = ? AND started_at < ?",
+                [job_name.to_string().into(), cutoff.into()],
+            ))
             .await?;
-        cron_job_run::Entity::delete_many()
-            .filter(
-                cron_job_run::Column::RunId
-                    .is_in(old_run_ids.iter().map(|s| s.as_str()).collect::<Vec<_>>()),
-            )
-            .exec(&txn)
-            .await?;
+        let ids: Vec<String> = rows
+            .into_iter()
+            .filter_map(|row| row.try_get::<String>("", "run_id").ok())
+            .collect();
+        if !ids.is_empty() {
+            cron_job_log::Entity::delete_many()
+                .filter(cron_job_log::Column::RunId.is_in(ids.iter().map(|s| s.as_str())))
+                .exec(&txn)
+                .await?;
+            cron_job_run::Entity::delete_many()
+                .filter(cron_job_run::Column::RunId.is_in(ids.iter().map(|s| s.as_str())))
+                .exec(&txn)
+                .await?;
+        }
         txn.commit().await?;
         Ok(())
     }
