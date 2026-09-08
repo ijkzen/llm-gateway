@@ -242,6 +242,7 @@ pnpm vitest run                    # 前端全量测试
 
 - 以上为 CI 的实际门禁（`ci.yml`：`cargo fmt --check` + `clippy -D warnings` + `cargo test --all-targets`；前端本地仍须 `pnpm lint` 全绿）。
 - **既有代码引发的差异/警告/错误也必须一并修复**，不允许带警告提交，也不要回退 rustfmt/clippy 版本或跳过。
+- **ADR/域文档与代码现状对齐**：提交前查看本次改动涉及的决策文档（`docs/adr/` 相关编号、`CONTEXT.md` 词条），若决策已实现、语义已演进或描述与代码现状不符，先更新文档再提交（文档遵循 `docs:` 单独提交惯例）。
 - 发布流程（release-management skill）中的「全量质量门」即本约定，必须全绿。
 
 ### Rust
