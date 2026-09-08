@@ -5,7 +5,9 @@
 //! - 订阅成员 A/B/C：充足 = 有可用窗口数据且剩余 > 0；不足 = 任一窗口剩余为 0 → 剔除。
 //! - 按量成员 D/E：充足 = 查得到余额且合计 > 0；不足（余额 0）= 查得到余额但合计为 0 → 剔除；
 //!   查不到余额（无数据）→ 不剔除。
-//! - 排序假设：充足订阅剩余 A>B>C；按量余额 D>E（D 比 E 高）。全平则随机，此处按该假设给确定顺序。
+//! - 排序假设：本测试的订阅用量数据均无截止时间（resets_at=None），比较器走
+//!   剩余百分比兜底路径 → 充足订阅剩余 A>B>C；按量余额 D>E（D 比 E 高）。
+//!   全平则随机，此处按该假设给确定顺序。
 //! - 期望 = LB 排序结果（即失败降级时的尝试顺序）。
 //!
 //! 注：测试用 (id, billing_mode) 元组代表成员（`Member` 为 crate 私有），
@@ -141,7 +143,7 @@ fn order(
         .collect();
 
     subs.sort_by(|x, y| {
-        usage_rank::cmp_quota_remaining(
+        usage_rank::cmp_quota_deadline_priority(
             usage.get(y).and_then(Option::as_ref),
             usage.get(x).and_then(Option::as_ref),
         )

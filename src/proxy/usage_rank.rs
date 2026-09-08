@@ -1,30 +1,45 @@
 //! 用量感知排序的纯比较器（供 `order_members` 使用，独立成模块便于单元测试）。
 //!
-//! 订阅制（quota）：按 5 小时 → 周 → 月 的剩余百分比逐层比较，缺失/不可用的
-//! 窗口视为平局交给下一层；同层剩余打平再比该层重置时间，早的优先（先消耗
-//! 即将重置的余量，避免被重置覆盖浪费）。全部平局返回 Equal（调用方 shuffle
-//! 后稳定排序实现“同等条件随机选一个”）。按量付费（balance）：按各供应商
-//! 主余额字段（fetcher 标记的 primary 条目）降序。
+//! 订阅制（quota）：截止时间优先（FEFO，先过期先出）——从最短窗口层（5 小时）起
+//! 逐层检查，双方该层都有额度（窗口可用且剩余 > 0）时跳过剩余百分比，改比更上层
+//! （期限更长的窗口）的截止时间链：早重置者优先、一方缺截止时间则另一方优先、都缺
+//! 则继续往更上层；截止链全平回退剩余百分比逐层比较（现有口径）。该层某方窗口
+//! 不可用/无额度则判平进入下一层。全部平局返回 Equal（调用方 shuffle 后稳定排序
+//! 实现“同等条件随机选一个”）。按量付费（balance）：按各供应商主余额字段（fetcher
+//! 标记的 primary 条目）降序。
 
 use std::cmp::Ordering;
 
 use crate::usage::types::{QuotaWindow, UsageData, WindowKind};
 
-/// 比较两个供应商的订阅制剩余用量（降序：剩余多的排前面）。
+/// 订阅制窗口层序：从最短滚动窗口到最长。
+const QUOTA_LAYERS: [WindowKind; 4] = [
+    WindowKind::FiveHour,
+    WindowKind::Daily,
+    WindowKind::Weekly,
+    WindowKind::Monthly,
+];
+
+/// 比较两个供应商的订阅制剩余用量（返回 Greater = a 排在 b 前面）。
 /// `None` 表示无用量数据，排在任何有数据的后面。
-pub fn cmp_quota_remaining(a: Option<&UsageData>, b: Option<&UsageData>) -> Ordering {
+pub fn cmp_quota_deadline_priority(a: Option<&UsageData>, b: Option<&UsageData>) -> Ordering {
     match (a, b) {
         (Some(x), Some(y)) => {
-            for kind in [
-                WindowKind::FiveHour,
-                WindowKind::Daily,
-                WindowKind::Weekly,
-                WindowKind::Monthly,
-            ] {
-                match cmp_window(x, y, kind) {
-                    Ordering::Equal => continue,
-                    ord => return ord,
+            for (i, kind) in QUOTA_LAYERS.iter().enumerate() {
+                if !(has_quota(x, *kind) && has_quota(y, *kind)) {
+                    // 某方该层无额度（窗口不可用或剩余为 0）→ 判平，进入下一层。
+                    continue;
                 }
+                // 双方该层都有额度：不比较剩余百分比，改比更上层的截止时间，
+                // 截止更近者优先（其额度先到期，先消耗避免被重置浪费）。
+                for upper in &QUOTA_LAYERS[i + 1..] {
+                    match cmp_deadline(x, y, *upper) {
+                        Ordering::Equal => continue,
+                        ord => return ord,
+                    }
+                }
+                // 截止链全平（上层无窗口数据或截止全同/全缺）：回退剩余百分比。
+                return cmp_remaining_percent(x, y);
             }
             Ordering::Equal
         }
@@ -32,6 +47,39 @@ pub fn cmp_quota_remaining(a: Option<&UsageData>, b: Option<&UsageData>) -> Orde
         (None, Some(_)) => Ordering::Less,
         (None, None) => Ordering::Equal,
     }
+}
+
+/// 该层是否有可用额度：窗口存在、剩余可推导且 > 0。多窗口取最差剩余口径
+/// （与额度门控 `subscription_usable` 一致：任一容器耗尽即视为该层无额度）。
+fn has_quota(data: &UsageData, kind: WindowKind) -> bool {
+    worst_window(data, kind)
+        .and_then(|w| w.remaining_percent_value())
+        .is_some_and(|p| p > 0.0)
+}
+
+/// 某层截止时间比较：早重置者优先；一方有截止时间另一方缺失（窗口不可用或
+/// 无 resets_at）→ 有者可判定者优先；都缺失判平（由调用方继续往更上层比较）。
+fn cmp_deadline(x: &UsageData, y: &UsageData, kind: WindowKind) -> Ordering {
+    match (
+        worst_window(x, kind).and_then(|w| w.resets_at),
+        worst_window(y, kind).and_then(|w| w.resets_at),
+    ) {
+        (Some(xr), Some(yr)) => yr.cmp(&xr),
+        (Some(_), None) => Ordering::Greater,
+        (None, Some(_)) => Ordering::Less,
+        (None, None) => Ordering::Equal,
+    }
+}
+
+/// 剩余百分比兜底（截止链全平时）：5h→日→周→月 逐层比较，即旧版订阅制口径。
+fn cmp_remaining_percent(x: &UsageData, y: &UsageData) -> Ordering {
+    for kind in QUOTA_LAYERS {
+        match cmp_window(x, y, kind) {
+            Ordering::Equal => continue,
+            ord => return ord,
+        }
+    }
+    Ordering::Equal
 }
 
 fn cmp_window(x: &UsageData, y: &UsageData, kind: WindowKind) -> Ordering {
@@ -83,7 +131,7 @@ pub fn cmp_balance(a: Option<&UsageData>, b: Option<&UsageData>) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::usage::types::{QuotaWindow, UsageData, UsageKind};
+    use crate::usage::types::{UsageData, UsageKind};
 
     fn balance(provider_id: i32, amounts: &[f64]) -> Option<UsageData> {
         Some(UsageData {
@@ -151,16 +199,179 @@ mod tests {
         })
     }
 
+    // ── 截止时间优先（新语义） ──
+
+    #[test]
+    fn deadline_decides_over_remaining_percent() {
+        use chrono::Duration;
+        let soon = chrono::Utc::now() + Duration::hours(2);
+        let later = chrono::Utc::now() + Duration::hours(2 * 24);
+        // 双方 5h 层都有额度：B 5h 剩余更低（40% < 60%）但周截止更近 → B 优先。
+        let a = quota_from_windows(
+            1,
+            vec![
+                window(WindowKind::FiveHour, 60.0),
+                window_reset_at(WindowKind::Weekly, 50.0, later),
+                crate::usage::types::QuotaWindow::unavailable(WindowKind::Monthly),
+            ],
+        );
+        let b = quota_from_windows(
+            2,
+            vec![
+                window(WindowKind::FiveHour, 40.0),
+                window_reset_at(WindowKind::Weekly, 50.0, soon),
+                crate::usage::types::QuotaWindow::unavailable(WindowKind::Monthly),
+            ],
+        );
+        assert_eq!(
+            cmp_quota_deadline_priority(b.as_ref(), a.as_ref()),
+            Ordering::Greater
+        );
+        assert_eq!(
+            cmp_quota_deadline_priority(a.as_ref(), b.as_ref()),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn weekly_deadline_tie_falls_to_monthly() {
+        use chrono::Duration;
+        let now = chrono::Utc::now();
+        // 周截止相同（3 天后）；月截止近者（A 10 天 vs B 20 天）优先。
+        let a = quota_from_windows(
+            1,
+            vec![
+                window(WindowKind::FiveHour, 50.0),
+                window_reset_at(WindowKind::Weekly, 50.0, now + Duration::days(3)),
+                window_reset_at(WindowKind::Monthly, 50.0, now + Duration::days(10)),
+            ],
+        );
+        let b = quota_from_windows(
+            2,
+            vec![
+                window(WindowKind::FiveHour, 50.0),
+                window_reset_at(WindowKind::Weekly, 50.0, now + Duration::days(3)),
+                window_reset_at(WindowKind::Monthly, 50.0, now + Duration::days(20)),
+            ],
+        );
+        assert_eq!(
+            cmp_quota_deadline_priority(a.as_ref(), b.as_ref()),
+            Ordering::Greater
+        );
+        assert_eq!(
+            cmp_quota_deadline_priority(b.as_ref(), a.as_ref()),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn missing_deadline_ranks_after_known() {
+        use chrono::Duration;
+        // 5h 都有额度；A 周窗无截止时间、B 周窗有（且更晚）→ B 仍优先（可判定者优先）。
+        let b_weekly_reset = chrono::Utc::now() + Duration::hours(2 * 24);
+        let a = quota_from_windows(
+            1,
+            vec![
+                window(WindowKind::FiveHour, 50.0),
+                window(WindowKind::Weekly, 50.0),
+                crate::usage::types::QuotaWindow::unavailable(WindowKind::Monthly),
+            ],
+        );
+        let b = quota_from_windows(
+            2,
+            vec![
+                window(WindowKind::FiveHour, 50.0),
+                window_reset_at(WindowKind::Weekly, 50.0, b_weekly_reset),
+                crate::usage::types::QuotaWindow::unavailable(WindowKind::Monthly),
+            ],
+        );
+        assert_eq!(
+            cmp_quota_deadline_priority(b.as_ref(), a.as_ref()),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn deadline_chain_tie_falls_back_to_remaining() {
+        // 5h 都有额度但上层无任何截止数据 → 兜底按 5h 剩余决胜。
+        let high = quota(1, Some(80.0), None, None);
+        let low = quota(2, Some(20.0), None, None);
+        assert_eq!(
+            cmp_quota_deadline_priority(high.as_ref(), low.as_ref()),
+            Ordering::Greater
+        );
+        assert_eq!(
+            cmp_quota_deadline_priority(low.as_ref(), high.as_ref()),
+            Ordering::Less
+        );
+    }
+
+    #[test]
+    fn layer_without_quota_defers_to_next() {
+        use chrono::Duration;
+        // A 无 5h 窗口（只有周窗）、B 有 5h 窗口 → 5h 判平；周层双方都有额度、
+        // 周剩余相同 → 兜底比周截止：A 截止更近 → A 优先。
+        let a_weekly_reset = chrono::Utc::now() + Duration::hours(2);
+        let b_weekly_reset = chrono::Utc::now() + Duration::days(5);
+        let a = quota_from_windows(
+            1,
+            vec![
+                crate::usage::types::QuotaWindow::unavailable(WindowKind::FiveHour),
+                window_reset_at(WindowKind::Weekly, 50.0, a_weekly_reset),
+                crate::usage::types::QuotaWindow::unavailable(WindowKind::Monthly),
+            ],
+        );
+        let b = quota_from_windows(
+            2,
+            vec![
+                window(WindowKind::FiveHour, 50.0),
+                window_reset_at(WindowKind::Weekly, 50.0, b_weekly_reset),
+                crate::usage::types::QuotaWindow::unavailable(WindowKind::Monthly),
+            ],
+        );
+        assert_eq!(
+            cmp_quota_deadline_priority(a.as_ref(), b.as_ref()),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn exhausted_five_hour_defers_to_weekly_remaining() {
+        // A 5h 剩余 0（耗尽，展示端才可能出现）→ 5h 层无额度判平；
+        // 周层都有额度、截止全缺 → 兜底 5h：A 0 < B 50 → B 优先。
+        let a = quota(1, Some(0.0), Some(50.0), None);
+        let b = quota(2, Some(50.0), Some(50.0), None);
+        assert_eq!(
+            cmp_quota_deadline_priority(b.as_ref(), a.as_ref()),
+            Ordering::Greater
+        );
+    }
+
+    #[test]
+    fn duplicate_windows_worst_zero_defers_to_next_layer() {
+        // 多池（商汤）最差剩余为 0 → 该层视为无额度判平进下一层（与额度门控
+        // subscription_usable 口径一致：任一容器耗尽即不可用）。
+        let mut a = quota(1, Some(90.0), Some(50.0), None).unwrap();
+        a.windows.push(window(WindowKind::FiveHour, 0.0));
+        let b = quota(2, Some(50.0), Some(50.0), None);
+        assert_eq!(
+            cmp_quota_deadline_priority(b.as_ref(), Some(&a)),
+            Ordering::Greater
+        );
+    }
+
+    // ── 回归（无截止数据时兜底口径与旧行为一致） ──
+
     #[test]
     fn five_hour_window_decides() {
         let high = quota(1, Some(80.0), None, None);
         let low = quota(2, Some(20.0), None, None);
         assert_eq!(
-            cmp_quota_remaining(high.as_ref(), low.as_ref()),
+            cmp_quota_deadline_priority(high.as_ref(), low.as_ref()),
             Ordering::Greater
         );
         assert_eq!(
-            cmp_quota_remaining(low.as_ref(), high.as_ref()),
+            cmp_quota_deadline_priority(low.as_ref(), high.as_ref()),
             Ordering::Less
         );
     }
@@ -182,7 +393,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            cmp_quota_remaining(daily_high.as_ref(), daily_low.as_ref()),
+            cmp_quota_deadline_priority(daily_high.as_ref(), daily_low.as_ref()),
             Ordering::Greater
         );
     }
@@ -192,7 +403,7 @@ mod tests {
         let a = quota(1, Some(50.0), Some(70.0), None);
         let b = quota(2, Some(50.0), Some(30.0), None);
         assert_eq!(
-            cmp_quota_remaining(a.as_ref(), b.as_ref()),
+            cmp_quota_deadline_priority(a.as_ref(), b.as_ref()),
             Ordering::Greater
         );
     }
@@ -201,7 +412,10 @@ mod tests {
     fn tie_on_all_windows_is_equal() {
         let a = quota(1, Some(50.0), Some(50.0), Some(50.0));
         let b = quota(2, Some(50.0), Some(50.0), Some(50.0));
-        assert_eq!(cmp_quota_remaining(a.as_ref(), b.as_ref()), Ordering::Equal);
+        assert_eq!(
+            cmp_quota_deadline_priority(a.as_ref(), b.as_ref()),
+            Ordering::Equal
+        );
     }
 
     #[test]
@@ -211,18 +425,18 @@ mod tests {
         multi.windows.push(window(WindowKind::FiveHour, 5.0));
         let plain = quota(2, Some(50.0), None, None);
         assert_eq!(
-            cmp_quota_remaining(Some(&multi), plain.as_ref()),
+            cmp_quota_deadline_priority(Some(&multi), plain.as_ref()),
             Ordering::Less
         );
     }
 
     #[test]
     fn missing_window_defers_to_next() {
-        // a 无 5h 窗口（提供 weekly），b 有 5h 窗口 → 5h 平局（缺数据持平）→ 周决胜。
+        // a 无 5h 窗口（提供 weekly），b 有 5h 窗口 → 5h 判平（缺数据持平）→ 周决胜。
         let a = quota(1, None, Some(80.0), None);
         let b = quota(2, Some(50.0), Some(10.0), None);
         assert_eq!(
-            cmp_quota_remaining(a.as_ref(), b.as_ref()),
+            cmp_quota_deadline_priority(a.as_ref(), b.as_ref()),
             Ordering::Greater
         );
     }
@@ -235,17 +449,20 @@ mod tests {
         let a = quota_from_windows(1, vec![window_reset_at(WindowKind::FiveHour, 50.0, soon)]);
         let b = quota_from_windows(2, vec![window_reset_at(WindowKind::FiveHour, 50.0, later)]);
         assert_eq!(
-            cmp_quota_remaining(a.as_ref(), b.as_ref()),
+            cmp_quota_deadline_priority(a.as_ref(), b.as_ref()),
             Ordering::Greater
         );
-        assert_eq!(cmp_quota_remaining(b.as_ref(), a.as_ref()), Ordering::Less);
+        assert_eq!(
+            cmp_quota_deadline_priority(b.as_ref(), a.as_ref()),
+            Ordering::Less
+        );
     }
 
     #[test]
     fn missing_reset_defers_to_next_layer() {
         use chrono::Duration;
         let later = chrono::Utc::now() + Duration::hours(4);
-        // a 的 5h 窗口无重置时间 → 5h 层平局 → 周层决胜（a 70% > b 10%）。
+        // a 的 5h 窗口无重置时间 → 5h 层打平 → 周层决胜（a 70% > b 10%）。
         let a = quota(1, Some(50.0), Some(70.0), None);
         let b = quota_from_windows(
             2,
@@ -256,7 +473,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            cmp_quota_remaining(a.as_ref(), b.as_ref()),
+            cmp_quota_deadline_priority(a.as_ref(), b.as_ref()),
             Ordering::Greater
         );
     }
@@ -264,9 +481,15 @@ mod tests {
     #[test]
     fn provider_without_data_ranks_last() {
         let d = quota(1, Some(50.0), None, None);
-        assert_eq!(cmp_quota_remaining(d.as_ref(), None), Ordering::Greater);
-        assert_eq!(cmp_quota_remaining(None, d.as_ref()), Ordering::Less);
-        assert_eq!(cmp_quota_remaining(None, None), Ordering::Equal);
+        assert_eq!(
+            cmp_quota_deadline_priority(d.as_ref(), None),
+            Ordering::Greater
+        );
+        assert_eq!(
+            cmp_quota_deadline_priority(None, d.as_ref()),
+            Ordering::Less
+        );
+        assert_eq!(cmp_quota_deadline_priority(None, None), Ordering::Equal);
     }
 
     #[test]

@@ -408,7 +408,7 @@ async fn load_item_responses<C: ConnectionTrait>(
 }
 
 /// 成员排序：启用优先 → 按虚拟模型负载均衡策略分组 → 组内按用量排序
-/// （订阅制按剩余百分比 5h→周→月、按量付费按主余额），平局按
+/// （订阅制按截止时间优先、截止链全平回退剩余百分比；按量付费按主余额），平局按
 /// virtual_model_item_id 升序；无用量数据的成员排在有数据成员之后。
 ///
 /// 策略 0（订阅制优先）：订阅制成员在前、按量付费在后；策略 1（按量付费优先）
@@ -439,7 +439,7 @@ fn sort_items(
                     a_sub.cmp(&b_sub)
                 }
             })
-            // 第三层：组内按用量排序（订阅比剩余百分比、按量比主余额）。
+            // 第三层：组内按用量排序（订阅比截止时间/剩余兜底、按量比主余额）。
             // 仅策略 0/1 且同付费模式（跨组由第二层定序）；无数据/不可比时
             // 由比较器排到有数据成员之后，同为无数据则继续落到第四层 id。
             .then_with(|| {
@@ -449,7 +449,7 @@ fn sort_items(
                 let a_usage = usage.get(&a.provider_id).and_then(Option::as_ref);
                 let b_usage = usage.get(&b.provider_id).and_then(Option::as_ref);
                 if a.billing_mode == 1 {
-                    crate::proxy::usage_rank::cmp_quota_remaining(b_usage, a_usage)
+                    crate::proxy::usage_rank::cmp_quota_deadline_priority(b_usage, a_usage)
                 } else {
                     crate::proxy::usage_rank::cmp_balance(b_usage, a_usage)
                 }

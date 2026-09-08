@@ -6,7 +6,9 @@ use serde_json::Value;
 use super::{Credentials, num, reset_ts, reset_ts_of, snippet};
 use crate::usage::error::UsageError;
 use crate::usage::http::{HttpReply, UsageHttp, ensure_not_auth_error, parse_json};
-use crate::usage::types::{FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window, ts_ms};
+use crate::usage::types::{
+    FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window, ts_iso, ts_ms,
+};
 
 // ── OpenCode Go ─────────────────────────────────────────────
 // GET https://opencode.ai/zen/go/v1/usage（只认 Bearer）
@@ -399,7 +401,7 @@ pub async fn fetch_command_code(
         return Err(UsageError::Upstream(credits.status, snippet(&credits.body)));
     }
 
-    // subscriptions 用于套餐名与「本期已用」计算；失败不阻塞窗口数据。
+    // subscriptions 用于套餐名、本期已用与月窗截止时间；失败不阻塞窗口数据。
     let subscription = match http
         .get(
             &format!("{COMMAND_CODE_BASE}/alpha/billing/subscriptions{org_query}"),
@@ -417,13 +419,16 @@ pub async fn fetch_command_code(
                 data.get("currentPeriodStart")
                     .and_then(Value::as_str)
                     .map(str::to_string),
+                data.get("currentPeriodEnd")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             )
         }),
         _ => None,
     };
-    let (plan, period_start) = match subscription {
-        Some((plan, start)) => (plan, start),
-        None => (None, None),
+    let (plan, period_start, period_end) = match subscription {
+        Some((plan, start, end)) => (plan, start, end),
+        None => (None, None, None),
     };
 
     // 本期已用（USD）：以订阅周期起始作为 since；失败只影响月窗总额。
@@ -446,7 +451,7 @@ pub async fn fetch_command_code(
         None => None,
     };
 
-    parse_command_code_credits(&credits.body, plan, total_cost)
+    parse_command_code_credits(&credits.body, plan, total_cost, period_end)
 }
 
 /// usage/summary 的 since 必须是 ISO 8601；简单 query 编码即可。
@@ -467,6 +472,7 @@ fn parse_command_code_credits(
     body: &str,
     plan: Option<String>,
     total_cost: Option<f64>,
+    period_end: Option<String>,
 ) -> Result<FetchOutput, UsageError> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
@@ -496,7 +502,8 @@ fn parse_command_code_credits(
     }
 
     // 月窗：monthlyCredits 是「本月剩余」（USD），无总额字段；
-    // 月总额 = monthlyCredits + 本期已用（usage/summary.totalCost）。
+    // 月总额 = monthlyCredits + 本期已用（usage/summary.totalCost）；
+    // 截止时间 = subscriptions 的 currentPeriodEnd（订阅周期结束即月度额度重置点）。
     if let Some(remaining) = v
         .get("credits")
         .and_then(|c| c.get("monthlyCredits"))
@@ -510,7 +517,7 @@ fn parse_command_code_credits(
                 WindowKind::Monthly,
                 total - remaining,
                 total,
-                None,
+                period_end.as_deref().and_then(ts_iso),
                 Some("USD"),
             ),
         );
@@ -667,10 +674,13 @@ mod tests {
             "weekly":   { "used": 0.96, "cap": 35, "resetAt": 1788403857032 }
           }
         }"#;
-        let FetchOutput::Quota { plan, windows } =
-            parse_command_code_credits(body, Some("individual-goat".to_string()), Some(0.946))
-                .unwrap()
-        else {
+        let FetchOutput::Quota { plan, windows } = parse_command_code_credits(
+            body,
+            Some("individual-goat".to_string()),
+            Some(0.946),
+            None,
+        )
+        .unwrap() else {
             panic!("expected quota")
         };
         assert_eq!(plan.as_deref(), Some("individual-goat"));
@@ -696,12 +706,49 @@ mod tests {
           }
         }"#;
         let FetchOutput::Quota { windows, .. } =
-            parse_command_code_credits(body, None, None).unwrap()
+            parse_command_code_credits(body, None, None, None).unwrap()
         else {
             panic!("expected quota")
         };
         assert!(windows[0].available);
         assert!(windows[1].available);
         assert!(!windows[2].available);
+    }
+
+    #[test]
+    fn command_code_monthly_resets_at_from_period_end() {
+        // subscriptions 的 currentPeriodEnd 即月窗截止时间：传入后月窗 resets_at 有值。
+        let body = r#"{
+          "credits": { "monthlyCredits": 69.04 },
+          "windowLimits": {
+            "fiveHour": { "used": 0.96, "cap": 14, "resetAt": 1787817057032 },
+            "weekly":   { "used": 0.96, "cap": 35, "resetAt": 1788403857032 }
+          }
+        }"#;
+        let FetchOutput::Quota { windows, .. } = parse_command_code_credits(
+            body,
+            None,
+            Some(0.946),
+            Some("2026-09-14T08:53:55.118Z".to_string()),
+        )
+        .unwrap() else {
+            panic!("expected quota")
+        };
+        assert!(windows[2].available);
+        assert_eq!(
+            windows[2].resets_at,
+            Some(
+                "2026-09-14T08:53:55.118Z"
+                    .parse::<chrono::DateTime<chrono::Utc>>()
+                    .unwrap()
+            )
+        );
+        // period_end 缺省（subscriptions 拉取失败）时月窗 resets_at 仍为 None。
+        let FetchOutput::Quota { windows, .. } =
+            parse_command_code_credits(body, None, Some(0.946), None).unwrap()
+        else {
+            panic!("expected quota")
+        };
+        assert_eq!(windows[2].resets_at, None);
     }
 }

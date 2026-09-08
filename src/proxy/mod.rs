@@ -248,8 +248,8 @@ fn format_usage(data: Option<&UsageData>) -> String {
 
 /// 按虚拟模型的负载均衡策略排序成员。
 ///
-/// 策略 0/1 分组后做组内用量感知排序（订阅制按 5h→周→月剩余百分比逐层比较、
-/// 全平随机；按量付费按剩余金额降序），用量优先取 10 分钟数据库缓存，缺失/
+/// 策略 0/1 分组后做组内用量感知排序（订阅制按截止时间优先，更上层截止链全平
+/// 回退剩余百分比；按量付费按剩余金额降序），用量优先取 10 分钟数据库缓存，缺失/
 /// 过期才真实抓取。排序结果即 failover 优先级（`forward_chat` 按 ordered 顺序
 /// 逐个重试）。策略 2/3 保持轮转/随机。
 async fn order_members(
@@ -261,7 +261,7 @@ async fn order_members(
     request_id: &str,
 ) -> Vec<Member> {
     match strategy {
-        // 订阅制优先 / 按量优先：先按付费模式分组，再组内按剩余用量排序。
+        // 订阅制优先 / 按量优先：先按付费模式分组，再组内按用量排序。
         0 | 1 => {
             let subscription_first = strategy == 0;
             let mut subs = Vec::new();
@@ -389,7 +389,9 @@ async fn order_members(
     }
 }
 
-/// 订阅制组内排序：剩余百分比 5h→周→月 降序，同层打平比该层重置时间（早的优先）。
+/// 订阅制组内排序：截止时间优先（FEFO）——逐层检查双方该层都有额度（剩余 > 0），
+/// 有则比较更上层截止时间（早的优先），截止链全平回退剩余百分比；层内无额度判平
+/// 进下一层。详见 `usage_rank::cmp_quota_deadline_priority`。
 /// 先 shuffle 再稳定排序，全部平局的成员保持随机相对顺序（即“同等条件随机选一个”）。
 /// `usage` 由调用方已解析（决策日志共用同一份，避免重复抓取）。
 async fn rank_by_quota_with(
@@ -401,9 +403,9 @@ async fn rank_by_quota_with(
         return members;
     }
     members.shuffle(&mut rand::thread_rng());
-    // 自然序比较器（a vs b）；sort_by 升序，因此交换参数实现「剩余多的在前」。
+    // 自然序比较器（a vs b）；sort_by 升序，因此交换参数实现「截止更近/剩余更多的在前」。
     members.sort_by(|a, b| {
-        usage_rank::cmp_quota_remaining(
+        usage_rank::cmp_quota_deadline_priority(
             usage.get(&b.provider_id).and_then(Option::as_ref),
             usage.get(&a.provider_id).and_then(Option::as_ref),
         )

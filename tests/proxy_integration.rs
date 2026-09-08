@@ -1393,6 +1393,91 @@ async fn subscription_first_ranks_by_remaining_five_hour_usage() {
     assert_eq!(captured_b.lock().unwrap().len(), 0, "供应商 B 不应被选到");
 }
 
+#[tokio::test]
+async fn subscription_first_prefers_earlier_deadline() {
+    use chrono::Duration;
+    use llm_gateway::usage::persist::write_usage_cache;
+    use llm_gateway::usage::types::{QuotaWindow, UsageData, UsageKind, WindowKind};
+
+    let captured_a = capture();
+    let captured_b = capture();
+    let base_a = spawn_mock(captured_a.clone()).await;
+    let base_b = spawn_mock(captured_b.clone()).await;
+
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    let provider_a = seed_provider(&db, "订阅-A-5h余量高截止远", &base_a, 0, 1).await;
+    let provider_b = seed_provider(&db, "订阅-B-5h余量低截止近", &base_b, 0, 1).await;
+    let model_a = seed_provider_model(&db, provider_a, "m-a").await;
+    let model_b = seed_provider_model(&db, provider_b, "m-b").await;
+
+    // 预置 10 分钟内的用量缓存：A 5h 剩余 80（高）但周截止 5 天后；
+    // B 5h 剩余 20（低）但周截止 1 天后 → 截止日期优先应选 B。
+    let now = chrono::Utc::now();
+    for (pid, five_hour, weekly_reset_in_days) in [(provider_a, 80.0, 5), (provider_b, 20.0, 1)] {
+        write_usage_cache(
+            &db,
+            &UsageData {
+                provider_id: pid,
+                fetched_at: now,
+                kind: UsageKind::Quota,
+                plan: None,
+                windows: vec![
+                    QuotaWindow::from_remaining_percent(WindowKind::FiveHour, five_hour, None),
+                    QuotaWindow::from_remaining_percent(
+                        WindowKind::Weekly,
+                        50.0,
+                        Some(now + Duration::days(weekly_reset_in_days)),
+                    ),
+                    QuotaWindow::unavailable(WindowKind::Monthly),
+                ],
+                balances: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+
+    let vm = virtual_model::ActiveModel {
+        display_id: Set("vm-lb-deadline".to_string()),
+        enable: Set(true),
+        load_balancing_strategy: Set(0),
+        fallback_strategy: Set(1),
+        created_at: Set(chrono::Utc::now()),
+        updated_at: Set(chrono::Utc::now()),
+        ..Default::default()
+    };
+    let vm = vm.insert(&db).await.unwrap();
+    for model_id in [model_a, model_b] {
+        virtual_model_item::ActiveModel {
+            virtual_model_id: Set(vm.virtual_model_id),
+            model_id: Set(model_id),
+            enable: Set(true),
+            created_at: Set(chrono::Utc::now()),
+            updated_at: Set(chrono::Utc::now()),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+    }
+
+    let (status, text) = send_chat(
+        &app,
+        json!({"model": "vm-lb-deadline", "messages": [{"role": "user", "content": "hi"}]}),
+    )
+    .await;
+    assert_eq!(status, 200, "转发失败：{text}");
+    assert_eq!(
+        captured_b.lock().unwrap().len(),
+        1,
+        "截止日期优先应选择周截止更近的供应商 B"
+    );
+    assert_eq!(captured_a.lock().unwrap().len(), 0, "供应商 A 不应被选到");
+}
+
 // ─── 上游出站头：透传 / 剥离 / 覆盖集成测试 ──────────────────────────────────
 
 /// seed provider，可指定 custom_header（默认 "{}"）。
