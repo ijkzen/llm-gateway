@@ -483,6 +483,26 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     }
     changed |= ensure_migration(db, 23, &migration_23_statements).await?;
 
+    // Migration 24: request 表索引补齐（新库缺 4 条）——
+    // - idx_request_ttft / idx_request_tps：原先只建在迁移 10 的老库条件分支内
+    //   （为 DROP network_latency 兜底），新库从 0 迁移没有这两条，request_logs
+    //   按 ttft/tps 排序退化为整窗 temp sort；老库已有，IF NOT EXISTS 幂等。
+    // - (provider_id, model_id, success, start_time)：model_metrics 点查 /
+    //   request_logs model_id IN 等值过滤路径（复核修正：整窗 GROUP BY 类不获益）。
+    // - (provider_id, success, start_time)：usage_estimate / provider_metrics 的
+    //   provider 点查 + success 过滤 + 时间窗截取。
+    changed |= ensure_migration(
+        db,
+        24,
+        &[
+            "CREATE INDEX IF NOT EXISTS idx_request_ttft ON request (ttft)",
+            "CREATE INDEX IF NOT EXISTS idx_request_tps ON request (tps)",
+            "CREATE INDEX IF NOT EXISTS idx_request_provider_model_success_start ON request (provider_id, model_id, success, start_time)",
+            "CREATE INDEX IF NOT EXISTS idx_request_provider_success_start ON request (provider_id, success, start_time)",
+        ],
+    )
+    .await?;
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)
@@ -625,6 +645,78 @@ mod tests {
         // parent must be created at the absolute location.
         ensure_sqlite_dir(&url).await.unwrap();
         assert!(db_path.parent().unwrap().exists());
+    }
+
+    /// 查询 request 表上的全部索引名。
+    async fn request_indexes(db: &DatabaseConnection) -> Vec<String> {
+        let rows = db
+            .query_all_raw(Statement::from_string(
+                db.get_database_backend(),
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'request'"
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        rows.into_iter()
+            .filter_map(|row| row.try_get::<String>("", "name").ok())
+            .collect()
+    }
+
+    /// 新库从 0 迁移完必须带齐 Migration 24 的四条 request 索引
+    /// （回归：ttft/tps 曾只建在迁移 10 老库分支，新库缺索引退化为 temp sort）。
+    #[tokio::test]
+    async fn migration_24_adds_request_indexes_on_fresh_db() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        migrate(&db).await.unwrap();
+
+        let indexes = request_indexes(&db).await;
+        for expected in [
+            "idx_request_ttft",
+            "idx_request_tps",
+            "idx_request_provider_model_success_start",
+            "idx_request_provider_success_start",
+        ] {
+            assert!(
+                indexes.iter().any(|name| name == expected),
+                "新库缺索引 {expected}: {indexes:?}"
+            );
+        }
+    }
+
+    /// 老库缺索引时 migrate() 必须补齐（删除版本记录 + 索引后重跑幂等补建）。
+    #[tokio::test]
+    async fn migration_24_rebuilds_indexes_on_legacy_db() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        migrate(&db).await.unwrap();
+        // 模拟老库：Migration 24 未跑过且四条索引都不存在。
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 24")
+            .await
+            .unwrap();
+        for index in [
+            "idx_request_ttft",
+            "idx_request_tps",
+            "idx_request_provider_model_success_start",
+            "idx_request_provider_success_start",
+        ] {
+            db.execute_unprepared(&format!("DROP INDEX IF EXISTS {index}"))
+                .await
+                .unwrap();
+        }
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        let indexes = request_indexes(&db).await;
+        for expected in [
+            "idx_request_ttft",
+            "idx_request_tps",
+            "idx_request_provider_model_success_start",
+            "idx_request_provider_success_start",
+        ] {
+            assert!(
+                indexes.iter().any(|name| name == expected),
+                "老库补建后仍缺 {expected}: {indexes:?}"
+            );
+        }
     }
 
     /// 历史库迁移：provider 表只有 proxy_enabled（缺 proxy_addr），且
