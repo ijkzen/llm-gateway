@@ -145,30 +145,36 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         settings: settings.clone(),
     };
 
-    // 用量刷新 handler：刷新全部已开启用量展示的供应商用量并落库，
-    // 同时执行订阅额度耗尽自动停用/恢复（见 src/usage/persist.rs）。
+    // 用量刷新 handler：刷新全部已开启用量展示的供应商用量并落库、执行订阅
+    // 额度耗尽自动停用/恢复；随后对剩余百分比落在 (0, 1) 边界区的订阅制供应商
+    // 实测请求（失败按额度耗尽停用、成功恢复，见 src/usage/persist.rs）。
     // 用 tokio Mutex try_lock 防止多次执行重叠（运行超 5 分钟时跳过本次）。
     let usage_refresh_lock = Arc::new(tokio::sync::Mutex::new(()));
     scheduler
         .register_handler(crate::cron::seed::USAGE_REFRESH_JOB, {
             let lock = usage_refresh_lock.clone();
-            Arc::new(move |ctx: JobContext| {
+            let state = state.clone();
+            Arc::new(move |_ctx: JobContext| {
                 let lock = lock.clone();
+                let state = state.clone();
                 Box::pin(async move {
                     let Ok(_guard) = lock.try_lock() else {
                         tracing::warn!("用量刷新上次仍在运行，本次跳过");
                         return Ok(());
                     };
-                    match crate::usage::persist::refresh_all_usage(&ctx.db).await {
+                    match crate::usage::persist::refresh_all_usage(&state.db).await {
                         Ok(n) => {
                             tracing::info!("用量刷新完成，成功刷新 {n} 家供应商");
-                            Ok(())
                         }
                         Err(e) => {
                             tracing::error!("用量刷新失败：{e}");
-                            Ok(())
                         }
                     }
+                    // 用量刷新刚落库，边界探活读到的缓存必新鲜。
+                    if let Err(e) = crate::usage::persist::probe_boundary_providers(&state).await {
+                        tracing::error!("订阅制边界探活失败：{e}");
+                    }
+                    Ok(())
                 })
             })
         })

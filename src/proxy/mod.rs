@@ -2828,6 +2828,45 @@ pub async fn test_model(
     Ok(duration_ms)
 }
 
+/// 自动探活失败类型：`Skipped` = 无法探活（缺模型/密钥，本轮跳过不算失败）；
+/// `Failed` = 最小测试请求真实失败（上游非 2xx 或网络错误）。
+pub enum ProbeFailure {
+    Skipped(String),
+    Failed(String),
+}
+
+/// 自动探活：取该供应商 model_id 最小的模型发最小测试请求（与模型弹窗测速、
+/// 失败恢复探测同一 `test_model` 入口）。用于用量刷新的订阅制边界探活：
+/// 成功返回耗时；无法探活返回 `Skipped`；请求失败返回 `Failed` 与人类可读原因。
+pub async fn probe_provider(
+    state: &AppState,
+    provider_row: &provider::Model,
+) -> Result<i64, ProbeFailure> {
+    let model = provider_model::Entity::find()
+        .filter(provider_model::Column::ProviderId.eq(provider_row.id))
+        .order_by_asc(provider_model::Column::ModelId)
+        .one(&state.db)
+        .await
+        .map_err(|e| ProbeFailure::Skipped(format!("查询模型失败：{e}")))?;
+    let Some(model) = model else {
+        return Err(ProbeFailure::Skipped(
+            "该供应商没有模型，无法探活".to_string(),
+        ));
+    };
+    let api_key = match crypto::decrypt(&provider_row.api_key) {
+        Ok(key) if !key.is_empty() => key,
+        Ok(_) => {
+            return Err(ProbeFailure::Skipped(
+                "未配置 API Key，无法探活".to_string(),
+            ));
+        }
+        Err(e) => return Err(ProbeFailure::Skipped(format!("API Key 解密失败：{e}"))),
+    };
+    test_model(state, provider_row, &model, &api_key)
+        .await
+        .map_err(ProbeFailure::Failed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -189,6 +189,90 @@ pub async fn apply_usage_gate(
     Ok(())
 }
 
+/// 订阅制边界探活：读取新鲜的用量数据库缓存，对处于边界区（任一已提供窗口
+/// 剩余百分比落在 (0, 1)）的订阅制供应商发最小测试请求（`proxy::probe_provider`，
+/// 同模型弹窗/失败恢复探测入口）——
+/// - 成功 → 解除 quota 停用（幂等；可用态无操作），探活同时充当恢复探测；
+/// - 失败 → 按订阅额度耗尽停用（quota 标记 + 级联停用虚拟模型子模型）。
+///
+/// manual/failure 停用态与未开启用量查询的供应商不探活（本机制无权解除，
+/// 探活无意义）。返回探活供应商数，单家失败仅记录日志不中断整体。
+/// 由 usage_refresh 在全量刷新落库后调用（缓存必新鲜）；即使本轮刷新全失败，
+/// 10 分钟内的旧缓存仍可判定，与 LB 排序/门控同新鲜度口径。
+pub async fn probe_boundary_providers(state: &crate::state::AppState) -> Result<usize, DbErr> {
+    let providers = provider::Entity::find().all(&state.db).await?;
+    let mut probed = 0;
+    for p in providers {
+        if p.billing_mode != 1 {
+            continue;
+        }
+        // 只探活当前可用或 quota 停用的供应商（恢复双通道之一）。
+        if !matches!(p.disabled_reason.as_deref(), None | Some("quota")) {
+            continue;
+        }
+        if !crate::usage::usage_enabled(&p.extra) {
+            continue;
+        }
+        let Some(data) = read_usage_cache(&state.db, p.id).await? else {
+            continue; // 无缓存（抓取从未成功落库）→ 无从判定，本轮跳过
+        };
+        if data.subscription_usable() != Some(true) || !data.has_low_remaining_window() {
+            continue;
+        }
+        match crate::proxy::probe_provider(state, &p).await {
+            Ok(duration_ms) => {
+                probed += 1;
+                tracing::info!(
+                    provider_id = p.id,
+                    provider_name = &p.name,
+                    "供应商「{}」边界探活成功（{}ms），额度可用",
+                    p.name,
+                    duration_ms
+                );
+                if let Err(e) =
+                    crate::availability::recover_quota(&state.db, p.id, &p.name, "订阅额度").await
+                {
+                    tracing::warn!(
+                        provider_id = p.id,
+                        provider_name = &p.name,
+                        "供应商「{}」边界探活恢复执行失败：{e}",
+                        p.name
+                    );
+                }
+            }
+            Err(crate::proxy::ProbeFailure::Failed(reason)) => {
+                probed += 1;
+                tracing::warn!(
+                    provider_id = p.id,
+                    provider_name = &p.name,
+                    "供应商「{}」边界探活失败（{reason}），按订阅额度耗尽自动停用",
+                    p.name
+                );
+                if let Err(e) =
+                    crate::availability::disable_for_quota(&state.db, p.id, &p.name, "订阅额度")
+                        .await
+                {
+                    tracing::warn!(
+                        provider_id = p.id,
+                        provider_name = &p.name,
+                        "供应商「{}」边界探活停用执行失败：{e}",
+                        p.name
+                    );
+                }
+            }
+            Err(crate::proxy::ProbeFailure::Skipped(reason)) => {
+                tracing::debug!(
+                    provider_id = p.id,
+                    provider_name = &p.name,
+                    "供应商「{}」边界探活跳过：{reason}",
+                    p.name
+                );
+            }
+        }
+    }
+    Ok(probed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

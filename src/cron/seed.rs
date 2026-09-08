@@ -31,11 +31,14 @@ pub fn default_description(name: &str, lang: crate::i18n::Lang) -> String {
         USAGE_REFRESH_JOB => lang
             .tr(
                 "每 5 分钟刷新所有已开启用量展示的供应商用量并写入数据库缓存；\
-                 订阅额度耗尽时自动停用对应供应商及其虚拟模型子模型，恢复后自动启用",
+                 订阅额度耗尽时自动停用对应供应商及其虚拟模型子模型，恢复后自动启用；\
+                 窗口剩余不足 1% 时发测试请求验证，失败同样自动停用",
                 "Refreshes usage for all providers with usage query enabled every 5 \
                  minutes and writes the database cache; automatically disables a \
                  provider (and its virtual model members) when its subscription \
-                 quota is exhausted, and re-enables it once restored",
+                 quota is exhausted, and re-enables it once restored; probes with a \
+                 test request when a window has less than 1% remaining and disables \
+                 the provider if the probe fails",
             )
             .to_string(),
         FAILURE_RECOVERY_JOB => lang

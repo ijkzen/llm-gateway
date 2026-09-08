@@ -199,6 +199,19 @@ impl UsageData {
         saw_derivable.then_some(true)
     }
 
+    /// 是否存在已提供窗口的剩余百分比落在 (0, 1)——未耗尽但逼近耗尽，
+    /// 供用量刷新边界探活使用（见 `src/usage/persist.rs`）；耗尽（≤ 0）
+    /// 由 [`Self::subscription_usable`] 判定为不可用，不落在此区间。
+    pub fn has_low_remaining_window(&self) -> bool {
+        if self.kind != UsageKind::Quota {
+            return false;
+        }
+        self.windows
+            .iter()
+            .filter_map(QuotaWindow::remaining_percent_value)
+            .any(|p| p > 0.0 && p < 1.0)
+    }
+
     /// LB 比较用的主余额金额：取 fetcher 标记的 primary 条目；旧缓存数据无
     /// 标记时回退取第一条（各 fetcher 的条目顺序本就以主字段打头）。
     pub fn primary_balance(&self) -> Option<f64> {
@@ -615,5 +628,63 @@ mod tests {
             balances: vec![],
         };
         assert_eq!(all_underivable.subscription_usable(), None);
+    }
+
+    #[test]
+    fn has_low_remaining_window_detects_boundary_only() {
+        let quota = |windows: Vec<QuotaWindow>| UsageData {
+            provider_id: 1,
+            fetched_at: Utc::now(),
+            kind: UsageKind::Quota,
+            plan: None,
+            windows,
+            balances: vec![],
+        };
+        let window = |kind, remaining| QuotaWindow::from_remaining_percent(kind, remaining, None);
+        // 边界触发：任一楼层的剩余百分比落在 (0, 1)。
+        assert!(
+            quota(vec![
+                window(WindowKind::FiveHour, 0.5),
+                window(WindowKind::Weekly, 50.0),
+            ])
+            .has_low_remaining_window()
+        );
+        // 恰好 1% 不在边界区间（(0, 1) 开区间）。
+        assert!(!quota(vec![window(WindowKind::FiveHour, 1.0)]).has_low_remaining_window());
+        // 正常余量不触发。
+        assert!(
+            !quota(vec![
+                window(WindowKind::FiveHour, 5.0),
+                window(WindowKind::Monthly, 80.0),
+            ])
+            .has_low_remaining_window()
+        );
+        // 已耗尽（0）由 subscription_usable 处理，不落入探活区间。
+        assert!(
+            !quota(vec![
+                window(WindowKind::FiveHour, 0.0),
+                window(WindowKind::Weekly, 50.0),
+            ])
+            .has_low_remaining_window()
+        );
+        // 不可用窗口不参与判定；剩余正常的可用窗口不触发。
+        assert!(
+            !quota(vec![
+                QuotaWindow::unavailable(WindowKind::FiveHour),
+                window(WindowKind::Weekly, 50.0),
+            ])
+            .has_low_remaining_window()
+        );
+        assert!(!quota(vec![]).has_low_remaining_window());
+        // 非 Quota 形态（余额数据无窗口）→ false。
+        let balance = UsageData {
+            provider_id: 1,
+            fetched_at: Utc::now(),
+            kind: UsageKind::Balance,
+            plan: None,
+            windows: vec![window(WindowKind::FiveHour, 0.5)],
+            balances: vec![],
+        };
+        assert!(!balance.has_low_remaining_window());
     }
 }
