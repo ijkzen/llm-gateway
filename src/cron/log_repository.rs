@@ -104,9 +104,39 @@ pub struct SeaOrmCronJobLogRepository {
     db: DatabaseConnection,
 }
 
+/// 待批量写入的一行日志。
+pub struct LogRow {
+    pub seq: i32,
+    pub level: String,
+    pub message: String,
+    pub ts: DateTime<Utc>,
+}
+
 impl SeaOrmCronJobLogRepository {
     pub fn new(db: DatabaseConnection) -> Self {
         Self { db }
+    }
+
+    /// 批量追加日志（单条多值 INSERT，替代逐条 autocommit 往返）。
+    pub async fn insert_logs(&self, run_id: &str, rows: &[LogRow]) -> Result<(), DbErr> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let models = rows
+            .iter()
+            .map(|row| cron_job_log::ActiveModel {
+                run_id: Set(run_id.to_string()),
+                seq: Set(row.seq),
+                level: Set(row.level.clone()),
+                message: Set(row.message.clone()),
+                created_at: Set(row.ts),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+        cron_job_log::Entity::insert_many(models)
+            .exec(&self.db)
+            .await?;
+        Ok(())
     }
 }
 
