@@ -10,9 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set};
 
 use crate::entity::{provider, usage_cache};
 use crate::usage::UsageError;
@@ -43,35 +41,32 @@ pub async fn read_usage_cache(
     Ok(serde_json::from_str(&row.usage_json).ok())
 }
 
-/// 写入/更新某供应商的用量缓存行（按 provider_id upsert）。
+/// 写入/更新某供应商的用量缓存行（单语句 `ON CONFLICT(provider_id) DO UPDATE`
+/// upsert：并发刷新同一供应商不再有 find→insert 两段竞态撞唯一键）。
 pub async fn write_usage_cache(db: &DatabaseConnection, data: &UsageData) -> Result<(), DbErr> {
+    use sea_orm::sea_query::OnConflict;
+
     let usage_json = usage_json_encode(data)?;
     let now = Utc::now();
-    let existing = usage_cache::Entity::find()
-        .filter(usage_cache::Column::ProviderId.eq(data.provider_id))
-        .one(db)
-        .await?;
-    match existing {
-        Some(row) => {
-            let mut active: usage_cache::ActiveModel = row.into();
-            active.usage_json = Set(usage_json);
-            active.fetched_at = Set(data.fetched_at);
-            active.updated_at = Set(now);
-            active.update(db).await?;
-        }
-        None => {
-            usage_cache::ActiveModel {
-                provider_id: Set(data.provider_id),
-                usage_json: Set(usage_json),
-                fetched_at: Set(data.fetched_at),
-                created_at: Set(now),
-                updated_at: Set(now),
-                ..Default::default()
-            }
-            .insert(db)
-            .await?;
-        }
-    }
+    usage_cache::Entity::insert(usage_cache::ActiveModel {
+        provider_id: Set(data.provider_id),
+        usage_json: Set(usage_json),
+        fetched_at: Set(data.fetched_at),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    })
+    .on_conflict(
+        OnConflict::column(usage_cache::Column::ProviderId)
+            .update_columns([
+                usage_cache::Column::UsageJson,
+                usage_cache::Column::FetchedAt,
+                usage_cache::Column::UpdatedAt,
+            ])
+            .to_owned(),
+    )
+    .exec(db)
+    .await?;
     Ok(())
 }
 
@@ -88,15 +83,19 @@ pub async fn invalidate_usage_cache(
 }
 
 /// 真实抓取一次供应商用量并写入数据库缓存，返回新数据。
+///
+/// 落库失败按抓取失败返回（不静默降级成「抓到了但缓存不新鲜」）：调用方
+/// （定时刷新/手动刷新/LB 选路兜底）会如实告警或回退，避免 DB 持续故障时
+/// 每轮无退避地反复抓取且缓存永远不新鲜的盲区。
 pub async fn fetch_and_store(
     db: &DatabaseConnection,
     provider_id: i32,
 ) -> Result<UsageData, UsageError> {
     // 真实抓取（无内存缓存）；落库后读接口与 LB 排序命中 10 分钟数据库缓存。
     let data = crate::usage::query_provider_usage(db, provider_id).await?;
-    if let Err(e) = write_usage_cache(db, &data).await {
-        tracing::warn!(provider_id, "用量缓存落库失败：{e}");
-    }
+    write_usage_cache(db, &data)
+        .await
+        .map_err(|e| UsageError::Database(e.to_string()))?;
     Ok(data)
 }
 
@@ -282,6 +281,7 @@ mod tests {
     use crate::usage::types::{
         BalanceItem, QuotaWindow, UsageData, UsageKind, WindowKind, empty_windows, set_window,
     };
+    use sea_orm::ActiveModelTrait;
 
     fn balance_data(provider_id: i32, amounts: &[f64]) -> UsageData {
         UsageData {
@@ -414,6 +414,30 @@ mod tests {
             .unwrap();
         assert!(provider_enabled(&db, pid).await);
         assert!(item_enabled(&db, model_id).await);
+    }
+
+    #[tokio::test]
+    async fn concurrent_usage_cache_writes_upsert_without_unique_violation() {
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        // 同一 provider 并发写缓存（模拟 usage_refresh 与 ?refresh=1 同时命中）：
+        // 单语句 ON CONFLICT upsert 无两段竞态，全部成功且只留一行。
+        let mut handles = Vec::new();
+        for i in 0..4 {
+            let db = db.clone();
+            handles.push(tokio::spawn(async move {
+                let mut data = balance_data(99, &[10.0 + i as f64]);
+                data.fetched_at = Utc::now();
+                write_usage_cache(&db, &data).await.unwrap();
+            }));
+        }
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        let rows = usage_cache::Entity::find().all(&db).await.unwrap();
+        assert_eq!(rows.len(), 1, "并发 upsert 后应只有一行");
+        assert_eq!(rows[0].provider_id, 99);
+        assert!(read_usage_cache(&db, 99).await.unwrap().is_some());
     }
 
     #[tokio::test]

@@ -20,6 +20,8 @@ pub enum UsageError {
     Network(String),
     #[error("上游响应解析失败：{0}")]
     Parse(String),
+    #[error("用量缓存写入失败：{0}")]
+    Database(String),
 }
 
 impl UsageError {
@@ -81,6 +83,13 @@ impl UsageError {
                     format!("failed to parse upstream response: {detail}")
                 } else {
                     format!("上游响应解析失败：{detail}")
+                }
+            }
+            UsageError::Database(detail) => {
+                if lang == Lang::En {
+                    format!("failed to write usage cache: {detail}")
+                } else {
+                    format!("用量缓存写入失败：{detail}")
                 }
             }
         }
