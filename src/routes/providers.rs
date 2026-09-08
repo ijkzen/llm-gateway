@@ -20,6 +20,7 @@ use crate::entity::virtual_model_item;
 use crate::i18n::Lang;
 use crate::response::{self, Response};
 use crate::state::AppState;
+use crate::usage::types::UsageData;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -745,6 +746,17 @@ struct ProviderUsageQuery {
     refresh: Option<String>,
 }
 
+/// 用量响应：用量数据（flatten 平铺到与原来同层）+ 展示时区。
+///
+/// `timezone` 为设置表保存的 IANA 时区名（缺省 Asia/Shanghai），前端把窗口
+/// 重置时间等绝对时刻映射到该时区渲染，避免依赖浏览器所在时区。
+#[derive(Serialize)]
+struct ProviderUsageResponse {
+    #[serde(flatten)]
+    data: UsageData,
+    timezone: String,
+}
+
 /// 查询供应商用量（余额/订阅窗口额度）。
 ///
 /// 优先直出数据库缓存（10 分钟内新鲜），过期/缺失才真实抓取并重新落库。
@@ -772,6 +784,16 @@ async fn get_provider_usage(
         );
     }
 
+    let timezone = state
+        .settings
+        .timezone()
+        .await
+        .map(|tz| tz.name().to_string())
+        .unwrap_or_else(|| crate::app_settings::DEFAULT_TIMEZONE.to_string());
+    let payload = |data: UsageData| ProviderUsageResponse {
+        timezone: timezone.clone(),
+        data: data.with_normalized_remaining().with_localized_labels(lang),
+    };
     let force_refresh = query
         .refresh
         .as_deref()
@@ -779,20 +801,10 @@ async fn get_provider_usage(
     if !force_refresh
         && let Ok(Some(data)) = crate::usage::persist::read_usage_cache(&state.db, id).await
     {
-        return (
-            StatusCode::OK,
-            Json(Response::success(
-                data.with_normalized_remaining().with_localized_labels(lang),
-            )),
-        );
+        return (StatusCode::OK, Json(Response::success(payload(data))));
     }
     match crate::usage::persist::fetch_and_store(&state.db, id).await {
-        Ok(data) => (
-            StatusCode::OK,
-            Json(Response::success(
-                data.with_normalized_remaining().with_localized_labels(lang),
-            )),
-        ),
+        Ok(data) => (StatusCode::OK, Json(Response::success(payload(data)))),
         Err(e) if e.is_client_error() => response::bad_request(e.user_message(lang)),
         Err(e) => response::bad_gateway(e.user_message(lang)),
     }
@@ -801,24 +813,14 @@ async fn get_provider_usage(
 /// 订阅周期窗口长度（毫秒）：周 = 7 天，月 = 30 天。
 const WEEK_MS: i64 = 7 * 24 * 3_600_000;
 const MONTH_MS: i64 = 30 * 24 * 3_600_000;
-/// 一天（毫秒）。
-const DAY_MS: i64 = 24 * 3_600_000;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageEstimateResponse {
     provider_id: i32,
-    /// 用于预估的窗口：weekly / monthly。
+    /// 用于预估的窗口：weekly / monthly / none。
     window: String,
-    /// 窗口起点（毫秒时间戳，由 resets_at 反推）。
-    window_start: i64,
-    /// 窗口终点（毫秒时间戳，即 resets_at）。
-    window_end: i64,
-    /// 窗口内实际有请求数据的日期数。
-    covered_days: i64,
-    /// 窗口总天数（周=7，月=30）。
-    total_days: i64,
-    /// 窗口内请求表统计的已用 token（成功行 total_tokens 合计）。
+    /// 窗口起点到 now（不越过窗口终点）之间请求表统计的已用 token。
     used_tokens: i64,
     /// 用量卡该窗口已用配额（厂商单位，如 credits）。
     used: Option<f64>,
@@ -826,7 +828,7 @@ struct UsageEstimateResponse {
     limit: Option<f64>,
     /// 预估订阅周期内可用 token 总量（按已用配额比例折算）。
     estimated_total_tokens: Option<i64>,
-    /// 是否可预估：请求数据覆盖完整且配额比例可折算时为 true。
+    /// 是否可预估：用量卡拿得到可折算比例且网关已记录 token 时为 true。
     estimatable: bool,
 }
 
@@ -834,9 +836,12 @@ struct UsageEstimateResponse {
 ///
 /// 仅订阅制（billing_mode=1）且开启用量查询（extra.usage=true）的供应商可用。
 /// 取用量卡 weekly/monthly 可用窗口（周优先），窗口起点由 resets_at 反推
-/// （周 = resets_at - 7 天，月 = resets_at - 30 天），统计请求表在该窗口内
-/// 该供应商的成功请求 token 总量。若窗口内请求数据天数覆盖不全（有日期
-/// 缺口），或用量卡拿不到已用/总量/百分比，则无法准确预估（estimatable=false）。
+/// （周 = resets_at - 7 天，月 = resets_at - 30 天），统计请求表在窗口起点
+/// 到 now（不越过 resets_at）之间该供应商成功请求的 token 总量。预估前提是
+/// 全部流量都经网关转发并被 request 表记录：网关已用 token ÷ 用量卡已用比例
+/// 即整个订阅周期的 token 总量（不再校验请求按天覆盖——前提成立时缺口只
+/// 意味着那天确实没有用量）。用量卡拿不到已用/总量/百分比，或网关记录为 0
+/// 时无法折算（estimatable=false）。
 async fn get_provider_usage_estimate(
     State(state): State<AppState>,
     Path(id): Path<i32>,
@@ -895,10 +900,6 @@ async fn get_provider_usage_estimate(
             Json(Response::success(UsageEstimateResponse {
                 provider_id: id,
                 window: "none".to_string(),
-                window_start: 0,
-                window_end: 0,
-                covered_days: 0,
-                total_days: 0,
                 used_tokens: 0,
                 used: None,
                 limit: None,
@@ -924,19 +925,13 @@ async fn get_provider_usage_estimate(
     let window_end = qw.resets_at.map(|t| t.timestamp_millis()).unwrap_or(now_ms);
     let window_start = window_end - window_len_ms;
 
-    // 请求表统计：已过去时段内该供应商成功请求的 token 总量 + 覆盖天数。
-    // 统计上限取 min(窗口终点, now)：未来时段不应计入已用 token 与覆盖检查。
-    // 覆盖天数按「距窗口起点的相对天」分桶，而不是 UTC 自然日——窗口是厂商定义的
-    // 重置周期，起点不一定落在 UTC 日边界（如东八区 24:00 = UTC 16:00），用自然日
-    // 分桶会把不足一天的窗口误判成横跨两个日桶、多算应覆盖天数。
+    // 请求表统计：窗口起点到 min(窗口终点, now) 之间该供应商成功请求的
+    // token 总量。统计上限不越过当前时刻：未来时段不存在请求数据。
     let elapsed_end = window_end.min(now_ms);
-    let sql = format!(
-        "SELECT COALESCE(SUM(r.total_tokens), 0) AS used_tokens, \
-                COUNT(DISTINCT (r.start_time - {window_start}) / {DAY_MS}) AS covered_days \
+    let sql = "SELECT COALESCE(SUM(r.total_tokens), 0) AS used_tokens \
          FROM request r \
          WHERE r.provider_id = ? AND r.success = 1 \
-           AND r.start_time >= ? AND r.start_time < ?"
-    );
+           AND r.start_time >= ? AND r.start_time < ?";
     let row = match state
         .db
         .query_one_raw(Statement::from_sql_and_values(
@@ -957,18 +952,6 @@ async fn get_provider_usage_estimate(
         Err(e) => return response::db_error(e.to_string()),
     };
     let used_tokens: i64 = row.try_get("", "used_tokens").unwrap_or(0);
-    let covered_days: i64 = row.try_get("", "covered_days").unwrap_or(0);
-
-    // 覆盖检查：只要求「已完整过去的整天」每天都有请求数据。
-    // 进行中的最后一段（不足一天）允许为空——窗口起点时刻之后尚未来流量
-    // 属正常（如请求集中在每天窗口起点时刻之前），把这一段向上取整成整天
-    // 会把「今天刚开始、还没有请求」误判为数据缺口（SenseNova 回归）。
-    // covered_days 的相对分桶以整天为界，应覆盖天数取已过去时段的整天数
-    // （向下取整）与之对齐；不足一天时按 1 天兜底（开窗初期只要求当天有数据）。
-    let elapsed_ms = elapsed_end - window_start;
-    let elapsed_days = elapsed_ms / DAY_MS;
-    let total_days = elapsed_days.max(1);
-    let covered = covered_days >= total_days;
 
     // 折算基准：优先 used/limit 绝对值，其次 used_percent。
     let ratio: Option<f64> = match (qw.used, qw.limit) {
@@ -977,7 +960,9 @@ async fn get_provider_usage_estimate(
     };
     let ratio = ratio.filter(|r| *r > 0.0);
 
-    let estimatable = covered && ratio.is_some();
+    // 网关记录为 0 却已消耗配额说明前提不成立（流量未全走网关），
+    // 0/比例 折算出 0 没有意义，同样视为不可预估。
+    let estimatable = used_tokens > 0 && ratio.is_some();
     let estimated_total_tokens = ratio.map(|r| (used_tokens as f64 / r).round() as i64);
 
     (
@@ -985,10 +970,6 @@ async fn get_provider_usage_estimate(
         Json(Response::success(UsageEstimateResponse {
             provider_id: id,
             window: window_name.to_string(),
-            window_start,
-            window_end,
-            covered_days,
-            total_days,
             used_tokens,
             used: qw.used,
             limit: qw.limit,

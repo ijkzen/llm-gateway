@@ -141,6 +141,7 @@ impl AppSettings {
         }
 
         *LANG_SYNC.lock().unwrap() = language;
+        *TIMEZONE_SYNC.write().unwrap() = timezone;
 
         let settings = Self {
             inner: Arc::new(RwLock::new(AppSettingsInner {
@@ -230,6 +231,7 @@ impl AppSettings {
             }
             KEY_TIMEZONE => {
                 inner.timezone = chrono_tz::Tz::from_str(value.trim()).ok();
+                *TIMEZONE_SYNC.write().unwrap() = inner.timezone;
             }
             KEY_MAX_CONSECUTIVE_FAILURES => {
                 if let Ok(v) = value.trim().parse::<u32>()
@@ -254,7 +256,22 @@ impl AppSettings {
     }
 }
 
+/// 时区的进程内同步副本：与 `inner.timezone` 保持一致（`load_from_db` /
+/// `update` 时同步），供用量 fetcher 等无 async 设置句柄的同步解析场景读取。
+/// 缺省值回退 `DEFAULT_TIMEZONE`，与设置表种子默认一致。
+pub fn timezone_sync() -> chrono_tz::Tz {
+    TIMEZONE_SYNC.read().unwrap().unwrap_or_else(|| {
+        chrono_tz::Tz::from_str(DEFAULT_TIMEZONE).expect("DEFAULT_TIMEZONE 是合法 IANA 时区名")
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn set_timezone_sync(tz: Option<chrono_tz::Tz>) {
+    *TIMEZONE_SYNC.write().unwrap() = tz;
+}
+
 static LANG_SYNC: std::sync::Mutex<Lang> = std::sync::Mutex::new(Lang::Zh);
+static TIMEZONE_SYNC: std::sync::RwLock<Option<chrono_tz::Tz>> = std::sync::RwLock::new(None);
 
 #[cfg(test)]
 mod tests {

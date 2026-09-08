@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { type Provider, fetchProviderApiKey, useUpdateProvider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
+import { useUsageEstimate } from "@/hooks/use-usage-estimate";
 import { cn, formatDateTime } from "@/lib/utils";
 import {
 	ChevronRight,
@@ -107,6 +108,10 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 		setPlainKey(null);
 		setKeyLoading(false);
 	}
+
+	// 订阅制 + 开启用量才拉取周期 Token 预估（非订阅制后端直接 400）。
+	const canEstimate = provider?.billingMode === 1 && usageEnabled(provider?.extra ?? "");
+	const usageEstimate = useUsageEstimate(canEstimate ? (provider?.id ?? null) : null);
 
 	if (!provider) {
 		return (
@@ -237,7 +242,9 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 					</DetailRow>
 				</div>
 
-				{usageEnabled(provider.extra) && <ProviderUsageCard providerId={provider.id} />}
+				{usageEnabled(provider.extra) && (
+					<ProviderUsageCard providerId={provider.id} estimate={usageEstimate.data} />
+				)}
 
 				{provider.extra && provider.extra !== "{}" && (
 					// key 按供应商 id：切换供应商时 remount，折叠态随之重置。

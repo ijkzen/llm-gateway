@@ -27,6 +27,8 @@ export interface ProviderUsage {
 	plan?: string;
 	windows?: UsageWindow[];
 	balances?: BalanceItem[];
+	/** 展示时区（设置表保存的 IANA 名）：窗口重置时间等绝对时刻映射到该时区渲染。 */
+	timezone?: string;
 }
 
 /**

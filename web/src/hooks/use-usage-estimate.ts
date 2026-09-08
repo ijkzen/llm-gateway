@@ -6,13 +6,7 @@ export interface UsageEstimate {
 	providerId: number;
 	/** 用于预估的窗口：weekly / monthly / none。 */
 	window: string;
-	windowStart: number;
-	windowEnd: number;
-	/** 窗口内实际有请求数据的日期数。 */
-	coveredDays: number;
-	/** 窗口总天数（周=7，月=30）。 */
-	totalDays: number;
-	/** 窗口内请求表统计的已用 token。 */
+	/** 窗口起点到 now（不越过 resets_at）之间请求表统计的已用 token。 */
 	usedTokens: number;
 	/** 用量卡该窗口已用配额（厂商单位）。 */
 	used?: number | null;
@@ -20,7 +14,7 @@ export interface UsageEstimate {
 	limit?: number | null;
 	/** 预估订阅周期内可用 token 总量（可预估时才有）。 */
 	estimatedTotalTokens?: number | null;
-	/** 是否可预估（数据覆盖完整且配额比例可折算）。 */
+	/** 是否可预估（用量卡可折算比例且网关已记录 token）。 */
 	estimatable: boolean;
 }
 

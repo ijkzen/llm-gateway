@@ -44,27 +44,36 @@ function barColor(remainingPercent: number): string {
 
 function formatReset(
 	resetsAt: string | undefined,
+	timezone: string | undefined,
 	t: (key: string, opts?: Record<string, unknown>) => string,
 ): string | null {
 	if (!resetsAt) return null;
 	const ts = new Date(resetsAt).getTime();
 	if (Number.isNaN(ts) || ts <= 0) return null;
-	const d = new Date(ts);
-	return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, "0")}:${String(
-		d.getMinutes(),
-	).padStart(2, "0")}${t("providers.resetsAtSuffix")}`;
+	// 映射到接口返回的设置表时区渲染（缺省退化为浏览器本地时区），
+	// 避免浏览器时区与设置时区不一致时重置时刻显示错位。
+	const parts = new Intl.DateTimeFormat("zh-CN", {
+		timeZone: timezone,
+		month: "numeric",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+		hourCycle: "h23",
+	}).formatToParts(new Date(ts));
+	const value = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+	return `${value("month")}月${value("day")}日 ${value("hour")}:${value("minute")}${t("providers.resetsAtSuffix")}`;
 }
 
 function formatAmount(amount: number): string {
 	return amount.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 }
 
-function WindowRow({ window }: { window: UsageWindow }) {
+function WindowRow({ window, timezone }: { window: UsageWindow; timezone?: string }) {
 	const { t } = useTranslation();
 	// 后端已在接口出口按 remaining_percent_value() 推导并取整（round2），
 	// 前端直接使用，不再自行推导/取整。
 	const remaining = window.remainingPercent;
-	const reset = formatReset(window.resetsAt, t);
+	const reset = formatReset(window.resetsAt, timezone, t);
 	return (
 		<div className="space-y-1.5">
 			<div className="flex items-baseline justify-between gap-2 text-sm">
@@ -178,7 +187,7 @@ export function ProviderUsageCard({
 			) : availableWindows.length > 0 ? (
 				<div className="space-y-4">
 					{availableWindows.map((w) => (
-						<WindowRow key={`${w.window}-${w.label ?? ""}`} window={w} />
+						<WindowRow key={`${w.window}-${w.label ?? ""}`} window={w} timezone={data?.timezone} />
 					))}
 				</div>
 			) : (

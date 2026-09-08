@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => {
 		models: [] as ProviderModel[],
 		modelsLoading: false,
 		testMutate: vi.fn(),
+		useUsageEstimate: vi.fn(),
+		useProviderUsage: vi.fn(),
 	};
 });
 vi.mock("@/hooks/use-providers", async () => {
@@ -48,6 +50,14 @@ vi.mock("@/hooks/use-toast", () => ({
 		toastSuccess: mocks.toastSuccess,
 		toastError: mocks.toastError,
 	}),
+}));
+
+vi.mock("@/hooks/use-usage-estimate", () => ({
+	useUsageEstimate: mocks.useUsageEstimate,
+}));
+
+vi.mock("@/hooks/use-provider-usage", () => ({
+	useProviderUsage: mocks.useProviderUsage,
 }));
 
 const provider: Provider = {
@@ -84,6 +94,20 @@ beforeEach(() => {
 	vi.stubGlobal("navigator", { clipboard: { writeText: mocks.writeText } });
 	mocks.models = [];
 	mocks.modelsLoading = false;
+	mocks.useUsageEstimate.mockReturnValue({ data: undefined });
+	mocks.useProviderUsage.mockReturnValue({
+		data: {
+			providerId: provider.id,
+			fetchedAt: "2026-08-30T12:00:00Z",
+			kind: "quota",
+			timezone: "Asia/Shanghai",
+			windows: [],
+		},
+		isLoading: false,
+		isFetching: false,
+		error: null,
+		refetch: vi.fn(),
+	});
 });
 
 describe("ProviderDetail 标题导航到数据面板", () => {
@@ -436,5 +460,58 @@ describe("ProviderSpeedTestDialog 测速弹窗", () => {
 		expect(
 			screen.getByRole("switch", { name: `切换 Provider ${provider.name} 状态` }),
 		).toHaveAttribute("data-state", "checked");
+	});
+});
+
+describe("ProviderDetail 用量预估月额度", () => {
+	const subProvider: Provider = {
+		...provider,
+		billingMode: 1,
+		extra: '{"usage":true}',
+	};
+
+	it("非订阅制（billingMode=0）不拉取预估", () => {
+		renderDetail();
+		expect(mocks.useUsageEstimate).toHaveBeenCalledWith(null);
+	});
+
+	it("订阅制但未开启用量不拉取预估", () => {
+		render(
+			<MemoryRouter>
+				<ProviderDetail
+					provider={{ ...subProvider, extra: "{}" }}
+					onEdit={vi.fn()}
+					onDelete={vi.fn()}
+					onSpeedTest={vi.fn()}
+				/>
+			</MemoryRouter>,
+		);
+		expect(mocks.useUsageEstimate).toHaveBeenCalledWith(null);
+	});
+
+	it("订阅制且开启用量：拉取预估并展示在用量卡上", async () => {
+		mocks.useUsageEstimate.mockReturnValue({
+			data: {
+				providerId: 7,
+				window: "weekly",
+				usedTokens: 90_000_000_000,
+				estimatable: true,
+				estimatedTotalTokens: 90_000_000_000,
+			},
+		});
+		render(
+			<MemoryRouter>
+				<ProviderDetail
+					provider={subProvider}
+					onEdit={vi.fn()}
+					onDelete={vi.fn()}
+					onSpeedTest={vi.fn()}
+				/>
+			</MemoryRouter>,
+		);
+		expect(mocks.useUsageEstimate).toHaveBeenCalledWith(7);
+		expect(await screen.findByText("用量信息")).toBeInTheDocument();
+		// 周窗口预估 ×4 展示月额度（9e10 × 4 = 3600 亿）。
+		expect(await screen.findByText("预估月 Token：")).toBeInTheDocument();
 	});
 });

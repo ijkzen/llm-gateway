@@ -1,7 +1,9 @@
 //! 订阅周期 Token 预估接口（GET /api/providers/{id}/usage/estimate）集成测试。
 //!
-//! 直接向 provider_usage_cache 表写入 UsageData（模拟用量缓存），
-//! 不依赖上游 mock：覆盖可预估 / 覆盖缺口无法预估 / 非订阅制 400 三态。
+//! 直接向 provider_usage_cache 表写入 UsageData（模拟用量缓存），不依赖上游
+//! mock。预估口径：请求表已用 token ÷ 用量卡已用比例（前提是全部流量都经
+//! 网关转发并被记录，不再要求请求按天覆盖）。覆盖部分时段可估 / 网关记录
+//! 为 0 不可估 / 用量卡无可折算比例不可估 / 非订阅制 400 / 无可用窗口五态。
 
 mod common;
 
@@ -94,10 +96,9 @@ async fn seed_request(
 
 /// 写入用量缓存（weekly 窗口：used=50, limit=100，resets_at 指定）。
 ///
-/// resets_at 故意不落在 UTC 日边界（= now + 7 天 + 16 小时），使窗口起点
-/// （resets_at − 7 天）同样偏离 UTC 日边界——复现生产 provider 26 的
-/// 周窗口形态（东八区 24:00 重置 = UTC 16:00）。旧实现按 UTC 自然日分桶会把
-/// 刚开窗不足一天的时段误判成横跨两个日桶。
+/// resets_at 故意不落在 UTC 日边界（= now + 3 天 + 16 小时），使窗口起点
+/// （resets_at − 7 天）同样偏离 UTC 日边界——窗口起止都是毫秒级精确时刻，
+/// 无时区解析语义不参与本测试。
 async fn seed_usage_cache(db: &DatabaseConnection, provider_id: i32, resets_at_ms: i64) {
     let now = chrono::Utc::now();
     let usage_json = json!({
@@ -134,15 +135,13 @@ async fn seed_usage_cache(db: &DatabaseConnection, provider_id: i32, resets_at_m
     .unwrap();
 }
 
-/// 可预估：weekly 窗口已完整过去的整天每天都有请求数据，比例 0.5。
+/// 可预估：窗口只过去一部分、且请求只覆盖部分时段，仍按已用 token ÷ 已用
+/// 比例折算（比例 0.5，token 200 → 周期总量 400）。
 ///
-/// resets_at = now + 3 天 + 16 小时（不对齐 UTC 日边界），窗口起点 =
-/// resets_at − 7 天 = now − 4 天 + 16 小时。已过去时长 = 4 天 − 16 小时，
-/// 已完整过去的整天 = 3（进行中的不满一天不计入应覆盖）。请求覆盖
-/// 相对桶 rel0/1/2 各一条。旧实现按 UTC 自然日分桶时，窗口起点落在
-/// UTC 16:00 会被折算到前一自然日、多算应覆盖天数而误判缺口。
+/// resets_at = now + 3 天 + 16 小时，窗口起点 = resets_at − 7 天 = now − 4 天
+/// + 16 小时。请求只放在窗口内的两个零散时刻，中间有空窗也不影响折算。
 #[tokio::test]
-async fn test_estimate_full_coverage() {
+async fn test_estimate_partial_usage_estimates() {
     let (app, db) = setup_app().await;
     seed_provider(&db, 1, "sub-provider", 1).await;
     let now = chrono::Utc::now().timestamp_millis();
@@ -150,18 +149,8 @@ async fn test_estimate_full_coverage() {
     seed_usage_cache(&db, 1, resets_at).await;
 
     let window_start = resets_at - 7 * DAY_MS; // = now − 4 天 + 16 小时
-    // 已完整过去的 3 个相对天桶（0/1/2）各放一条，落在 UTC 日边界两侧以验证
-    // 相对分桶不被 UTC 自然日干扰。
-    for day in 0..3 {
-        seed_request(
-            &db,
-            &format!("r-day-{day}"),
-            1,
-            window_start + day * DAY_MS + 1000,
-            100,
-        )
-        .await;
-    }
+    seed_request(&db, "r-a", 1, window_start + 3_600_000, 100).await;
+    seed_request(&db, "r-b", 1, window_start + 2 * DAY_MS + 3_600_000, 100).await;
 
     let (status, body) = send_get(&app, "/api/providers/1/usage/estimate").await;
     assert_eq!(status, StatusCode::OK);
@@ -170,47 +159,70 @@ async fn test_estimate_full_coverage() {
     assert_eq!(data["window"], "weekly");
     assert_eq!(
         data["estimatable"], true,
-        "已完整过去的整天覆盖完整应可预估：{data}"
+        "存在已用 token 且比例可折算即可预估：{data}"
     );
-    // 已用 token = 3 * 100 = 300；比例 0.5 → 预估总量 600。
-    assert_eq!(data["usedTokens"], 300);
-    assert_eq!(data["estimatedTotalTokens"], 600);
-    assert_eq!(data["coveredDays"], 3);
-    assert_eq!(data["totalDays"], 3);
+    // 已用 token = 2 * 100 = 200；比例 0.5 → 预估周期总量 400。
+    assert_eq!(data["usedTokens"], 200);
+    assert_eq!(data["estimatedTotalTokens"], 400);
 }
 
-/// 覆盖缺口：已完整过去的相对天桶缺一个（应覆盖 3 天、只有 2 天有数据）→ 无法预估。
+/// 网关记录为 0（窗口内没有任何请求数据）却已消耗配额：前提不成立，
+/// 0 ÷ 比例折算出 0 没有意义 → 无法预估。
 #[tokio::test]
-async fn test_estimate_gap_coverage_not_estimatable() {
+async fn test_estimate_zero_recorded_tokens_not_estimatable() {
     let (app, db) = setup_app().await;
     seed_provider(&db, 1, "sub-provider", 1).await;
     let now = chrono::Utc::now().timestamp_millis();
     let resets_at = now + 3 * DAY_MS + 16 * 3_600_000;
     seed_usage_cache(&db, 1, resets_at).await;
 
-    // 已完整过去的 3 个相对天桶中只有 2 个有数据（缺 rel2 —— 一个完整过去的天）。
-    let window_start = resets_at - 7 * DAY_MS; // = now − 4 天 + 16 小时
-    for day in 0..2 {
-        seed_request(
-            &db,
-            &format!("r-{day}"),
-            1,
-            window_start + day * DAY_MS + 1000,
-            100,
-        )
-        .await;
-    }
-
     let (status, body) = send_get(&app, "/api/providers/1/usage/estimate").await;
     assert_eq!(status, StatusCode::OK);
     let data = &body["data"];
-    assert_eq!(data["estimatable"], false, "覆盖缺口应无法预估：{data}");
-    assert_eq!(data["coveredDays"], 2);
-    assert_eq!(data["totalDays"], 3);
+    assert_eq!(data["usedTokens"], 0);
+    assert_eq!(data["estimatable"], false, "网关无记录应无法预估：{data}");
     assert!(
         data["estimatedTotalTokens"].is_null(),
         "无预估值时该字段为 null"
     );
+}
+
+/// 用量卡窗口可用但拿不到已用/总量/百分比（无折算比例）→ 无法预估。
+#[tokio::test]
+async fn test_estimate_no_ratio_not_estimatable() {
+    let (app, db) = setup_app().await;
+    seed_provider(&db, 1, "sub-provider", 1).await;
+    let now = chrono::Utc::now();
+    let usage_json = json!({
+        "providerId": 1,
+        "fetchedAt": now.to_rfc3339(),
+        "kind": "quota",
+        "windows": [
+            {"window": "five_hour", "available": false},
+            {"window": "weekly", "available": true},
+            {"window": "monthly", "available": false}
+        ]
+    });
+    usage_cache::ActiveModel {
+        id: Set(1),
+        provider_id: Set(1),
+        usage_json: Set(usage_json.to_string()),
+        fetched_at: Set(now),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    // 有请求数据（token 100），但比例缺失 → 仍不可预估。
+    seed_request(&db, "r-a", 1, now.timestamp_millis() - 3_600_000, 100).await;
+
+    let (status, body) = send_get(&app, "/api/providers/1/usage/estimate").await;
+    assert_eq!(status, StatusCode::OK);
+    let data = &body["data"];
+    assert_eq!(data["usedTokens"], 100);
+    assert_eq!(data["estimatable"], false, "无折算比例应无法预估：{data}");
 }
 
 /// 非订阅制 → 400。
