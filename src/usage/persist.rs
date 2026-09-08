@@ -143,7 +143,7 @@ pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> 
         return Ok(0);
     }
 
-    // 每家用独立 reqwest 客户端；限并发避免同时打开过多连接。
+    // 客户端按代理维度进程级复用（usage::http，P5）；限并发避免同时打开过多连接。
     let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
     let mut set = tokio::task::JoinSet::new();
     for p in targets {

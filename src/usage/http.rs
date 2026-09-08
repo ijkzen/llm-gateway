@@ -14,6 +14,37 @@ const TIMEOUT_SECS: u64 = 15;
 const USER_AGENT: &str = concat!("llm-gateway/", env!("CARGO_PKG_VERSION"));
 const OVERRIDE_ENV: &str = "LLM_GATEWAY_USAGE_HTTP_OVERRIDE";
 
+/// 按代理维度缓存的 reqwest 客户端（key：代理地址，空串=直连）。
+/// 进程级单例：连接池/TLS 会话跨刷新轮次复用，连接池内部自行回收空闲连接。
+fn cached_client(proxy_addr: Option<&str>) -> reqwest::Client {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CLIENTS: OnceLock<Mutex<HashMap<String, reqwest::Client>>> = OnceLock::new();
+    let key = proxy_addr.unwrap_or("").trim().to_string();
+    CLIENTS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .entry(key)
+        .or_insert_with(|| build_client(proxy_addr))
+        .clone()
+}
+
+fn build_client(proxy_addr: Option<&str>) -> reqwest::Client {
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
+        .user_agent(USER_AGENT);
+    if let Some(addr) = proxy_addr.map(str::trim).filter(|a| !a.is_empty()) {
+        // 地址已由 provider 校验过（http:// 开头、无认证）；解析失败按无代理降级。
+        // 用 Proxy::all：Proxy::http 只拦截 http:// URL，https 供应商会直连。
+        if let Ok(proxy) = reqwest::Proxy::all(addr) {
+            builder = builder.proxy(proxy);
+        }
+    }
+    builder.build().expect("reqwest client build is infallible")
+}
+
 pub struct UsageHttp {
     client: reqwest::Client,
     /// 测试用：将请求重定向到该 base（如 `http://127.0.0.1:PORT`）。
@@ -34,23 +65,16 @@ impl UsageHttp {
     ///
     /// 供 provider 级代理透传使用：用量抓取若也需经网络代理访问厂商端点，
     /// 调用方把 `provider.proxy_addr` 传进来。
+    ///
+    /// 客户端按代理维度（直连/代理地址）进程级复用（P5）：reqwest 连接池与
+    /// TLS 会话随客户端存活，避免每 5 分钟一轮刷新为每家重建客户端导致
+    /// 全部连接池/TLS 会话随 drop 丢弃、每轮全部厂商重新握手。
     pub fn with_proxy(proxy_addr: Option<&str>) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-            .user_agent(USER_AGENT);
-        if let Some(addr) = proxy_addr.map(str::trim).filter(|a| !a.is_empty()) {
-            // 地址已由 provider 校验过（http:// 开头、无认证）；解析失败按无代理降级。
-            // 用 Proxy::all：Proxy::http 只拦截 http:// URL，https 供应商会直连。
-            if let Ok(proxy) = reqwest::Proxy::all(addr) {
-                builder = builder.proxy(proxy);
-            }
-        }
-        let client = builder.build().expect("reqwest client build is infallible");
         let base_override = std::env::var(OVERRIDE_ENV)
             .ok()
             .filter(|v| !v.trim().is_empty());
         Self {
-            client,
+            client: cached_client(proxy_addr),
             base_override,
         }
     }
