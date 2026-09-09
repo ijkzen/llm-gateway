@@ -7,16 +7,15 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 
 use crate::stats_snapshot as snap;
 
-/// 六指标原语顺序（与 SUCCESS_PRIM_EXPRS 一一对应）：
+/// 六指标原语顺序（与 registry::success_prims() 一一对应）：
 /// success_calls, total_tokens, input_tokens, cache_tokens, output_tokens,
 /// ttft_sum, ttft_n, request_time_sum, tps_time_sum。
 pub(crate) const PRIM_COUNT: usize = 9;
 
-/// 快照/兑底共用 SELECT 列（原语别名列表；顺序与 SUCCESS_PRIM_EXPRS 严格一致，
+/// 快照/兑底共用 SELECT 列（原语别名列表；顺序与 success_prims() 严格一致，
 /// Prims 按下标访问即以此顺序为契约——增删指标两处同步）。
 pub(crate) fn prim_select_list() -> String {
-    snap::SUCCESS_PRIM_EXPRS
-        .iter()
+    snap::success_prims()
         .map(|(m, e)| format!("{e} AS {m}"))
         .collect::<Vec<_>>()
         .join(", ")
@@ -24,6 +23,14 @@ pub(crate) fn prim_select_list() -> String {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Prims(pub(crate) [f64; PRIM_COUNT]);
+
+impl std::ops::AddAssign for Prims {
+    fn add_assign(&mut self, rhs: Self) {
+        for i in 0..PRIM_COUNT {
+            self.0[i] += rhs.0[i];
+        }
+    }
+}
 
 impl Prims {
     pub(crate) fn success_calls(&self) -> f64 {
@@ -90,7 +97,7 @@ impl Prims {
 /// 把一行聚合结果按 (entity, 指标别名) 并入 map。
 fn fold_row(map: &mut HashMap<String, Prims>, entity: String, row: &sea_orm::QueryResult) {
     let entry = map.entry(entity).or_default();
-    for (i, (metric, _)) in snap::SUCCESS_PRIM_EXPRS.iter().enumerate() {
+    for (i, (metric, _)) in snap::success_prims().enumerate() {
         let value: f64 = row
             .try_get("", metric)
             .ok()
@@ -113,7 +120,7 @@ async fn fold_snapshot(
     for frame in &cov.snapshots {
         by_level.entry(frame.level).or_default().push(*frame);
     }
-    let prim_names: Vec<&str> = snap::SUCCESS_PRIM_EXPRS.iter().map(|(m, _)| *m).collect();
+    let prim_names: Vec<&str> = snap::success_prims().map(|(m, _)| m).collect();
     for (level, frames) in &by_level {
         let rows = snap::snapshot_rows(db, *level, frames, entity_type, exact, &prim_names)
             .await

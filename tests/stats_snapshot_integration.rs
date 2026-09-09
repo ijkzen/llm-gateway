@@ -479,6 +479,106 @@ async fn filtered_charts_equal_between_snapshot_and_live() {
 }
 
 #[tokio::test]
+async fn deleted_subject_filter_demotes_to_live() {
+    // 回归：按已删除的模型/Key 过滤时，主体键解析失败必须整窗兑底——
+    // 否则快照侧按全量主体行取数，把其它模型/Key 的闭桶贡献加进来（高估）。
+    // 形态：双模型双 Key，删掉其中一个，另一个的泄漏行是爆炸的载体。
+    let (app, db) = setup_app().await;
+    let today = chrono::Utc::now().date_naive();
+    let day1 = seed_history(
+        &db,
+        today - chrono::Days::new(1),
+        today - chrono::Days::new(2),
+    )
+    .await;
+    let ts = "2024-01-01T00:00:00Z";
+    // 第二个模型与第二个 Key（泄漏载体）+ 其在窗口内的一条请求。
+    exec(
+        &db,
+        &format!(
+            "INSERT INTO provider_model (provider_id, provider_model_id, context_length, \
+             max_output_tokens, reasoning, tool_use, image_understand, video_understand, \
+             proxy_enabled, proxy_addr, created_at, updated_at) \
+             VALUES (1, 'gpt-y', 8000, 2000, 0, 0, 0, 0, 0, '', '{ts}', '{ts}')"
+        ),
+    )
+    .await;
+    exec(
+        &db,
+        &format!(
+            "INSERT INTO api_key (name, key, key_hash, enable, created_at, updated_at) \
+             VALUES ('k2', 'lg-bbb', NULL, 1, '{ts}', '{ts}')"
+        ),
+    )
+    .await;
+    insert_request(
+        &db,
+        "e5",
+        10,
+        "gpt-y",
+        "k2",
+        true,
+        true,
+        Some(300),
+        Some(60),
+        10,
+        Some(15),
+        Some(600),
+        25.0,
+        800,
+        Some(90),
+        day1 + 4 * HOUR_MS,
+    )
+    .await;
+
+    // 删掉过滤目标（pm gpt-x 与 Key k1），然后先取全实时基准（尚无快照行）。
+    exec(
+        &db,
+        "DELETE FROM provider_model WHERE provider_id = 1 AND provider_model_id = 'gpt-x'",
+    )
+    .await;
+    exec(&db, "DELETE FROM api_key WHERE name = 'k1'").await;
+
+    let window = format!("startTime={day1}&endTime={}", day1 + 24 * HOUR_MS);
+    let uris = vec![
+        format!("/api/stats/charts?{window}&granularity=hour&providerId=1&modelId=gpt-x"),
+        format!("/api/stats/charts?{window}&granularity=hour&apiKey=k1"),
+        format!("/api/stats/insight?{window}&granularity=hour&providerId=1&modelId=gpt-x"),
+        format!("/api/stats/insight?{window}&granularity=hour&apiKey=k1"),
+        format!("/api/stats/model-metrics?{window}&providerId=1&modelId=gpt-x"),
+        format!("/api/stats/api-key-metrics?{window}&apiKey=k1"),
+        format!("/api/stats/provider-model-rank?{window}&providerId=1&modelId=gpt-x"),
+    ];
+    let mut live_baseline = Vec::new();
+    for uri in &uris {
+        live_baseline.push(get_json(&app, uri).await);
+    }
+
+    // 固化昨天全部小时桶（此时被删主体的请求已映射不到 → 只产其它主体行）。
+    for hour in 0..24 {
+        let s = day1 + hour * HOUR_MS;
+        snap::finalize_bucket(
+            &db,
+            snap::Frame {
+                level: snap::Level::Hour,
+                start: s,
+                end: s + HOUR_MS,
+            },
+        )
+        .await
+        .unwrap();
+    }
+
+    for (uri, live) in uris.iter().zip(live_baseline.iter()) {
+        let snapped = get_json(&app, uri).await;
+        assert_eq!(
+            &snapped, live,
+            "删除主体过滤 {uri} 快照态必须兑底且与实时一致"
+        );
+    }
+}
+
+#[tokio::test]
 async fn summary_and_charts_equality_with_today_tail() {
     let (app, db) = setup_app().await;
     let now = chrono::Utc::now().timestamp_millis();

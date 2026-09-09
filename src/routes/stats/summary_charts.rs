@@ -76,31 +76,38 @@ pub(crate) struct ChartsQuery {
 
 use crate::stats_snapshot as snap;
 
-/// 汇总兑底段原始聚合（与旧 SQL 同口径：全量行 COUNT/SUM）。
+/// 汇总兑底段原始聚合（谓词取自 registry 指标表，与生成端同一文本；
+/// SUMMARY_METRICS 键序即列序）。
 async fn summary_live(
     db: &sea_orm::DatabaseConnection,
     segs: &[(i64, i64)],
 ) -> anyhow::Result<(i64, i64, i64, i64, i64)> {
+    let select = snap::select_list(&SUMMARY_METRICS);
     let mut totals = (0i64, 0i64, 0i64, 0i64, 0i64);
     for (s, e) in segs {
         let row = db
             .query_one_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 format!(
-                    "SELECT COUNT(*) AS a, COALESCE(SUM(success), 0) AS b, \
-                            COALESCE(SUM(total_tokens), 0) AS c, \
-                            COALESCE(SUM(input_tokens), 0) AS d, \
-                            COALESCE(SUM(input_cache_tokens), 0) AS e \
-                     FROM request WHERE start_time >= {s} AND start_time < {e}"
+                    "SELECT {select} FROM request r \
+                     WHERE r.start_time >= {s} AND r.start_time < {e}"
                 ),
             ))
             .await?;
         if let Some(row) = row {
-            totals.0 += row.try_get::<i64>("", "a").unwrap_or(0);
-            totals.1 += row.try_get::<i64>("", "b").unwrap_or(0);
-            totals.2 += row.try_get::<i64>("", "c").unwrap_or(0);
-            totals.3 += row.try_get::<i64>("", "d").unwrap_or(0);
-            totals.4 += row.try_get::<i64>("", "e").unwrap_or(0);
+            totals.0 += row.try_get::<i64>("", snap::metrics::CALLS).unwrap_or(0);
+            totals.1 += row
+                .try_get::<i64>("", snap::metrics::SUCCESS_CALLS)
+                .unwrap_or(0);
+            totals.2 += row
+                .try_get::<i64>("", snap::metrics::TOKENS_ALL)
+                .unwrap_or(0);
+            totals.3 += row
+                .try_get::<i64>("", snap::metrics::INPUT_TOKENS_ALL)
+                .unwrap_or(0);
+            totals.4 += row
+                .try_get::<i64>("", snap::metrics::CACHE_TOKENS_ALL)
+                .unwrap_or(0);
         }
     }
     Ok(totals)
@@ -234,6 +241,8 @@ pub(crate) fn filter_parts(query: &ChartsQuery) -> (String, Vec<sea_orm::Value>)
 
 /// 趋势主体解析（快照侧）：页面实际使用的单维过滤形态 → (entity_type, 键)。
 /// None = 该形态不落快照（整窗兑底，保证正确）。charts/insight 同级模块复用。
+/// 键解析失败（pm/Key 已删）同样返回 None——快照主体行按全量取数会把其它
+/// 主体加进来（subject 模块不变量），整窗兑底是唯一正确口径。
 pub(crate) async fn trend_entity(
     db: &sea_orm::DatabaseConnection,
     query: &ChartsQuery,
@@ -247,30 +256,13 @@ pub(crate) async fn trend_entity(
         (None, None, None, None) => Some((snap::ENTITY_WHOLE, None)),
         (Some(p), None, None, None) => Some((snap::ENTITY_PROVIDER, Some(p.to_string()))),
         (Some(p), None, Some(m), None) => {
-            let id = db
-                .query_one_raw(Statement::from_string(
-                    DbBackend::Sqlite,
-                    format!(
-                        "SELECT model_id AS v FROM provider_model \
-                         WHERE provider_id = {p} AND provider_model_id = '{m}'"
-                    ),
-                ))
-                .await
-                .ok()?
-                .and_then(|row| row.try_get::<i64>("", "v").ok());
-            Some((snap::ENTITY_MODEL, id.map(|v| v.to_string())))
+            let key = snap::resolve_pm_key(db, p, m).await?;
+            Some((snap::ENTITY_MODEL, Some(key)))
         }
         (None, Some(vm), None, None) => Some((snap::ENTITY_VIRTUAL_MODEL, Some(vm.to_string()))),
         (None, None, None, Some(key)) => {
-            let id = db
-                .query_one_raw(Statement::from_string(
-                    DbBackend::Sqlite,
-                    format!("SELECT id AS v FROM api_key WHERE name = '{key}'"),
-                ))
-                .await
-                .ok()?
-                .and_then(|row| row.try_get::<i64>("", "v").ok());
-            Some((snap::ENTITY_API_KEY, id.map(|v| v.to_string())))
+            let id = snap::resolve_api_key_id(db, key).await?;
+            Some((snap::ENTITY_API_KEY, Some(id)))
         }
         _ => None,
     }
@@ -278,6 +270,7 @@ pub(crate) async fn trend_entity(
 
 /// 分布主体解析：过滤形态 → 分布行模式（与生成端一致）。
 /// 返回 (entity_type, 精确 entity 值, provider 过滤, vm 过滤, api_key 过滤)。
+/// 精确形态（pm/Key）键解析失败（已删）→ None：整窗兑底（subject 不变量）。
 async fn distribution_pattern(
     db: &sea_orm::DatabaseConnection,
     query: &ChartsQuery,
@@ -297,37 +290,16 @@ async fn distribution_pattern(
         (None, None, None, None) => Some((snap::ENTITY_MODEL, None, None, None, None)),
         (Some(p), None, None, None) => Some((snap::ENTITY_MODEL, None, Some(p), None, None)),
         (Some(p), None, Some(m), None) => {
-            let id = db
-                .query_one_raw(Statement::from_string(
-                    DbBackend::Sqlite,
-                    format!(
-                        "SELECT model_id AS v FROM provider_model \
-                         WHERE provider_id = {p} AND provider_model_id = '{m}'"
-                    ),
-                ))
-                .await
-                .ok()?
-                .and_then(|row| row.try_get::<i64>("", "v").ok());
-            Some((
-                snap::ENTITY_MODEL,
-                id.map(|v| v.to_string()),
-                None,
-                None,
-                None,
-            ))
+            let key = snap::resolve_pm_key(db, p, m).await?;
+            Some((snap::ENTITY_MODEL, Some(key), None, None, None))
         }
         (None, Some(vm), None, None) => Some((snap::ENTITY_VM_MEMBER, None, None, Some(vm), None)),
         (None, None, None, Some(key)) => {
-            let id = db
-                .query_one_raw(Statement::from_string(
-                    DbBackend::Sqlite,
-                    format!("SELECT id AS v FROM api_key WHERE name = '{key}'"),
-                ))
-                .await
-                .ok()?
-                .and_then(|row| row.try_get::<i64>("", "v").ok())
-                .map(|v| v as i32);
-            Some((snap::ENTITY_API_KEY_MODEL, None, None, None, id))
+            let id = snap::resolve_api_key_id(db, key)
+                .await?
+                .parse::<i32>()
+                .ok()?;
+            Some((snap::ENTITY_API_KEY_MODEL, None, None, None, Some(id)))
         }
         _ => None,
     }
@@ -522,9 +494,14 @@ async fn charts_merge(
         }
         Ok(())
     };
-    run_live("COUNT(*)", &mut call_idx, &mut call_period).await?;
     run_live(
-        "COALESCE(SUM(r.total_tokens), 0)",
+        snap::expr_of(snap::metrics::CALLS),
+        &mut call_idx,
+        &mut call_period,
+    )
+    .await?;
+    run_live(
+        snap::expr_of(snap::metrics::TOKENS_ALL),
         &mut token_idx,
         &mut token_period,
     )
@@ -722,8 +699,8 @@ async fn model_distribution(
         }
         Ok(())
     };
-    run_live("COUNT(*)", &mut live_calls).await?;
-    run_live("COALESCE(SUM(r.total_tokens), 0)", &mut live_tokens).await?;
+    run_live(snap::expr_of(snap::metrics::CALLS), &mut live_calls).await?;
+    run_live(snap::expr_of(snap::metrics::TOKENS_ALL), &mut live_tokens).await?;
 
     let mut call_by_model: Vec<ModelValue> = Vec::new();
     let mut token_by_model: Vec<ModelValue> = Vec::new();

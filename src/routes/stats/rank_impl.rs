@@ -247,24 +247,19 @@ pub(crate) async fn provider_model_rank(
     let supported = query.virtual_model_id.is_none() && query.api_key.is_none();
     demote(&mut cov, start, end, supported);
 
-    // 精确形态（providerId + modelId）：model 行取该 pm。
+    // 精确形态（providerId + modelId）：model 行取该 pm；键解析失败（pm 已删）
+    // 快照按全量 model 行取数会把其它模型加进来 —— 整窗兑底（subject 不变量）。
+    let exact_shape = matches!(
+        (query.provider_id, query.model_id.as_deref()),
+        (Some(_), Some(_))
+    );
     let exact = match (query.provider_id, query.model_id.as_deref()) {
-        (Some(p), Some(m)) => {
-            let id: Option<i64> = db
-                .query_one_raw(Statement::from_string(
-                    DbBackend::Sqlite,
-                    format!(
-                        "SELECT model_id AS v FROM provider_model \
-                         WHERE provider_id = {p} AND provider_model_id = '{m}'"
-                    ),
-                ))
-                .await
-                .map_err(|e| response::db_error(e.to_string()))?
-                .and_then(|row| row.try_get("", "v").ok());
-            id.map(|v| v.to_string())
-        }
+        (Some(p), Some(m)) => snap::resolve_pm_key(db, p, m).await,
         _ => None,
     };
+    if exact_shape {
+        snap::demote_if_unresolved(&mut cov, start, end, snap::ENTITY_MODEL, exact.as_deref());
+    }
     let provider_filter = query.provider_id;
 
     let prim_list = rank_snap::prim_select_list();
@@ -662,7 +657,7 @@ pub(crate) async fn api_key_rank(
     } else {
         snap::ENTITY_API_KEY
     };
-    let prim_names: Vec<&str> = snap::SUCCESS_PRIM_EXPRS.iter().map(|(m, _)| *m).collect();
+    let prim_names: Vec<&str> = snap::success_prims().map(|(m, _)| m).collect();
     for (level, frames) in &by_level {
         let rows = snap::snapshot_rows(db, *level, frames, snap_type, None, &prim_names)
             .await
@@ -713,35 +708,11 @@ pub(crate) async fn api_key_rank(
         .await
         .map_err(response::db_error)?;
 
-    // 名称域归并：id → 名称（现存 Key）；已删 Key 的 id 快照贡献丢弃。
-    let id_keys: Vec<&String> = by_id.keys().collect();
-    let name_map = resolve_names(
-        db,
-        "api_key",
-        "id",
-        "name",
-        &id_keys.iter().map(|k| k.to_string()).collect::<Vec<_>>(),
-    )
-    .await
-    .map_err(response::db_error)?;
-    let mut by_name: std::collections::BTreeMap<String, super::rank_snap::Prims> =
-        std::collections::BTreeMap::new();
-    for (key, prims) in by_id {
-        // 兑底侧 key 已是名称，直接归并；快照侧是数字 id → 解析名称；
-        // 已删 Key（id 无法解析）快照闭桶贡献按生成语义丢弃（孤儿由兑底补全）。
-        let name = if key.parse::<i64>().is_ok() {
-            match name_map.get(&key) {
-                Some(name) => name.clone(),
-                None => continue,
-            }
-        } else {
-            key
-        };
-        let entry = by_name.entry(name).or_default();
-        for i in 0..9 {
-            entry.0[i] += prims.0[i];
-        }
-    }
+    // 名称域归并：快照 id 键解析名称（已删 Key 的贡献按生成语义丢弃）、
+    // 兑底名称键原样保留（subject 归并助手，与 insight 同一实现）。
+    let by_name = snap::api_key_reconcile_names(db, by_id)
+        .await
+        .map_err(response::db_error)?;
 
     let mut items: Vec<ApiKeyRaceRankItem> = Vec::new();
     for (name, prims) in by_name {

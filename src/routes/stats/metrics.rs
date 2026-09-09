@@ -4,24 +4,19 @@ use crate::stats_snapshot as snap;
 
 /// 指标端点共用：闭桶读快照（精确主体键）+ 兑底段实时，返回 6 指标原语和。
 /// subject_sql 追加 WHERE 片段与参数（如 `AND r.provider_id = ?`）。
-#[allow(clippy::too_many_arguments)]
 async fn metrics_prims(
     state: &AppState,
     start: i64,
     end: i64,
     snap_type: &str,
     snap_exact: Option<&str>,
-    snap_required: bool,
     extra_where: &str,
     extra_params: Vec<sea_orm::Value>,
 ) -> Result<super::rank_snap::Prims, String> {
     let mut cov = super::rank::rank_coverage(&state.db, start, end).await?;
     // 主体键解析失败（provider_model/api_key 已删）时快照贡献必须为空：
     // 若仍按全量主体行取数会把其它主体加进来，高估数字 —— 直接整窗兑底。
-    if snap_required && snap_exact.is_none() {
-        cov.snapshots.clear();
-        cov.live = vec![(start, end)];
-    }
+    snap::demote_if_unresolved(&mut cov, start, end, snap_type, snap_exact);
     let prim_list = rank_snap::prim_select_list();
     let grouped = |s: i64, e: i64| {
         let sql = format!(
@@ -117,25 +112,13 @@ pub(crate) async fn model_metrics(
 
     // 快照主体键：pm 主键（模型行）；无法解析（pm 已删）→ 快照贡献为空，
     // 兑底段按 provider+model 原文过滤，与旧语义一致。
-    let pm_id: Option<i64> = db
-        .query_one_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            format!(
-                "SELECT model_id AS v FROM provider_model \
-                 WHERE provider_id = {provider_id} AND provider_model_id = '{model_id}'"
-            ),
-        ))
-        .await
-        .ok()
-        .flatten()
-        .and_then(|row| row.try_get("", "v").ok());
+    let pm_key = snap::resolve_pm_key(db, provider_id, &model_id).await;
     let prims = match metrics_prims(
         &state,
         start,
         end,
         snap::ENTITY_MODEL,
-        pm_id.map(|v| v.to_string()).as_deref(),
-        true,
+        pm_key.as_deref(),
         " AND r.provider_id = ? AND r.model_id = ?",
         vec![provider_id.into(), model_id.clone().into()],
     )
@@ -213,22 +196,13 @@ pub(crate) async fn api_key_metrics(
     let db = &state.db;
 
     // 快照主体键：Key 主键（已删 Key 无法解析 → 快照贡献为空，兑底按原名兜底）。
-    let key_id: Option<i64> = db
-        .query_one_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            format!("SELECT id AS v FROM api_key WHERE name = '{api_key}'"),
-        ))
-        .await
-        .ok()
-        .flatten()
-        .and_then(|row| row.try_get("", "v").ok());
+    let key_id = snap::resolve_api_key_id(db, api_key).await;
     let prims = match metrics_prims(
         &state,
         start,
         end,
         snap::ENTITY_API_KEY,
-        key_id.map(|v| v.to_string()).as_deref(),
-        true,
+        key_id.as_deref(),
         " AND r.api_key_name = ?",
         vec![api_key.into()],
     )
@@ -308,7 +282,6 @@ pub(crate) async fn provider_metrics(
         end,
         snap::ENTITY_PROVIDER,
         Some(&provider_id.to_string()),
-        false,
         " AND r.provider_id = ?",
         vec![provider_id.into()],
     )
@@ -391,7 +364,6 @@ pub(crate) async fn virtual_model_metrics(
         end,
         snap::ENTITY_VIRTUAL_MODEL,
         Some(&virtual_model_id.to_string()),
-        false,
         " AND r.virtual_model_id = ?",
         vec![virtual_model_id.into()],
     )

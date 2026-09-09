@@ -22,14 +22,149 @@ pub(crate) const ALL_ENTITY_TYPES: [&str; 7] = [
     ENTITY_API_KEY_MODEL,
 ];
 
-/// 指标种类：可加和原语（跨桶加总后再算比率/均值）或闭桶标量（分位，逐桶使用
-/// 不跨桶加总）。
+// 指标种类说明：METRICS 表为可加和原语（跨桶加总后再算比率/均值；整数列以
+// REAL 存储，2^53 内无损）；分位标量（metrics::*_P50/90/95/99）为闭桶时对
+// 该桶原始值精确计算的标量，仅 hour/day 行，逐桶使用不跨桶加总。
+
+/// 可加和指标的集合归属。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MetricKind {
-    /// 加和/计数原语（整数列以 REAL 存储，2^53 内无损）。
-    Additive,
-    /// 闭桶时对该桶原始值精确计算的分位标量（仅 hour/day 行）。
-    Percentile,
+pub(crate) enum MetricSet {
+    /// 全量全集（表达式无 success 条件）。
+    All,
+    /// 成功全集（CASE WHEN success = 1 条件求和，与实时端点「WHERE success = 1
+    /// 后聚合」严格等价），但不在九原语读路径契约内。
+    Success,
+    /// 成功全集且属九原语契约（rank/metrics 读路径；表内顺序即契约顺序）。
+    SuccessPrim,
+}
+
+/// 可加和指标规格（读写两侧唯一事实源）：键 + SQL 表达式 + 集合归属。
+/// 生成端按全表单遍扫描固化；读侧按声明键序列取表达式拼 SELECT——
+/// 谓词文本只此一份，不再各端点手抄。
+pub(crate) struct MetricSpec {
+    pub(crate) key: &'static str,
+    pub(crate) expr: &'static str,
+    pub(crate) set: MetricSet,
+}
+
+/// 全部 16 个可加和指标（表序即生成端 SELECT 列序；九原语段顺序即
+/// rank_snap::Prims 下标契约——success_calls 起连续 9 个 SuccessPrim）。
+pub(crate) const METRICS: [MetricSpec; 16] = [
+    // 全量全集
+    MetricSpec {
+        key: metrics::CALLS,
+        expr: "COUNT(*)",
+        set: MetricSet::All,
+    },
+    MetricSpec {
+        key: metrics::FAIL_CALLS,
+        expr: "SUM(CASE WHEN r.success = 0 THEN 1 ELSE 0 END)",
+        set: MetricSet::All,
+    },
+    MetricSpec {
+        key: metrics::STREAM_CALLS,
+        expr: "SUM(CASE WHEN r.stream THEN 1 ELSE 0 END)",
+        set: MetricSet::All,
+    },
+    MetricSpec {
+        key: metrics::TOKENS_ALL,
+        expr: "SUM(r.total_tokens)",
+        set: MetricSet::All,
+    },
+    MetricSpec {
+        key: metrics::INPUT_TOKENS_ALL,
+        expr: "SUM(r.input_tokens)",
+        set: MetricSet::All,
+    },
+    MetricSpec {
+        key: metrics::CACHE_TOKENS_ALL,
+        expr: "SUM(r.input_cache_tokens)",
+        set: MetricSet::All,
+    },
+    // 九原语段（SuccessPrim，顺序契约：success_calls 起连续 9 个）
+    MetricSpec {
+        key: metrics::SUCCESS_CALLS,
+        expr: "SUM(CASE WHEN r.success = 1 THEN 1 ELSE 0 END)",
+        set: MetricSet::SuccessPrim,
+    },
+    MetricSpec {
+        key: metrics::TOTAL_TOKENS,
+        expr: "SUM(CASE WHEN r.success = 1 THEN r.total_tokens END)",
+        set: MetricSet::SuccessPrim,
+    },
+    MetricSpec {
+        key: metrics::INPUT_TOKENS,
+        expr: "SUM(CASE WHEN r.success = 1 THEN r.input_tokens END)",
+        set: MetricSet::SuccessPrim,
+    },
+    MetricSpec {
+        key: metrics::CACHE_TOKENS,
+        expr: "SUM(CASE WHEN r.success = 1 THEN r.input_cache_tokens END)",
+        set: MetricSet::SuccessPrim,
+    },
+    MetricSpec {
+        key: metrics::OUTPUT_TOKENS,
+        expr: "SUM(CASE WHEN r.success = 1 THEN r.output_tokens END)",
+        set: MetricSet::SuccessPrim,
+    },
+    MetricSpec {
+        key: metrics::TTFT_SUM,
+        expr: "SUM(CASE WHEN r.success = 1 THEN r.ttft END)",
+        set: MetricSet::SuccessPrim,
+    },
+    MetricSpec {
+        key: metrics::TTFT_N,
+        expr: "SUM(CASE WHEN r.success = 1 AND r.ttft IS NOT NULL THEN 1 ELSE 0 END)",
+        set: MetricSet::SuccessPrim,
+    },
+    MetricSpec {
+        key: metrics::REQUEST_TIME_SUM,
+        expr: "SUM(CASE WHEN r.success = 1 THEN r.request_time END)",
+        set: MetricSet::SuccessPrim,
+    },
+    MetricSpec {
+        key: metrics::TPS_TIME_SUM,
+        expr: "SUM(CASE WHEN r.success = 1 AND r.tps > 0 AND r.output_tokens > 0 \
+                      THEN r.output_tokens / r.tps ELSE 0 END)",
+        set: MetricSet::SuccessPrim,
+    },
+    // 成功全集（非九原语）
+    MetricSpec {
+        key: metrics::OUT_SEC_SUM,
+        expr: "SUM(CASE WHEN r.success = 1 AND r.output_tokens_time > 0 \
+                      THEN r.output_tokens / (r.output_tokens_time / 1000.0) ELSE 0 END)",
+        set: MetricSet::Success,
+    },
+];
+
+/// 全部可加和指标 (键, 表达式)：生成端单遍扫描固化用（表序即列序）。
+pub(crate) fn metric_exprs() -> impl Iterator<Item = (&'static str, &'static str)> {
+    METRICS.iter().map(|s| (s.key, s.expr))
+}
+
+/// 九原语 (键, 表达式)：rank/metrics 读路径契约（顺序固定，与 Prims 下标一致）。
+pub(crate) fn success_prims() -> impl Iterator<Item = (&'static str, &'static str)> {
+    METRICS
+        .iter()
+        .filter(|s| matches!(s.set, MetricSet::SuccessPrim))
+        .map(|s| (s.key, s.expr))
+}
+
+/// 按键查表达式（键均为 metrics 模块常量，查不到即程序错误）。
+pub(crate) fn expr_of(key: &str) -> &'static str {
+    METRICS
+        .iter()
+        .find(|s| s.key == key)
+        .map(|s| s.expr)
+        .unwrap_or_else(|| panic!("未注册的指标键: {key}"))
+}
+
+/// 按键序列拼 SELECT 列（"{expr} AS {key}"）：读侧 trend/series/summary SQL 用。
+pub(crate) fn select_list(keys: &[&str]) -> String {
+    keys.iter()
+        .map(|k| format!("{} AS {k}", expr_of(k)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// 指标值常量。命名约定：无后缀 = 成功请求全集（success = 1）；`_all` 后缀 =

@@ -126,18 +126,10 @@ async fn run_live_series(
     series: &mut [BucketSeries; 8],
     cal_level: Option<snap::Level>,
 ) -> Result<(), String> {
+    let select = snap::select_list(&SERIES_METRICS);
     for &(s, e) in segs {
         let sql = format!(
-            "SELECT {bucket_expr} AS bucket, COUNT(*) AS calls, \
-                    COALESCE(SUM(CASE WHEN r.success = 0 THEN 1 ELSE 0 END), 0) AS fail_calls, \
-                    COALESCE(SUM(CASE WHEN r.stream THEN 1 ELSE 0 END), 0) AS stream_calls, \
-                    COALESCE(SUM(CASE WHEN r.success = 1 THEN r.input_tokens END), 0) AS input_tokens, \
-                    COALESCE(SUM(CASE WHEN r.success = 1 THEN r.output_tokens END), 0) AS output_tokens, \
-                    COALESCE(SUM(CASE WHEN r.success = 1 THEN r.input_cache_tokens END), 0) AS cache_tokens, \
-                    COALESCE(SUM(r.total_tokens), 0) AS tokens_all, \
-                    COALESCE(SUM(CASE WHEN r.success = 1 AND r.output_tokens_time > 0 \
-                                      THEN r.output_tokens / (r.output_tokens_time / 1000.0) ELSE 0 END), 0) \
-                            AS out_sec_sum \
+            "SELECT {bucket_expr} AS bucket, {select} \
              FROM request r WHERE r.start_time >= {s} AND r.start_time < {e}{filter_sql} \
              GROUP BY bucket"
         );
@@ -424,8 +416,10 @@ pub(crate) async fn insight(
             params.push(v.clone());
         }
         let sql = format!(
-            "SELECT COALESCE(NULLIF(r.fail_reason, ''), '') AS reason, COUNT(*) AS count \
-             FROM request r WHERE {where_sql} AND r.success = 0 GROUP BY reason"
+            "SELECT COALESCE(NULLIF(r.fail_reason, ''), '') AS reason, \
+                    {} AS count \
+             FROM request r WHERE {where_sql} AND r.success = 0 GROUP BY reason",
+            snap::expr_of(snap::metrics::CALLS)
         );
         match db
             .query_all_raw(Statement::from_sql_and_values(
@@ -571,7 +565,14 @@ pub(crate) async fn insight(
         || query.virtual_model_id.is_some()
         || query.model_id.is_some()
         || query.api_key.is_some();
-    let mut key_map: std::collections::BTreeMap<String, i64> = Default::default();
+    let mut key_map: std::collections::BTreeMap<String, f64> = Default::default();
+    let key_count_sql = |where_clause: String| {
+        format!(
+            "SELECT r.api_key_name AS name, {} AS value FROM request r \
+             WHERE {where_clause} GROUP BY r.api_key_name",
+            snap::expr_of(snap::metrics::CALLS)
+        )
+    };
     if has_filter {
         let mut params: Vec<sea_orm::Value> = vec![window.start.into(), window.end.into()];
         let mut where_sql = String::from("r.start_time >= ? AND r.start_time < ?");
@@ -579,10 +580,7 @@ pub(crate) async fn insight(
         for v in filter_params.iter() {
             params.push(v.clone());
         }
-        let sql = format!(
-            "SELECT r.api_key_name AS name, COUNT(*) AS value FROM request r \
-             WHERE {where_sql} GROUP BY r.api_key_name"
-        );
+        let sql = key_count_sql(where_sql);
         match db
             .query_all_raw(Statement::from_sql_and_values(
                 DbBackend::Sqlite,
@@ -594,15 +592,21 @@ pub(crate) async fn insight(
             Ok(rows) => {
                 for row in &rows {
                     let name: String = row.try_get("", "name").unwrap_or_default();
-                    let value: i64 = row.try_get("", "value").unwrap_or(0);
-                    *key_map.entry(name).or_insert(0) += value;
+                    let value: f64 = row
+                        .try_get("", "value")
+                        .ok()
+                        .or_else(|| row.try_get::<i64>("", "value").ok().map(|v| v as f64))
+                        .unwrap_or(0.0);
+                    *key_map.entry(name).or_insert(0.0) += value;
                 }
             }
             Err(e) => return response::db_error(e.to_string()),
         }
     } else {
-        // 快照侧：api_key 行 calls 按 id 归并（闭桶；by_level 复用趋势段同一份）。
-        let mut by_id: std::collections::BTreeMap<String, f64> = Default::default();
+        // 快照侧 api_key 行 calls 按 id 归并、兑底侧按名称归并（同一 map 混合
+        // 键域），最后经 reconcile 统一折算名称域（已删 Key 快照贡献丢弃、
+        // 孤儿名称保留）。by_level 复用趋势段同一份。
+        let mut by_id: std::collections::HashMap<String, f64> = Default::default();
         for (level, frames) in &by_level {
             let rows = snap::snapshot_rows(
                 db,
@@ -618,23 +622,11 @@ pub(crate) async fn insight(
                 *by_id.entry(entity).or_insert(0.0) += value;
             }
         }
-        let id_keys: Vec<String> = by_id.keys().cloned().collect();
-        let names = match super::rank::resolve_names(db, "api_key", "id", "name", &id_keys).await {
-            Ok(map) => map,
-            Err(e) => return response::db_error(e),
-        };
-        for (key, value) in by_id {
-            let Some(name) = names.get(&key) else {
-                continue; // 已删 Key：快照闭桶贡献按生成语义丢弃
-            };
-            *key_map.entry(name.clone()).or_insert(0) += value.round() as i64;
-        }
         // 兑底侧（孤儿名称行保留）。
         for &(s, e) in &coverage.live {
-            let sql = format!(
-                "SELECT r.api_key_name AS name, COUNT(*) AS value FROM request r \
-                 WHERE r.start_time >= {s} AND r.start_time < {e}{filter_sql} GROUP BY r.api_key_name"
-            );
+            let sql = key_count_sql(format!(
+                "r.start_time >= {s} AND r.start_time < {e}{filter_sql}"
+            ));
             match db
                 .query_all_raw(Statement::from_sql_and_values(
                     DbBackend::Sqlite,
@@ -646,19 +638,27 @@ pub(crate) async fn insight(
                 Ok(rows) => {
                     for row in &rows {
                         let name: String = row.try_get("", "name").unwrap_or_default();
-                        let value: i64 = row.try_get("", "value").unwrap_or(0);
-                        *key_map.entry(name).or_insert(0) += value;
+                        let value: f64 = row
+                            .try_get("", "value")
+                            .ok()
+                            .or_else(|| row.try_get::<i64>("", "value").ok().map(|v| v as f64))
+                            .unwrap_or(0.0);
+                        *by_id.entry(name).or_insert(0.0) += value;
                     }
                 }
                 Err(e) => return response::db_error(e.to_string()),
             }
         }
+        key_map = match snap::api_key_reconcile_names(db, by_id).await {
+            Ok(map) => map,
+            Err(e) => return response::db_error(e),
+        };
     }
     let mut api_key_rank: Vec<ApiKeyRankItem> = key_map
         .into_iter()
         .map(|(api_key_name, value)| ApiKeyRankItem {
             api_key_name,
-            value,
+            value: value.round() as i64,
         })
         .collect();
     api_key_rank.sort_by_key(|item| std::cmp::Reverse(item.value));

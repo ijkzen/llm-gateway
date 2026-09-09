@@ -4,7 +4,7 @@
 
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement, TransactionTrait};
 
-use super::registry::metrics;
+use super::registry::{metric_exprs, metrics};
 use super::{Frame, percentile};
 
 /// 主体模式：key_expr 产出该模式的 entity 文本；映射不到（JOIN 为 NULL）的请求
@@ -57,111 +57,8 @@ const PATTERNS: [Pattern; 7] = [
     },
 ];
 
-/// 可加和指标 (别名, 表达式)：同一遍扫描产出全量与成功两个全集——成功全集用
-/// `CASE WHEN success = 1` 条件求和，与实时端点「WHERE success = 1 后聚合」
-/// 严格等价；无 success 条件的为全量全集口径。与 stats 端点 SQL 逐条对账
-/// （spec §指标注册表；TPS 分子 = 成功全集 SUM(output_tokens)，复用
-/// OUTPUT_TOKENS，故无独立 tps_out_sum）。
-const METRIC_EXPRS: [(&str, &str); 16] = [
-    // 全量全集
-    (metrics::CALLS, "COUNT(*)"),
-    (
-        metrics::FAIL_CALLS,
-        "SUM(CASE WHEN r.success = 0 THEN 1 ELSE 0 END)",
-    ),
-    (
-        metrics::STREAM_CALLS,
-        "SUM(CASE WHEN r.stream THEN 1 ELSE 0 END)",
-    ),
-    (metrics::TOKENS_ALL, "SUM(r.total_tokens)"),
-    (metrics::INPUT_TOKENS_ALL, "SUM(r.input_tokens)"),
-    (metrics::CACHE_TOKENS_ALL, "SUM(r.input_cache_tokens)"),
-    (
-        metrics::SUCCESS_CALLS,
-        "SUM(CASE WHEN r.success = 1 THEN 1 ELSE 0 END)",
-    ),
-    // 成功全集
-    (
-        metrics::TOTAL_TOKENS,
-        "SUM(CASE WHEN r.success = 1 THEN r.total_tokens END)",
-    ),
-    (
-        metrics::INPUT_TOKENS,
-        "SUM(CASE WHEN r.success = 1 THEN r.input_tokens END)",
-    ),
-    (
-        metrics::CACHE_TOKENS,
-        "SUM(CASE WHEN r.success = 1 THEN r.input_cache_tokens END)",
-    ),
-    (
-        metrics::OUTPUT_TOKENS,
-        "SUM(CASE WHEN r.success = 1 THEN r.output_tokens END)",
-    ),
-    (
-        metrics::TTFT_SUM,
-        "SUM(CASE WHEN r.success = 1 THEN r.ttft END)",
-    ),
-    (
-        metrics::TTFT_N,
-        "SUM(CASE WHEN r.success = 1 AND r.ttft IS NOT NULL THEN 1 ELSE 0 END)",
-    ),
-    (
-        metrics::REQUEST_TIME_SUM,
-        "SUM(CASE WHEN r.success = 1 THEN r.request_time END)",
-    ),
-    (
-        metrics::TPS_TIME_SUM,
-        "SUM(CASE WHEN r.success = 1 AND r.tps > 0 AND r.output_tokens > 0 \
-                  THEN r.output_tokens / r.tps ELSE 0 END)",
-    ),
-    (
-        metrics::OUT_SEC_SUM,
-        "SUM(CASE WHEN r.success = 1 AND r.output_tokens_time > 0 \
-                  THEN r.output_tokens / (r.output_tokens_time / 1000.0) ELSE 0 END)",
-    ),
-];
-
-/// 成功全集可加和指标原语（读路径兑底 SQL 与快照端共用，避免两套表达式漂移）：
-/// (指标键, 表达式)。表达式自带 success 条件（WHERE 再带 success=1 亦等价）。
-pub(crate) const SUCCESS_PRIM_EXPRS: [(&str, &str); 9] = [
-    (
-        metrics::SUCCESS_CALLS,
-        "SUM(CASE WHEN r.success = 1 THEN 1 ELSE 0 END)",
-    ),
-    (
-        metrics::TOTAL_TOKENS,
-        "SUM(CASE WHEN r.success = 1 THEN r.total_tokens END)",
-    ),
-    (
-        metrics::INPUT_TOKENS,
-        "SUM(CASE WHEN r.success = 1 THEN r.input_tokens END)",
-    ),
-    (
-        metrics::CACHE_TOKENS,
-        "SUM(CASE WHEN r.success = 1 THEN r.input_cache_tokens END)",
-    ),
-    (
-        metrics::OUTPUT_TOKENS,
-        "SUM(CASE WHEN r.success = 1 THEN r.output_tokens END)",
-    ),
-    (
-        metrics::TTFT_SUM,
-        "SUM(CASE WHEN r.success = 1 THEN r.ttft END)",
-    ),
-    (
-        metrics::TTFT_N,
-        "SUM(CASE WHEN r.success = 1 AND r.ttft IS NOT NULL THEN 1 ELSE 0 END)",
-    ),
-    (
-        metrics::REQUEST_TIME_SUM,
-        "SUM(CASE WHEN r.success = 1 THEN r.request_time END)",
-    ),
-    (
-        metrics::TPS_TIME_SUM,
-        "SUM(CASE WHEN r.success = 1 AND r.tps > 0 AND r.output_tokens > 0 \
-                  THEN r.output_tokens / r.tps ELSE 0 END)",
-    ),
-];
+// 可加和指标文本已升格至 registry::METRICS（读写两侧唯一事实源）；
+// 生成端经 metric_exprs() 取全表（表序即列序），读侧九原语经 success_prims()。
 
 /// 固化一个闭桶：可加和指标（7 主体模式）+ hour/day 分位标量，单事务幂等 upsert。
 ///
@@ -173,11 +70,10 @@ pub(crate) const SUCCESS_PRIM_EXPRS: [(&str, &str); 9] = [
 pub async fn finalize_bucket(db: &DatabaseConnection, frame: Frame) -> anyhow::Result<()> {
     let txn = db.begin().await?;
     // 哨兵先行：空桶标志 + 事务写锁早取（升级点无读快照）。非空桶被后续覆盖。
-    for (metric, _) in &METRIC_EXPRS {
+    for (metric, _) in metric_exprs() {
         upsert_row(&txn, frame, super::ENTITY_WHOLE, "", metric, 0.0).await?;
     }
-    let select_list = METRIC_EXPRS
-        .iter()
+    let select_list = metric_exprs()
         .map(|(metric, expr)| format!("{expr} AS {metric}"))
         .collect::<Vec<_>>()
         .join(", ");
@@ -203,7 +99,7 @@ pub async fn finalize_bucket(db: &DatabaseConnection, frame: Frame) -> anyhow::R
             let Some(entity) = row.try_get::<String>("", "entity").ok() else {
                 continue; // 映射不到（JOIN NULL）的请求不产主体行
             };
-            for (metric, _) in &METRIC_EXPRS {
+            for (metric, _) in metric_exprs() {
                 let value: f64 = row
                     .try_get("", metric)
                     .ok()
