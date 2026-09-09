@@ -164,8 +164,18 @@ pub(crate) const SUCCESS_PRIM_EXPRS: [(&str, &str); 9] = [
 ];
 
 /// 固化一个闭桶：可加和指标（7 主体模式）+ hour/day 分位标量，单事务幂等 upsert。
+///
+/// 事务第一个语句必须是写（先无条件写 whole 哨兵行）：SQLite WAL 下 DEFERRED
+/// 事务先读后写时，读快照期间若有其他连接提交过，首次写升级会立即报
+/// SQLITE_BUSY_SNAPSHOT（517 database is locked），busy_timeout 无效；写先行
+/// 则在无快照的干净点升级，该竞态结构性不可能。非空桶的真实聚合行随后
+/// upsert 覆盖哨兵（幂等，终态不变）。
 pub async fn finalize_bucket(db: &DatabaseConnection, frame: Frame) -> anyhow::Result<()> {
     let txn = db.begin().await?;
+    // 哨兵先行：空桶标志 + 事务写锁早取（升级点无读快照）。非空桶被后续覆盖。
+    for (metric, _) in &METRIC_EXPRS {
+        upsert_row(&txn, frame, super::ENTITY_WHOLE, "", metric, 0.0).await?;
+    }
     let select_list = METRIC_EXPRS
         .iter()
         .map(|(metric, expr)| format!("{expr} AS {metric}"))
@@ -189,14 +199,10 @@ pub async fn finalize_bucket(db: &DatabaseConnection, frame: Frame) -> anyhow::R
                 [frame.start.into(), frame.end.into()],
             ))
             .await?;
-        let mut wrote_whole = false;
         for row in rows {
             let Some(entity) = row.try_get::<String>("", "entity").ok() else {
                 continue; // 映射不到（JOIN NULL）的请求不产主体行
             };
-            if pattern.entity_type == super::ENTITY_WHOLE {
-                wrote_whole = true;
-            }
             for (metric, _) in &METRIC_EXPRS {
                 let value: f64 = row
                     .try_get("", metric)
@@ -204,12 +210,6 @@ pub async fn finalize_bucket(db: &DatabaseConnection, frame: Frame) -> anyhow::R
                     .or_else(|| row.try_get::<i64>("", metric).ok().map(|v| v as f64))
                     .unwrap_or(0.0);
                 upsert_row(&txn, frame, pattern.entity_type, &entity, metric, value).await?;
-            }
-        }
-        // 空桶哨兵：桶内无请求时 GROUP BY 无行，仍须写 whole 全 0 行（固化标志）。
-        if pattern.entity_type == super::ENTITY_WHOLE && !wrote_whole {
-            for (metric, _) in &METRIC_EXPRS {
-                upsert_row(&txn, frame, super::ENTITY_WHOLE, "", metric, 0.0).await?;
             }
         }
     }

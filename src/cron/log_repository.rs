@@ -283,10 +283,12 @@ impl CronJobLogRepository for SeaOrmCronJobLogRepository {
         // 保留区内最旧一条的 started_at 即清理阈值：删严格更旧的执行。
         let cutoff = runs[keep as usize - 1].started_at;
 
-        let txn = self.db.begin().await?;
-        // 只取应删的 run（阈值之前），不整表拉全量（S6）。
+        // 事务外先取应删 run_id：事务首语句必须是写（WAL 下事务内先读后写、
+        // 读快照期间他连接提交过时首次写升级报 database is locked；本函数随
+        // 每次任务执行触发，与 /v1 流量写并发）。
         use sea_orm::{ConnectionTrait, DbBackend, Statement};
-        let rows = txn
+        let rows = self
+            .db
             .query_all_raw(Statement::from_sql_and_values(
                 DbBackend::Sqlite,
                 "SELECT run_id FROM cron_job_runs WHERE job_name = ? AND started_at < ?",
@@ -297,16 +299,19 @@ impl CronJobLogRepository for SeaOrmCronJobLogRepository {
             .into_iter()
             .filter_map(|row| row.try_get::<String>("", "run_id").ok())
             .collect();
-        if !ids.is_empty() {
-            cron_job_log::Entity::delete_many()
-                .filter(cron_job_log::Column::RunId.is_in(ids.iter().map(|s| s.as_str())))
-                .exec(&txn)
-                .await?;
-            cron_job_run::Entity::delete_many()
-                .filter(cron_job_run::Column::RunId.is_in(ids.iter().map(|s| s.as_str())))
-                .exec(&txn)
-                .await?;
+        if ids.is_empty() {
+            return Ok(());
         }
+
+        let txn = self.db.begin().await?;
+        cron_job_log::Entity::delete_many()
+            .filter(cron_job_log::Column::RunId.is_in(ids.iter().map(|s| s.as_str())))
+            .exec(&txn)
+            .await?;
+        cron_job_run::Entity::delete_many()
+            .filter(cron_job_run::Column::RunId.is_in(ids.iter().map(|s| s.as_str())))
+            .exec(&txn)
+            .await?;
         txn.commit().await?;
         Ok(())
     }

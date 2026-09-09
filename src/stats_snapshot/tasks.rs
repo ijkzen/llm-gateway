@@ -382,4 +382,86 @@ mod tests {
                 .unwrap()
         );
     }
+
+    /// 并发写者回归：/v1 流量持续落 request 时，快照生成不得报 database is locked。
+    /// SQLite WAL 下 DEFERRED 事务先读后写，若读快照期间他连接提交过，事务内
+    /// 首次写升级会立即失败（SQLITE_BUSY_SNAPSHOT 517 / BUSY 5），busy_timeout
+    /// 无效——修复：finalize_bucket 事务首语句改为写（哨兵先行），升级发生在无
+    /// 读快照的干净点。必须用文件库（内存库无 WAL 语义，测不到该竞态）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn generation_survives_concurrent_request_writes() {
+        let _serial = test_lock().await;
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("probe.db").display()
+        );
+        let db = crate::db::connect(&url).await.unwrap();
+        let now = now_ms();
+        let (_older, closed) = closed_hour_frame(now);
+
+        // 闭桶内灌 25k 成功行：放大聚合 SELECT 耗时（即 517 竞态窗口）。
+        let start = closed.start + 1000;
+        for chunk in 0..50 {
+            let values = (0..500)
+                .map(|i| {
+                    let rid = chunk * 500 + i;
+                    format!(
+                        "('s{rid}', 1, 1, 'm', 0, 100, 0, 0.0, 1.0, {start}, {start}, 200, 1, 'k1')"
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            exec(
+                &db,
+                &format!(
+                    "INSERT INTO request (request_id, virtual_model_id, provider_id, model_id, stream, \
+                     ttft, input_cache_tokens, input_cache_rate, tps, start_time, end_time, \
+                     request_time, success, api_key_name) VALUES {values}"
+                ),
+            )
+            .await;
+        }
+
+        // 并发写者：模拟 /v1 请求持续落库（start_time ≈ now，永不落进已闭桶）。
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer_db = db.clone();
+        let writer_stop = stop.clone();
+        let writer = tokio::spawn(async move {
+            let mut i = 0u64;
+            while !writer_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let ts = now + (i % 50) as i64;
+                let sql = format!(
+                    "INSERT INTO request (request_id, virtual_model_id, provider_id, model_id, stream, \
+                     input_cache_tokens, input_cache_rate, tps, start_time, end_time, request_time, \
+                     success, api_key_name) VALUES ('w{i}', 1, 1, 'm', 0, 0, 0.0, 0.0, {ts}, {ts}, 100, 1, 'k1')"
+                );
+                let _ = writer_db.execute_unprepared(&sql).await;
+                i += 1;
+            }
+        });
+
+        // 无 meta → 每次从零全量回填，可重复制造竞态窗口。
+        let mut failure: Option<(usize, String)> = None;
+        for attempt in 1..=3 {
+            exec(&db, "DELETE FROM request_log_snapshot").await;
+            exec(&db, "DELETE FROM snapshot_meta").await;
+            if let Err(e) = run_snapshot_generation(&db).await {
+                failure = Some((attempt, format!("{e:#}")));
+                break;
+            }
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = writer.await;
+
+        if let Some((attempt, err)) = failure {
+            panic!("attempt {attempt} 失败：{err}");
+        }
+        assert!(
+            crate::stats_snapshot::bucket_finalized(&db, Level::Hour, closed.start)
+                .await
+                .unwrap(),
+            "快照应实际固化闭桶"
+        );
+    }
 }
