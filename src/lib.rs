@@ -18,6 +18,7 @@ pub mod response;
 pub mod routes;
 pub mod state;
 pub mod static_assets;
+pub mod stats_snapshot;
 pub mod usage;
 
 use std::sync::Arc;
@@ -213,9 +214,49 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         })
         .await;
 
+    // 统计快照生成/自愈 handler（ADR-0021）：进程级互斥在 tasks 内部（静态锁），
+    // handler 只负责调用与记录错误，不阻塞转发路径。
+    scheduler
+        .register_handler(crate::cron::seed::STATS_SNAPSHOT_JOB, {
+            Arc::new(|ctx: JobContext| {
+                Box::pin(async move {
+                    if let Err(e) = crate::stats_snapshot::run_snapshot_generation(&ctx.db).await {
+                        tracing::error!("统计快照生成失败：{e}");
+                    }
+                    Ok(())
+                })
+            })
+        })
+        .await;
+    scheduler
+        .register_handler(crate::cron::seed::STATS_SNAPSHOT_REBUILD_JOB, {
+            Arc::new(|ctx: JobContext| {
+                Box::pin(async move {
+                    if let Err(e) = crate::stats_snapshot::run_snapshot_heal(&ctx.db).await {
+                        tracing::error!("统计快照自愈失败：{e}");
+                    }
+                    Ok(())
+                })
+            })
+        })
+        .await;
+
     // 内置定时任务种子，与上面的 handler 注册一一对应。
     crate::cron::seed::ensure_usage_refresh_job(&db).await?;
     crate::cron::seed::ensure_failure_recovery_job(&db).await?;
+    crate::cron::seed::ensure_stats_snapshot_job(&db).await?;
+    crate::cron::seed::ensure_stats_snapshot_rebuild_job(&db).await?;
+
+    // 启动预热：首启全量回填/时区变更重算不等到下一个整点触发（与定时任务同一
+    // 进程级互斥，任务运行时本次自动跳过）。
+    {
+        let warmup_db = db.clone();
+        tokio::spawn(async move {
+            if let Err(e) = crate::stats_snapshot::run_snapshot_generation(&warmup_db).await {
+                tracing::warn!("统计快照启动预热失败：{e}");
+            }
+        });
+    }
 
     scheduler.load_from_db(&repo).await?;
     scheduler.start().await?;

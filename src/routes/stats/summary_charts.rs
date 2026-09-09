@@ -54,71 +54,6 @@ pub(crate) struct SummaryQuery {
     end_time: Option<i64>,
 }
 
-/// 全量历史累计（可选时间窗口过滤）：累计请求数、成功率、总计 token、加权缓存命中率。
-/// 不带 startTime/endTime 时保持全量聚合；两者同时提供时按 [start, end) 半开区间过滤。
-pub(crate) async fn summary(
-    State(state): State<AppState>,
-    Query(query): Query<SummaryQuery>,
-) -> impl IntoResponse {
-    let base_sql = r#"
-        SELECT COUNT(*) AS total_requests,
-               COALESCE(SUM(CASE WHEN success THEN 1 ELSE 0 END), 0) AS success_count,
-               COALESCE(SUM(total_tokens), 0) AS total_tokens,
-               COALESCE(SUM(input_tokens), 0) AS input_tokens,
-               COALESCE(SUM(input_cache_tokens), 0) AS cache_tokens
-        FROM request
-    "#;
-    let (sql, params): (String, Vec<sea_orm::Value>) = match (query.start_time, query.end_time) {
-        (None, None) => (base_sql.to_string(), Vec::new()),
-        (Some(start), Some(end)) if end > start => (
-            format!("{base_sql} WHERE start_time >= ? AND start_time < ?"),
-            vec![start.into(), end.into()],
-        ),
-        _ => {
-            return response::bad_request(AppSettings::lang_sync().tr(
-                "startTime 与 endTime 必须同时提供且 endTime 晚于 startTime",
-                "startTime and endTime must both be provided with endTime after startTime",
-            ));
-        }
-    };
-    let row = match state
-        .db
-        .query_one_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            sql,
-            params,
-        ))
-        .await
-    {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            return response::db_error(
-                AppSettings::lang_sync().tr("统计查询无结果", "stats query returned no rows"),
-            );
-        }
-        Err(e) => return response::db_error(e.to_string()),
-    };
-
-    let total_requests: i64 = row.try_get("", "total_requests").unwrap_or(0);
-    let success_count: i64 = row.try_get("", "success_count").unwrap_or(0);
-    let total_tokens: i64 = row.try_get("", "total_tokens").unwrap_or(0);
-    let input_tokens: i64 = row.try_get("", "input_tokens").unwrap_or(0);
-    let cache_tokens: i64 = row.try_get("", "cache_tokens").unwrap_or(0);
-
-    let success_rate = weighted_ratio(success_count as f64, total_requests as f64);
-    let cache_hit_rate = weighted_ratio(cache_tokens as f64, input_tokens as f64);
-
-    (
-        StatusCode::OK,
-        Json(Response::success(SummaryResponse {
-            total_requests,
-            success_rate,
-            total_tokens,
-            cache_hit_rate,
-        })),
-    )
-}
-
 /// 图表查询参数（全部可选；缺省回退「过去 24 小时」）。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,12 +74,277 @@ pub(crate) struct ChartsQuery {
     pub(crate) granularity: Option<String>,
 }
 
+use crate::stats_snapshot as snap;
+use chrono::Datelike;
+
+/// 汇总兑底段原始聚合（与旧 SQL 同口径：全量行 COUNT/SUM）。
+async fn summary_live(
+    db: &sea_orm::DatabaseConnection,
+    segs: &[(i64, i64)],
+) -> anyhow::Result<(i64, i64, i64, i64, i64)> {
+    let mut totals = (0i64, 0i64, 0i64, 0i64, 0i64);
+    for (s, e) in segs {
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    "SELECT COUNT(*) AS a, COALESCE(SUM(success), 0) AS b, \
+                            COALESCE(SUM(total_tokens), 0) AS c, \
+                            COALESCE(SUM(input_tokens), 0) AS d, \
+                            COALESCE(SUM(input_cache_tokens), 0) AS e \
+                     FROM request WHERE start_time >= {s} AND start_time < {e}"
+                ),
+            ))
+            .await?;
+        if let Some(row) = row {
+            totals.0 += row.try_get::<i64>("", "a").unwrap_or(0);
+            totals.1 += row.try_get::<i64>("", "b").unwrap_or(0);
+            totals.2 += row.try_get::<i64>("", "c").unwrap_or(0);
+            totals.3 += row.try_get::<i64>("", "d").unwrap_or(0);
+            totals.4 += row.try_get::<i64>("", "e").unwrap_or(0);
+        }
+    }
+    Ok(totals)
+}
+
+const SUMMARY_METRICS: [&str; 5] = [
+    snap::metrics::CALLS,
+    snap::metrics::SUCCESS_CALLS,
+    snap::metrics::TOKENS_ALL,
+    snap::metrics::INPUT_TOKENS_ALL,
+    snap::metrics::CACHE_TOKENS_ALL,
+];
+
+/// 全量历史累计（可选时间窗口过滤）：累计请求数、成功率、总计 token、加权缓存命中率。
+/// 闭桶（day 帧）读快照，其余兑底；数字与实时口径一致（快照只是加速层）。
+pub(crate) async fn summary(
+    State(state): State<AppState>,
+    Query(query): Query<SummaryQuery>,
+) -> impl IntoResponse {
+    // 无参数 = 全量历史（含起点之前与当前未闭/未来行）：兑底段上不封顶。
+    let all_time = query.start_time.is_none() && query.end_time.is_none();
+    let (start, end) = match (query.start_time, query.end_time) {
+        (Some(start), Some(end)) if end > start => (start, end),
+        (None, None) => (0, chrono::Utc::now().timestamp_millis()),
+        _ => {
+            return response::bad_request(AppSettings::lang_sync().tr(
+                "startTime 与 endTime 必须同时提供且 endTime 晚于 startTime",
+                "startTime and endTime must both be provided with endTime after startTime",
+            ));
+        }
+    };
+    let db = &state.db;
+    let offset = stats_tz_offset_minutes(Some(start));
+    let now = chrono::Utc::now().timestamp_millis();
+    let mut coverage = match snap::coverage(
+        db,
+        snap::Level::Day,
+        offset,
+        start,
+        end,
+        now,
+        snap::MARGIN_MS,
+    )
+    .await
+    {
+        Ok(cov) => match snap::trim_zero_prefix(db, cov).await {
+            Ok(cov) => cov,
+            Err(e) => return response::db_error(e.to_string()),
+        },
+        Err(e) => return response::db_error(e.to_string()),
+    };
+    if all_time {
+        // 全量语义上不封顶：now 之后的实时行也计入（旧 SQL 无上界）。
+        let last_end = coverage.live.last().map(|(_, e)| *e).unwrap_or(start);
+        if last_end < i64::MAX {
+            coverage.live.push((last_end.max(end), i64::MAX));
+        }
+    }
+
+    // 覆盖帧可能混含 day 帧（整闭日）与 hour 帧（今天 00:00 起已闭小时）：
+    // 按帧层级分组取 whole 行加总，任何层级都不可丢（兑底段只覆盖未闭部分）。
+    let mut by_level: std::collections::BTreeMap<snap::Level, Vec<snap::Frame>> =
+        std::collections::BTreeMap::new();
+    for frame in &coverage.snapshots {
+        by_level.entry(frame.level).or_default().push(*frame);
+    }
+    let mut sums = [0f64; 5];
+    for (level, frames) in &by_level {
+        let rows = match snap::snapshot_rows(
+            db,
+            *level,
+            frames,
+            snap::ENTITY_WHOLE,
+            Some(""),
+            &SUMMARY_METRICS,
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => return response::db_error(e.to_string()),
+        };
+        for (_, _, _, m, v) in rows {
+            if let Some(i) = SUMMARY_METRICS.iter().position(|x| *x == m) {
+                sums[i] += v;
+            }
+        }
+    }
+    let (l1, l2, l3, l4, l5) = match summary_live(db, &coverage.live).await {
+        Ok(v) => v,
+        Err(e) => return response::db_error(e.to_string()),
+    };
+
+    let total_requests = sums[0] as i64 + l1;
+    let success_count = sums[1] as i64 + l2;
+    let total_tokens = sums[2] as i64 + l3;
+    let input_tokens = sums[3] as i64 + l4;
+    let cache_tokens = sums[4] as i64 + l5;
+    (
+        StatusCode::OK,
+        Json(Response::success(SummaryResponse {
+            total_requests,
+            success_rate: weighted_ratio(success_count as f64, total_requests as f64),
+            total_tokens,
+            cache_hit_rate: weighted_ratio(cache_tokens as f64, input_tokens as f64),
+        })),
+    )
+}
+
+/// 过滤子句与参数（live SQL 共用；charts/insight 同级模块复用）。
+pub(crate) fn filter_parts(query: &ChartsQuery) -> (String, Vec<sea_orm::Value>) {
+    let mut sql = String::new();
+    let mut params: Vec<sea_orm::Value> = Vec::new();
+    if let Some(provider_id) = query.provider_id {
+        sql.push_str(" AND r.provider_id = ?");
+        params.push(provider_id.into());
+    }
+    if let Some(virtual_model_id) = query.virtual_model_id {
+        sql.push_str(" AND r.virtual_model_id = ?");
+        params.push(virtual_model_id.into());
+    }
+    if let Some(model_id) = query.model_id.as_deref() {
+        sql.push_str(" AND r.model_id = ?");
+        params.push(model_id.into());
+    }
+    if let Some(api_key) = query.api_key.as_deref() {
+        sql.push_str(" AND r.api_key_name = ?");
+        params.push(api_key.into());
+    }
+    (sql, params)
+}
+
+/// 本地历法起点（epoch ms）：naive(y, m, 1) 0 点 − offset（与快照桶对齐）。
+fn period_start_ms(y: i32, m: u32, off_ms: i64) -> Option<i64> {
+    chrono::NaiveDate::from_ymd_opt(y, m, 1)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|dt| dt.and_utc().timestamp_millis() - off_ms)
+}
+
+/// 趋势主体解析（快照侧）：页面实际使用的单维过滤形态 → (entity_type, 键)。
+/// None = 该形态不落快照（整窗兑底，保证正确）。charts/insight 同级模块复用。
+pub(crate) async fn trend_entity(
+    db: &sea_orm::DatabaseConnection,
+    query: &ChartsQuery,
+) -> Option<(&'static str, Option<String>)> {
+    match (
+        query.provider_id,
+        query.virtual_model_id,
+        query.model_id.as_deref(),
+        query.api_key.as_deref(),
+    ) {
+        (None, None, None, None) => Some((snap::ENTITY_WHOLE, None)),
+        (Some(p), None, None, None) => Some((snap::ENTITY_PROVIDER, Some(p.to_string()))),
+        (Some(p), None, Some(m), None) => {
+            let id = db
+                .query_one_raw(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT model_id AS v FROM provider_model \
+                         WHERE provider_id = {p} AND provider_model_id = '{m}'"
+                    ),
+                ))
+                .await
+                .ok()?
+                .and_then(|row| row.try_get::<i64>("", "v").ok());
+            Some((snap::ENTITY_MODEL, id.map(|v| v.to_string())))
+        }
+        (None, Some(vm), None, None) => Some((snap::ENTITY_VIRTUAL_MODEL, Some(vm.to_string()))),
+        (None, None, None, Some(key)) => {
+            let id = db
+                .query_one_raw(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!("SELECT id AS v FROM api_key WHERE name = '{key}'"),
+                ))
+                .await
+                .ok()?
+                .and_then(|row| row.try_get::<i64>("", "v").ok());
+            Some((snap::ENTITY_API_KEY, id.map(|v| v.to_string())))
+        }
+        _ => None,
+    }
+}
+
+/// 分布主体解析：过滤形态 → 分布行模式（与生成端一致）。
+/// 返回 (entity_type, 精确 entity 值, provider 过滤, vm 过滤, api_key 过滤)。
+async fn distribution_pattern(
+    db: &sea_orm::DatabaseConnection,
+    query: &ChartsQuery,
+) -> Option<(
+    &'static str,
+    Option<String>,
+    Option<i32>,
+    Option<i32>,
+    Option<i32>,
+)> {
+    match (
+        query.provider_id,
+        query.virtual_model_id,
+        query.model_id.as_deref(),
+        query.api_key.as_deref(),
+    ) {
+        (None, None, None, None) => Some((snap::ENTITY_MODEL, None, None, None, None)),
+        (Some(p), None, None, None) => Some((snap::ENTITY_MODEL, None, Some(p), None, None)),
+        (Some(p), None, Some(m), None) => {
+            let id = db
+                .query_one_raw(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT model_id AS v FROM provider_model \
+                         WHERE provider_id = {p} AND provider_model_id = '{m}'"
+                    ),
+                ))
+                .await
+                .ok()?
+                .and_then(|row| row.try_get::<i64>("", "v").ok());
+            Some((
+                snap::ENTITY_MODEL,
+                id.map(|v| v.to_string()),
+                None,
+                None,
+                None,
+            ))
+        }
+        (None, Some(vm), None, None) => Some((snap::ENTITY_VM_MEMBER, None, None, Some(vm), None)),
+        (None, None, None, Some(key)) => {
+            let id = db
+                .query_one_raw(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!("SELECT id AS v FROM api_key WHERE name = '{key}'"),
+                ))
+                .await
+                .ok()?
+                .and_then(|row| row.try_get::<i64>("", "v").ok())
+                .map(|v| v as i32);
+            Some((snap::ENTITY_API_KEY_MODEL, None, None, None, id))
+        }
+        _ => None,
+    }
+}
+
 /// 图表数据：调用/ token 的趋势 + 按上游模型的分布。
-///
-/// 支持可选 startTime/endTime（缺省回退过去 24 小时）与 providerId 过滤；
-/// 显式 granularity 时按设置表时区的自然边界分桶：
-/// 小时/天桶对齐本地整点/午夜，月/年桶按自然月/年归并；granularity 缺省时
-/// 按窗口长度回退（≤48h 小时桶、≤62 天天桶、其余 30 天块）。
+/// 支持可选 startTime/endTime（缺省回退过去 24 小时）与各维度过滤；
+/// 显式 hour/day/month/year 桶且过滤形态可落快照时：闭桶读快照 + 兑底合并；
+/// 其余（30 天块、不支持形态、缺快照）整窗兑底，数字与实时口径一致。
 pub(crate) async fn charts(
     State(state): State<AppState>,
     Query(query): Query<ChartsQuery>,
@@ -154,162 +354,518 @@ pub(crate) async fn charts(
         Err(msg) => return response::bad_request(msg),
     };
     let tz_offset_minutes = stats_tz_offset_minutes(query.start_time);
-    let tz = chrono::FixedOffset::east_opt(tz_offset_minutes * 60)
-        .unwrap_or_else(|| chrono::FixedOffset::east_opt(0).expect("0 偏移恒有效"));
     let window = resolve_chart_window(
         query.start_time,
         query.end_time,
         explicit_granularity,
         tz_offset_minutes,
     );
-    let (window_start, window_end, granularity) = (window.start, window.end, window.granularity);
-
-    // WHERE 公共条件：时间窗口（半开）+ 可选供应商过滤。
-    let mut where_sql = String::from("r.start_time >= ? AND r.start_time < ?");
-    let mut params: Vec<sea_orm::Value> = vec![window_start.into(), window_end.into()];
-    if let Some(provider_id) = query.provider_id {
-        where_sql.push_str(" AND r.provider_id = ?");
-        params.push(provider_id.into());
-    }
-    if let Some(virtual_model_id) = query.virtual_model_id {
-        where_sql.push_str(" AND r.virtual_model_id = ?");
-        params.push(virtual_model_id.into());
-    }
-    if let Some(model_id) = query.model_id {
-        where_sql.push_str(" AND r.model_id = ?");
-        params.push(model_id.into());
-    }
-    if let Some(api_key) = query.api_key.as_deref() {
-        where_sql.push_str(" AND r.api_key_name = ?");
-        params.push(api_key.into());
-    }
-
-    // 月/年粒度：SQL 按本地日桶聚合，Rust 侧再归并自然月/年。
-    let bucket_expr = window.bucket_expr();
-
-    let trend_sql = |value_expr: &str| {
-        format!(
-            "SELECT {bucket_expr} AS bucket, {value_expr} AS value \
-             FROM request r WHERE {where_sql} GROUP BY bucket"
-        )
-    };
-    let model_sql = |value_expr: &str| {
-        format!(
-            "SELECT COALESCE(p.name, '') AS provider_name, r.model_id, {value_expr} AS value \
-             FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
-             WHERE {where_sql} GROUP BY p.name, r.model_id"
-        )
-    };
-
     let db = &state.db;
-    let (call_rows, token_rows, call_model_rows, token_model_rows) = match tokio::try_join!(
-        db.query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            trend_sql("COUNT(*)"),
-            params.clone(),
-        )),
-        db.query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            trend_sql("COALESCE(SUM(r.total_tokens), 0)"),
-            params.clone(),
-        )),
-        db.query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            model_sql("COUNT(*)"),
-            params.clone(),
-        )),
-        db.query_all_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            model_sql("COALESCE(SUM(r.total_tokens), 0)"),
-            params.clone(),
-        )),
-    ) {
-        Ok(rows) => rows,
-        Err(e) => return response::db_error(e.to_string()),
+    let now = chrono::Utc::now().timestamp_millis();
+    let month_mode = matches!(window.granularity, Granularity::Month | Granularity::Year);
+
+    // 快照粒度：显式 hour/day/month/year 且与桶对齐的查询才走快照。
+    let snap_level = match (window.granularity, window.bucket_ms) {
+        (Granularity::Hour, b) if b == HOUR_MS => Some(snap::Level::Hour),
+        (Granularity::Day, b) if b == DAY_MS => Some(snap::Level::Day),
+        (Granularity::Month, _) => Some(snap::Level::Month),
+        (Granularity::Year, _) => Some(snap::Level::Year),
+        _ => None,
     };
 
-    // 桶填充：从窗口起点所在桶到终点所在桶，按桶粒度对齐。
-    let (call_trend, token_trend) = if matches!(granularity, Granularity::Month | Granularity::Year)
-    {
-        // 月/年：先按本地日索引收集，再归并自然月/年（含窗口内补零）。
-        let collect = |rows: &[sea_orm::QueryResult]| {
-            rows.iter()
-                .filter_map(|row| {
-                    let bucket: i64 = row.try_get("", "bucket").ok()?;
-                    let value: i64 = row.try_get("", "value").ok()?;
-                    Some((bucket, value))
-                })
-                .collect::<Vec<_>>()
+    let supported = trend_entity(db, &query).await.is_some()
+        && distribution_pattern(db, &query).await.is_some();
+    let coverage = match (snap_level, supported) {
+        (Some(level), true) => {
+            match snap::coverage(
+                db,
+                level,
+                tz_offset_minutes,
+                window.start,
+                window.end,
+                now,
+                snap::MARGIN_MS,
+            )
+            .await
+            {
+                Ok(cov) => match snap::trim_zero_prefix(db, cov).await {
+                    Ok(cov) => cov,
+                    Err(e) => return response::db_error(e.to_string()),
+                },
+                Err(e) => return response::db_error(e.to_string()),
+            }
+        }
+        _ => snap::Coverage {
+            snapshots: vec![],
+            live: vec![(window.start, window.end)],
+        },
+    };
+
+    let result = charts_merge(db, &query, &window, tz_offset_minutes, month_mode, coverage).await;
+    match result {
+        Ok(charts) => (StatusCode::OK, Json(Response::success(charts))),
+        Err(e) => response::db_error(e),
+    }
+}
+
+/// 图表合并主流程：闭桶贡献（快照行按桶记账）+ 兑底贡献（每段分桶 SQL）
+/// 加总后按粒度补零输出，并计算按模型分布。
+#[allow(clippy::too_many_arguments)]
+async fn charts_merge(
+    db: &sea_orm::DatabaseConnection,
+    query: &ChartsQuery,
+    window: &ChartWindow,
+    tz_offset_minutes: i32,
+    month_mode: bool,
+    coverage: snap::Coverage,
+) -> Result<ChartsResponse, String> {
+    let off_ms = i64::from(tz_offset_minutes) * 60_000;
+    let bucket_ms = window.bucket_ms;
+    let (filter_sql, filter_params) = filter_parts(query);
+
+    // 趋势桶记账：hour/day → 桶索引；month/year → (本地年, 月|0)。
+    let (mut call_idx, mut token_idx) = (
+        std::collections::BTreeMap::<i64, f64>::new(),
+        std::collections::BTreeMap::<i64, f64>::new(),
+    );
+    let (mut call_period, mut token_period) = (
+        std::collections::BTreeMap::<(i32, u32), f64>::new(),
+        std::collections::BTreeMap::<(i32, u32), f64>::new(),
+    );
+    let key_of_ts = |ts: i64| -> Option<(i32, u32)> {
+        let wall = chrono::DateTime::from_timestamp_millis(ts + off_ms)?;
+        if matches!(window.granularity, Granularity::Month) {
+            Some((wall.year(), wall.month()))
+        } else {
+            Some((wall.year(), 0))
+        }
+    };
+
+    // 快照贡献：帧起点归属到查询桶。
+    let mut by_level: std::collections::BTreeMap<snap::Level, Vec<snap::Frame>> =
+        std::collections::BTreeMap::new();
+    for frame in &coverage.snapshots {
+        by_level.entry(frame.level).or_default().push(*frame);
+    }
+    let (entity_type, exact_entity) = match trend_entity(db, query).await {
+        Some(v) => v,
+        None => (snap::ENTITY_WHOLE, None),
+    };
+    let add_period =
+        |map: &mut std::collections::BTreeMap<(i32, u32), f64>, key: (i32, u32), v: f64| {
+            *map.entry(key).or_insert(0.0) += v;
         };
-        let (starts, call_values, token_values) = merge_natural_periods(
-            &collect(&call_rows),
-            &collect(&token_rows),
-            window_start,
-            window_end,
-            tz,
-            matches!(granularity, Granularity::Month),
-        );
-        let call_trend = starts
-            .iter()
-            .zip(call_values)
-            .map(|(&bucket_start, value)| TrendPoint {
-                bucket_start,
-                value,
-            })
-            .collect::<Vec<_>>();
-        let token_trend = starts
-            .iter()
-            .zip(token_values)
-            .map(|(&bucket_start, value)| TrendPoint {
-                bucket_start,
-                value,
-            })
-            .collect::<Vec<_>>();
-        (call_trend, token_trend)
+    let add_idx = |map: &mut std::collections::BTreeMap<i64, f64>, idx: i64, v: f64| {
+        *map.entry(idx).or_insert(0.0) += v;
+    };
+    for (level, frames) in &by_level {
+        let rows = snap::snapshot_rows(
+            db,
+            *level,
+            frames,
+            entity_type,
+            exact_entity.as_deref(),
+            &["calls", "tokens_all"],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        for (start, _, _, metric, value) in rows {
+            if month_mode {
+                if let Some(key) = key_of_ts(start) {
+                    if metric == "calls" {
+                        add_period(&mut call_period, key, value);
+                    } else {
+                        add_period(&mut token_period, key, value);
+                    }
+                }
+            } else {
+                let idx = (start + off_ms).div_euclid(bucket_ms);
+                if metric == "calls" {
+                    add_idx(&mut call_idx, idx, value);
+                } else {
+                    add_idx(&mut token_idx, idx, value);
+                }
+            }
+        }
+    }
+
+    // 兑底贡献：每段一条分桶 SQL（与旧实现同一 bucket 表达式/口径）。
+    let bucket_expr = window.bucket_expr();
+    let trend_sql = |value_expr: &str, seg: (i64, i64)| {
+        format!(
+            "SELECT {bucket_expr} AS bucket, {value_expr} AS value FROM request r \
+             WHERE r.start_time >= {} AND r.start_time < {}{filter_sql} GROUP BY bucket",
+            seg.0, seg.1
+        )
+    };
+    let run_live = async |value_expr: &str,
+                          idx_map: &mut std::collections::BTreeMap<i64, f64>,
+                          period_map: &mut std::collections::BTreeMap<(i32, u32), f64>|
+           -> Result<(), String> {
+        for &(s, e) in &coverage.live {
+            let sql = trend_sql(value_expr, (s, e));
+            // 段边界已是字面量，只绑定过滤占位符（顺序与 filter_sql 一致）。
+            let rows = db
+                .query_all_raw(Statement::from_sql_and_values(
+                    DbBackend::Sqlite,
+                    sql,
+                    filter_params.clone(),
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let bucket: i64 = row.try_get("", "bucket").unwrap_or(0);
+                let value: f64 = row
+                    .try_get("", "value")
+                    .ok()
+                    .or_else(|| row.try_get::<i64>("", "value").ok().map(|v| v as f64))
+                    .unwrap_or(0.0);
+                if month_mode {
+                    // bucket = 本地日索引（bucket_expr 月/年路径），日起点转 (y, m)。
+                    let wall = chrono::DateTime::from_timestamp_millis(bucket * DAY_MS);
+                    if let Some(wall) = wall {
+                        let key = if matches!(window.granularity, Granularity::Month) {
+                            (wall.year(), wall.month())
+                        } else {
+                            (wall.year(), 0)
+                        };
+                        *period_map.entry(key).or_insert(0.0) += value;
+                    }
+                } else {
+                    *idx_map.entry(bucket).or_insert(0.0) += value;
+                }
+            }
+        }
+        Ok(())
+    };
+    run_live("COUNT(*)", &mut call_idx, &mut call_period).await?;
+    run_live(
+        "COALESCE(SUM(r.total_tokens), 0)",
+        &mut token_idx,
+        &mut token_period,
+    )
+    .await?;
+
+    // 趋势按粒度补零输出（与旧实现同形状：bucket_range 全补 / 自然月年全补）。
+    let call_trend;
+    let token_trend;
+    if month_mode {
+        let fill_periods = |map: &std::collections::BTreeMap<(i32, u32), f64>| -> Vec<TrendPoint> {
+            let (Some(first), Some(last)) = (
+                chrono::DateTime::from_timestamp_millis(window.start + off_ms),
+                chrono::DateTime::from_timestamp_millis(window.end - 1 + off_ms),
+            ) else {
+                return Vec::new();
+            };
+            let mut out = Vec::new();
+            if matches!(window.granularity, Granularity::Month) {
+                let mut y = first.year();
+                let mut m = first.month();
+                let (ly, lm) = (last.year(), last.month());
+                loop {
+                    if let Some(start) = period_start_ms(y, m, off_ms) {
+                        out.push(TrendPoint {
+                            bucket_start: start,
+                            value: map.get(&(y, m)).copied().unwrap_or(0.0).round() as i64,
+                        });
+                    }
+                    if (y, m) == (ly, lm) {
+                        break;
+                    }
+                    m += 1;
+                    if m > 12 {
+                        m = 1;
+                        y += 1;
+                    }
+                }
+            } else {
+                for y in first.year()..=last.year() {
+                    if let Some(start) = period_start_ms(y, 1, off_ms) {
+                        out.push(TrendPoint {
+                            bucket_start: start,
+                            value: map.get(&(y, 0)).copied().unwrap_or(0.0).round() as i64,
+                        });
+                    }
+                }
+            }
+            out
+        };
+        call_trend = fill_periods(&call_period);
+        token_trend = fill_periods(&token_period);
     } else {
-        // 小时/天：直接按桶索引区间补零（桶对齐本地边界，tz 偏移已并入表达式）。
         let buckets = window.bucket_range();
-        let fill_trend = |map: &std::collections::HashMap<i64, i64>| {
+        let fill_idx = |map: &std::collections::BTreeMap<i64, f64>| -> Vec<TrendPoint> {
             buckets
                 .clone()
                 .map(|bucket| TrendPoint {
                     bucket_start: window.bucket_start_ms(bucket),
-                    value: map.get(&bucket).copied().unwrap_or(0),
+                    value: map.get(&bucket).copied().unwrap_or(0.0).round() as i64,
                 })
-                .collect::<Vec<_>>()
+                .collect()
         };
-        let mut call_counts = std::collections::HashMap::new();
-        for row in &call_rows {
-            let bucket: i64 = row.try_get("", "bucket").unwrap_or(0);
-            let value: i64 = row.try_get("", "value").unwrap_or(0);
-            call_counts.insert(bucket, value);
-        }
-        let mut token_sums = std::collections::HashMap::new();
-        for row in &token_rows {
-            let bucket: i64 = row.try_get("", "bucket").unwrap_or(0);
-            let value: i64 = row.try_get("", "value").unwrap_or(0);
-            token_sums.insert(bucket, value);
-        }
-        (fill_trend(&call_counts), fill_trend(&token_sums))
-    };
+        call_trend = fill_idx(&call_idx);
+        token_trend = fill_idx(&token_idx);
+    }
 
-    let to_model_values = |rows: Vec<sea_orm::QueryResult>| {
-        rows.iter()
-            .map(|row| ModelValue {
-                provider_name: row.try_get("", "provider_name").unwrap_or_default(),
-                model_id: row.try_get("", "model_id").unwrap_or_default(),
-                value: row.try_get("", "value").unwrap_or(0),
-            })
+    let (call_by_model, token_by_model) =
+        model_distribution(db, query, &coverage, tz_offset_minutes).await?;
+
+    Ok(ChartsResponse {
+        call_trend,
+        call_by_model,
+        token_trend,
+        token_by_model,
+    })
+}
+
+/// 分布：快照闭桶段按主体行（model / vm_member / api_key_model）加总 +
+/// 兑底段按 (p.name, r.model_id) 分组加总；显示键统一为 (供应商名, 模型 ID)。
+async fn model_distribution(
+    db: &sea_orm::DatabaseConnection,
+    query: &ChartsQuery,
+    coverage: &snap::Coverage,
+    _tz_offset_minutes: i32,
+) -> Result<(Vec<ModelValue>, Vec<ModelValue>), String> {
+    let (entity_type, exact_entity, provider_filter, vm_filter, key_filter) =
+        match distribution_pattern(db, query).await {
+            Some(v) => v,
+            None => (snap::ENTITY_MODEL, None, None, None, None),
+        };
+    let mut by_entity: std::collections::BTreeMap<String, (f64, f64)> =
+        std::collections::BTreeMap::new();
+    let mut by_level: std::collections::BTreeMap<snap::Level, Vec<snap::Frame>> =
+        std::collections::BTreeMap::new();
+    for frame in &coverage.snapshots {
+        by_level.entry(frame.level).or_default().push(*frame);
+    }
+    for (level, frames) in &by_level {
+        let rows = snap::snapshot_rows(
+            db,
+            *level,
+            frames,
+            entity_type,
+            exact_entity.as_deref(),
+            &["calls", "tokens_all"],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        for (_, _, entity, metric, value) in rows {
+            let entry = by_entity.entry(entity).or_insert((0.0, 0.0));
+            if metric == "calls" {
+                entry.0 += value;
+            } else {
+                entry.1 += value;
+            }
+        }
+    }
+
+    // 主体文本 → 展示 (供应商名, 模型 ID)；复合主体取逗号后段（pm id）。
+    let pm_key_of = |entity: &str| -> Option<String> {
+        if entity_type == snap::ENTITY_MODEL {
+            Some(entity.to_string())
+        } else {
+            entity.rsplit_once(',').map(|(_, pm)| pm.to_string())
+        }
+    };
+    let pm_keys: Vec<String> = by_entity.keys().filter_map(|e| pm_key_of(e)).collect();
+    let mut display = std::collections::HashMap::<String, (String, String)>::new();
+    if !pm_keys.is_empty() {
+        let in_list = pm_keys
+            .iter()
+            .map(|k| format!("'{k}'"))
             .collect::<Vec<_>>()
-    };
+            .join(", ");
+        let mut sql = format!(
+            "SELECT CAST(pm.model_id AS TEXT) AS k, COALESCE(p.name, '') AS n, \
+                    pm.provider_model_id AS mid \
+             FROM provider_model pm LEFT JOIN provider p ON p.id = pm.provider_id \
+             WHERE CAST(pm.model_id AS TEXT) IN ({in_list})"
+        );
+        if let Some(p) = provider_filter {
+            sql.push_str(&format!(" AND pm.provider_id = {p}"));
+        }
+        let rows = db
+            .query_all_raw(Statement::from_string(DbBackend::Sqlite, sql))
+            .await
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let k: String = row.try_get("", "k").unwrap_or_default();
+            let n: String = row.try_get("", "n").unwrap_or_default();
+            let mid: String = row.try_get("", "mid").unwrap_or_default();
+            display.insert(k, (n, mid));
+        }
+    }
 
-    (
-        StatusCode::OK,
-        Json(Response::success(ChartsResponse {
-            call_trend,
-            call_by_model: to_model_values(call_model_rows),
-            token_trend,
-            token_by_model: to_model_values(token_model_rows),
-        })),
-    )
+    let mut result: std::collections::BTreeMap<(String, String), (f64, f64)> =
+        std::collections::BTreeMap::new();
+    for (entity, (calls, tokens)) in by_entity {
+        if let Some(vm) = vm_filter {
+            let ok = entity
+                .split_once(',')
+                .map(|(v, _)| v == vm.to_string())
+                .unwrap_or(false);
+            if !ok {
+                continue;
+            }
+        }
+        if let Some(key_id) = key_filter {
+            let ok = entity
+                .split_once(',')
+                .map(|(k, _)| k == key_id.to_string())
+                .unwrap_or(false);
+            if !ok {
+                continue;
+            }
+        }
+        let Some(pm_key) = pm_key_of(&entity) else {
+            continue;
+        };
+        let Some((name, model_id)) = display.get(&pm_key) else {
+            continue; // pm 已删：与生成端「映射不到不产行」同语义
+        };
+        let entry = result
+            .entry((name.clone(), model_id.clone()))
+            .or_insert((0.0, 0.0));
+        entry.0 += calls;
+        entry.1 += tokens;
+    }
+
+    // 兑底贡献：与旧 SQL 同分组（p.name, r.model_id）。
+    let (filter_sql, filter_params) = filter_parts(query);
+    let model_sql = |value_expr: &str, seg: (i64, i64)| {
+        format!(
+            "SELECT COALESCE(p.name, '') AS provider_name, r.model_id, {value_expr} AS value \
+             FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
+             WHERE r.start_time >= {} AND r.start_time < {}{filter_sql} \
+             GROUP BY p.name, r.model_id",
+            seg.0, seg.1
+        )
+    };
+    let mut live_calls: std::collections::BTreeMap<(String, String), f64> = Default::default();
+    let mut live_tokens: std::collections::BTreeMap<(String, String), f64> = Default::default();
+    let run_live = async |value_expr: &str,
+                          map: &mut std::collections::BTreeMap<(String, String), f64>|
+           -> Result<(), String> {
+        for &(s, e) in &coverage.live {
+            let sql = model_sql(value_expr, (s, e));
+            let rows = db
+                .query_all_raw(Statement::from_sql_and_values(
+                    DbBackend::Sqlite,
+                    sql,
+                    filter_params.clone(),
+                ))
+                .await
+                .map_err(|e| e.to_string())?;
+            for row in rows {
+                let name: String = row.try_get("", "provider_name").unwrap_or_default();
+                let model: String = row.try_get("", "model_id").unwrap_or_default();
+                let value: f64 = row
+                    .try_get("", "value")
+                    .ok()
+                    .or_else(|| row.try_get::<i64>("", "value").ok().map(|v| v as f64))
+                    .unwrap_or(0.0);
+                *map.entry((name, model)).or_insert(0.0) += value;
+            }
+        }
+        Ok(())
+    };
+    run_live("COUNT(*)", &mut live_calls).await?;
+    run_live("COALESCE(SUM(r.total_tokens), 0)", &mut live_tokens).await?;
+
+    let mut call_by_model: Vec<ModelValue> = Vec::new();
+    let mut token_by_model: Vec<ModelValue> = Vec::new();
+    let mut keys: Vec<(String, String)> = result
+        .keys()
+        .cloned()
+        .chain(live_calls.keys().cloned())
+        .chain(live_tokens.keys().cloned())
+        .collect();
+    keys.sort();
+    keys.dedup();
+    for (name, model) in keys {
+        let (c, t) = result
+            .get(&(name.clone(), model.clone()))
+            .copied()
+            .unwrap_or((0.0, 0.0));
+        let lc = live_calls
+            .get(&(name.clone(), model.clone()))
+            .copied()
+            .unwrap_or(0.0);
+        let lt = live_tokens
+            .get(&(name.clone(), model.clone()))
+            .copied()
+            .unwrap_or(0.0);
+        let call_total = (c + lc).round() as i64;
+        let token_total = (t + lt).round() as i64;
+        if call_total == 0 && token_total == 0 {
+            continue;
+        }
+        call_by_model.push(ModelValue {
+            provider_name: name.clone(),
+            model_id: model.clone(),
+            value: call_total,
+        });
+        token_by_model.push(ModelValue {
+            provider_name: name,
+            model_id: model,
+            value: token_total,
+        });
+    }
+    Ok((call_by_model, token_by_model))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::ConnectionTrait;
+
+    const HOUR_MS: i64 = 3_600_000;
+
+    async fn test_db() -> sea_orm::DatabaseConnection {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.db");
+        let url = format!("sqlite:///{}?mode=rwc", path.display());
+        let db = crate::db::connect(&url).await.unwrap();
+        let ts = "2024-01-01T00:00:00Z";
+        db.execute_unprepared(&format!(
+            "INSERT INTO provider (name, enable, base_url, api_key, custom_header, protocol_type, billing_mode, extra, sort_order, proxy_enabled, proxy_addr, created_at, updated_at) \
+             VALUES ('测试供应商', 1, 'https://a.example', 'k', '{{}}', 0, 1, '{{}}', 0, 0, '', '{ts}', '{ts}')"
+        )).await.unwrap();
+        db
+    }
+
+    async fn insert_req(db: &sea_orm::DatabaseConnection, rid: &str, vm: i32, start: i64) {
+        db.execute_unprepared(&format!(
+            "INSERT INTO request (request_id, virtual_model_id, provider_id, model_id, stream, \
+             input_tokens, input_cache_tokens, input_cache_rate, output_tokens, output_tokens_time, \
+             tps, start_time, end_time, request_time, success, fail_reason, total_tokens, api_key_name) \
+             VALUES ('{rid}', {vm}, 1, 'gpt-4o', 0, 10, 0, 0.0, NULL, NULL, 0.0, {start}, {start}, 500, 1, NULL, 100, 'itest-key')"
+        )).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn charts_live_by_model_with_vm_filter() {
+        let db = test_db().await;
+        let t0 = (1_700_000_000_000i64 / HOUR_MS) * HOUR_MS;
+        insert_req(&db, "vmf1", 1, t0 + 1).await;
+        insert_req(&db, "vmf2", 2, t0 + 1).await;
+        let query = ChartsQuery {
+            start_time: Some(t0),
+            end_time: Some(t0 + 2 * HOUR_MS),
+            provider_id: None,
+            virtual_model_id: Some(1),
+            model_id: None,
+            api_key: None,
+            granularity: Some("hour".to_string()),
+        };
+        let coverage = snap::Coverage {
+            snapshots: vec![],
+            live: vec![(t0, t0 + 2 * HOUR_MS)],
+        };
+        let (call_by_model, _) = model_distribution(&db, &query, &coverage, 480)
+            .await
+            .unwrap();
+        assert_eq!(call_by_model.len(), 1);
+        assert_eq!(call_by_model[0].model_id, "gpt-4o");
+    }
 }

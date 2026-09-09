@@ -11,6 +11,12 @@ use crate::entity::cron_job;
 pub const USAGE_REFRESH_JOB: &str = "usage_refresh";
 /// 连续失败供应商自动恢复任务名：每个整点复查并恢复已恢复健康的供应商。
 pub const FAILURE_RECOVERY_JOB: &str = "failure_recovery";
+/// 统计快照生成任务名：每小时固化新闭桶的时间桶（小时/天/月/年）入快照表，
+/// 首启/时区变更时全量回填（ADR-0021）。
+pub const STATS_SNAPSHOT_JOB: &str = "stats_snapshot";
+/// 统计快照自愈任务名：每小时扫描并补算最近 7 天缺哨兵行的闭桶小时/天桶与
+/// 最近闭月/闭年（跳跑/宕机错过生成时兜底）。
+pub const STATS_SNAPSHOT_REBUILD_JOB: &str = "stats_snapshot_rebuild";
 
 /// 内置任务的默认标题（按语言）。语言切换同步未自定义任务时复用。
 pub fn default_title(name: &str, lang: crate::i18n::Lang) -> String {
@@ -20,6 +26,12 @@ pub fn default_title(name: &str, lang: crate::i18n::Lang) -> String {
             .to_string(),
         FAILURE_RECOVERY_JOB => lang
             .tr("连续失败供应商恢复", "Failed Provider Recovery")
+            .to_string(),
+        STATS_SNAPSHOT_JOB => lang
+            .tr("统计快照生成", "Stats Snapshot Generation")
+            .to_string(),
+        STATS_SNAPSHOT_REBUILD_JOB => lang
+            .tr("统计快照自愈", "Stats Snapshot Self-Heal")
             .to_string(),
         _ => lang.tr("定时任务", "Cron Job").to_string(),
     }
@@ -47,6 +59,24 @@ pub fn default_description(name: &str, lang: crate::i18n::Lang) -> String {
                 "Checks providers disabled by consecutive failures every hour and restores the provider and its virtual model members after usage and model probes succeed",
             )
             .to_string(),
+        STATS_SNAPSHOT_JOB => lang
+            .tr(
+                "每小时把已闭桶的时间桶（小时/天/月/年，终点后 60 分钟）聚合写入统计快照表；\
+                 首次启动或设置表时区变更时全量回填整个请求历史",
+                "Aggregates closed time buckets (hour/day/month/year, 60 minutes after bucket end) \
+                 into the stats snapshot table every hour; performs a full backfill of the whole \
+                 request history on first startup or when the settings timezone changes",
+            )
+            .to_string(),
+        STATS_SNAPSHOT_REBUILD_JOB => lang
+            .tr(
+                "每小时自愈扫描：补算最近 7 天缺哨兵行的闭桶小时/天桶，并点检最近闭月/闭年；\
+                 服务部署跳过快照生成或宕机错过时兜底",
+                "Hourly self-heal scan: regenerates closed hour/day buckets missing their sentinel \
+                 row within the last 7 days, and checks the last closed month/year; covers snapshot \
+                 generation skipped by deployments or downtime",
+            )
+            .to_string(),
         _ => lang
             .tr("系统内置定时任务", "Built-in scheduled job")
             .to_string(),
@@ -61,6 +91,16 @@ pub async fn ensure_failure_recovery_job(db: &DatabaseConnection) -> anyhow::Res
 /// 确保 `usage_refresh` 任务行存在（不存在则插入，幂等）。
 pub async fn ensure_usage_refresh_job(db: &DatabaseConnection) -> anyhow::Result<()> {
     ensure_job(db, USAGE_REFRESH_JOB, "@every 5m").await
+}
+
+/// 确保 `stats_snapshot` 任务行存在（不存在则插入，幂等）。
+pub async fn ensure_stats_snapshot_job(db: &DatabaseConnection) -> anyhow::Result<()> {
+    ensure_job(db, STATS_SNAPSHOT_JOB, "@every 1h").await
+}
+
+/// 确保 `stats_snapshot_rebuild` 任务行存在（不存在则插入，幂等）。
+pub async fn ensure_stats_snapshot_rebuild_job(db: &DatabaseConnection) -> anyhow::Result<()> {
+    ensure_job(db, STATS_SNAPSHOT_REBUILD_JOB, "@every 1h").await
 }
 
 async fn ensure_job(db: &DatabaseConnection, name: &str, expression: &str) -> anyhow::Result<()> {
@@ -96,6 +136,31 @@ async fn ensure_job(db: &DatabaseConnection, name: &str, expression: &str) -> an
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stats_snapshot_seeds_are_idempotent() {
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        ensure_stats_snapshot_job(&db).await.unwrap();
+        ensure_stats_snapshot_job(&db).await.unwrap();
+        ensure_stats_snapshot_rebuild_job(&db).await.unwrap();
+        ensure_stats_snapshot_rebuild_job(&db).await.unwrap();
+
+        for (name, expression) in [
+            (STATS_SNAPSHOT_JOB, "@every 1h"),
+            (STATS_SNAPSHOT_REBUILD_JOB, "@every 1h"),
+        ] {
+            let rows = cron_job::Entity::find()
+                .filter(cron_job::Column::Name.eq(name))
+                .all(&db)
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].expression, expression);
+            assert!(rows[0].enabled);
+            assert_eq!(rows[0].group, "system");
+            assert!(!rows[0].is_deleted);
+        }
+    }
 
     #[tokio::test]
     async fn seed_is_idempotent_and_loadable() {

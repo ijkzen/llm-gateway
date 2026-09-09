@@ -1,5 +1,64 @@
 use super::*;
 
+use crate::stats_snapshot as snap;
+
+/// 指标端点共用：闭桶读快照（精确主体键）+ 兑底段实时，返回 6 指标原语和。
+/// subject_sql 追加 WHERE 片段与参数（如 `AND r.provider_id = ?`）。
+#[allow(clippy::too_many_arguments)]
+async fn metrics_prims(
+    state: &AppState,
+    start: i64,
+    end: i64,
+    snap_type: &str,
+    snap_exact: Option<&str>,
+    snap_required: bool,
+    extra_where: &str,
+    extra_params: Vec<sea_orm::Value>,
+) -> Result<super::rank_snap::Prims, String> {
+    let mut cov = super::rank::rank_coverage(&state.db, start, end).await?;
+    // 主体键解析失败（provider_model/api_key 已删）时快照贡献必须为空：
+    // 若仍按全量主体行取数会把其它主体加进来，高估数字 —— 直接整窗兑底。
+    if snap_required && snap_exact.is_none() {
+        cov.snapshots.clear();
+        cov.live = vec![(start, end)];
+    }
+    let prim_list = rank_snap::prim_select_list();
+    let grouped = |s: i64, e: i64| {
+        let sql = format!(
+            "SELECT 'x' AS key, {prim_list} FROM request r \
+             WHERE r.start_time >= {s} AND r.start_time < {e} AND r.success = 1{extra_where}"
+        );
+        (sql, extra_params.clone())
+    };
+    // 快照侧按主体键（如 "1"）记账、兑底侧按哨兵键 "x" 记账：单主体端点
+    // 全量加总（等价于同一主体的快照 + 兑底两部分）。
+    let map =
+        super::rank_snap::merged_prims(&state.db, &cov, snap_type, snap_exact, grouped).await?;
+    let mut total = super::rank_snap::Prims::default();
+    for prims in map.values() {
+        for i in 0..super::rank_snap::PRIM_COUNT {
+            total.0[i] += prims.0[i];
+        }
+    }
+    Ok(total)
+}
+
+/// 主体展示名解析（LEFT JOIN 语义：缺失给空串）。
+async fn subject_name(
+    db: &sea_orm::DatabaseConnection,
+    table: &str,
+    id_col: &str,
+    name_col: &str,
+    id: i32,
+) -> String {
+    super::rank::resolve_names(db, table, id_col, name_col, &[id.to_string()])
+        .await
+        .unwrap_or_default()
+        .get(&id.to_string())
+        .cloned()
+        .unwrap_or_default()
+}
+
 /// 模型详情查询参数：providerId + modelId + 时间窗口。
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,50 +115,50 @@ pub(crate) async fn model_metrics(
     };
     let db = &state.db;
 
-    // 单行聚合 6 指标（无 GROUP BY），JOIN provider 出名称。
-    let rank_sql = rank_metric_sql();
-    let sql = format!(
-        "SELECT COALESCE(p.name, '') AS provider_name,{rank_sql} \
-         FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
-         WHERE r.success = 1 AND r.provider_id = ? AND r.model_id = ? \
-           AND r.start_time >= ? AND r.start_time < ?"
-    );
-
-    let row = match db
-        .query_one_raw(Statement::from_sql_and_values(
+    // 快照主体键：pm 主键（模型行）；无法解析（pm 已删）→ 快照贡献为空，
+    // 兑底段按 provider+model 原文过滤，与旧语义一致。
+    let pm_id: Option<i64> = db
+        .query_one_raw(Statement::from_string(
             DbBackend::Sqlite,
-            sql,
-            [
-                provider_id.into(),
-                model_id.clone().into(),
-                start.into(),
-                end.into(),
-            ],
+            format!(
+                "SELECT model_id AS v FROM provider_model \
+                 WHERE provider_id = {provider_id} AND provider_model_id = '{model_id}'"
+            ),
         ))
         .await
+        .ok()
+        .flatten()
+        .and_then(|row| row.try_get("", "v").ok());
+    let prims = match metrics_prims(
+        &state,
+        start,
+        end,
+        snap::ENTITY_MODEL,
+        pm_id.map(|v| v.to_string()).as_deref(),
+        true,
+        " AND r.provider_id = ? AND r.model_id = ?",
+        vec![provider_id.into(), model_id.clone().into()],
+    )
+    .await
     {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            return response::db_error(
-                AppSettings::lang_sync()
-                    .tr("模型指标查询无结果", "model metrics query returned no rows"),
-            );
-        }
-        Err(e) => return response::db_error(e.to_string()),
+        Ok(prims) => prims,
+        Err(e) => return response::db_error(e),
     };
+    let (request_count, total_tokens, ttft, request_time, tps, cache_hit_rate) = prims.derive();
+    let provider_name = subject_name(db, "provider", "id", "name", provider_id).await;
 
     (
         StatusCode::OK,
         Json(Response::success(ModelMetricsResponse {
             provider_id,
-            provider_name: row.try_get("", "provider_name").unwrap_or_default(),
+            provider_name,
             model_id,
-            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
-            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
-            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
-            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
-            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
-            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+            request_count,
+            total_tokens,
+            ttft,
+            request_time,
+            tps,
+            cache_hit_rate,
         })),
     )
 }
@@ -153,35 +212,32 @@ pub(crate) async fn api_key_metrics(
     };
     let db = &state.db;
 
-    // 单行聚合 6 指标（无 GROUP BY）：仅该 key 的成功请求。
-    let rank_sql = rank_metric_sql();
-    let sql = format!(
-        "SELECT {rank_sql} \
-         FROM request r \
-         WHERE r.success = 1 AND r.api_key_name = ? \
-           AND r.start_time >= ? AND r.start_time < ?"
-    );
-
-    // SQLite COUNT/SUM 无行时返回单行全 0/0.0；无请求窗口用聚合行归一，避免 db_error。
-    let (request_count, total_tokens, ttft, request_time, tps, cache_hit_rate) = match db
-        .query_one_raw(Statement::from_sql_and_values(
+    // 快照主体键：Key 主键（已删 Key 无法解析 → 快照贡献为空，兑底按原名兜底）。
+    let key_id: Option<i64> = db
+        .query_one_raw(Statement::from_string(
             DbBackend::Sqlite,
-            sql,
-            [api_key.into(), start.into(), end.into()],
+            format!("SELECT id AS v FROM api_key WHERE name = '{api_key}'"),
         ))
         .await
+        .ok()
+        .flatten()
+        .and_then(|row| row.try_get("", "v").ok());
+    let prims = match metrics_prims(
+        &state,
+        start,
+        end,
+        snap::ENTITY_API_KEY,
+        key_id.map(|v| v.to_string()).as_deref(),
+        true,
+        " AND r.api_key_name = ?",
+        vec![api_key.into()],
+    )
+    .await
     {
-        Ok(Some(row)) => (
-            row.try_get::<i64>("", "request_count").unwrap_or(0),
-            row.try_get::<i64>("", "total_tokens").unwrap_or(0),
-            row.try_get::<f64>("", "ttft").unwrap_or(0.0),
-            row.try_get::<f64>("", "request_time").unwrap_or(0.0),
-            row.try_get::<f64>("", "tps").unwrap_or(0.0),
-            row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
-        ),
-        Ok(None) => (0, 0, 0.0, 0.0, 0.0, 0.0),
-        Err(e) => return response::db_error(e.to_string()),
+        Ok(prims) => prims,
+        Err(e) => return response::db_error(e),
     };
+    let (request_count, total_tokens, ttft, request_time, tps, cache_hit_rate) = prims.derive();
 
     (
         StatusCode::OK,
@@ -246,43 +302,35 @@ pub(crate) async fn provider_metrics(
     };
     let db = &state.db;
 
-    let rank_sql = rank_metric_sql();
-    let sql = format!(
-        "SELECT COALESCE(p.name, '') AS provider_name,{rank_sql} \
-         FROM request r LEFT JOIN provider p ON p.id = r.provider_id \
-         WHERE r.success = 1 AND r.provider_id = ? \
-           AND r.start_time >= ? AND r.start_time < ?"
-    );
-
-    let row = match db
-        .query_one_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            sql,
-            [provider_id.into(), start.into(), end.into()],
-        ))
-        .await
+    let prims = match metrics_prims(
+        &state,
+        start,
+        end,
+        snap::ENTITY_PROVIDER,
+        Some(&provider_id.to_string()),
+        false,
+        " AND r.provider_id = ?",
+        vec![provider_id.into()],
+    )
+    .await
     {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            return response::db_error(AppSettings::lang_sync().tr(
-                "供应商指标查询无结果",
-                "provider metrics query returned no rows",
-            ));
-        }
-        Err(e) => return response::db_error(e.to_string()),
+        Ok(prims) => prims,
+        Err(e) => return response::db_error(e),
     };
+    let (request_count, total_tokens, ttft, request_time, tps, cache_hit_rate) = prims.derive();
+    let provider_name = subject_name(db, "provider", "id", "name", provider_id).await;
 
     (
         StatusCode::OK,
         Json(Response::success(ProviderMetricsResponse {
             provider_id,
-            provider_name: row.try_get("", "provider_name").unwrap_or_default(),
-            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
-            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
-            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
-            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
-            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
-            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+            provider_name,
+            request_count,
+            total_tokens,
+            ttft,
+            request_time,
+            tps,
+            cache_hit_rate,
         })),
     )
 }
@@ -337,45 +385,42 @@ pub(crate) async fn virtual_model_metrics(
     };
     let db = &state.db;
 
-    let rank_sql = rank_metric_sql();
-    let sql = format!(
-        "SELECT COALESCE(vm.display_id, '') AS virtual_model_display_id,{rank_sql} \
-         FROM request r LEFT JOIN virtual_model vm ON vm.virtual_model_id = r.virtual_model_id \
-         WHERE r.success = 1 AND r.virtual_model_id = ? \
-           AND r.start_time >= ? AND r.start_time < ?"
-    );
-
-    let row = match db
-        .query_one_raw(Statement::from_sql_and_values(
-            DbBackend::Sqlite,
-            sql,
-            [virtual_model_id.into(), start.into(), end.into()],
-        ))
-        .await
+    let prims = match metrics_prims(
+        &state,
+        start,
+        end,
+        snap::ENTITY_VIRTUAL_MODEL,
+        Some(&virtual_model_id.to_string()),
+        false,
+        " AND r.virtual_model_id = ?",
+        vec![virtual_model_id.into()],
+    )
+    .await
     {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            return response::db_error(AppSettings::lang_sync().tr(
-                "虚拟模型指标查询无结果",
-                "virtual model metrics query returned no rows",
-            ));
-        }
-        Err(e) => return response::db_error(e.to_string()),
+        Ok(prims) => prims,
+        Err(e) => return response::db_error(e),
     };
+    let (request_count, total_tokens, ttft, request_time, tps, cache_hit_rate) = prims.derive();
+    let virtual_model_display_id = subject_name(
+        db,
+        "virtual_model",
+        "virtual_model_id",
+        "display_id",
+        virtual_model_id,
+    )
+    .await;
 
     (
         StatusCode::OK,
         Json(Response::success(VirtualModelMetricsResponse {
             virtual_model_id,
-            virtual_model_display_id: row
-                .try_get("", "virtual_model_display_id")
-                .unwrap_or_default(),
-            request_count: row.try_get::<i64>("", "request_count").unwrap_or(0),
-            total_tokens: row.try_get::<i64>("", "total_tokens").unwrap_or(0),
-            ttft: row.try_get::<f64>("", "ttft").unwrap_or(0.0),
-            request_time: row.try_get::<f64>("", "request_time").unwrap_or(0.0),
-            tps: row.try_get::<f64>("", "tps").unwrap_or(0.0),
-            cache_hit_rate: row.try_get::<f64>("", "cache_hit_rate").unwrap_or(0.0),
+            virtual_model_display_id,
+            request_count,
+            total_tokens,
+            ttft,
+            request_time,
+            tps,
+            cache_hit_rate,
         })),
     )
 }

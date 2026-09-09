@@ -107,7 +107,8 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
 pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     use crate::entity::{
         api_key, cron_job, cron_job_log, cron_job_run, provider, provider_model, provider_template,
-        request, session, setting, usage_cache, user, virtual_model, virtual_model_item,
+        request, session, setting, snapshot, snapshot_meta, usage_cache, user, virtual_model,
+        virtual_model_item,
     };
     use sea_orm::ConnectionTrait;
 
@@ -166,6 +167,14 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     db.execute(&stmt).await?;
 
     let mut stmt = Schema::new(backend).create_table_from_entity(usage_cache::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(snapshot::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(snapshot_meta::Entity);
     stmt.if_not_exists();
     db.execute(&stmt).await?;
 
@@ -514,6 +523,34 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         &[
             "CREATE INDEX IF NOT EXISTS idx_cron_job_logs_run_seq ON cron_job_logs (run_id, seq)",
             "DROP INDEX IF EXISTS idx_cron_job_logs_run_id",
+        ],
+    )
+    .await?;
+
+    // Migration 26: 统计快照表（request_log_snapshot + snapshot_meta，ADR-0021）。
+    // request_log_snapshot 是 EAV 窄表：同一时间桶内 (duration_type,
+    // start_time, entity_type, entity, metric_type) 唯一，UNIQUE 由复合索引
+    // 承担（幂等 upsert 以它为前提）。meta 表存生成时区等键值。新库已由第一遍
+    // create_table_from_entity 建表，此处 CREATE IF NOT EXISTS 兜底历史库。
+    changed |= ensure_migration(
+        db,
+        26,
+        &[
+            "CREATE TABLE IF NOT EXISTS request_log_snapshot (\
+             id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, \
+             duration_type varchar NOT NULL, \
+             start_time bigint NOT NULL, \
+             end_time bigint NOT NULL, \
+             entity_type varchar NOT NULL, \
+             entity varchar NOT NULL, \
+             metric_type varchar NOT NULL, \
+             metric_value real NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS snapshot_meta (\
+             key varchar PRIMARY KEY NOT NULL, \
+             value varchar NOT NULL, \
+             updated_at text NOT NULL)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_request_log_snapshot_bucket \
+             ON request_log_snapshot (duration_type, start_time, entity_type, entity, metric_type)",
         ],
     )
     .await?;
@@ -1093,5 +1130,73 @@ mod tests {
                 .await
                 .unwrap()
         );
+    }
+
+    /// 新库从 0 迁移完必须带齐 Migration 26 的两张快照表与复合唯一索引
+    /// （幂等 upsert 以该索引为前提；重复行必须被 UNIQUE 拒绝）。
+    #[tokio::test]
+    async fn migration_26_creates_snapshot_tables_on_fresh_db() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        migrate(&db).await.unwrap();
+
+        assert!(
+            column_exists(&db, "request_log_snapshot", "metric_value")
+                .await
+                .unwrap()
+        );
+        assert!(column_exists(&db, "snapshot_meta", "value").await.unwrap());
+        let indexes = db
+            .query_all_raw(Statement::from_string(
+                db.get_database_backend(),
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_request_log_snapshot_bucket'"
+                    .to_string(),
+            ))
+            .await
+            .unwrap();
+        assert!(!indexes.is_empty(), "快照复合唯一索引缺失");
+
+        // 同桶同主体同指标重复行必须触发 UNIQUE 冲突。
+        db.execute_unprepared(
+            "INSERT INTO request_log_snapshot (duration_type, start_time, end_time, entity_type, entity, metric_type, metric_value) \
+             VALUES ('hour', 1, 2, 'whole', '', 'request_count', 0)",
+        )
+        .await
+        .unwrap();
+        let dup = db
+            .execute_unprepared(
+                "INSERT INTO request_log_snapshot (duration_type, start_time, end_time, entity_type, entity, metric_type, metric_value) \
+                 VALUES ('hour', 1, 2, 'whole', '', 'request_count', 3)",
+            )
+            .await;
+        assert!(
+            dup.is_err() && crate::db::is_unique_violation(&dup.unwrap_err()),
+            "重复快照行应报 UNIQUE 冲突"
+        );
+    }
+
+    /// 历史库迁移：两表被删 + 版本记录移除后，migrate() 必须重建（幂等兜底）。
+    #[tokio::test]
+    async fn migration_26_rebuilds_tables_on_legacy_db() {
+        let db = connect("sqlite::memory:").await.unwrap();
+        migrate(&db).await.unwrap();
+
+        db.execute_unprepared("DROP TABLE request_log_snapshot")
+            .await
+            .unwrap();
+        db.execute_unprepared("DROP TABLE snapshot_meta")
+            .await
+            .unwrap();
+        db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 26")
+            .await
+            .unwrap();
+
+        let changed = migrate(&db).await.unwrap();
+        assert!(changed, "migrate 应报告有变更");
+        assert!(
+            column_exists(&db, "request_log_snapshot", "metric_value")
+                .await
+                .unwrap()
+        );
+        assert!(column_exists(&db, "snapshot_meta", "key").await.unwrap());
     }
 }
