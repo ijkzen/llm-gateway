@@ -17,6 +17,7 @@
 ## Decisions so far
 
 - [01 · 模块边界全景盘点](issues/01-module-boundary-inventory.md)：全仓模块图（后端 20 模块两清分层、availability=纯 entity 底座、usage↔proxy 单点双向 by-design）+ 10 族散落候选（F3/F6 已单源免票，F1/F2/F4/F5/F7/F8/F9/F10 各有主票见 MODULES.md §4）+ 文件归属（failure_recovery.rs 寄居成立→08 审、failure_recheck 合理、usage 子模块干净）+ 前端切分修正（18 拆 21、19 缩小、16/17/20 注记）+ AGENTS.md 结构树漂移清单（§1.4，随实施批次刷新）。产物=MODULES.md。
+- [02 · proxy 转发编排与选路审查](issues/02-proxy-forwarding-orchestration.md)：12 条清单（1 P2=终态失败零日志 / 11 P3），三项拍板：额度空候选 503 落库记失败行（含 NoMembers 补 warn）、直连成功清零保持现状只补注释、决策日志明细降 debug 留 info 选路结果。产物=findings/02-proxy-forwarding-orchestration.md。
 
 ## Not yet specified
 
