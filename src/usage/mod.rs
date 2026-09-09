@@ -10,6 +10,7 @@ pub mod error;
 pub mod estimate;
 pub mod fetchers;
 pub mod http;
+pub mod mem_cache;
 pub mod persist;
 pub mod sensenova_login;
 pub mod types;

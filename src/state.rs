@@ -10,7 +10,7 @@ use crate::cron::scheduler::SchedulerRuntime;
 use crate::proxy::LbState;
 use crate::proxy::failure_recheck::RecheckGate;
 use crate::proxy::pool::UpstreamPool;
-use crate::usage::persist::UsageMemCache;
+use crate::usage::mem_cache::UsageMemCache;
 
 #[derive(Clone)]
 pub struct AppState {
