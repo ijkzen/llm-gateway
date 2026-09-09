@@ -97,82 +97,40 @@ pub async fn forward_native(
     let client_stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let forwarded = select_passthrough_headers(downstream_headers);
 
-    // 路由：display_id 精确匹配 + 接口类型严格对应（鉴权失败与路由未命中不落 request 表）。
-    let virtual_model = match virtual_model::Entity::find()
-        .filter(virtual_model::Column::DisplayId.eq(&requested_model))
-        .filter(virtual_model::Column::Enable.eq(true))
-        .one(&state.db)
-        .await
+    // 路由解析前半段（与 chat 共用 resolve_and_order）：display_id 路由 +
+    // 接口类型严格对应 + 成员加载 + 防御性协议过滤（成员匹配规则保证，
+    // 兜底跳过异协议成员）+ LB 排序；错误信封按端点协议格式映射。
+    let route = match resolve_and_order(
+        state,
+        &request_id,
+        &requested_model,
+        |vm| vm.interface_type == endpoint.interface_type(),
+        |member| member.protocol == endpoint.member_protocol(),
+    )
+    .await
     {
-        Ok(Some(model)) => model,
-        Ok(None) => {
+        Ok(route) => route,
+        Err(RouteError::NotFound) => {
             return endpoint.error(
                 StatusCode::NOT_FOUND,
                 "not_found_error",
                 format!("model '{requested_model}' does not exist"),
             );
         }
-        Err(e) => {
+        Err(RouteError::QueryFailed(message)) => {
+            return endpoint.error(StatusCode::INTERNAL_SERVER_ERROR, "api_error", message);
+        }
+        Err(RouteError::NoMembers) => {
             return endpoint.error(
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 "api_error",
-                format!("查询虚拟模型失败：{e}"),
+                format!("虚拟模型 '{requested_model}' 没有可用的成员"),
             );
         }
     };
-    if virtual_model.interface_type != endpoint.interface_type() {
-        return endpoint.error(
-            StatusCode::NOT_FOUND,
-            "not_found_error",
-            format!("model '{requested_model}' does not exist"),
-        );
-    }
-
-    let members = match load_members(&state.db, virtual_model.virtual_model_id).await {
-        Ok(members) => members,
-        Err(e) => {
-            return endpoint.error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "api_error",
-                format!("查询模型成员失败：{e}"),
-            );
-        }
-    };
-    // 防御性过滤：成员协议须与端点对应（成员匹配规则保证，兜底跳过异协议成员）。
-    let members: Vec<_> = members
-        .into_iter()
-        .filter(|member| member.protocol == endpoint.member_protocol())
-        .collect();
-    if members.is_empty() {
-        return endpoint.error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "api_error",
-            format!("虚拟模型 '{requested_model}' 没有可用的成员"),
-        );
-    }
-
-    let ordered = order_members(
-        state,
-        members,
-        virtual_model.load_balancing_strategy,
-        &state.lb_state,
-        virtual_model.virtual_model_id,
-        &request_id,
-    )
-    .await;
-    let retry_enabled = virtual_model.fallback_strategy == 1;
-    if let Some(first) = ordered.first() {
-        tracing::info!(
-            request_id,
-            virtual_model_id = virtual_model.virtual_model_id,
-            requested_model = %requested_model,
-            endpoint = ?endpoint,
-            member_count = ordered.len(),
-            selected_provider_id = first.provider_id,
-            selected_model_id = %first.model_id,
-            "原生透传 LB 选路结果",
-        );
-    }
+    let virtual_model = route.virtual_model;
+    let ordered = route.ordered;
+    let retry_enabled = route.retry_enabled;
 
     match forward_through_members(
         state,

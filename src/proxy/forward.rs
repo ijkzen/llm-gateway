@@ -38,15 +38,21 @@ pub async fn forward_chat(
         );
     }
 
-    // 路由：display_id 精确匹配（鉴权失败与路由未命中不落 request 表）。
-    let virtual_model = match virtual_model::Entity::find()
-        .filter(virtual_model::Column::DisplayId.eq(&requested_model))
-        .filter(virtual_model::Column::Enable.eq(true))
-        .one(&state.db)
-        .await
+    // 路由解析前半段（与原生透传共用 resolve_and_order）：display_id 路由 +
+    // chat 接口类型门 + 成员加载 + LB 排序；错误信封按 OpenAI 格式映射。
+    // chat/completions 只服务 OpenAI Compatible / Full Compatible 类型；
+    // Responses/Messages 专用模型按模型不存在处理（与 /v1/models 过滤一致）。
+    let route = match resolve_and_order(
+        state,
+        &request_id,
+        &requested_model,
+        |vm| virtual_model::CHAT_SERVED_TYPES.contains(&vm.interface_type),
+        |_| true,
+    )
+    .await
     {
-        Ok(Some(model)) => model,
-        Ok(None) => {
+        Ok(route) => route,
+        Err(RouteError::NotFound) => {
             return openai_error(
                 StatusCode::NOT_FOUND,
                 format!("The model '{requested_model}' does not exist"),
@@ -54,84 +60,26 @@ pub async fn forward_chat(
                 "model_not_found",
             );
         }
-        Err(e) => {
+        Err(RouteError::QueryFailed(message)) => {
             return openai_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("查询虚拟模型失败：{e}"),
+                message,
                 "server_error",
                 "internal_error",
             );
         }
-    };
-
-    // chat/completions 只服务 OpenAI Compatible / Full Compatible 类型；
-    // Responses/Messages 专用模型按模型不存在处理（与 /v1/models 过滤一致）。
-    if !virtual_model::CHAT_SERVED_TYPES.contains(&virtual_model.interface_type) {
-        return openai_error(
-            StatusCode::NOT_FOUND,
-            format!("The model '{requested_model}' does not exist"),
-            "invalid_request_error",
-            "model_not_found",
-        );
-    }
-
-    let members = match load_members(&state.db, virtual_model.virtual_model_id).await {
-        Ok(members) => members,
-        Err(e) => {
+        Err(RouteError::NoMembers) => {
             return openai_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("查询模型成员失败：{e}"),
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("虚拟模型 '{requested_model}' 没有可用的成员"),
                 "server_error",
-                "internal_error",
+                "no_available_members",
             );
         }
     };
-    if members.is_empty() {
-        return openai_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            format!("虚拟模型 '{requested_model}' 没有可用的成员"),
-            "server_error",
-            "no_available_members",
-        );
-    }
-
-    let ordered = order_members(
-        state,
-        members,
-        virtual_model.load_balancing_strategy,
-        &state.lb_state,
-        virtual_model.virtual_model_id,
-        &request_id,
-    )
-    .await;
-    let retry_enabled = virtual_model.fallback_strategy == 1;
-
-    // 负载均衡决策日志：选路结果每请求 1 条 info；完整排序明细 debug
-    // （默认 RUST_LOG=info 不输出，深排时临时调 debug）。
-    let ordered_desc: Vec<String> = ordered
-        .iter()
-        .map(|m| format!("{}:{}", m.provider_id, m.model_id))
-        .collect();
-    tracing::debug!(
-        request_id,
-        virtual_model_id = virtual_model.virtual_model_id,
-        requested_model = %requested_model,
-        strategy = virtual_model.load_balancing_strategy,
-        member_order = ?ordered_desc,
-        "LB 排序明细",
-    );
-    if let Some(first) = ordered.first() {
-        tracing::info!(
-            request_id,
-            virtual_model_id = virtual_model.virtual_model_id,
-            requested_model = %requested_model,
-            strategy = virtual_model.load_balancing_strategy,
-            member_count = ordered.len(),
-            selected_provider_id = first.provider_id,
-            selected_model_id = %first.model_id,
-            "LB 选路结果",
-        );
-    }
+    let virtual_model = route.virtual_model;
+    let ordered = route.ordered;
+    let retry_enabled = route.retry_enabled;
 
     match forward_through_members(
         state,

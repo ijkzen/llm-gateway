@@ -30,6 +30,7 @@ mod headers;
 mod lb;
 mod native;
 mod probe;
+mod route;
 
 pub use dispatch::accumulate_chunks;
 pub use forward::{forward_chat, forward_chat_direct};
@@ -88,6 +89,7 @@ pub(crate) use lb::{
 };
 pub(crate) use native::{NativeUsageScanner, dispatch_native_success};
 pub(crate) use probe::{TEST_API_KEY_NAME, TEST_PROMPT, TEST_VIRTUAL_MODEL_ID};
+pub(crate) use route::{RouteError, resolve_and_order};
 
 #[cfg(test)]
 mod tests;
