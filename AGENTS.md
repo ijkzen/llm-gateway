@@ -89,7 +89,8 @@
 │   │   └── usage_rank.rs   # 用量感知排序纯比较器（订阅 5h→周→月剩余百分比 / 按量余额合计）
 │   ├── usage/              # 供应商用量查询：按 base_url host 分发 fetcher，归一化输出
 │   │   ├── types.rs        # UsageData/QuotaWindow（available 标记三窗）/BalanceItem
-│   │   ├── persist.rs      # 用量数据库缓存（10 分钟新鲜度）+ 全量刷新 + 订阅额度耗尽自动停用/恢复 + 订阅制边界实测探活（probe_boundary_providers）
+│   │   ├── persist.rs      # 用量数据库缓存（10 分钟新鲜度，cache_age_fresh* 单一判定）+ 全量刷新 + 订阅额度耗尽自动停用/恢复 + 订阅制边界实测探活（probe_boundary_providers）
+│   │   ├── mem_cache.rs    # LB 选路用量内存缓存（与 DB 缓存同新鲜度 + provider 单飞抓取去重）
 │   │   ├── http.rs         # reqwest 封装（15s 超时；LLM_GATEWAY_USAGE_HTTP_OVERRIDE 供测试重定向）
 │   │   ├── cookiecloud.rs  # CookieCloud 解密（MD5 材料 + EVP_BytesToKey + AES-256-CBC）
 │   │   ├── volcengine_sign.rs # 火山 V4 签名（service=ark，scope 以 /request 结尾）
