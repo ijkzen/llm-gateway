@@ -547,9 +547,7 @@ async fn charts_merge(
     .await?;
 
     // 趋势按粒度补零输出（与旧实现同形状：bucket_range 全补 / 自然月年全补）。
-    let call_trend;
-    let token_trend;
-    if month_mode {
+    let (call_trend, token_trend) = if month_mode {
         let fill_periods = |map: &std::collections::BTreeMap<(i32, u32), f64>| -> Vec<TrendPoint> {
             let (Some(first), Some(last)) = (
                 chrono::DateTime::from_timestamp_millis(window.start + off_ms),
@@ -590,8 +588,7 @@ async fn charts_merge(
             }
             out
         };
-        call_trend = fill_periods(&call_period);
-        token_trend = fill_periods(&token_period);
+        (fill_periods(&call_period), fill_periods(&token_period))
     } else {
         let buckets = window.bucket_range();
         let fill_idx = |map: &std::collections::BTreeMap<i64, f64>| -> Vec<TrendPoint> {
@@ -603,9 +600,8 @@ async fn charts_merge(
                 })
                 .collect()
         };
-        call_trend = fill_idx(&call_idx);
-        token_trend = fill_idx(&token_idx);
-    }
+        (fill_idx(&call_idx), fill_idx(&token_idx))
+    };
 
     let (call_by_model, token_by_model) =
         model_distribution(db, query, &coverage, tz_offset_minutes).await?;
