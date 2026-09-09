@@ -19,6 +19,7 @@
 - [01 · 模块边界全景盘点](issues/01-module-boundary-inventory.md)：全仓模块图（后端 20 模块两清分层、availability=纯 entity 底座、usage↔proxy 单点双向 by-design）+ 10 族散落候选（F3/F6 已单源免票，F1/F2/F4/F5/F7/F8/F9/F10 各有主票见 MODULES.md §4）+ 文件归属（failure_recovery.rs 寄居成立→08 审、failure_recheck 合理、usage 子模块干净）+ 前端切分修正（18 拆 21、19 缩小、16/17/20 注记）+ AGENTS.md 结构树漂移清单（§1.4，随实施批次刷新）。产物=MODULES.md。
 - [02 · proxy 转发编排与选路审查](issues/02-proxy-forwarding-orchestration.md)：12 条清单（1 P2=终态失败零日志 / 11 P3），三项拍板：额度空候选 503 落库记失败行（含 NoMembers 补 warn）、直连成功清零保持现状只补注释、决策日志明细降 debug 留 info 选路结果。产物=findings/02-proxy-forwarding-orchestration.md。
 - [03 · proxy 流式转运与指标记账审查](issues/03-proxy-stream-accounting.md)：9 条清单（1 P2=带内错误事件客户端假成功 / 8 P3），两项拍板：泵对转换器 error 态发 error 帧 + [DONE]（03-01 修复含 03-07 三协议回归；collect 非流式路径已正确可对照）、S3 request 表保留保持现状不清理（原 P1 读侧已被统计快照消除，登记体积观察项，复原形态存 revert 22bb5c8）。产物=findings/03-proxy-stream-accounting.md。
+- [04 · proxy 上游传输与探活审查](issues/04-proxy-upstream-transport.md)：13 条清单全 P3 无 P1/P2（本图迄今最干净模块，09-08 P1-P6 在此域整改无回归）；四轴分布=重试条件隐式判定+双重计费窗口无注释（04-01）/IPv6 字面量不可用报错误导（04-02，http 1.4.2 host() 实证带括号）/两处口径注释漂移（04-03）/stream 与 connect_done_at_ms 死字段（04-04）/探活前奏三处重复（04-05）/test 成功行 request_id 断链（04-06）/测试缺陈旧重试·超时缝·失败族·并发隔离四族（04-07-10）/probe_gate 每小时真抓用量应先读缓存（04-11，归口 06）/测速路由无超时无取消（04-12）/每 host 并发无上限观察级（04-13）；无拍板项（超时同口径与 ADR-0010 既有语义一致，默认解均明确）。产物=findings/04-proxy-upstream-transport.md。
 
 ## Not yet specified
 
