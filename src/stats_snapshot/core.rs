@@ -57,6 +57,74 @@ fn offset_ms(offset_minutes: i32) -> i64 {
     i64::from(offset_minutes) * 60_000
 }
 
+/// 本地历法周期起点（epoch ms）：naive(y, m, 1) 0 点 − offset（与快照帧同一算术）。
+pub(crate) fn period_start_ms(y: i32, m: u32, off_ms: i64) -> Option<i64> {
+    NaiveDate::from_ymd_opt(y, m, 1)
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|dt| dt.and_utc().timestamp_millis() - off_ms)
+}
+
+/// 覆盖窗口 [start, end) 首末自然历法周期（month/year）的列表：
+/// 元素 (year, month, 周期起点 ms)，按时间升序；Year 粒度 month 恒为 1（历法真值，
+/// 调用方的 map 键惯例 (y, 0) 由调用方自折）。不可表示的日期跳过不产出。
+pub(crate) fn natural_periods(
+    level: Level,
+    off_ms: i64,
+    start: i64,
+    end: i64,
+) -> Vec<(i32, u32, i64)> {
+    debug_assert!(matches!(level, Level::Month | Level::Year));
+    let wall = |ts: i64| chrono::DateTime::from_timestamp_millis(ts + off_ms);
+    let (Some(first), Some(last)) = (wall(start), wall(end - 1)) else {
+        return Vec::new();
+    };
+    let month_mode = matches!(level, Level::Month);
+    let mut y = first.year();
+    let mut m = if month_mode { first.month() } else { 1 };
+    let (ly, lm) = (last.year(), if month_mode { last.month() } else { 1 });
+    let mut out = Vec::new();
+    loop {
+        if let Some(start_ms) = period_start_ms(y, m, off_ms) {
+            out.push((y, m, start_ms));
+        }
+        if (y, m) == (ly, lm) {
+            break;
+        }
+        if month_mode {
+            m += 1;
+            if m > 12 {
+                m = 1;
+                y += 1;
+            }
+        } else {
+            y += 1;
+        }
+    }
+    out
+}
+
+/// 时刻归属的本地历法周期键：Month → (year, month)，Year → (year, 0)
+///（map 键惯例）；hour/day 无历法周期，返回 None。
+pub(crate) fn period_key_of_ts(ts: i64, off_ms: i64, level: Level) -> Option<(i32, u32)> {
+    let wall = chrono::DateTime::from_timestamp_millis(ts + off_ms)?;
+    match level {
+        Level::Month => Some((wall.year(), wall.month())),
+        Level::Year => Some((wall.year(), 0)),
+        Level::Hour | Level::Day => None,
+    }
+}
+
+/// 本地日索引归属的历法周期键（live SQL month/year 路径的 bucket 即日索引；
+/// 墙钟当量 = idx * DAY_MS，offset 已在取索引时并入，无需再传）。
+pub(crate) fn period_key_of_day_index(idx: i64, level: Level) -> Option<(i32, u32)> {
+    let wall = chrono::DateTime::from_timestamp_millis(idx * DAY_MS)?;
+    match level {
+        Level::Month => Some((wall.year(), wall.month())),
+        Level::Year => Some((wall.year(), 0)),
+        Level::Hour | Level::Day => None,
+    }
+}
+
 /// 定长帧（hour/day）覆盖 [start, end) 的全部帧（含越界的首尾帧，由调用方截取）。
 fn fixed_frames(level: Level, offset_minutes: i32, start: i64, end: i64) -> Vec<Frame> {
     let bucket_ms = match level {
@@ -97,11 +165,7 @@ fn calendar_frames(level: Level, offset_minutes: i32, start: i64, end: i64) -> V
     };
 
     // 帧起点（epoch）：本地 (y, m, 1) 0 点的 naive 毫秒 − offset。
-    let boundary = |y: i32, m: u32| -> Option<i64> {
-        NaiveDate::from_ymd_opt(y, m, 1)
-            .and_then(|d| d.and_hms_opt(0, 0, 0))
-            .map(|dt| dt.and_utc().timestamp_millis() - off)
-    };
+    let boundary = |y: i32, m: u32| period_start_ms(y, m, off);
     let mut frames = Vec::new();
     let mut y = first_y;
     let mut m = first_m;
@@ -251,6 +315,66 @@ mod tests {
             .and_then(|dt| dt.and_hms_opt(h, mi, 0))
             .map(|dt| dt.and_utc().timestamp_millis())
             .unwrap()
+    }
+
+    #[test]
+    fn natural_periods_covers_window_months_with_gap() {
+        // 窗口：2026-06-25 00:00 ~ 2026-08-27 00:00（东八区）→ 6/7/8 三个自然月
+        // 全列出（7 月无数据也由调用方补零，列表本身无缺月）。
+        let off = 480 * 60_000;
+        let start = ms(2026, 6, 24, 16, 0); // 本地 2026-06-25 00:00
+        let end = ms(2026, 8, 26, 16, 0); // 本地 2026-08-27 00:00
+        let periods = natural_periods(Level::Month, off, start, end);
+        assert_eq!(
+            periods,
+            vec![
+                (2026, 6, ms(2026, 5, 31, 16, 0)),
+                (2026, 7, ms(2026, 6, 30, 16, 0)),
+                (2026, 8, ms(2026, 7, 31, 16, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn natural_periods_years_use_calendar_month_one() {
+        // 窗口：2025-07-01 ~ 2026-09-01（东八区）→ 2025 / 2026 两个年周期，m 恒 1。
+        let off = 480 * 60_000;
+        let start = ms(2025, 6, 30, 16, 0); // 本地 2025-07-01
+        let end = ms(2026, 8, 31, 16, 0); // 本地 2026-09-01
+        let periods = natural_periods(Level::Year, off, start, end);
+        assert_eq!(
+            periods,
+            vec![
+                (2025, 1, ms(2024, 12, 31, 16, 0)),
+                (2026, 1, ms(2025, 12, 31, 16, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn period_key_of_ts_month_and_year_conventions() {
+        let off = 480 * 60_000;
+        // UTC 2026-07-15 20:00 = 本地 2026-07-16 04:00。
+        let ts = ms(2026, 7, 15, 20, 0);
+        assert_eq!(period_key_of_ts(ts, off, Level::Month), Some((2026, 7)));
+        assert_eq!(period_key_of_ts(ts, off, Level::Year), Some((2026, 0)));
+        assert_eq!(period_key_of_ts(ts, off, Level::Day), None);
+    }
+
+    #[test]
+    fn period_key_of_day_index_matches_ts_key() {
+        // 本地日索引 = (ts + off) / DAY_MS；两条路径应得出同一历法周期键。
+        let off = 480 * 60_000;
+        let ts = ms(2026, 7, 15, 20, 0); // 本地 2026-07-16
+        let idx = (ts + off).div_euclid(DAY_MS);
+        assert_eq!(
+            period_key_of_day_index(idx, Level::Month),
+            period_key_of_ts(ts, off, Level::Month)
+        );
+        assert_eq!(
+            period_key_of_day_index(idx, Level::Year),
+            period_key_of_ts(ts, off, Level::Year)
+        );
     }
 
     #[test]

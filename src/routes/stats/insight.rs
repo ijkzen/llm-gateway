@@ -70,27 +70,14 @@ fn bucket_key_of(
     ts: i64,
     off_ms: i64,
     bucket_ms: i64,
-    month_mode: bool,
+    cal_level: Option<snap::Level>,
 ) -> Option<(i64, i32, u32)> {
-    if month_mode {
-        let wall = chrono::DateTime::from_timestamp_millis(ts + off_ms)?;
-        if wall.month() == 0 {
-            return None;
+    match cal_level {
+        Some(level) => {
+            let (y, m) = snap::period_key_of_ts(ts, off_ms, level)?;
+            Some((0, y, m))
         }
-        Some((0, wall.year(), wall.month()))
-    } else {
-        Some(((ts + off_ms).div_euclid(bucket_ms), 0, 0))
-    }
-}
-
-fn period_of_day_index(idx: i64, off_ms: i64, month_mode: bool) -> Option<(i32, u32)> {
-    // live SQL 的 bucket = 本地日索引（month/year 路径），日起点 epoch = idx*DAY - off。
-    let _ = off_ms;
-    let wall = chrono::DateTime::from_timestamp_millis(idx * super::DAY_MS)?;
-    if month_mode {
-        Some((wall.year(), wall.month()))
-    } else {
-        Some((wall.year(), 0))
+        None => Some(((ts + off_ms).div_euclid(bucket_ms), 0, 0)),
     }
 }
 
@@ -113,14 +100,14 @@ fn fold_snapshot_rows(
     rows: Vec<(i64, String, String, String, f64)>, // (start, et, e, metric, value)
     off_ms: i64,
     bucket_ms: i64,
-    month_mode: bool,
+    cal_level: Option<snap::Level>,
 ) {
     for (start, _, _, metric, value) in rows {
-        let Some((idx, y, m)) = bucket_key_of(start, off_ms, bucket_ms, month_mode) else {
+        let Some((idx, y, m)) = bucket_key_of(start, off_ms, bucket_ms, cal_level) else {
             continue;
         };
         if let Some(i) = SERIES_METRICS.iter().position(|x| *x == metric) {
-            if month_mode {
+            if cal_level.is_some() {
                 *series[i].period.entry((y, m)).or_insert(0.0) += value;
             } else {
                 *series[i].idx.entry(idx).or_insert(0.0) += value;
@@ -130,7 +117,6 @@ fn fold_snapshot_rows(
 }
 
 /// live 兑底段分桶并入（与旧 group_rows 同口径；month/year 段内按日索引归并）。
-#[allow(clippy::too_many_arguments)]
 async fn run_live_series(
     db: &sea_orm::DatabaseConnection,
     segs: &[(i64, i64)],
@@ -138,8 +124,7 @@ async fn run_live_series(
     filter_sql: &str,
     filter_params: &[sea_orm::Value],
     series: &mut [BucketSeries; 8],
-    off_ms: i64,
-    month_mode: bool,
+    cal_level: Option<snap::Level>,
 ) -> Result<(), String> {
     for &(s, e) in segs {
         let sql = format!(
@@ -175,9 +160,10 @@ async fn run_live_series(
                     .ok()
                     .or_else(|| row.try_get::<i64>("", metric).ok().map(|v| v as f64))
                     .unwrap_or(0.0);
-                if month_mode {
-                    if let Some((y, m)) = period_of_day_index(bucket, off_ms, month_mode) {
-                        *series[i].period.entry((y, m)).or_insert(0.0) += value;
+                if let Some(level) = cal_level {
+                    // bucket = 本地日索引（month/year 路径），日索引折历法周期键。
+                    if let Some(key) = snap::period_key_of_day_index(bucket, level) {
+                        *series[i].period.entry(key).or_insert(0.0) += value;
                     }
                 } else {
                     *series[i].idx.entry(bucket).or_insert(0.0) += value;
@@ -210,7 +196,12 @@ pub(crate) async fn insight(
     let db = &state.db;
     let now = chrono::Utc::now().timestamp_millis();
     let month_mode = matches!(window.granularity, Granularity::Month | Granularity::Year);
-    let year_mode = matches!(window.granularity, Granularity::Year);
+    // 历法周期粒度（month/year 才需要周期键与补零走查；hour/day 走桶索引）。
+    let cal_level = match window.granularity {
+        Granularity::Month => Some(snap::Level::Month),
+        Granularity::Year => Some(snap::Level::Year),
+        _ => None,
+    };
     let off_ms = i64::from(tz_offset_minutes) * 60_000;
     let (filter_sql, filter_params) = super::summary_charts::filter_parts(&query);
     let (entity_type, exact_entity) = match super::summary_charts::trend_entity(db, &query).await {
@@ -278,7 +269,7 @@ pub(crate) async fn insight(
             Ok(rows) => rows,
             Err(e) => return response::db_error(e.to_string()),
         };
-        fold_snapshot_rows(&mut series, rows, off_ms, window.bucket_ms, month_mode);
+        fold_snapshot_rows(&mut series, rows, off_ms, window.bucket_ms, cal_level);
     }
 
     // 兑底贡献（分段聚合，口径同旧 group_rows 全量/成功两集）。
@@ -290,8 +281,7 @@ pub(crate) async fn insight(
         &filter_sql,
         &filter_params,
         &mut series,
-        off_ms,
-        month_mode,
+        cal_level,
     )
     .await
     {
@@ -300,48 +290,15 @@ pub(crate) async fn insight(
 
     // 自然月/年补零归并输出（比值类在归并后重算）。
     let bucket_starts = |series: &BucketSeries| -> Vec<(i64, f64)> {
-        if month_mode {
-            // 生成桶起点列表（与 charts 同法：窗口首末自然月/年逐月补零）。
-            let (Some(first), Some(last)) = (
-                chrono::DateTime::from_timestamp_millis(window.start + off_ms),
-                chrono::DateTime::from_timestamp_millis(window.end - 1 + off_ms),
-            ) else {
-                return Vec::new();
-            };
-            let mut out = Vec::new();
-            if year_mode {
-                for y in first.year()..=last.year() {
-                    let start = chrono::NaiveDate::from_ymd_opt(y, 1, 1)
-                        .and_then(|d| d.and_hms_opt(0, 0, 0))
-                        .map(|dt| dt.and_utc().timestamp_millis() - off_ms);
-                    if let Some(start) = start {
-                        out.push((start, series.period.get(&(y, 0)).copied().unwrap_or(0.0)));
-                    }
-                }
-            } else {
-                let mut y = first.year();
-                let mut m = first.month();
-                let (ly, lm) = (last.year(), last.month());
-                loop {
-                    let start = chrono::NaiveDate::from_ymd_opt(y, m, 1)
-                        .and_then(|d| d.and_hms_opt(0, 0, 0))
-                        .map(|dt| dt.and_utc().timestamp_millis() - off_ms);
-                    if let Some(start) = start {
-                        out.push((start, series.period.get(&(y, m)).copied().unwrap_or(0.0)));
-                    }
-                    if (y, m) == (ly, lm) {
-                        break;
-                    }
-                    m += 1;
-                    if m > 12 {
-                        m = 1;
-                        y += 1;
-                    }
-                }
-            }
-            out
-        } else {
-            window
+        match cal_level {
+            Some(level) => snap::natural_periods(level, off_ms, window.start, window.end)
+                .into_iter()
+                .map(|(y, m, start)| {
+                    let key = (y, if level == snap::Level::Year { 0 } else { m });
+                    (start, series.period.get(&key).copied().unwrap_or(0.0))
+                })
+                .collect(),
+            None => window
                 .bucket_range()
                 .map(|bucket| {
                     (
@@ -349,7 +306,7 @@ pub(crate) async fn insight(
                         series.idx.get(&bucket).copied().unwrap_or(0.0),
                     )
                 })
-                .collect()
+                .collect(),
         }
     };
 

@@ -506,3 +506,81 @@ async fn test_insight_month_granularity_recomputes_ratios() {
     assert_eq!(stream_ratio[0]["value"].as_f64().unwrap(), 1.0);
     assert_eq!(stream_ratio[1]["value"].as_f64().unwrap(), 0.0);
 }
+
+#[tokio::test]
+async fn test_insight_year_granularity_trends_nonzero() {
+    // 回归：year 粒度曾 fold 存 (y, 真实月) 而补零读取查 (y, 0)，趋势恒全零。
+    let (app, db) = setup_app().await;
+    // 窗口：2025-07-01 ~ 2026-09-01（东八区）→ 2025 / 2026 两个年桶。
+    let start = local_ms_cn(2025, 7, 1, 0, 0);
+    let end = local_ms_cn(2026, 9, 1, 0, 0);
+
+    for row in [
+        FullRow {
+            request_id: "y-ok-1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            stream: false,
+            ttft: Some(100),
+            input_tokens: Some(100),
+            input_cache_tokens: 0,
+            output_tokens: Some(200),
+            output_tokens_time: Some(2000),
+            request_time: 500,
+            success: true,
+            fail_reason: None,
+            total_tokens: Some(300),
+            start_time: local_ms_cn(2025, 8, 10, 10, 0),
+        },
+        FullRow {
+            request_id: "y-fail-1".into(),
+            provider_id: DEFAULT_PROVIDER_ID,
+            model_id: "gpt-4o".into(),
+            stream: false,
+            ttft: Some(100),
+            input_tokens: Some(100),
+            input_cache_tokens: 0,
+            output_tokens: Some(200),
+            output_tokens_time: Some(2000),
+            request_time: 500,
+            success: false,
+            fail_reason: Some("上游 500".to_string()),
+            total_tokens: None,
+            start_time: local_ms_cn(2026, 3, 5, 10, 0),
+        },
+    ] {
+        insert_full(&db, row).await;
+    }
+
+    let (status, json) = get_json(
+        app,
+        &format!("/api/stats/insight?startTime={start}&endTime={end}&granularity=year"),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let data = &json["data"];
+
+    // 两个年桶：2025 / 2026，起点为各年 1 月 1 日（本地）。
+    let call_trend = data["callTrend"].as_array().unwrap();
+    assert_eq!(call_trend.len(), 2);
+    assert_eq!(call_trend[0]["bucketStart"], local_ms_cn(2025, 1, 1, 0, 0));
+    assert_eq!(call_trend[1]["bucketStart"], local_ms_cn(2026, 1, 1, 0, 0));
+    assert_eq!(call_trend[0]["value"], 1);
+    assert_eq!(call_trend[1]["value"], 1);
+
+    let failure_trend = data["failureTrend"].as_array().unwrap();
+    assert_eq!(failure_trend.len(), 2);
+    assert_eq!(failure_trend[0]["value"], 0);
+    assert_eq!(failure_trend[1]["value"], 1);
+
+    // 失败率按年桶重算：2025 = 0/1，2026 = 1/1。
+    let failure_rate = data["failureRateTrend"].as_array().unwrap();
+    assert_eq!(failure_rate.len(), 2);
+    assert_eq!(failure_rate[0]["value"].as_f64().unwrap(), 0.0);
+    assert_eq!(failure_rate[1]["value"].as_f64().unwrap(), 1.0);
+
+    // token 趋势同样按年归并（2026 失败行无 total_tokens → 0）。
+    let input_token = data["inputTokenTrend"].as_array().unwrap();
+    assert_eq!(input_token[0]["value"], 100);
+    assert_eq!(input_token[1]["value"], 0);
+}

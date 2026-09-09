@@ -19,7 +19,10 @@ pub use core::{Frame, Level};
 pub use generator::finalize_bucket;
 
 #[allow(unused_imports)] // 端点接入中，部分面暂未消费
-pub(crate) use core::{DAY_MS, HOUR_MS, MARGIN_MS, decompose, frames_covering};
+pub(crate) use core::{
+    DAY_MS, HOUR_MS, MARGIN_MS, decompose, frames_covering, natural_periods,
+    period_key_of_day_index, period_key_of_ts, period_start_ms,
+};
 pub(crate) use generator::SUCCESS_PRIM_EXPRS;
 pub(crate) use math::{percentile, round_5, weighted_ratio};
 #[allow(unused_imports)]

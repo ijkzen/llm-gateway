@@ -1,18 +1,4 @@
 use super::*;
-use chrono::TimeZone;
-
-fn tz480() -> chrono::FixedOffset {
-    chrono::FixedOffset::east_opt(480 * 60).unwrap()
-}
-
-/// 本地日期 → UTC 毫秒时间戳（东八区）。
-fn local_ms(y: i32, m: u32, d: u32, h: u32, min: u32) -> i64 {
-    tz480()
-        .with_ymd_and_hms(y, m, d, h, min, 0)
-        .single()
-        .unwrap()
-        .timestamp_millis()
-}
 
 #[test]
 fn parse_granularity_accepts_all_kinds() {
@@ -31,65 +17,6 @@ fn parse_granularity_accepts_all_kinds() {
         Ok(Some(Granularity::Year))
     );
     assert!(Granularity::parse(Some("week")).is_err());
-}
-
-#[test]
-fn merge_natural_periods_groups_and_zero_fills_months() {
-    // 窗口：2026-06-25 00:00 ~ 2026-08-27 00:00（东八区）。
-    let start = local_ms(2026, 6, 25, 0, 0);
-    let end = local_ms(2026, 8, 27, 0, 0);
-    // 日索引数据：6/25 一次、7/15 一次、7/16 一次、8/26 一次。
-    // 本地 0 点的 UTC 毫秒 / DAY_MS 即本地日索引（东八区 +480）。
-    let day_indexes = vec![
-        (start / DAY_MS, 1),
-        (local_ms(2026, 7, 15, 0, 0) / DAY_MS, 5),
-        (local_ms(2026, 7, 16, 0, 0) / DAY_MS, 7),
-        (local_ms(2026, 8, 26, 0, 0) / DAY_MS, 3),
-    ];
-    let (starts, calls, tokens) =
-        merge_natural_periods(&day_indexes, &day_indexes, start, end, tz480(), true);
-    assert_eq!(starts.len(), 3);
-    assert_eq!(starts[0], local_ms(2026, 6, 1, 0, 0));
-    assert_eq!(calls[0], 1);
-    assert_eq!(starts[1], local_ms(2026, 7, 1, 0, 0));
-    assert_eq!(calls[1], 12);
-    assert_eq!(starts[2], local_ms(2026, 8, 1, 0, 0));
-    assert_eq!(calls[2], 3);
-    assert_eq!(tokens, calls);
-}
-
-#[test]
-fn merge_natural_periods_zero_fills_gap_months() {
-    // 窗口：2026-06-25 ~ 2026-08-27，无 7 月数据 → 7 月补零。
-    let start = local_ms(2026, 6, 25, 0, 0);
-    let end = local_ms(2026, 8, 27, 0, 0);
-    let day_indexes = vec![
-        (start / DAY_MS, 1),
-        (local_ms(2026, 8, 26, 0, 0) / DAY_MS, 3),
-    ];
-    let (starts, calls, _) =
-        merge_natural_periods(&day_indexes, &day_indexes, start, end, tz480(), true);
-    assert_eq!(starts.len(), 3);
-    assert_eq!(starts[1], local_ms(2026, 7, 1, 0, 0));
-    assert_eq!(calls[1], 0);
-}
-
-#[test]
-fn merge_natural_periods_groups_years() {
-    // 窗口：2025-07-01 ~ 2026-09-01 → 2025 / 2026 两个年桶。
-    let start = local_ms(2025, 7, 1, 0, 0);
-    let end = local_ms(2026, 9, 1, 0, 0);
-    let day_indexes = vec![
-        (start / DAY_MS, 2),
-        (local_ms(2026, 3, 5, 0, 0) / DAY_MS, 4),
-    ];
-    let (starts, calls, _) =
-        merge_natural_periods(&day_indexes, &day_indexes, start, end, tz480(), false);
-    assert_eq!(starts.len(), 2);
-    assert_eq!(starts[0], local_ms(2025, 1, 1, 0, 0));
-    assert_eq!(calls[0], 2);
-    assert_eq!(starts[1], local_ms(2026, 1, 1, 0, 0));
-    assert_eq!(calls[1], 4);
 }
 
 fn window_at(start: i64, end: i64, bucket_ms: i64, tz_offset_minutes: i32) -> ChartWindow {

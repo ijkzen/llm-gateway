@@ -5,7 +5,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use chrono::{Datelike, Offset, TimeZone};
+use chrono::{Offset, TimeZone};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde::{Deserialize, Serialize};
 
@@ -56,8 +56,6 @@ pub(crate) use summary_charts::TrendPoint;
 pub(crate) use window::DAY_MS;
 pub(crate) use window::Granularity;
 pub(crate) use window::HOUR_MS;
-#[cfg(test)]
-pub(crate) use window::merge_natural_periods;
 pub(crate) use window::resolve_chart_window;
 pub(crate) use window::stats_tz_offset_minutes;
 

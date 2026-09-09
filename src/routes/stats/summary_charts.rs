@@ -75,7 +75,6 @@ pub(crate) struct ChartsQuery {
 }
 
 use crate::stats_snapshot as snap;
-use chrono::Datelike;
 
 /// 汇总兑底段原始聚合（与旧 SQL 同口径：全量行 COUNT/SUM）。
 async fn summary_live(
@@ -231,13 +230,6 @@ pub(crate) fn filter_parts(query: &ChartsQuery) -> (String, Vec<sea_orm::Value>)
         params.push(api_key.into());
     }
     (sql, params)
-}
-
-/// 本地历法起点（epoch ms）：naive(y, m, 1) 0 点 − offset（与快照桶对齐）。
-fn period_start_ms(y: i32, m: u32, off_ms: i64) -> Option<i64> {
-    chrono::NaiveDate::from_ymd_opt(y, m, 1)
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
-        .map(|dt| dt.and_utc().timestamp_millis() - off_ms)
 }
 
 /// 趋势主体解析（快照侧）：页面实际使用的单维过滤形态 → (entity_type, 键)。
@@ -424,6 +416,11 @@ async fn charts_merge(
     let (filter_sql, filter_params) = filter_parts(query);
 
     // 趋势桶记账：hour/day → 桶索引；month/year → (本地年, 月|0)。
+    let cal_level = if matches!(window.granularity, Granularity::Year) {
+        snap::Level::Year
+    } else {
+        snap::Level::Month
+    };
     let (mut call_idx, mut token_idx) = (
         std::collections::BTreeMap::<i64, f64>::new(),
         std::collections::BTreeMap::<i64, f64>::new(),
@@ -432,14 +429,7 @@ async fn charts_merge(
         std::collections::BTreeMap::<(i32, u32), f64>::new(),
         std::collections::BTreeMap::<(i32, u32), f64>::new(),
     );
-    let key_of_ts = |ts: i64| -> Option<(i32, u32)> {
-        let wall = chrono::DateTime::from_timestamp_millis(ts + off_ms)?;
-        if matches!(window.granularity, Granularity::Month) {
-            Some((wall.year(), wall.month()))
-        } else {
-            Some((wall.year(), 0))
-        }
-    };
+    let key_of_ts = |ts: i64| snap::period_key_of_ts(ts, off_ms, cal_level);
 
     // 快照贡献：帧起点归属到查询桶。
     let mut by_level: std::collections::BTreeMap<snap::Level, Vec<snap::Frame>> =
@@ -521,14 +511,8 @@ async fn charts_merge(
                     .or_else(|| row.try_get::<i64>("", "value").ok().map(|v| v as f64))
                     .unwrap_or(0.0);
                 if month_mode {
-                    // bucket = 本地日索引（bucket_expr 月/年路径），日起点转 (y, m)。
-                    let wall = chrono::DateTime::from_timestamp_millis(bucket * DAY_MS);
-                    if let Some(wall) = wall {
-                        let key = if matches!(window.granularity, Granularity::Month) {
-                            (wall.year(), wall.month())
-                        } else {
-                            (wall.year(), 0)
-                        };
+                    // bucket = 本地日索引（bucket_expr 月/年路径），日索引折历法周期键。
+                    if let Some(key) = snap::period_key_of_day_index(bucket, cal_level) {
                         *period_map.entry(key).or_insert(0.0) += value;
                     }
                 } else {
@@ -549,44 +533,17 @@ async fn charts_merge(
     // 趋势按粒度补零输出（与旧实现同形状：bucket_range 全补 / 自然月年全补）。
     let (call_trend, token_trend) = if month_mode {
         let fill_periods = |map: &std::collections::BTreeMap<(i32, u32), f64>| -> Vec<TrendPoint> {
-            let (Some(first), Some(last)) = (
-                chrono::DateTime::from_timestamp_millis(window.start + off_ms),
-                chrono::DateTime::from_timestamp_millis(window.end - 1 + off_ms),
-            ) else {
-                return Vec::new();
-            };
-            let mut out = Vec::new();
-            if matches!(window.granularity, Granularity::Month) {
-                let mut y = first.year();
-                let mut m = first.month();
-                let (ly, lm) = (last.year(), last.month());
-                loop {
-                    if let Some(start) = period_start_ms(y, m, off_ms) {
-                        out.push(TrendPoint {
-                            bucket_start: start,
-                            value: map.get(&(y, m)).copied().unwrap_or(0.0).round() as i64,
-                        });
-                    }
-                    if (y, m) == (ly, lm) {
-                        break;
-                    }
-                    m += 1;
-                    if m > 12 {
-                        m = 1;
-                        y += 1;
-                    }
-                }
-            } else {
-                for y in first.year()..=last.year() {
-                    if let Some(start) = period_start_ms(y, 1, off_ms) {
-                        out.push(TrendPoint {
-                            bucket_start: start,
-                            value: map.get(&(y, 0)).copied().unwrap_or(0.0).round() as i64,
-                        });
-                    }
-                }
-            }
-            out
+            snap::natural_periods(cal_level, off_ms, window.start, window.end)
+                .into_iter()
+                .map(|(y, m, start)| TrendPoint {
+                    bucket_start: start,
+                    value: map
+                        .get(&(y, if cal_level == snap::Level::Year { 0 } else { m }))
+                        .copied()
+                        .unwrap_or(0.0)
+                        .round() as i64,
+                })
+                .collect()
         };
         (fill_periods(&call_period), fill_periods(&token_period))
     } else {
