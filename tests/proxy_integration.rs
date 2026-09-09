@@ -152,6 +152,26 @@ async fn spawn_mock_with_headers(captured: Captured, captured_headers: CapturedH
                         }))
                         .into_response();
                     }
+                    // 回归触发器：流中夹带畸形事件（非 JSON 的 data 行），
+                    // 转换失败必须按失败记账（不得假成功）。
+                    if parsed.pointer("/messages/0/content/0/text")
+                        == Some(&json!("malformed-stream"))
+                    {
+                        let mut payload = String::new();
+                        for event in [
+                            json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10}}}).to_string(),
+                            json!({"type":"content_block_start","index":0,"content_block":{"type":"text"}}).to_string(),
+                        ] {
+                            payload.push_str(&format!("data: {event}\n\n"));
+                        }
+                        payload.push_str("data: {broken\n\n");
+                        return (
+                            HttpStatus::OK,
+                            [("content-type", "text/event-stream")],
+                            payload,
+                        )
+                            .into_response();
+                    }
                     if parsed["stream"] == json!(true) {
                         sse(&[
                             json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}}}).to_string(),

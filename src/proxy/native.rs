@@ -301,6 +301,8 @@ pub(crate) async fn dispatch_native_success(
             }
         }
         let end_time = now_ms();
+        // 记账口径与 relay 统一（StreamOutcome；原生无转换错误概念，仅上游读错）。
+        let outcome = StreamOutcome::from_parts(upstream_failed, None, None, disconnect);
         RequestRecord {
             request_id,
             virtual_model_id,
@@ -313,8 +315,8 @@ pub(crate) async fn dispatch_native_success(
             start_time,
             end_time,
             usage: scanner.usage().unwrap_or_default(),
-            success: upstream_failed.is_none(),
-            fail_reason: upstream_failed.or(disconnect.then(|| "客户端提前断开".to_string())),
+            success: outcome.success(),
+            fail_reason: outcome.fail_reason(),
             api_key_name,
         }
         .insert(&db);

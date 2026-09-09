@@ -30,6 +30,7 @@ mod headers;
 mod lb;
 mod native;
 mod probe;
+mod relay;
 mod route;
 
 pub use dispatch::accumulate_chunks;
@@ -71,9 +72,7 @@ use crate::usage::persist::{fetch_and_store, read_usage_cache};
 use crate::usage::types::{UsageData, UsageKind, WindowKind};
 
 pub(crate) use calls::{build_native_upstream_call, build_upstream_call};
-pub(crate) use dispatch::{
-    Converter, collect_stream_events, dispatch_success, record_failure, sse_response,
-};
+pub(crate) use dispatch::{collect_stream_events, dispatch_success, record_failure, sse_response};
 pub(crate) use failover::{
     ForwardFlavor, MemberLoopOutcome, SuccessContext, forward_through_members,
 };
@@ -89,6 +88,7 @@ pub(crate) use lb::{
 };
 pub(crate) use native::{NativeUsageScanner, dispatch_native_success};
 pub(crate) use probe::{TEST_API_KEY_NAME, TEST_PROMPT, TEST_VIRTUAL_MODEL_ID};
+pub(crate) use relay::{Converter, PumpSource, RecordCtx, StreamOutcome, TailSpec, relay_stream};
 pub(crate) use route::{RouteError, resolve_and_order};
 
 #[cfg(test)]

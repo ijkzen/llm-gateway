@@ -186,6 +186,41 @@ async fn anthropic_non_stream_converts_and_merges_cache_tokens() {
 }
 
 #[tokio::test]
+async fn anthropic_stream_convert_failure_records_failure() {
+    // 回归：流中畸形事件（parse 失败）必须按失败落库——曾与 Responses 臂
+    // 口径不一致：Anthropic/Gemini 臂漏记转换错误而记假成功。
+    let base = spawn_mock(capture()).await;
+    let (app, db) = common_setup_with_member(&base, 2, 0, 0).await;
+
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "stream": true,
+            "messages": [{"role": "user", "content": "malformed-stream"}],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert!(text.contains("api_error"), "应发 error 帧: {text}");
+    assert!(text.contains("data: [DONE]"), "{text}");
+
+    let rows = wait_for_records(&db, 1).await;
+    let record = &rows[0];
+    assert_eq!(record.stream, true);
+    assert!(!record.success, "转换失败必须记失败，不得假成功");
+    assert!(
+        record
+            .fail_reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("解析"),
+        "fail_reason={:?}",
+        record.fail_reason
+    );
+}
+
+#[tokio::test]
 async fn anthropic_stream_converts_to_openai_chunks() {
     let base = spawn_mock(capture()).await;
     let (app, db) = common_setup_with_member(&base, 2, 0, 0).await;

@@ -1,92 +1,6 @@
 use super::*;
 
-pub(crate) enum Converter {
-    Anthropic(Box<anthropic::AnthropicStreamConverter>),
-    Responses(Box<responses::ResponsesStreamConverter>),
-    Gemini(Box<gemini::GeminiStreamConverter>),
-}
-
-impl Converter {
-    fn convert_event(&mut self, data: &str) -> Result<Vec<Value>, String> {
-        match self {
-            Converter::Anthropic(c) => c.convert_event(data),
-            Converter::Responses(c) => c.convert_event(data),
-            Converter::Gemini(c) => c.convert_event(data),
-        }
-    }
-
-    fn usage(&self) -> Option<Usage> {
-        match self {
-            Converter::Anthropic(c) => c.usage().cloned(),
-            Converter::Responses(c) => c.usage().cloned(),
-            Converter::Gemini(c) => c.usage().cloned(),
-        }
-    }
-
-    fn is_finished(&self) -> bool {
-        match self {
-            Converter::Anthropic(c) => c.is_finished(),
-            Converter::Responses(c) => c.is_finished(),
-            Converter::Gemini(c) => c.is_finished(),
-        }
-    }
-
-    fn error(&self) -> Option<String> {
-        match self {
-            Converter::Anthropic(c) => c.error().cloned(),
-            Converter::Responses(c) => c.error().cloned(),
-            Converter::Gemini(c) => c.error().cloned(),
-        }
-    }
-
-    fn has_finish(&self) -> bool {
-        match self {
-            Converter::Anthropic(c) => c.has_finish(),
-            Converter::Responses(c) => c.has_finish(),
-            Converter::Gemini(c) => c.has_finish(),
-        }
-    }
-
-    fn final_chunk(&mut self) -> Option<Value> {
-        match self {
-            Converter::Anthropic(_) => None,
-            Converter::Responses(_) => None,
-            Converter::Gemini(c) => c.final_chunk(),
-        }
-    }
-
-    fn completion_model(&self) -> String {
-        match self {
-            Converter::Responses(c) => c.completion_model().to_string(),
-            Converter::Anthropic(_) | Converter::Gemini(_) => {
-                unreachable!("only Responses uses upstream completion metadata")
-            }
-        }
-    }
-
-    fn completion_id(&self) -> String {
-        match self {
-            Converter::Anthropic(c) => c.completion_id().to_string(),
-            Converter::Responses(c) => c.completion_id().to_string(),
-            Converter::Gemini(c) => c.completion_id().to_string(),
-        }
-    }
-}
-
-/// chunk 是否携带内容（用于 ttft / 末 token 时刻统计）。
-fn chunk_has_content(chunk: &Value) -> bool {
-    let delta = chunk.pointer("/choices/0/delta");
-    let Some(delta) = delta else { return false };
-    ["content", "reasoning_content"].iter().any(|key| {
-        delta
-            .get(*key)
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty())
-    }) || delta
-        .get("tool_calls")
-        .and_then(Value::as_array)
-        .is_some_and(|calls| !calls.is_empty())
-}
+use super::relay::{Converter, chunk_has_content, strip_reasoning_delta};
 
 /// exclude:true 时剥除非流式响应 message 中的思考内容（模型照常思考，客户端不收）。
 fn strip_reasoning_message(completion: &mut Value) {
@@ -96,17 +10,6 @@ fn strip_reasoning_message(completion: &mut Value) {
     {
         message.remove("reasoning_content");
         message.remove("reasoning_details");
-    }
-}
-
-/// exclude:true 时剥除流式 delta 中的思考增量。
-fn strip_reasoning_delta(chunk: &mut Value) {
-    if let Some(delta) = chunk
-        .pointer_mut("/choices/0/delta")
-        .and_then(Value::as_object_mut)
-    {
-        delta.remove("reasoning_content");
-        delta.remove("reasoning_details");
     }
 }
 
@@ -311,193 +214,49 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
             (StatusCode::OK, axum::Json(parsed)).into_response()
         }
         // OpenAI Compat 流式：事件直通（重帧）+ 旁路扫描统计；客户端未请求
-        // include_usage 时过滤注入产生的 usage 尾块。
+        // include_usage 时过滤注入产生的 usage 尾块。（泵骨架已收拢至 relay。）
         (Protocol::OpenAiCompat, true) => {
-            let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
-            let db = state.db.clone();
-            let mut scanner = openai::OpenAiStreamScanner::default();
-            let reply_start_at = reply.start_at_ms;
-            let mut stream_metrics = StreamMetrics::new(reply.start_at_ms);
-            tokio::spawn(async move {
-                let mut body = reply.body;
-                let mut splitter = crate::proxy::sse::SseSplitter::default();
-                let mut disconnect = false;
-                // 上游流中断（hyper 帧错误/连接重置）与客户端断开是两种结局：
-                // 前者记失败并补 error 帧 + [DONE] 收尾，后者客户端已不在。
-                let mut upstream_failed: Option<String> = None;
-                'outer: while let Some(frame) = body.frame().await {
-                    let bytes = match frame {
-                        Ok(frame) => frame.into_data().unwrap_or_default(),
-                        Err(e) => {
-                            let message = format!("读取上游流失败：{e}");
-                            upstream_failed = Some(message.clone());
-                            let error_frame = format!(
-                                "data: {}\n\n",
-                                json!({"error": {"message": message, "type": "api_error", "code": "upstream_error"}})
-                            );
-                            let _ = tx.send(Ok(Bytes::from(error_frame))).await;
-                            break 'outer;
-                        }
-                    };
-                    let text = String::from_utf8_lossy(&bytes).to_string();
-                    for event in splitter.feed(&text) {
-                        scanner.feed_event(&event);
-                        if scanner.saw_content {
-                            scanner.saw_content = false;
-                            stream_metrics.on_token();
-                        }
-                        // include_usage 注入只为统计指标；客户端未请求时，
-                        // 空 choices 的 usage 尾块不透出（OpenAI 规范语义）。
-                        if !include_usage && openai::is_usage_only_chunk(&event) {
-                            continue;
-                        }
-                        if tx
-                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(&event))))
-                            .await
-                            .is_err()
-                        {
-                            disconnect = true;
-                            break 'outer;
-                        }
-                    }
-                }
-                // 上游中断时补 [DONE] 收尾（正常路径 [DONE] 由上游自带）。
-                if upstream_failed.is_some() {
-                    let _ = tx
-                        .send(Ok(Bytes::from("data: [DONE]\n\n".to_string())))
-                        .await;
-                }
-                let end_time = now_ms();
-                let usage = scanner.usage.clone().unwrap_or_default();
-                RequestRecord {
+            let response = relay_stream(
+                state.db.clone(),
+                reply,
+                PumpSource::OpenAi {
+                    scanner: openai::OpenAiStreamScanner::default(),
+                    include_usage,
+                },
+                TailSpec::Plain,
+                RecordCtx {
                     request_id,
                     virtual_model_id,
-                    provider_id: member.provider_id,
-                    model_id: member.model_id.clone(),
-                    stream: true,
-                    ttft: stream_metrics.ttft_ms(),
-                    output_tokens_time: stream_metrics.output_duration_ms(),
-                    ttft_start_ms: reply_start_at,
-                    start_time,
-                    end_time,
-                    usage,
-                    success: upstream_failed.is_none(),
-                    fail_reason: upstream_failed
-                        .or(disconnect.then(|| "客户端提前断开".to_string())),
+                    member,
                     api_key_name,
-                }
-                .insert(&db);
-            });
-            with_thinking_dropped_header(sse_response(ReceiverStream::new(rx)), thinking_dropped)
+                    start_time,
+                },
+            );
+            with_thinking_dropped_header(response, thinking_dropped)
         }
         // Responses 出站：上游强制流式。
         // Responses 出站恒为上游流式；客户端 stream=true 时 live 逐事件转换
         // 转发（不再整条缓冲后回放：TTFB=首个转换事件耗时，峰值内存=单帧）。
         (Protocol::OpenAiResponses, true) => {
-            let mut converter = Converter::Responses(Box::new(
-                responses::ResponsesStreamConverter::new(&request_id, &requested_model),
-            ));
-            let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
-            let db = state.db.clone();
-            let reply_start_at = reply.start_at_ms;
-            let mut stream_metrics = StreamMetrics::new(reply.start_at_ms);
-            tokio::spawn(async move {
-                let mut body = reply.body;
-                let mut splitter = crate::proxy::sse::SseSplitter::default();
-                let mut disconnect = false;
-                // 上游帧错误/转换失败与客户端断开分开记账：前者补 error 帧并按
-                // 失败落库，收尾的 usage 尾块仅在无错误时补发。
-                let mut failed: Option<String> = None;
-                'outer: while let Some(frame) = body.frame().await {
-                    let bytes = match frame {
-                        Ok(frame) => frame.into_data().unwrap_or_default(),
-                        Err(e) => {
-                            let message = format!("读取上游流失败：{e}");
-                            failed = Some(message.clone());
-                            let error_frame = format!(
-                                "data: {}\n\n",
-                                json!({"error": {"message": message, "type": "api_error", "code": "upstream_error"}})
-                            );
-                            let _ = tx.send(Ok(Bytes::from(error_frame))).await;
-                            break 'outer;
-                        }
-                    };
-                    let text = String::from_utf8_lossy(&bytes).to_string();
-                    for event in splitter.feed(&text) {
-                        match converter.convert_event(&event) {
-                            Ok(chunks) => {
-                                for mut chunk in chunks {
-                                    if chunk_has_content(&chunk) {
-                                        stream_metrics.on_token();
-                                    }
-                                    if reasoning_exclude {
-                                        strip_reasoning_delta(&mut chunk);
-                                    }
-                                    let frame = crate::proxy::sse::sse_frame(&chunk.to_string());
-                                    if tx.send(Ok(Bytes::from(frame))).await.is_err() {
-                                        disconnect = true;
-                                        break 'outer;
-                                    }
-                                }
-                            }
-                            Err(message) => {
-                                // 转换失败（上游事件畸形/语义错误）：发 error 帧收尾。
-                                failed = Some(message.clone());
-                                let error_frame = format!(
-                                    "data: {}\n\n",
-                                    json!({"error": {"message": message, "type": "api_error", "code": "upstream_error"}})
-                                );
-                                let _ = tx.send(Ok(Bytes::from(error_frame))).await;
-                                break 'outer;
-                            }
-                        }
-                        if converter.is_finished() {
-                            break 'outer;
-                        }
-                    }
-                }
-                if failed.is_none()
-                    && let Some(converter_error) = converter.error()
-                {
-                    failed = Some(converter_error);
-                }
-                // 正常收尾补 usage 尾块（include_usage 注入只为统计口径透出）。
-                if failed.is_none()
-                    && include_usage
-                    && let Some(usage) = converter.usage()
-                {
-                    let frame = crate::proxy::sse::sse_frame(
-                        &usage_chunk_json(
-                            &converter.completion_id(),
-                            &converter.completion_model(),
-                            cached_client_usage_json(&usage),
-                        )
-                        .to_string(),
-                    );
-                    let _ = tx.send(Ok(Bytes::from(frame))).await;
-                }
-                let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n"))).await;
-                let end_time = now_ms();
-                let usage = converter.usage().unwrap_or_default();
-                RequestRecord {
+            let response = relay_stream(
+                state.db.clone(),
+                reply,
+                PumpSource::Convert {
+                    converter: Converter::Responses(Box::new(
+                        responses::ResponsesStreamConverter::new(&request_id, &requested_model),
+                    )),
+                    reasoning_exclude,
+                },
+                TailSpec::ResponsesUsage { include_usage },
+                RecordCtx {
                     request_id,
                     virtual_model_id,
-                    provider_id: member.provider_id,
-                    model_id: member.model_id.clone(),
-                    stream: true,
-                    ttft: stream_metrics.ttft_ms(),
-                    output_tokens_time: stream_metrics.output_duration_ms(),
-                    ttft_start_ms: reply_start_at,
-                    start_time,
-                    end_time,
-                    usage,
-                    success: failed.is_none(),
-                    fail_reason: failed.or(disconnect.then(|| "客户端提前断开".to_string())),
+                    member,
                     api_key_name,
-                }
-                .insert(&db);
-            });
-            with_thinking_dropped_header(sse_response(ReceiverStream::new(rx)), thinking_dropped)
+                    start_time,
+                },
+            );
+            with_thinking_dropped_header(response, thinking_dropped)
         }
         // Responses 出站恒为上游流式；客户端非流式时收集整条流后聚合为 JSON。
         (Protocol::OpenAiResponses, false) => {
@@ -555,20 +314,6 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
         }
         // Anthropic / Gemini：非流式直接转换；流式逐事件转换后转发。
         (protocol, client_stream) => {
-            let mut converter = match protocol {
-                Protocol::Anthropic => {
-                    Converter::Anthropic(Box::new(anthropic::AnthropicStreamConverter::new(
-                        &request_id,
-                        &requested_model,
-                        json_mode_tool,
-                    )))
-                }
-                Protocol::Gemini => Converter::Gemini(Box::new(
-                    gemini::GeminiStreamConverter::new(&request_id, &requested_model),
-                )),
-                Protocol::OpenAiCompat | Protocol::OpenAiResponses => unreachable!("handled above"),
-            };
-
             if !client_stream {
                 let body = upstream::read_body(reply.body).await.unwrap_or_default();
                 let text = String::from_utf8_lossy(&body).to_string();
@@ -657,128 +402,41 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                 };
             }
 
-            // 流式：逐事件转换并推送给客户端。
-            let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(32);
-            let db = state.db.clone();
-            let reply_start_at = reply.start_at_ms;
-            let mut stream_metrics = StreamMetrics::new(reply.start_at_ms);
-            tokio::spawn(async move {
-                let mut body = reply.body;
-                let mut splitter = crate::proxy::sse::SseSplitter::default();
-                let mut disconnect = false;
-                // 上游流中断与客户端断开分开记账：前者发 error 帧并按失败落库，
-                // 收尾的 finish/usage 补发仅在无错误时进行。
-                let mut upstream_failed: Option<String> = None;
-                'outer: while let Some(frame) = body.frame().await {
-                    let bytes = match frame {
-                        Ok(frame) => frame.into_data().unwrap_or_default(),
-                        Err(e) => {
-                            let message = format!("读取上游流失败：{e}");
-                            upstream_failed = Some(message.clone());
-                            let error_frame = format!(
-                                "data: {}\n\n",
-                                json!({"error": {"message": message, "type": "api_error", "code": "upstream_error"}})
-                            );
-                            let _ = tx.send(Ok(Bytes::from(error_frame))).await;
-                            break 'outer;
-                        }
-                    };
-                    let text = String::from_utf8_lossy(&bytes).to_string();
-                    for event in splitter.feed(&text) {
-                        match converter.convert_event(&event) {
-                            Ok(chunks) => {
-                                for mut chunk in chunks {
-                                    if chunk_has_content(&chunk) {
-                                        stream_metrics.on_token();
-                                    }
-                                    if reasoning_exclude {
-                                        strip_reasoning_delta(&mut chunk);
-                                    }
-                                    let frame = crate::proxy::sse::sse_frame(&chunk.to_string());
-                                    if tx.send(Ok(Bytes::from(frame))).await.is_err() {
-                                        disconnect = true;
-                                        break 'outer;
-                                    }
-                                }
-                            }
-                            Err(message) => {
-                                let error_frame = format!(
-                                    "data: {}\n\n",
-                                    json!({"error": {"message": message, "type": "api_error", "code": "upstream_error"}})
-                                );
-                                let _ = tx.send(Ok(Bytes::from(error_frame))).await;
-                                disconnect = false;
-                                break 'outer;
-                            }
-                        }
-                        if converter.is_finished() {
-                            break 'outer;
-                        }
-                    }
+            // 流式：逐事件转换并推送给客户端（泵骨架已收拢至 relay；转换失败
+            // 与带内错误统一按失败记账——不再记假成功）。
+            let converter = match protocol {
+                Protocol::Anthropic => {
+                    Converter::Anthropic(Box::new(anthropic::AnthropicStreamConverter::new(
+                        &request_id,
+                        &requested_model,
+                        json_mode_tool,
+                    )))
                 }
-                // 补发缺失的 finish / usage / [DONE]（上游中断时跳过，error 帧后仅收 [DONE]）。
-                if converter.error().is_none() && upstream_failed.is_none() {
-                    if let Some(chunk) = converter.final_chunk()
-                        && tx
-                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(
-                                &chunk.to_string(),
-                            ))))
-                            .await
-                            .is_err()
-                    {
-                        disconnect = true;
-                    }
-                    if !converter.has_finish() {
-                        let finish = chunk_json(
-                            &converter.completion_id(),
-                            &requested_model,
-                            json!({}),
-                            Some("stop"),
-                        );
-                        let _ = tx
-                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(
-                                &finish.to_string(),
-                            ))))
-                            .await;
-                    }
-                    if include_usage && let Some(usage) = converter.usage() {
-                        // 各协议统一带缓存明细（与非流式口径一致）。
-                        let usage_chunk = usage_chunk_json(
-                            &converter.completion_id(),
-                            &requested_model,
-                            cached_client_usage_json(&usage),
-                        );
-                        let frame = usage_chunk.to_string();
-                        let _ = tx
-                            .send(Ok(Bytes::from(crate::proxy::sse::sse_frame(&frame))))
-                            .await;
-                    }
-                }
-                let _ = tx.send(Ok(Bytes::from("data: [DONE]\n\n"))).await;
-                let end_time = now_ms();
-                let success = upstream_failed.is_none() && converter.error().is_none();
-                let usage = converter.usage().unwrap_or_default();
-                RequestRecord {
+                Protocol::Gemini => Converter::Gemini(Box::new(
+                    gemini::GeminiStreamConverter::new(&request_id, &requested_model),
+                )),
+                Protocol::OpenAiCompat | Protocol::OpenAiResponses => unreachable!("handled above"),
+            };
+            let response = relay_stream(
+                state.db.clone(),
+                reply,
+                PumpSource::Convert {
+                    converter,
+                    reasoning_exclude,
+                },
+                TailSpec::ConvertFinish {
+                    include_usage,
+                    requested_model,
+                },
+                RecordCtx {
                     request_id,
                     virtual_model_id,
-                    provider_id: member.provider_id,
-                    model_id: member.model_id.clone(),
-                    stream: true,
-                    ttft: stream_metrics.ttft_ms(),
-                    output_tokens_time: stream_metrics.output_duration_ms(),
-                    ttft_start_ms: reply_start_at,
-                    start_time,
-                    end_time,
-                    usage,
-                    success,
-                    fail_reason: upstream_failed
-                        .or_else(|| converter.error().clone())
-                        .or(disconnect.then(|| "客户端提前断开".to_string())),
+                    member,
                     api_key_name,
-                }
-                .insert(&db);
-            });
-            with_thinking_dropped_header(sse_response(ReceiverStream::new(rx)), thinking_dropped)
+                    start_time,
+                },
+            );
+            with_thinking_dropped_header(response, thinking_dropped)
         }
     }
 }
