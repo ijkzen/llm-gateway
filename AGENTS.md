@@ -77,6 +77,7 @@
 │   │   ├── headers.rs      # 出站头四层组装：下游透传/自定义/模板默认/协议鉴权 + 剥离清单
 │   │   ├── calls.rs        # 上游调用组装（build_upstream_call / build_native_upstream_call）
 │   │   ├── forward.rs      # 转发入口：forward_chat（/v1 chat）+ forward_chat_direct（管理后台直连）
+│   │   ├── route.rs        # 路由解析前半段 resolve_and_order（display_id 路由/接口类型门/成员加载/LB 排序与选路日志统一形状）+ RouteError
 │   │   ├── failover.rs     # 统一成员尝试循环 forward_through_members + ForwardFlavor/成员结局类型
 │   │   ├── native.rs       # /v1/messages・/v1/responses 原生透传（forward_native + 旁路 usage 扫描）
 │   │   ├── dispatch.rs     # 成功分派/流收集/指标落库（dispatch_success/accumulate_chunks/record_failure）
