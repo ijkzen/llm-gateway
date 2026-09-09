@@ -13,4 +13,6 @@ Blocked by: 01
 - 测试覆盖：页面级 17 件之外缺什么（图表纯函数单测、数据变换边界）；
 - 模块间调用：hooks 与 api.ts 的类型契约、与后端 stats 端点字段的同步面。
 
+范围注记（01 盘点）：本票域内含 stats/race/dashboard hooks（use-dashboard-*/use-stats-*/use-*-race/use-model-metrics 等）；hooks 为跨域共享接口（RequestLogsTable 等 17 域组件亦消费），视为冻结。
+
 产出 `.scratch/code-quality-map-2026-09-09/findings/16-fe-dashboard-logs.md`，Answer 给摘要与需拍板问题。

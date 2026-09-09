@@ -11,17 +11,18 @@
 - **清单格式**：沿用四维审计 FINDINGS 口径（编号 / 严重度 P1-P3 / 维度 / 一句话 / 证据行号），产出到 `.scratch/code-quality-map-2026-09-09/findings/<NN>-<slug>.md`，Answer 给摘要。行号引用必须逐条复核（教训：子代理报告是起点，执行前逐行核对）。
 - **归位遗留项**：S3 request 表保留与 rollup → 03 票；S5 同窗聚合合并 → 10 票；usage fetcher 会话失效分类 → 06 票（均在对应票 Question 中显式列出）。
 - **Tracker**：本地 markdown（`docs/agents/issue-tracker.md`）；ticket 均为 `task` 类型（agent 独立驱动），`Status: claimed/resolved` 认领后才动手，Answer 段记录结论。所有模块票被 01 盘点票阻塞。
+- **范围权威**：各模块票的审查范围与切分以 `MODULES.md`（01 票产物）§1/§3/§4 为准——01 已解决（2026-09-09），其切分修正（08 补寄居文件、11 补路由文件、18 拆 21、19 缩小、hooks 冻结接口）已直接落进各票 Question。
 - **Skills**：与用户拍板用 grilling（AskUserQuestion）；域术语若有冲突用 domain-modeling；无需 research/prototype。
 
 ## Decisions so far
 
-（空——本图尚未解决任何票）
+- [01 · 模块边界全景盘点](issues/01-module-boundary-inventory.md)：全仓模块图（后端 20 模块两清分层、availability=纯 entity 底座、usage↔proxy 单点双向 by-design）+ 10 族散落候选（F3/F6 已单源免票，F1/F2/F4/F5/F7/F8/F9/F10 各有主票见 MODULES.md §4）+ 文件归属（failure_recovery.rs 寄居成立→08 审、failure_recheck 合理、usage 子模块干净）+ 前端切分修正（18 拆 21、19 缩小、16/17/20 注记）+ AGENTS.md 结构树漂移清单（§1.4，随实施批次刷新）。产物=MODULES.md。
 
 ## Not yet specified
 
-- 01 盘点票毕业后：票切分的修正（现 02-20 切分为初版，以盘点结果为准）、新发现的散落/边界重构候选的补票。
+- 「P1 高危险发现」是否中途脱离清单模式插入修复（默认不改，图后统一排期）——由用户在票答覆盖时自行决定。
 - 图后实施排期的组织方式（统一 backlog 文档？按严重度分批？按模块批量？）——终点之后的交付形态，图内不定。
-- 若某模块票产出大量 P2/P3「口味级」条目，是否需要在图内加一张「低危条目收敛决策」票（合并/砍掉/全留）——视实际产出再定。
+- AGENTS.md 结构树刷新（漂移清单见 MODULES.md §1.4）与各票低危「口味级」条目的收敛决策——均归图后实施批次，图内不再开票。
 
 ## Out of scope
 

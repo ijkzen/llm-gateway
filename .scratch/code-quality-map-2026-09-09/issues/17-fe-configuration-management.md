@@ -13,4 +13,6 @@ Blocked by: 01
 - 测试覆盖：组件级用例之外缺什么（弹窗提交流程、字段门控矩阵）；
 - 模块间调用：与共享 data-table/ui 层的契约、与后端 CRUD 字段名同步面。
 
+范围注记（01 盘点）：本票域内含 CRUD hooks（use-providers/use-provider-models/use-virtual-models/use-api-keys/use-usage-estimate 等）；hooks 为跨域共享接口（16 域 RequestLogsTable 亦消费 4 个实体 hook），视为冻结。
+
 产出 `.scratch/code-quality-map-2026-09-09/findings/17-fe-configuration-management.md`，Answer 给摘要与需拍板问题。

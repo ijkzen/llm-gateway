@@ -6,7 +6,7 @@ Blocked by: 01
 
 ## Question
 
-对 cron 域做全量审查：`scheduler.rs` / `parser.rs` / `repository.rs` / `worker.rs` / `seed.rs` / `log_capture.rs` / `log_repository.rs` + `scheduler/tests.rs`。按四轴 + 专门性能轮产出分级清单（不改代码）：
+对 cron 域做全量审查：`scheduler.rs` / `parser.rs` / `repository.rs` / `worker.rs` / `seed.rs` / `log_capture.rs` / `log_repository.rs` + `scheduler/tests.rs`，**另含 lib.rs:196 注册的 FAILURE_RECOVERY_JOB handler 实现体 `src/proxy/failure_recovery.rs` 的归属审查**（01 盘点结论：唯一消费=cron 注册、转发路径零调用，寄居 proxy/ 名不副实，此处定夺归属建议）。按四轴 + 专门性能轮产出分级清单（不改代码）：
 
 - 逻辑正确性：禁用=移除语义、重启恢复、优雅关闭、日志截断/计数口径（09-08 已修 E1-E8/P1-P4 系列不复查）、next_run_at 写者归属（C4 已收口不复查）；
 - 实现简洁：scheduler 回滚路径与生产路径并存是否仍有冗余、仓库层哑化程度；
