@@ -224,14 +224,25 @@ async fn seed_failure_disabled_provider(state: &AppState, base_url: &str) -> (i3
     (provider.id, model.model_id)
 }
 
+/// 等待 request 表出现记录：订阅落库事件做同步（事件先于订阅到达的行由
+/// 首查存量覆盖，事件唤醒后重查），超时兜底与旧轮询预算耗尽同行为。
 async fn wait_for_requests(state: &AppState, expected: u64) -> Vec<request::Model> {
-    for _ in 0..20 {
-        if request::Entity::find().count(&state.db).await.unwrap() >= expected {
-            break;
+    let mut rx = llm_gateway::proxy::metrics::subscribe_request_writes();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let rows = request::Entity::find().all(&state.db).await.unwrap();
+        if rows.len() as u64 >= expected {
+            return rows;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return rows;
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(())) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => return rows,
+        }
     }
-    request::Entity::find().all(&state.db).await.unwrap()
 }
 
 async fn set_usage_enabled(state: &AppState, provider_id: i32, proxy_addr: &str) {

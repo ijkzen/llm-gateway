@@ -200,20 +200,28 @@ fn chat_body(provider_id: i32, model_id: i32) -> Value {
     })
 }
 
-/// 等待 request 表出现记录（落库为异步任务）。
+/// 等待 request 表出现记录：订阅落库事件做同步（事件先于订阅到达的行由
+/// 首查存量覆盖，事件唤醒后重查），超时兜底与旧轮询预算耗尽同行为。
 async fn wait_for_records(
     db: &sea_orm::DatabaseConnection,
     expected: usize,
 ) -> Vec<request::Model> {
-    for _ in 0..40 {
-        if let Ok(rows) = request::Entity::find().all(db).await
-            && rows.len() >= expected
-        {
+    let mut rx = llm_gateway::proxy::metrics::subscribe_request_writes();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let rows = request::Entity::find().all(db).await.unwrap();
+        if rows.len() >= expected {
             return rows;
         }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return rows;
+        }
+        match tokio::time::timeout(remaining, rx.recv()).await {
+            Ok(Ok(())) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => return rows,
+        }
     }
-    request::Entity::find().all(db).await.unwrap()
 }
 
 // ---------- 用例 ----------

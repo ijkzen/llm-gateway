@@ -177,6 +177,25 @@ struct PendingWrite {
 const WRITE_BATCH_SIZE: usize = 50;
 const WRITE_IDLE_FLUSH: std::time::Duration = std::time::Duration::from_millis(200);
 
+/// 请求行落库完成事件（测试可观测性）：每次成功 INSERT 广播一次；无订阅者
+/// 时发送被忽略，生产零开销。集成测试订阅后以事件同步替代固定预算轮询，
+/// 消除「spawn 泵 → 单写者队列 → 落库」异步链等待的负载敏感抖动。
+static WRITE_EVENTS: std::sync::OnceLock<tokio::sync::broadcast::Sender<()>> =
+    std::sync::OnceLock::new();
+
+/// 订阅请求行落库事件（每行一次；滞后 Lagged 由调用方重查数据库兜底）。
+pub fn subscribe_request_writes() -> tokio::sync::broadcast::Receiver<()> {
+    WRITE_EVENTS
+        .get_or_init(|| tokio::sync::broadcast::channel(1024).0)
+        .subscribe()
+}
+
+fn emit_write_event() {
+    if let Some(tx) = WRITE_EVENTS.get() {
+        let _ = tx.send(()); // 无订阅者：忽略
+    }
+}
+
 /// 把一行指标送入进程级写者队列；通道满（极端突刺）回退独立任务直插，
 /// 避免指标写入阻塞转发路径。
 fn enqueue_write(db: DatabaseConnection, active: ActiveModel) {
@@ -185,28 +204,19 @@ fn enqueue_write(db: DatabaseConnection, active: ActiveModel) {
 
     static WRITER: OnceLock<mpsc::Sender<PendingWrite>> = OnceLock::new();
     let tx = WRITER.get_or_init(|| {
-        let (tx, mut rx) = mpsc::channel::<PendingWrite>(1024);
-        tokio::spawn(async move {
-            let mut pending: Vec<PendingWrite> = Vec::with_capacity(WRITE_BATCH_SIZE);
-            loop {
-                let idle = tokio::time::sleep(WRITE_IDLE_FLUSH);
-                tokio::pin!(idle);
-                tokio::select! {
-                    item = rx.recv() => match item {
-                        Some(item) => {
-                            pending.push(item);
-                            if pending.len() >= WRITE_BATCH_SIZE {
-                                flush_pending(&mut pending).await;
-                            }
-                        }
-                        None => break,
-                    },
-                    _ = &mut idle, if !pending.is_empty() => flush_pending(&mut pending).await,
-                }
-            }
-            // 通道关闭：清空残余。
-            flush_pending(&mut pending).await;
-        });
+        let (tx, rx) = mpsc::channel::<PendingWrite>(1024);
+        // 写者跑在独立线程的私有 runtime：集成测试每用例一个短命 runtime，
+        // 寄居任一调用方 runtime 都会随其关闭而丢失队列内未冲刷的行。
+        std::thread::Builder::new()
+            .name("request-metrics-writer".to_string())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("指标写者 runtime 创建失败");
+                rt.block_on(writer_loop(rx));
+            })
+            .expect("指标写者线程创建失败");
         tx
     });
     match tx.try_send(PendingWrite { db, active }) {
@@ -217,20 +227,47 @@ fn enqueue_write(db: DatabaseConnection, active: ActiveModel) {
             tokio::spawn(async move {
                 if let Err(e) = active.insert(&db).await {
                     tracing::warn!("Failed to insert request record: {e}");
+                } else {
+                    emit_write_event();
                 }
             });
         }
-        // 写者随其宿主 runtime 结束而关闭（如单测短命 runtime）：回退直插。
+        // 写者线程仅随进程结束而退出（该路径实际不可达，保留兜底）。
         Err(mpsc::error::TrySendError::Closed(item)) => {
             let db = item.db;
             let active = item.active;
             tokio::spawn(async move {
                 if let Err(e) = active.insert(&db).await {
                     tracing::warn!("Failed to insert request record: {e}");
+                } else {
+                    emit_write_event();
                 }
             });
         }
     }
+}
+
+/// 写者主循环：串行消费队列，积攒到批大小或空闲超时即逐行落库。
+async fn writer_loop(mut rx: tokio::sync::mpsc::Receiver<PendingWrite>) {
+    let mut pending: Vec<PendingWrite> = Vec::with_capacity(WRITE_BATCH_SIZE);
+    loop {
+        let idle = tokio::time::sleep(WRITE_IDLE_FLUSH);
+        tokio::pin!(idle);
+        tokio::select! {
+            item = rx.recv() => match item {
+                Some(item) => {
+                    pending.push(item);
+                    if pending.len() >= WRITE_BATCH_SIZE {
+                        flush_pending(&mut pending).await;
+                    }
+                }
+                None => break,
+            },
+            _ = &mut idle, if !pending.is_empty() => flush_pending(&mut pending).await,
+        }
+    }
+    // 通道关闭：清空残余。
+    flush_pending(&mut pending).await;
 }
 
 async fn flush_pending(pending: &mut Vec<PendingWrite>) {
@@ -238,6 +275,8 @@ async fn flush_pending(pending: &mut Vec<PendingWrite>) {
     for item in drained {
         if let Err(e) = item.active.insert(&item.db).await {
             tracing::warn!("Failed to insert request record: {e}");
+        } else {
+            emit_write_event();
         }
     }
 }
