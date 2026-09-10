@@ -562,6 +562,9 @@ const zhCN = {
 		searchPlaceholder: "搜索键或值...",
 		filterByType: "按类型筛选",
 		allTypes: "全部类型",
+		validationInt: "必须是有效的整数",
+		validationFloat: "必须是有效的数字",
+		validationBool: "必须是 true 或 false",
 	},
 	backup: {
 		title: "备份与恢复",

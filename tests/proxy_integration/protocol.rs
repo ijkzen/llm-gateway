@@ -221,6 +221,39 @@ async fn anthropic_stream_convert_failure_records_failure() {
 }
 
 #[tokio::test]
+async fn anthropic_stream_inband_error_sends_error_frame_and_records_failure() {
+    // 03-01 回归：200 SSE 流内的错误事件（Anthropic `error`）此前只置转换器
+    // error 态、不产错误帧——客户端只收到 [DONE]，把截断内容当完整成功。
+    let base = spawn_mock(capture()).await;
+    let (app, db) = common_setup_with_member(&base, 2, 0, 0).await;
+
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "stream": true,
+            "messages": [{"role": "user", "content": "inband-error"}],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert!(
+        text.contains("api_error"),
+        "带内错误必须补发 error 帧（不得只发 [DONE]）: {text}"
+    );
+    assert!(
+        text.contains("上游过载"),
+        "error 帧应带上游错误信息: {text}"
+    );
+    assert!(text.contains("data: [DONE]"), "{text}");
+
+    let rows = wait_for_records(&db, 1).await;
+    let record = &rows[0];
+    assert_eq!(record.stream, true);
+    assert!(!record.success, "带内错误必须记失败，不得假成功");
+}
+
+#[tokio::test]
 async fn anthropic_stream_converts_to_openai_chunks() {
     let base = spawn_mock(capture()).await;
     let (app, db) = common_setup_with_member(&base, 2, 0, 0).await;

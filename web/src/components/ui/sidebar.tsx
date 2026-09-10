@@ -19,6 +19,14 @@ import { cn } from "@/lib/utils";
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
+
+/** 读取折叠状态 cookie（19-01：原先只写不读，刷新必回展开）。 */
+function readSidebarCookie(): boolean | null {
+	if (typeof document === "undefined") return null;
+	const match = document.cookie.match(new RegExp(`(?:^|;\\s*)${SIDEBAR_COOKIE_NAME}=(true|false)`));
+	if (!match) return null;
+	return match[1] === "true";
+}
 const SIDEBAR_WIDTH = "16rem";
 const SIDEBAR_WIDTH_MOBILE = "18rem";
 const SIDEBAR_WIDTH_ICON = "3rem";
@@ -70,7 +78,8 @@ const SidebarProvider = React.forwardRef<
 
 		// This is the internal state of the sidebar.
 		// We use openProp and setOpenProp for control from outside the component.
-		const [_open, _setOpen] = React.useState(defaultOpen);
+		// 初值优先取 cookie（用户上次的折叠选择），无则不使用 defaultOpen。
+		const [_open, _setOpen] = React.useState(() => readSidebarCookie() ?? defaultOpen);
 		const open = openProp ?? _open;
 		const setOpen = React.useCallback(
 			(value: boolean | ((value: boolean) => boolean)) => {

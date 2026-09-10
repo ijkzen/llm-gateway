@@ -148,6 +148,8 @@ impl StreamOutcome {
 
 /// 事件源：每 SSE 事件的处理结果。
 enum PumpStep {
+    /// 先发送已产出的帧，再按失败收尾（带内错误事件已产生内容增量的场景）。
+    FramesThenFailed(Vec<Bytes>, String),
     /// 正常产出（0..n 帧待发送；被过滤时为 0 帧）。
     Frames(Vec<Bytes>),
     /// 转换失败（Err 返回）：记 convert_err、发 error 帧、终止。
@@ -207,6 +209,15 @@ impl PumpSource {
                         &chunk.to_string(),
                     )));
                 }
+                // 03-01：上游 200 SSE 流内的错误事件（Responses error/response.failed、
+                // Anthropic error、Gemini {"error":..}）只把转换器置 error 态而不产出
+                // 错误帧——不补发客户端会收到「内容截断但流正常结束」的假成功。
+                if let Some(message) = self.error() {
+                    if frames.is_empty() {
+                        return PumpStep::Failed(message);
+                    }
+                    return PumpStep::FramesThenFailed(frames, message);
+                }
                 PumpStep::Frames(frames)
             }
         }
@@ -231,6 +242,14 @@ impl PumpSource {
         match self {
             PumpSource::OpenAi { .. } => None,
             PumpSource::Convert { converter, .. } => converter.error(),
+        }
+    }
+
+    /// 是否已收到上游 [DONE]（仅 OpenAI 直通有该语义）。
+    fn saw_done(&self) -> bool {
+        match self {
+            PumpSource::OpenAi { scanner, .. } => scanner.saw_done,
+            PumpSource::Convert { .. } => false,
         }
     }
 }
@@ -290,6 +309,16 @@ pub(crate) fn relay_stream(
             let bytes = match frame {
                 Ok(frame) => frame.into_data().unwrap_or_default(),
                 Err(e) => {
+                    // 03-02：上游 [DONE] 之后的读错误属连接 teardown 噪音——内容已
+                    // 完整交付，不再补 error 帧/翻失败（否则客户端会在 [DONE] 后收到
+                    // 第二个错误帧与第二个 [DONE]，且整单被记失败）。
+                    if source.saw_done() && matches!(tail, TailSpec::Plain) {
+                        tracing::debug!(
+                            request_id = %record.request_id,
+                            "上游 [DONE] 之后的读错误（连接收尾噪音），按成功结束"
+                        );
+                        break 'outer;
+                    }
                     let message = format!("读取上游流失败：{e}");
                     tracing::warn!(
                         request_id = %record.request_id,
@@ -313,6 +342,24 @@ pub(crate) fn relay_stream(
                                 break 'outer;
                             }
                         }
+                    }
+                    PumpStep::FramesThenFailed(frames, message) => {
+                        for frame in frames {
+                            if tx.send(Ok(frame)).await.is_err() {
+                                disconnect = true;
+                                break 'outer;
+                            }
+                        }
+                        tracing::warn!(
+                            request_id = %record.request_id,
+                            provider_id = record.member.provider_id,
+                            model_id = %record.member.model_id,
+                            fail_reason = %message,
+                            "上游流内错误事件，向客户端补发错误帧",
+                        );
+                        convert_err = Some(message.clone());
+                        let _ = tx.send(Ok(error_frame(&message))).await;
+                        break 'outer;
                     }
                     PumpStep::Failed(message) => {
                         tracing::warn!(

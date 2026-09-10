@@ -1,3 +1,5 @@
+import { useLocale } from "@/hooks/use-locale";
+import i18n, { SETTING_KEY_LANGUAGE } from "@/i18n";
 import { type ApiResponse, api, unwrap } from "@/lib/api";
 import type { SettingType } from "@/lib/constants";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -32,7 +34,20 @@ export function useUpdateSetting() {
 				.json<ApiResponse<unknown>>();
 			return unwrap(res);
 		},
-		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsKeys.all }),
+		onSuccess: async (_data, variables) => {
+			await queryClient.invalidateQueries({ queryKey: settingsKeys.all });
+			// 18-03：设置表直视编辑 language 时前端同步热切换（正路 useChangeLocale
+			// 之外的第二入口）——否则界面语言与后端设置表长期分叉，且下次刷新又
+			// 从 localStorage 读回旧语言。
+			if (variables.key !== SETTING_KEY_LANGUAGE) return;
+			if (variables.value !== "zh-CN" && variables.value !== "en") return;
+			const { setLocale } = useLocale.getState();
+			setLocale(variables.value);
+			if (i18n.language !== variables.value) {
+				await i18n.changeLanguage(variables.value);
+			}
+			await queryClient.invalidateQueries();
+		},
 	});
 }
 

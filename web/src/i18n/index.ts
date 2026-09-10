@@ -44,21 +44,27 @@ export function initialLocale(): Locale {
 	return storedLocale() ?? detectBrowserLocale();
 }
 
+const initial = initialLocale();
+
+// 同步 <html lang>，让浏览器原生 UI（日期选择器等）跟随语言。
+i18n.on("languageChanged", (lng) => {
+	document.documentElement.lang = lng;
+});
+
 void i18n.use(initReactI18next).init({
 	resources: {
 		"zh-CN": { translation: zhCN },
 		en: { translation: en },
 	},
-	lng: initialLocale(),
+	lng: initial,
 	fallbackLng: "zh-CN",
 	interpolation: {
 		escapeValue: false,
 	},
 });
 
-// 同步 <html lang>，让浏览器原生 UI（日期选择器等）跟随语言。
-i18n.on("languageChanged", (lng) => {
-	document.documentElement.lang = lng;
-});
+// 20-01：init 内的 languageChanged 在处理器注册之前同步触发（i18next 实证），
+// 事件漏掉首帧——此处直接按初始语言落 lang，保证首屏 <html lang> 跟随。
+document.documentElement.lang = initial;
 
 export default i18n;

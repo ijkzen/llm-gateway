@@ -127,6 +127,9 @@ pub struct OpenAiStreamScanner {
     splitter: SseSplitter,
     pub usage: Option<Usage>,
     pub saw_content: bool,
+    /// 已见到上游 [DONE]：其后的读错误属连接 teardown 噪音（03-02），
+    /// 内容已完整交付，不该翻转整单为失败。
+    pub saw_done: bool,
 }
 
 impl OpenAiStreamScanner {
@@ -138,6 +141,7 @@ impl OpenAiStreamScanner {
 
     pub fn feed_event(&mut self, event: &str) {
         if event == "[DONE]" {
+            self.saw_done = true;
             return;
         }
         let Ok(value) = serde_json::from_str::<Value>(event) else {

@@ -172,6 +172,27 @@ async fn spawn_mock_with_headers(captured: Captured, captured_headers: CapturedH
                         )
                             .into_response();
                     }
+                    // 回归触发器：200 SSE 流内错误事件（带内 error 帧）——
+                    // 客户端必须收到 error 帧 + [DONE]，不得假成功（03-01）。
+                    if parsed.pointer("/messages/0/content/0/text")
+                        == Some(&json!("inband-error"))
+                    {
+                        let payload = [
+                            json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10}}}).to_string(),
+                            json!({"type":"error","error":{"type":"overloaded_error","message":"上游过载"}}).to_string(),
+                        ]
+                        .into_iter()
+                        .fold(String::new(), |mut acc, event| {
+                            acc.push_str(&format!("data: {event}\n\n"));
+                            acc
+                        });
+                        return (
+                            HttpStatus::OK,
+                            [("content-type", "text/event-stream")],
+                            payload,
+                        )
+                            .into_response();
+                    }
                     if parsed["stream"] == json!(true) {
                         sse(&[
                             json!({"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":10,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}}}).to_string(),

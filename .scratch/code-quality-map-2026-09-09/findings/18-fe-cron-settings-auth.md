@@ -6,10 +6,10 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 18-01 | P2 | 契约/SSE | 后端实时 `log` 事件从不带 seq（log_capture.rs:151 写死 None+skip 序列化），前端 `data.seq<=last.seq` 去重**失效**（undefined 比较恒 false=不丢弃）→ 快照重叠必现重复行；实时日志 React key 恒 undefined；测试 emitLog 注入 seq 构成假阳性契约——08-01 前端半边实证 |
-| 18-02 | P2 | 逻辑/竞态 | `reset` 分支 fetchQuery 整体替换 logs：reset 与拉取完成间追加的实时日志被覆盖丢弃；叠加全局 staleTime 5min，fetchQuery 可能命中旧缓存把新日志**回退** |
-| 18-03 | P2 | 逻辑/i18n | 设置表直接编辑 `language` 只改后端：前端 i18n 不热切换、刷新后仍读旧 localStorage，前后端语言长期分叉无提示（正路 useChangeLocale 只有 locale-toggle 在用） |
-| 18-04 | P2 | 逻辑/契约 | SettingEditDialog 类型盲：非 Json 一律纯文本 `z.string()`+Input，Int/Bool/Float 无字段级校验与对应控件（max_consecutive_failures 首当其冲），非法值只能提交后吃后端 400 |
+| 18-01 | P2【已修复 2026-09-10】 | 契约/SSE | 后端实时 `log` 事件从不带 seq（log_capture.rs:151 写死 None+skip 序列化），前端 `data.seq<=last.seq` 去重**失效**（undefined 比较恒 false=不丢弃）→ 快照重叠必现重复行；实时日志 React key 恒 undefined；测试 emitLog 注入 seq 构成假阳性契约——08-01 前端半边实证 |
+| 18-02 | P2【已修复 2026-09-10】 | 逻辑/竞态 | `reset` 分支 fetchQuery 整体替换 logs：reset 与拉取完成间追加的实时日志被覆盖丢弃；叠加全局 staleTime 5min，fetchQuery 可能命中旧缓存把新日志**回退** |
+| 18-03 | P2【已修复 2026-09-10】 | 逻辑/i18n | 设置表直接编辑 `language` 只改后端：前端 i18n 不热切换、刷新后仍读旧 localStorage，前后端语言长期分叉无提示（正路 useChangeLocale 只有 locale-toggle 在用） |
+| 18-04 | P2【已修复 2026-09-10】 | 逻辑/契约 | SettingEditDialog 类型盲：非 Json 一律纯文本 `z.string()`+Input，Int/Bool/Float 无字段级校验与对应控件（max_consecutive_failures 首当其冲），非法值只能提交后吃后端 400 |
 | 18-05 | P3 | 逻辑 | 断线重连错过 run_ended 时 idle 分支不 invalidate runs，历史执行列表长期停留旧快照 |
 | 18-06 | P3 | 逻辑/契约 | cron 表达式前端仅 `.min(1)` 非空（语法校验后端独有且仅变更时），非法表达式只得泛化 toast 无字段级错误 |
 | 18-07 | P3 | 逻辑 | 立即执行后固定 1s 失效刷新，但 last_run_at 在执行**结束**才回写——超过 1 秒的任务刷新不到新时间 |
@@ -136,3 +136,10 @@ SettingDeleteDialog 无保护判断，language/timezone 删除菜单照常（Set
 ## 性能/内存轮结论
 
 无 P1/P2 性能项。动作项=18-09（日志列表 memo/预格式化）与 18-11（重连退避）；18-02 的 staleTime 叠加既影响正确性也削弱「重拉」语义；设置表规模极小无性能面；Json 编辑器大 JSON 每击键整弹窗重渲染为观察级（当前设置规模无风险）；SSE 每弹窗 1 连接无压力。结论：本域性能形态健康，重点是 18-01/18-02 两个 SSE 正确性项随 08-01 批实施。
+
+## 实施进度（2026-09-10）
+
+- **18-01 已修复**（随后端 08-01）：`JobLogLayer` 捕获侧按 span 分配 per-run 单调 seq，实时 log 事件携带；前端既有 `data.seq <= last.seq` 去重生效、React key 不再是 undefined。前端新增去重回归（快照 1/2 + 重叠实时事件各只渲染一条），`emitLog` 不再注入模拟 seq。
+- **18-02 已修复**：reset 分支改为「按 seq 合并」而非整体替换（拉取期间新到的实时日志不丢），并 `staleTime: 0` 绕过旧缓存回退。
+- **18-03 已修复**：`useUpdateSetting` 在 key=language 的成功回调里热切换前端语言（zustand store + i18n.changeLanguage + 全量失效缓存），设置表直视编辑不再与前端分叉。
+- **18-04 已修复**：`SettingEditDialog` 按声明类型渲染控件与校验——Bool 用 Switch、Int/Float 带 inputMode 与 zod refine（与后端 validate_setting_value 同口径），非法值当场标错不再提交后吃 400；补 `settings.validationInt/Float/Bool` 双语词条。

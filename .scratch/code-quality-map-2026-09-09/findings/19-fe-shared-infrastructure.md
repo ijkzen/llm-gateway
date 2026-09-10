@@ -6,7 +6,7 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 19-01 | P2 | 逻辑 | sidebar 折叠状态写 cookie 但全仓无任何读取点——刷新必回展开，注释声明的持久化不成立（shadcn SSR 遗产在 Vite SPA 无读者） |
+| 19-01 | P2【已修复 2026-09-10】 | 逻辑 | sidebar 折叠状态写 cookie 但全仓无任何读取点——刷新必回展开，注释声明的持久化不成立（shadcn SSR 遗产在 Vite SPA 无读者） |
 | 19-02 | P2【已修复 2026-09-10】 | 逻辑/网络栈 | `beforeError` 把 HTTPError 换成 ApiError（name 不匹配），ky 重试的 `isHTTPError` 判不上 → `retry.statusCodes` 白名单失效：GET 类 400/401/403/404 也被重试一次，429/503 的 Retry-After 尊重逻辑同被绕过 |
 | 19-03 | P2【已修复 2026-09-10】 | 逻辑/网络栈 | 网络错误/超时根本不过 `beforeError`（ky 只在 !response.ok 后调），`api.ts:53` 的 NETWORK_ERROR 分支不可达——网络故障 toast 显示英文原始消息 |
 | 19-04 | P2【已修复 2026-09-10】 | 逻辑/超时 | 全局 `timeout: 10000` 短于用量上游 15s：usage/estimate/backup import 未像 refresh(30s)/test(60s) 那样覆盖——前端先于后端超时，后端其实会成功落缓存 |
@@ -149,3 +149,5 @@ test/setup.ts:70-74 mock @/hooks/use-stats-time-zone 返回本机时区；真实
 - **19-03 已修复**：新增 `userErrorMessage`（网络 TypeError → `error.networkError`、`TimeoutError` → 带方法/路径的 `error.timeout`、AbortError → `error.aborted`），`useToastActions.toastError` 统一经它取描述；两 locale 补 `error.timeout`/`error.aborted` 词条。
 - **19-04 已修复**：全局 timeout 10s → 30s；用量查询与用量预估显式 `timeout: 30000`（后端上游 15s），备份导入 `timeout: 120000`。
 - 测试：新增 `src/lib/__tests__/api.test.ts`（8 例：beforeError 两分支 + 错误身份保持、userErrorMessage 四分支、unwrap 两分支），`provider-detail.test.tsx` 补 17-01 竞态回归。前端 428 passed + tsc + biome 全绿。
+
+- **19-01 已修复**：`sidebar.tsx` 增加 `readSidebarCookie()`，`_open` 初值改为 `readSidebarCookie() ?? defaultOpen`——折叠后刷新保持折叠（原先只写不读）。

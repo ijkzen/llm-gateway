@@ -6,8 +6,8 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 20-01 | P2 | 逻辑 | `<html lang>` 首帧不跟随语言：`languageChanged` 处理器注册在 `i18n.init()` 之后，而该事件在 init 内同步触发（i18next 26.4.0 实证）→ 处理器漏掉首帧；index.html 硬编码 `lang="zh-CN"`，英文用户首屏 lang 恒 zh-CN 直到手动切换 |
-| 20-02 | P2 | 逻辑 | `zh-CN.ts:681-682` 的 `dashboard.success`/`dashboard.failed` 中文档写英文值（"success"/"failed"）→ insight 失败趋势 tooltip 中文界面显示英文，且与同图硬编码中文图例（16-05）同图矛盾 |
+| 20-01 | P2【已修复 2026-09-10】 | 逻辑 | `<html lang>` 首帧不跟随语言：`languageChanged` 处理器注册在 `i18n.init()` 之后，而该事件在 init 内同步触发（i18next 26.4.0 实证）→ 处理器漏掉首帧；index.html 硬编码 `lang="zh-CN"`，英文用户首屏 lang 恒 zh-CN 直到手动切换 |
+| 20-02 | P2【已修复 2026-09-10】 | 逻辑 | `zh-CN.ts:681-682` 的 `dashboard.success`/`dashboard.failed` 中文档写英文值（"success"/"failed"）→ insight 失败趋势 tooltip 中文界面显示英文，且与同图硬编码中文图例（16-05）同图矛盾 |
 | 20-03 | P3 | 简洁 | 703 键中 160 键零引用（死键）：`usage`（13/13）与 `time`（5/5）整组全死、`error.internalError/unauthorized`、`providers.usageLabels.*`（14）、7 页面的 `<域>.title` 与 `nav.pages.*.title` 语义重复 |
 | 20-04 | P3 | 逻辑/简洁 | 日期/周期格式化手写「locale==="zh" ? 中文串 : Intl」（race-period.ts 9 处 + dashboard-charts.tsx 3 处）绕过 i18n，而所需格式的 `time.*` 键全组死键——两套文案来源并存 |
 | 20-05 | P3 | 逻辑 | `constants.ts:1` `DEFAULT_GROUP = "默认"` 硬编码，英文界面 cron 列表/详情显示中文「默认」 |
@@ -60,3 +60,8 @@ zh-CN.ts:681-682 `success: "success", failed: "failed"`（dashboard 分组，同
 ## 性能/内存轮结论
 
 无性能负债。唯一观察：useChangeLocale 切换成功即 `invalidateQueries()` 全量失效（含统计/赛马重查询）——为刷新后端本地化 cron 标题有意为之，可用更窄 key 前缀收窄（图后可选）。
+
+## 实施进度（2026-09-10）
+
+- **20-01 已修复**：`i18n/index.ts` 的 `languageChanged` 处理器注册移到 `init()` 之前，且 init 后直接 `document.documentElement.lang = initial`——首帧 `<html lang>` 跟随实际语言（原先英文用户首屏恒 zh-CN）。
+- **20-02 已修复**：`zh-CN` 的 `dashboard.success/failed` 值由 "success"/"failed" 改为「成功」/「失败」；insight 五图图例改走 i18n（16-05），同图 tooltip 与图例语言一致。

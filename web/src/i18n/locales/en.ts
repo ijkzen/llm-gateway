@@ -572,6 +572,9 @@ const en: Translation = {
 		searchPlaceholder: "Search key or value...",
 		filterByType: "Filter by type",
 		allTypes: "All types",
+		validationInt: "Must be a valid integer",
+		validationFloat: "Must be a valid number",
+		validationBool: "Must be true or false",
 	},
 	backup: {
 		title: "Backup & Restore",

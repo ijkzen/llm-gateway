@@ -40,6 +40,9 @@
 
 ## 实施进度
 
+- **03-01/03-02（P2/P3）已修复**：带内错误事件补发 error 帧（假成功消除）+ [DONE] 后 teardown 噪音按成功结束。
+- **18-01~18-04（P2）已修复**：SSE seq 前端生效、reset 合并、language 热切换、设置弹窗类型控件。
+- **19-01（P2）已修复**：sidebar cookie 读回（刷新保持折叠）。**20-01/20-02（P2）已修复**：html lang 首帧 + zh dashboard 英文值。
 - **16-01~16-07（P2）已修复**：period 白名单、两概览页错误态+门控、日志分页重置、四列禁排序、insight 图例 i18n（并修 zh 的 success/failed 英文值）、X 轴标签走设置表时区、RPM/TPM 拆轴。
 - **17-06（P2）已修复**：候选卡数字输入 stopPropagation（manual/pending 字段可填）。
 - **15-01（P2）已修复**：HTTP 优雅关停加 8s 上限，长连接不再钉死 worker 收尾。

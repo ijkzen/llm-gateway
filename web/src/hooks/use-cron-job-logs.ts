@@ -173,17 +173,30 @@ export function useCronJobLogStream(name: string) {
 		});
 
 		es.addEventListener("reset", () => {
-			// 接收端积压丢事件：重新拉取当前 run 的全量日志替换本地。
+			// 接收端积压丢事件：重新拉取当前 run 的全量日志。
 			const current = stateRef.current;
 			if (!current.currentRun) return;
 			const runId = current.currentRun.run_id;
+			// 18-02：拉取期间新到的实时日志不能被整体替换掉——按 seq 合并
+			// （拉回的是历史快照，本地可能已有更靠后的增量）；同时绕过
+			// staleTime 用 fetchQuery 的最新结果，避免命中旧缓存导致日志回退。
 			queryClient
 				.fetchQuery({
 					queryKey: cronJobLogsKeys.runLogs(name, runId),
 					queryFn: () => fetchRunLogs(name, runId),
+					staleTime: 0,
 				})
 				.then((logs) => {
-					setState((s) => (s.currentRun?.run_id === runId ? { ...s, logs } : s));
+					setState((s) => {
+						if (s.currentRun?.run_id !== runId) return s;
+						const bySeq = new Map<number, CronJobLog>();
+						for (const log of logs) bySeq.set(log.seq, log);
+						for (const log of s.logs) bySeq.set(log.seq, log);
+						return {
+							...s,
+							logs: [...bySeq.values()].sort((a, b) => a.seq - b.seq),
+						};
+					});
 				})
 				.catch(() => {
 					// 拉取失败保持现状，后续增量按 seq 去重仍会补齐

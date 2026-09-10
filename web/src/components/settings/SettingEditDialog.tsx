@@ -15,18 +15,39 @@ import {
 	FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { type Setting, useUpdateSetting } from "@/hooks/use-settings";
 import { useToastActions } from "@/hooks/use-toast";
+import type { SettingType } from "@/lib/constants";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
+import { useTranslation } from "react-i18next";
 import { z } from "zod";
 
-const settingFormSchema = z.object({
-	value: z.string(),
-});
+/**
+ * 按设置声明类型校验（18-04）：与后端 validate_setting_value 同口径，避免
+ * Int/Bool/Float 填非法值要提交后才吃 400。String/Json 走原文本（Json 另有
+ * 结构化编辑弹窗）。
+ */
+function buildSettingSchema(type: SettingType | undefined, t: (key: string) => string) {
+	return z.object({
+		value: z
+			.string()
+			.refine((v) => type !== "Int" || /^-?\d+$/.test(v.trim()), {
+				message: t("settings.validationInt"),
+			})
+			.refine((v) => type !== "Float" || Number.isFinite(Number(v.trim())), {
+				message: t("settings.validationFloat"),
+			})
+			.refine((v) => type !== "Bool" || v.trim() === "true" || v.trim() === "false", {
+				message: t("settings.validationBool"),
+			})
+			.transform((v) => (type === "Bool" ? v.trim() : v)),
+	});
+}
 
-type SettingFormValues = z.infer<typeof settingFormSchema>;
+type SettingFormValues = z.infer<ReturnType<typeof buildSettingSchema>>;
 
 interface SettingEditDialogProps {
 	setting: Setting | null;
@@ -37,9 +58,15 @@ interface SettingEditDialogProps {
 export function SettingEditDialog({ setting, open, onOpenChange }: SettingEditDialogProps) {
 	const { toastSuccess, toastError } = useToastActions();
 	const updateSetting = useUpdateSetting();
+	const { t } = useTranslation();
+	// 18-04：按声明类型校验（Int/Bool/Float 不再等到提交后吃后端 400）。
+	const schema = useMemo(
+		() => buildSettingSchema(setting?.type as SettingType | undefined, t),
+		[setting?.type, t],
+	);
 
 	const form = useForm<SettingFormValues>({
-		resolver: zodResolver(settingFormSchema),
+		resolver: zodResolver(schema),
 		defaultValues: {
 			value: "",
 		},
@@ -87,15 +114,37 @@ export function SettingEditDialog({ setting, open, onOpenChange }: SettingEditDi
 							<FormField
 								control={form.control}
 								name="value"
-								render={({ field }) => (
-									<FormItem>
-										<FormLabel>值</FormLabel>
-										<FormControl>
-											<Input {...field} />
-										</FormControl>
-										<FormMessage />
-									</FormItem>
-								)}
+								render={({ field }) =>
+									setting?.type === "Bool" ? (
+										<FormItem className="flex items-center justify-between rounded-lg border p-3">
+											<FormLabel>{t("settings.value")}</FormLabel>
+											<FormControl>
+												<Switch
+													checked={field.value === "true"}
+													onCheckedChange={(checked) => field.onChange(checked ? "true" : "false")}
+												/>
+											</FormControl>
+											<FormMessage />
+										</FormItem>
+									) : (
+										<FormItem>
+											<FormLabel>{t("settings.value")}</FormLabel>
+											<FormControl>
+												<Input
+													{...field}
+													inputMode={
+														setting?.type === "Int"
+															? "numeric"
+															: setting?.type === "Float"
+																? "decimal"
+																: undefined
+													}
+												/>
+											</FormControl>
+											<FormMessage />
+										</FormItem>
+									)
+								}
 							/>
 						</div>
 						<DialogFooter className="gap-2">
