@@ -6,8 +6,8 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 10-01 | P1【插修已撤销，方案落实施批】 | 逻辑/分位 | insight day 粒度窗口含今日未闭天时，小时帧 p 标量覆盖写今日日桶分位（「过去 7 天」常见查询必现，尾点错）——group_percentiles 未校验帧级 == 查询粒度 |
-| 10-02 | P1【插修已撤销，方案落实施批】 | 逻辑/过滤 | provider-model-rank 单侧过滤：仅 modelId 时快照 exact=None 读入全量 model 行混入其它供应商/模型（亲验）；providerId-only 被展示层 meta 的 provider 过滤兜住（响应正确但 fold 浪费）——修复=单侧过滤整窗兑底 |
+| 10-01 | P1【已修复 2026-09-10，d8f7825】 | 逻辑/分位 | insight day 粒度窗口含今日未闭天时，小时帧 p 标量覆盖写今日日桶分位（「过去 7 天」常见查询必现，尾点错）——group_percentiles 未校验帧级 == 查询粒度 |
+| 10-02 | P1【已修复 2026-09-10，d8f7825】 | 逻辑/过滤 | provider-model-rank 单侧过滤：仅 modelId 时快照 exact=None 读入全量 model 行混入其它供应商/模型（亲验）；providerId-only 被展示层 meta 的 provider 过滤兜住（响应正确但 fold 浪费）——修复=单侧过滤整窗兑底 |
 | 10-03 | P3·语义【已拍板：接受现状+注释与测试锁定】 | 逻辑/删后时序 | pm/Key 硬删后（四个硬删端点已确认）闭桶历史快照态消失、兑底态按原文保留（pm_rank raw: 孤儿键即此设计）——「快照=加速层」在此时序不成立；快照行只存主键 id 无原文，schema 级统一成本高 |
 | 10-04 | P3 | 逻辑/注入面 | api_key_rank 按 name 反查 id 用内联拼接（rank_impl.rs:723-727）——name 无字符集限制，含 `'` 即破坏 SQL；应改 `?` 绑定 |
 | 10-05 | P3 | 健壮/契约 | PRIM_COUNT=9（rank_snap.rs:13）与 registry SuccessPrim 段序是运行期偶合——加/减原语不同步会在 fold 越界 panic，无 debug_assert 护栏 |
@@ -20,13 +20,13 @@
 
 ## 各条证据
 
-### 10-01 insight day 粒度分位尾桶污染（P1）【插修已撤销，方案落实施批】
+### 10-01 insight day 粒度分位尾桶污染（P1）【已修复 2026-09-10，d8f7825】
 
 insight.rs `group_percentiles`（:445-543）逐 level 读 p 标量（:462-477）时守卫只放行 `Hour|Day`（:464），**不校验帧级 == 查询粒度**；同桶多行按指标位**覆盖写**（:473-474 `entry[pos] = value`）。查询 granularity=day 且窗口含今日未闭天（典型「过去 7 天，end=now」）时：coverage 的 decompose(Day) 把今日部分天下钻为闭桶 Snap(hour) 帧（core.rs:264-273）→ by_level 含 Day 帧与 Hour 帧 → 小时帧 p 标量折入同一今日日桶索引（`(start+off).div_euclid(DAY_MS)`）互相覆盖 → 今日桶 p50/90/95/99 = 迭代序最后一个小时的 p；且 :479-488 因 `p_rows.contains_key` 跳过实时回算。:455 注释「跨层（细帧）不叠加」与行为相反（覆盖写同样错误）。窗口日界对齐（全部整闭日）才不触发——等价测试只用整闭的昨天，漏网。亲验：by_level 构建（:245-249）与覆盖计划（:216-240）确认跨层帧真实存在。
 
 **处置（2026-09-10，两轮）**：首轮拍板立即插修并已实施（group_percentiles 只处理与查询粒度同层的帧，跨层细帧覆盖的尾桶落入「缺标量」分支整桶实时回算），回归测试 `insight_day_granularity_percentiles_equal_with_today_tail`（day 粒度+今日尾桶）验证先红（快照 p50=300 vs 实时 275）后绿；随后用户决定撤销代码改动回到纯审查清单模式。**实施批指引**：修复方案如上，回归测试形态如票内设计（等价测试补 day 粒度+今日尾桶，数据=昨日两条 ttft 100/300 + 今日两闭小时各一条 100/300 + 实时尾行 250）。
 
-### 10-02 provider-model-rank 单侧过滤快照全量污染（P1）【插修已撤销，方案落实施批】
+### 10-02 provider-model-rank 单侧过滤快照全量污染（P1）【已修复 2026-09-10，d8f7825】
 
 rank_impl.rs provider_model_rank（:232-397）：`supported`（:247）只排除 vm/apiKey；`exact` 要求 provider+model **同传**（:252-255）。单侧形态（仅 providerId 或仅 modelId）exact=None 且不 demote → 快照侧 `merged_prims(ENTITY_MODEL, None)` 经 fold_snapshot（rank_snap.rs:111-135）拉**全部 model 主体行**（所有供应商所有模型），兑底 grouped SQL（:265-281）经 push_rank_filters 只按单侧过滤。**亲验两种形态的实际表现**：modelId-only 是真污染——装配段 meta 查询（:300-313）无 provider 过滤时把全部 pm 键解析进展示，快照态响应混入其它供应商/模型（回归测试修复前红：混入供应商二 gpt-y）；providerId-only 恰好被同一 meta 查询的 `AND pm.provider_id = {p}`（:310-312）兜住——响应正确但 fold 浪费（每闭桶段读全量 model 行再丢弃）。注释（:242-243）自称支持「∅/providerId(/modelId 精确)」，单侧形态是漏网；stats_snapshot_integration 只测 ∅（:258/335）与精确（:550），单侧形态零覆盖。
 
@@ -86,3 +86,9 @@ insight.rs:467-469 `snapshot_rows(...).await.unwrap_or_default()`——DB 读错
 ## 性能/内存轮结论
 
 无 P1/P2（除 10-01/10-02 属正确性非性能）。正向：快照使闭桶段 O(1) 行取（S5 已消解，见归位段）；coverage 哨兵一次 IN 查询；trim_zero_prefix 裁初始化前空段；分位标量避免逐值拉回。残余：10-09（读错误降级触发整窗逐桶回算，事件性）、10-10-①（summary 全量未来段空扫，每请求一次）、summary all_time 无 start/end 时整窗兑底不可快照（全历史窗天然无闭桶快照覆盖之外的部分——trim 后窗口内闭桶仍走快照，正确）。结论：读路径成本 ∝ 帧数×行数不随请求总量涨，形态正确。
+
+## 修复记录（2026-09-10 实施批，commit d8f7825）
+
+- **10-01 已修复**：`insight.rs::group_percentiles` 分三层口径——(1) 同层帧（与查询粒度同层）p 标量直接落桶；(2) 跨层细帧（day 查询下今日拆出的小时帧）按各帧与窗口的重叠时长加权平均后并入父桶，不再互相覆盖写；(3) 细帧未覆盖的剩余时段实时扫描 `request` 表按剩余时长同权合并（当前未闭小时走此路径）；无数据的实时空档段不参与合并，避免把「无流量」当 0 分位拉低。回归测试 `insight_day_granularity_percentiles_merge_today_hours`（三个闭小时帧 200/400/600 → 合并均值 400，覆盖写旧行为会得 600）。ADR-0021 Decision 8。
+- **10-02 已修复**：`rank_impl.rs::provider_model_rank` 单侧过滤（仅 providerId / 仅 modelId）先经 `subject::resolve_pm_keys_for_filter` 解析该侧全部 provider_model 主键集合，`reader::snapshot_rows` 新增 `entities` 主体集合过滤（`AND entity IN (...)`），快照只读集合内主体行；`rank_snap::merged_prims`/`fold_snapshot` 同步透传。回归测试 `provider_model_rank_single_sided_filter_equality_with_snapshot`（modelId-only 混入断言 + providerId-only 防回归，先红后绿已验）。ADR-0021 Decision 9。
+- 质量门：`cargo fmt --check` + `clippy --all-targets --all-features -D warnings` + `cargo test --all-targets`（848 passed / 0 failed）。
