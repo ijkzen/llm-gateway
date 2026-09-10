@@ -23,6 +23,13 @@ pub const TEMPLATES: &[Template] = &[
         extra: "{}",
     },
     Template {
+        name: "above.dev",
+        base_url: "https://api.above.dev/v1",
+        protocol_type: 0,
+        billing_mode: 0,
+        extra: "{}",
+    },
+    Template {
         name: "AgentRouter",
         base_url: "https://agentrouter.org/v1",
         protocol_type: 0,
@@ -166,6 +173,13 @@ pub const TEMPLATES: &[Template] = &[
     Template {
         name: "Berget.AI",
         base_url: "https://api.berget.ai/v1",
+        protocol_type: 0,
+        billing_mode: 0,
+        extra: "{}",
+    },
+    Template {
+        name: "Bothub",
+        base_url: "https://openai.bothub.ru/v1",
         protocol_type: 0,
         billing_mode: 0,
         extra: "{}",

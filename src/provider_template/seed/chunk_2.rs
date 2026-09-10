@@ -205,6 +205,13 @@ pub const TEMPLATES: &[Template] = &[
         extra: "{\"usage\": true, \"usage_type\": 1}",
     },
     Template {
+        name: "klokintegration.se",
+        base_url: "https://api-gw.klok.ipaas.se/proxy/kloker-key/v1",
+        protocol_type: 0,
+        billing_mode: 0,
+        extra: "{}",
+    },
+    Template {
         name: "Kosmik Compute",
         base_url: "https://api.koscompute.com/v1",
         protocol_type: 0,

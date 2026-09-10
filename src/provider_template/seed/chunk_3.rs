@@ -65,6 +65,13 @@ pub const TEMPLATES: &[Template] = &[
         extra: "{}",
     },
     Template {
+        name: "NaN",
+        base_url: "https://api.nan.builders/v1",
+        protocol_type: 0,
+        billing_mode: 0,
+        extra: "{}",
+    },
+    Template {
         name: "NanoGPT",
         base_url: "https://nano-gpt.com/api/v1",
         protocol_type: 0,

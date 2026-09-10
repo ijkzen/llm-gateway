@@ -129,6 +129,13 @@ pub const TEMPLATES: &[Template] = &[
         extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 0}",
     },
     Template {
+        name: "TokenRouter",
+        base_url: "https://api.tokenrouter.com/v1",
+        protocol_type: 0,
+        billing_mode: 0,
+        extra: "{}",
+    },
+    Template {
         name: "TrustedRouter",
         base_url: "https://api.trustedrouter.com/v1",
         protocol_type: 0,

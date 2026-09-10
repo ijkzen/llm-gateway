@@ -92,7 +92,7 @@ fn entry_from(
 fn catalog() -> &'static HashMap<String, CatalogEntry> {
     CATALOG.get_or_init(|| {
         // 14-09：复用 raw() 的解析结果（RawModelFull 是 RawModel 的超集），
-        // 不再第二次解析 293KB 的嵌入 JSON。
+        // 不再第二次解析 304KB 的嵌入 JSON。
         let mut index = HashMap::with_capacity(raw().len());
         for (key, model) in raw() {
             let modalities = model
@@ -295,8 +295,8 @@ mod tests {
 
     #[test]
     fn test_catalog_parses_all_entries() {
-        // 2026-08-29 抓取的 models.json 共 363 条。
-        assert_eq!(entry_count(), 363);
+        // 2026-09-10 抓取的 models.json 共 379 条。
+        assert_eq!(entry_count(), 379);
     }
 
     #[test]
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn test_incomplete_entries_exist() {
-        // 363 条中有 8 条缺 limit，用于验证 partial 状态的判定来源。
+        // 379 条中有 8 条缺 limit.output，用于验证 partial 状态的判定来源。
         let incomplete = catalog()
             .values()
             .filter(|entry| !entry.is_complete())
