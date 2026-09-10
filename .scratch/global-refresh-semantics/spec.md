@@ -1,8 +1,9 @@
 # SPEC — 顶栏刷新的「页面刷新」语义与页面刷新按钮下线
 
-Status: ready-for-agent
+Status: implemented (2026-09-10)
 
 来源：`.scratch/global-refresh-semantics/REQUIREMENTS.md`（2026-09-10 grilling 四轮 + ponytail 削减一轮，全部经用户拍板）。
+实现：049a7d6（feat）+ 72ff197（docs）；审阅：code-review 两轴 + ponytail-review，修复项已落在 049a7d6。
 决策记录：无新 ADR（改动易回滚、非难以逆转的取舍，按 domain-modeling 三测不写）。
 术语：`CONTEXT.md` 已消歧——「远端模型刷新 (Model Refresh)」指拉取远端模型列表（原「刷新」词条更名），
 新增「页面刷新 (Page Refresh)」指本次语义。
