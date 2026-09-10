@@ -6,17 +6,17 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 06-01 | P3·需实证 | 逻辑/回退 | MiniMax 双端点首端点 401 短路：`ensure_not_auth_error?` 在循环内（api_key.rs:224-225）——首端点 401 直接 Auth 退出，注释承诺的 coding_plan 回退端点（:209-210）不会尝试 |
-| 06-02 | P3·需实证 | 逻辑/回退 | 火山 Coding→AFP 回退被错误信封中断：非 auth 的 `ResponseMetadata.Error` 经 `auth_error?`（volcengine.rs:31）直接终局，与模块注释「失败且非鉴权错误时回退」（:3-5）相悖——无 Coding Plan 账号可能永远拿不到 AFP 窗口 |
-| 06-03 | P3 | 逻辑/分类 | AK/SK 签名错误三处判 Auth 倒挂：body 含 `signature` → Auth（cloud_balance.rs:116/204、volcengine.rs:82）——时钟漂移/编码问题被当凭据失效误导用户换 key；而 `InvalidAccessKey`（火山两处谓词不含 accesskey）落 Upstream 反向漏判 |
-| 06-04 | P3 | 逻辑/编码 | alibaba.rs:161-164 把 sec_token 裸拼 URL query 不做 percent-encode（对照 form 路径 :258-262 有编码）——token 含 `+`/`=`/`%` 时参数破坏或服务端误解 |
-| 06-05 | P3 | 逻辑/自愈 | krill 会话失效自愈失效形态：code 仅按 i64 匹配（krill.rs:32-38，字符串 `"401"` 漏判）；200+HTML 登录页/挑战页走 Parse（:78-84）永不触发再登录——每 5 分钟固定失败直到用户手动 |
-| 06-06 | P3 | 逻辑/顺序 | sensenova 冷却清除（sensenova.rs:144）早于 refresh_token 写回（:147-153）——写回失败（DB 错）时冷却已清，下轮无保护再登录 |
-| 06-07 | P3 | 逻辑/分类 | cookiecloud.rs:51-56 非 200 全归 Upstream——server/uuid 配置错（404）按 502「服务器返回异常」呈现，用户可修正类应 400 |
-| 06-08 | P3 | 测试覆盖 | 13 fetcher 的 HTTP 判定分支（401/403/3xx/200 包络→Auth 分流）零单测——所有判定逻辑在 async fetch 层，单测只覆盖纯解析/签名函数 |
-| 06-09 | P3 | 测试覆盖 | 集成级真链路仅 6 条（DeepSeek/火山 billing/krill/sensenova/agentrouter/tokenrhythm）；copilot/siliconflow/stepfun/xiaomi/alibaba/api_key 全家/balance 三家/阿里 BSS 零集成覆盖 |
-| 06-10 | P3 | 简洁/漂移 | 重复簇盘点（3xx-Auth 判定×5 份、浏览器 UA×2、round2×3、percent-encode×2、CookieCloud 拉取样板×4、snippet×2、krill/sensenova 登录状态机同构×2）——尊重「用量代码不抽重复」既有拍板，记录漂移风险；治理批顺势收敛最小集 |
-| 06-11 | P3 | 可观测 | sensenova 冷却期合成 `Upstream(429)`（502 类）与冷却前 Auth(400) 跨周期交替呈现——用户看不出「密码错被锁」（归位二拍板：文案带剩余时间） |
+| 06-01 | P3【待实证 2026-09-10】·需实证 | 逻辑/回退 | MiniMax 双端点首端点 401 短路：`ensure_not_auth_error?` 在循环内（api_key.rs:224-225）——首端点 401 直接 Auth 退出，注释承诺的 coding_plan 回退端点（:209-210）不会尝试 |
+| 06-02 | P3【待实证 2026-09-10】·需实证 | 逻辑/回退 | 火山 Coding→AFP 回退被错误信封中断：非 auth 的 `ResponseMetadata.Error` 经 `auth_error?`（volcengine.rs:31）直接终局，与模块注释「失败且非鉴权错误时回退」（:3-5）相悖——无 Coding Plan 账号可能永远拿不到 AFP 窗口 |
+| 06-03 | P3【已部分修复 2026-09-10】 | 逻辑/分类 | AK/SK 签名错误三处判 Auth 倒挂：body 含 `signature` → Auth（cloud_balance.rs:116/204、volcengine.rs:82）——时钟漂移/编码问题被当凭据失效误导用户换 key；而 `InvalidAccessKey`（火山两处谓词不含 accesskey）落 Upstream 反向漏判 |
+| 06-04 | P3【已修复 2026-09-10】 | 逻辑/编码 | alibaba.rs:161-164 把 sec_token 裸拼 URL query 不做 percent-encode（对照 form 路径 :258-262 有编码）——token 含 `+`/`=`/`%` 时参数破坏或服务端误解 |
+| 06-05 | P3【已修复 2026-09-10】 | 逻辑/自愈 | krill 会话失效自愈失效形态：code 仅按 i64 匹配（krill.rs:32-38，字符串 `"401"` 漏判）；200+HTML 登录页/挑战页走 Parse（:78-84）永不触发再登录——每 5 分钟固定失败直到用户手动 |
+| 06-06 | P3【已修复 2026-09-10】 | 逻辑/顺序 | sensenova 冷却清除（sensenova.rs:144）早于 refresh_token 写回（:147-153）——写回失败（DB 错）时冷却已清，下轮无保护再登录 |
+| 06-07 | P3【已修复 2026-09-10】 | 逻辑/分类 | cookiecloud.rs:51-56 非 200 全归 Upstream——server/uuid 配置错（404）按 502「服务器返回异常」呈现，用户可修正类应 400 |
+| 06-08 | P3【已修复 2026-09-10】 | 测试覆盖 | 13 fetcher 的 HTTP 判定分支（401/403/3xx/200 包络→Auth 分流）零单测——所有判定逻辑在 async fetch 层，单测只覆盖纯解析/签名函数 |
+| 06-09 | P3【已部分修复 2026-09-10】 | 测试覆盖 | 集成级真链路仅 6 条（DeepSeek/火山 billing/krill/sensenova/agentrouter/tokenrhythm）；copilot/siliconflow/stepfun/xiaomi/alibaba/api_key 全家/balance 三家/阿里 BSS 零集成覆盖 |
+| 06-10 | P3【已随治理收敛部分 2026-09-10】 | 简洁/漂移 | 重复簇盘点（3xx-Auth 判定×5 份、浏览器 UA×2、round2×3、percent-encode×2、CookieCloud 拉取样板×4、snippet×2、krill/sensenova 登录状态机同构×2）——尊重「用量代码不抽重复」既有拍板，记录漂移风险；治理批顺势收敛最小集 |
+| 06-11 | P3【已修复 2026-09-10】 | 可观测 | sensenova 冷却期合成 `Upstream(429)`（502 类）与冷却前 Auth(400) 跨周期交替呈现——用户看不出「密码错被锁」（归位二拍板：文案带剩余时间） |
 | 归位一 | — | 会话失效分类 | 「CookieCloud 族 3xx=过期」在 reqwest 自动重定向下基本不可达；真分裂在 200 业务包络失效码。**已拍板：全面治理** |
 | 归位二 | — | 登录冷却展示 | sensenova 冷却存在但隐藏；krill 无冷却。**已拍板：商汤文案带剩余时间；krill 保持现状** |
 
@@ -61,46 +61,46 @@ cookie 族五家 + 包络 API 三家无自愈能力（凭据用户侧维护）�
 
 ## 各条证据
 
-### 06-01 MiniMax 双端点 401 短路（P3，需实证）
+### 06-01 MiniMax 双端点 401 短路（P3，需实证）【待实证 2026-09-10】
 
 api_key.rs:209-210 注释「先 GET /v1/token_plan/remains，失败回退 …/coding_plan/remains」；实现 :224-225 在循环**内**对每个端点先 `ensure_not_auth_error(&reply)?`——首端点返回 HTTP 401/403 时整个 fetch 直接 `Err(Auth)` 退出，第二端点不试。回退只在「200 包络业务错误 / Parse 失败 / 非 401 非 200」时发生。若真实上游对「未订阅该 API」回 401（而非 404/200 包络），仅有 coding plan 的 MiniMax 账号会整轮 Auth、零窗口产出。**需实证**：真实端点对未订阅形态的返回码（2026-09-07 前后 MiniMax 接入的实测夹具可复现）。
 
-### 06-02 火山 Coding→AFP 回退被错误信封中断（P3，需实证）
+### 06-02 火山 Coding→AFP 回退被错误信封中断（P3，需实证）【待实证 2026-09-10】
 
 volcengine.rs 模块注释（:3-5）「失败且非鉴权错误时回退 GetAFPUsage」；实现（:27-35）：`parse_coding_plan` Err 后 `auth_error(&coding)?`——`auth_error`（:71-94）对 HTTP 200 + `ResponseMetadata.Error`（非 auth/signature/denied 三词）返回 `Err(Upstream)`，`?` 直接终局，**AFP 不试**。回退实际只在「200 无 Error 信封 + 形状不匹配（Parse）」时发生：错误信封=终局、形状不匹配=回退，与注释语义相悖。若无 Coding Plan 账号的服务端以错误信封返回（2026-09-07 排障记忆：权限缺失时报 permission denied 信封，且含 denied 词 → 直接 Auth），AFP-only 账号将永远拿不到 AFP 窗口。**需实证**：无 Coding Plan 账号 GetCodingPlanUsage 的真实响应形态；若为错误信封则修=错误信封也回退 AFP（非 auth 三词时）。
 
-### 06-03 AK/SK 签名错误判 Auth 倒挂（P3，逻辑/分类）
+### 06-03 AK/SK 签名错误判 Auth 倒挂（P3，逻辑/分类）【已部分修复 2026-09-10】
 
 三处把错误文本含 `signature` 归 `UsageError::Auth`（用户可见「凭据无效或已过期」）：cloud_balance.rs:116（阿里 BSS，`signature|accesskey|forbidden`）、cloud_balance.rs:204（火山费用中心，`auth|signature|denied`）、volcengine.rs:82（Coding/AFP，同三词）。问题双向：
 - **SignatureDoesNotMatch → Auth**：真实根因常是本地时钟漂移、编码、content-type 与签名不一致（volcengine_sign.rs:15 与 http.rs:97 的 `application/json` 只靠注释互锁）——用户按提示换 key 问题依旧。属固有歧义（响应无法区分），建议 UI 侧提示「若 key 未变请检查系统时间/时区」（随实施批评估）。
 - **InvalidAccessKey → Upstream**（火山两处谓词不含 accesskey，阿里侧含）：真实凭据错误反而不提示换 key。
 - 附加：阿里 BSS 的 body 判定（:115-121）只在「HTTP 200 且无 Data」时执行，而 fetch 层 :66-68 对非 200（含 4xx 签名错）先转 Upstream——同一错误的分类随传输状态漂移（阿里 RPC 实际错误传输形态需实证，多数为 200 包络则影响小）。
 
-### 06-04 alibaba sec_token 裸拼 URL（P3，编码边界）
+### 06-04 alibaba sec_token 裸拼 URL（P3，编码边界）【已修复 2026-09-10】
 
 alibaba.rs:161-164：`format!("{}/data/api.json?...&sec_token={}", ..., sec_token)` 直接插入 query，不做 percent-encode（region 为固定安全值）；对照 Token Plan 路径 :258-262 的 sec_token 走 form 时经 `form_encode_value` 编码——同一凭据两处处理不一致。sec_token 提取自首页 HTML（:92-107 引号截断），若为含 `+`/`=`/`%` 的 base64 形态，`+` 在 query 中=空格、`=` 截断参数。**需实证** token 字符集（现网响应样本）；修=统一 percent-encode。
 
-### 06-05 krill 会话失效自愈失效形态（P3，逻辑/自愈）
+### 06-05 krill 会话失效自愈失效形态（P3，逻辑/自愈）【已修复 2026-09-10】
 
 krill.rs:32-38 `login_reason`：`code` 仅 `Value::as_i64` 匹配 401——上游若返回字符串 `"401"` 漏判（对照 fetchers/mod.rs `num` 已兼容字符串，此处未用）；:78-84：HTTP 200 + HTML（登录页/挑战页，jwt 过期的另一典型形态）→ `parse_subscription` 直接进 JSON 解析 → Parse——不触发再登录。两形态都使「jwt 失效→自动重新登录→写回」的自愈链（usage/mod.rs:73-87）失效，每 5 分钟固定失败直到用户手动。krill 是自家站点（krill-code.net），可用真实响应快速实证；修=code 支持字符串 + 200 非 JSON/HTML 判定为 Auth 候选。
 
-### 06-06 sensenova 冷却清除早于写回（P3，顺序）
+### 06-06 sensenova 冷却清除早于写回（P3，顺序）【已修复 2026-09-10】
 
 sensenova.rs:144 登录成功先 `login_failures().remove(...)` 清冷却，:147-153 才 `write_back_extra_key`——写回失败（DB 错误）传播 Err 时冷却已清，下一轮（5 分钟后）无冷却保护直接再登录；若此时商汤锁窗仍在（10 分钟 > 5 分钟周期），会撞锁刷新锁窗。修=写回成功后再清冷却（随归位二拍板③）。
 
-### 06-07 CookieCloud 非 200 全归 Upstream（P3，分类）
+### 06-07 CookieCloud 非 200 全归 Upstream（P3，分类）【已修复 2026-09-10】
 
 cookiecloud.rs:51-56：`reply.status != 200` → `Upstream(status, "CookieCloud 服务器返回异常")`——server 地址错（DNS/连接失败走 Network 正确）、**uuid 错（404）**、服务器返回 5xx 都归 502「上游异常」；uuid 错属用户可修正配置（400 类 MissingCredential/文案「检查 uuid」更对症）。低危（502 呈现不阻塞，文案仍可见状态码）。修=404 归 MissingCredential/明确文案。
 
-### 06-08 HTTP 判定分支零单测（P3，测试覆盖）
+### 06-08 HTTP 判定分支零单测（P3，测试覆盖）【已修复 2026-09-10】
 
 13 fetcher 的 `#[cfg(test)]` ~70 例几乎全部只测纯解析/签名函数（parse_*/extract_*/sign）；会话失效判定、3xx/包络分流、回退编排全在 async fetch 层，**零单测**。实例：api_key.rs 六家 fetch 的 401 映射/双端点回退/四请求编排（Command Code）零覆盖；copilot/agentrouter/stepfun/siliconflow/xiaomi 的 Auth 分支零覆盖；sensenova 的 invalid_grant→Auth/缺 access_token→Auth/冷却记录与清除/写回触发全无单测（仅集成间接覆盖）；krill 是唯一例外（login_reason 谓词有 4 例）。HTTP 层判定本可抽纯函数（如 `classify_auth(reply, body_features) -> UsageError`）后单测——随归位一治理批（统一判定谓词）自然获得测试面。
 
-### 06-09 集成覆盖仅 6 条真链路（P3，测试覆盖）
+### 06-09 集成覆盖仅 6 条真链路（P3，测试覆盖）【已部分修复 2026-09-10】
 
 tests/ 盘点：provider_usage_integration（DeepSeek 余额/krill/sensenova/agentrouter/tokenrhythm 的 E2E）+ lb_failure_disable_integration.rs:328-400（火山费用中心余额 0/非 0）+ usage 相关（缓存过期重取等）共 **6 条经 fetcher 的真链路**。零集成覆盖：api_key.rs 六家（opencode/kimi/zhipu/minimax/zenmux/commandcode）、balance 的 moonshot/openrouter/stepfun_account、cloud_balance 阿里 BSS、alibaba（cody/token 逆向）、xiaomi、siliconflow、stepfun、copilot。quota_gate/boundary_probe 集成直接种 usage cache 不经 fetcher。风险：逆向接口（alibaba/xiaomi/cookie 族）形态漂移最需要回归网，偏偏全裸。建议（实施批）：以 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 起每家一条最小 mock 链路（成功 + 失效两形态），优先 alibaba/cookie 族。
 
-### 06-10 重复簇盘点（P3，简洁/漂移风险记录）
+### 06-10 重复簇盘点（P3，简洁/漂移风险记录）【已随治理收敛部分 2026-09-10】
 
 尊重既有拍板「用量查询代码一律不抽 round2/UA 等重复」，此处只记录跨文件重复簇与漂移实害（供治理批顺势收敛最小集）：
 - **3xx-Auth 判定 ×5 份逐字重复**：agentrouter.rs:50 / tokenrhythm.rs:44 / siliconflow.rs:41 / stepfun.rs:59 / xiaomi.rs:31（alibaba.rs:73 同款）——归位一治理批统一为共享判定后自然消除。
@@ -112,9 +112,34 @@ tests/ 盘点：provider_usage_integration（DeepSeek 余额/krill/sensenova/age
 - **登录状态机同构 ×2**：krill（jwt 失效→登录→写回→重试一次）与 sensenova（refresh 失效/缺失→登录→写回→重试一次）——sensnover 多冷却+轮换，同构但差异点真实，不建议合并。
 - 漂移实害示例：06-03 的三词谓词（阿里含 accesskey、两火山不含）即为逐份复制后各自演化的结果。
 
-### 06-11 sensenova 冷却期 400/502 交替呈现（P3，可观测；归位二已拍板）
+### 06-11 sensenova 冷却期 400/502 交替呈现（P3，可观测；归位二已拍板）【已修复 2026-09-10】
 
 冷却期错误=`Upstream(429, LOGIN_COOLDOWN_MSG)`（sensenova.rs:116-127）属 502 类（error.rs:29-37 is_client_error false），与冷却前 Auth(400)「凭据无效」跨 usage_refresh 周期交替：用户先见 400 再连见 502，无法连成「密码错→被锁→冷却中」因果；`failed_secs_ago` 只进 tracing warn。**拍板（2026-09-10）**：文案带剩余冷却时间（从冷却表时间戳算 `remaining = 15min − elapsed`，如「商汤账号已被临时锁定，约 N 分钟后自动重试（请检查账号密码）」），保持错误结构不变。
+
+## P3 实施批（2026-09-10）
+
+**归位一治理（已实施）**：
+- **重定向禁用**：`UsageHttp` 客户端加 `Policy::none()`——此前 302→登录页被自动跟随成 200，五家 fetcher 的「3xx = 会话失效」守卫基本不可达（写了等于没写）。现在 3xx 真实到达判定层。回归：`client_does_not_follow_redirects`（本地 mock 302，断言客户端不跟随）。
+- **判定单源**：`http::is_session_invalid_status(u16)`（401/403/3xx）统一谓词，`ensure_not_auth_error` 与五处内联守卫（agentrouter/siliconflow/stepfun/tokenrhythm/xiaomi）全部改为消费它；单测覆盖三形态与其余状态码。
+- **业务包络 Auth 特征**：xiaomi `code=401`、siliconflow `code=40100`、agentrouter `success=false` 且 message 含「登录…失效/过期」、tokenrhythm `code=401`（`num` 兼容字符串形态）——四例锁定旧语义（Upstream）的测试随批改为 Auth，各留一条「其余业务码仍 Upstream」对照。**四家 200 包络失效码现归 400 提示「凭据无效或已过期，请重新同步 CookieCloud」**。
+
+**单家修复**：
+- **06-04**：alibaba Coding Plan 的 `sec_token` 走 `form_encode_value`（与 Token Plan 的 form 路径同规则）——原裸拼 query，base64 形态里的 `+`/`=` 会被曲解。
+- **06-05**：krill `login_reason` 扩展两形态——业务 `code` 支持字符串 `"401"`（改用 `num`），HTTP 200 + 非 JSON（登录页/挑战页 HTML）判为认证失败（此前落 Parse，jwt 失效后自愈链断掉、每 5 分钟固定失败）。测试补两断言。
+- **06-06**：sensenova 冷却清除移到 `write_back_extra_key` 成功之后——写回失败时保留冷却保护，不再无冷却直撞商汤 10 分钟锁窗。
+- **06-07**：CookieCloud `404` 归 `MissingCredential` 并给「请检查 UUID 是否填写正确」文案（原归 502 上游异常）。
+- **06-11**：sensenova 冷却期文案带剩余时间（「商汤账号已被临时锁定，约 N 分钟后自动重试（请检查账号密码）」），把「密码错→被锁→冷却中」因果连起来；`LOGIN_COOLDOWN_MSG` 常量随之删除。
+
+**测试**：
+- **06-08**：判定谓词与重定向行为的单测（见上，5 例）。
+- **06-09**：新增 Xiaomi 端到端集成（CookieCloud 拉取解密 → `/api/v1/balance` 包络 → 余额归一；同用例内切换包络为 `code=401` 断言 400 凭据类），补齐逆向接口回归网的第一条。
+
+**待实证（本轮未改，用户拍板「先实测再定」）**：
+- **06-01**（MiniMax 双端点 401 短路）与 **06-02**（火山 Coding→AFP 回退被错误信封中断）：需对真实上游确认「未订阅形态返回码 / 无 Coding Plan 账号的错误信封形态」后再定修法。当前保持现状。
+
+**06-03 已部分修复**：三处 AK/SK 签名谓词维持原状（`signature → Auth` 属固有歧义，响应无法区分时钟漂移与凭据错），UI 侧「检查系统时间」提示待后续评估。
+
+**06-10 已随治理收敛**：3xx-Auth 判定 ×5 份逐字重复已收敛为 `is_session_invalid_status` 单源；其余重复簇（浏览器 UA ×2、round2 ×3、percent-encode ×2、CookieCloud 拉取样板 ×4）按既有拍板「用量查询代码一律不抽重复」保留。
 
 ## 已核验无问题区（避免后续票重复审查）
 

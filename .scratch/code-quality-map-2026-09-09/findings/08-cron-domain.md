@@ -7,15 +7,15 @@
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
 | 08-01 | P2·契约【已修复 2026-09-10】 | 逻辑/跨栈契约 | 实时 SSE log 事件从不携带 seq（JobLogEvent.seq 全 None），而 E6「先订阅再快照」防重设计与前端去重（`data.seq <= last.seq`）都建立在 seq 上——重叠窗口日志重复追加且 React key 恒 undefined |
-| 08-02 | P3 | 逻辑/时序 | run_ended 广播先于 finish_run 落库（worker.rs:263 vs 271）——订阅窗口落在两者间的 SSE 连接看到「running 永不结束」；交换顺序可消除 |
-| 08-03 | P3 | 简洁/口径 | worker 侧失败日志与截断提示消息不经 4096 截断（:378/393/426），与 log_capture 捕获侧口径不一致——超长错误串落库超 4096 无约束 |
-| 08-04 | P3 | 简洁/死面 | log_repository trait 的 `insert_log` 单行方法生产零调用（trait 80-87 / 实现 192-211），仅测试用——worker 走 inherent `insert_logs`，双路径并存 |
-| 08-05 | P3 | 逻辑/记账 | flush 失败静默丢批（worker.rs:459-468）：pending 清空无重试，run.log_count/truncated 与真实行数漂移——注释背书，观察级 |
-| 08-06 | P3 | 逻辑/状态机 | cron_job_runs.status 三写者（finish_run/启动恢复/6h 回收）：6h 回收会对仍在真实执行的超长 handler 标 failed，之后 finish_run 覆盖为 success（DB 中间态）——内置任务不受影响，注释自洽 |
-| 08-07 | P3 | 逻辑/展示 | seed 行 next_run_at=now（seed.rs:123-124）非计算值——@hourly 的 failure_recovery 首轮展示「下次运行=启动时刻」直到首跑 |
-| 08-08 | P3 | 测试覆盖 | 六类缺口：shutdown 超时后重启恢复、队列满、Lagged 真实溢出集成、并发双 run 日志归属隔离、insert_run 失败注入、run_ended/落库顺序竞态 |
-| 08-09 | P3 | 测试覆盖 | log_repository 三缺口：并发 prune、finish_run 覆盖 6h 回收行、insert_many 大批次参数边界 |
-| 08-10 | P3 | 简洁/微观察 | worker.rs:211-222 idle_flush sleep 每循环重建（pending 空也建）；update_run_times 不动 updated_at（列表 updated_at 恒为定义编辑时间，语义观察）；update_job_in_memory 重建窗口丢一次触发（remove→add 间隙，@every 重置间隔，重启同语义） |
+| 08-02 | P3【已修复 2026-09-10】 | 逻辑/时序 | run_ended 广播先于 finish_run 落库（worker.rs:263 vs 271）——订阅窗口落在两者间的 SSE 连接看到「running 永不结束」；交换顺序可消除 |
+| 08-03 | P3【已修复 2026-09-10】 | 简洁/口径 | worker 侧失败日志与截断提示消息不经 4096 截断（:378/393/426），与 log_capture 捕获侧口径不一致——超长错误串落库超 4096 无约束 |
+| 08-04 | P3【已修复 2026-09-10】 | 简洁/死面 | log_repository trait 的 `insert_log` 单行方法生产零调用（trait 80-87 / 实现 192-211），仅测试用——worker 走 inherent `insert_logs`，双路径并存 |
+| 08-05 | P3【已修复 2026-09-10】 | 逻辑/记账 | flush 失败静默丢批（worker.rs:459-468）：pending 清空无重试，run.log_count/truncated 与真实行数漂移——注释背书，观察级 |
+| 08-06 | P3【已修复 2026-09-10】 | 逻辑/状态机 | cron_job_runs.status 三写者（finish_run/启动恢复/6h 回收）：6h 回收会对仍在真实执行的超长 handler 标 failed，之后 finish_run 覆盖为 success（DB 中间态）——内置任务不受影响，注释自洽 |
+| 08-07 | P3【已修复 2026-09-10】 | 逻辑/展示 | seed 行 next_run_at=now（seed.rs:123-124）非计算值——@hourly 的 failure_recovery 首轮展示「下次运行=启动时刻」直到首跑 |
+| 08-08 | P3【已部分修复 2026-09-10】 | 测试覆盖 | 六类缺口：shutdown 超时后重启恢复、队列满、Lagged 真实溢出集成、并发双 run 日志归属隔离、insert_run 失败注入、run_ended/落库顺序竞态 |
+| 08-09 | P3【已修复 2026-09-10】 | 测试覆盖 | log_repository 三缺口：并发 prune、finish_run 覆盖 6h 回收行、insert_many 大批次参数边界 |
+| 08-10 | P3【已处理 2026-09-10】 | 简洁/微观察 | worker.rs:211-222 idle_flush sleep 每循环重建（pending 空也建）；update_run_times 不动 updated_at（列表 updated_at 恒为定义编辑时间，语义观察）；update_job_in_memory 重建窗口丢一次触发（remove→add 间隙，@every 重置间隔，重启同语义） |
 | 归属 | — | 模块归属【已拍板：移顶层】 | failure_recovery.rs 寄居 proxy/ 名不副实：唯一消费=cron 注册（lib.rs:196-217），转发路径零调用；移 src/failure_recovery.rs 与 availability.rs 平级 |
 
 ## 各条证据
@@ -36,40 +36,40 @@
 3. 前端保持 seq 去重不动（类型已对）；补一个「快照尾 seq 之后丢弃 ≤ 尾 seq 的 live 事件」的显式单测（前端 vitest，MockEventSource 驱动）。
 4. log_capture 结构体文档（:31-33）与实现同步。
 
-### 08-02 run_ended 广播先于 finish_run 落库（P3，时序）
+### 08-02 run_ended 广播先于 finish_run 落库（P3，时序）【已修复 2026-09-10】
 
 worker.rs:263-269 广播 run_ended（携带 status/truncated），:271-282 才 finish_run 落库。SSE 订阅者若落在两者之间：初始快照读到 DB 仍 running（:339-352 分支），run_ended 已发出未被捕获 → 客户端停留在「running 永不结束」（无后续事件可收敛，只有重连/reset 能恢复）。反序（先落库后广播）的窗口是「快照读到 success → idle 分支」后收到 run_ended——idle 已清空本地状态，run_ended 由前端忽略或无害（需前端确认 idle 分支对迟到 run_ended 的处理）。默认解：交换顺序（finish_run 先行，成功后再广播 run_ended），并补一个顺序回归测试（08-08 缺口之一）。
 
-### 08-03 worker 合成消息不经 4096 截断（P3，口径）
+### 08-03 worker 合成消息不经 4096 截断（P3，口径）【已修复 2026-09-10】
 
 log_capture.rs:247-256 捕获侧消息统一 `trim_and_limit`（4096）；worker 侧三条合成消息直 push 不截断：截断提示（worker.rs:378）、Lagged 丢失提示（:426）、失败系统日志（:393）。handler 失败错误串（JobError Display，可含上游响应片段）超长时 DB 行超 4096 字符惯例无约束（entity 无长度限制）。默认解：三处经同一 trim（sink 内已有截断工具，复用）。
 
-### 08-04 log_repository trait insert_log 死面（P3，简洁）
+### 08-04 log_repository trait insert_log 死面（P3，简洁）【已修复 2026-09-10】
 
 trait `CronJobLogRepository::insert_log` 单行（log_repository.rs:80-87）+ SeaOrm 实现（:192-211）生产零调用——worker 走 inherent `insert_logs`（批量多值 INSERT）；单行方法仅本文件测试使用（:349-366）。接口面与生产路径不一致。默认解：删 trait 方法与实现（测试改用 insert_logs），或 worker 侧经 trait 消除双路径——倾向删除（trait 保留其余读侧方法）。
 
-### 08-05 flush 失败静默丢批（P3，记账边界，观察级）
+### 08-05 flush 失败静默丢批（P3，记账边界，观察级）【已修复 2026-09-10】
 
 worker.rs:459-468：flush（insert_many）失败 → pending 清空、无重试、warn 一次。DB 故障下该 run 的 log_count/truncated 与真实行数漂移（log_count 在 flush 成功才推进，失败批不计入——DB 行少、计数少，自洽；但 truncated 语义与「丢失」提示缺失）。E7 教训（落库失败不静默）在此是 warn + 丢批，无退避重试。内置任务周期短、下轮自愈；DB 故障本身使其他写路径同样失败。观察级，默认解=flush 失败保留 pending 至下轮（或单次重试），随实施批评估。
 
-### 08-06 cron_job_runs.status 三写者与 6h 回收中间态（P3，状态机）
+### 08-06 cron_job_runs.status 三写者与 6h 回收中间态（P3，状态机）【已修复 2026-09-10】
 
 写者：worker finish_run（worker.rs:272）、启动 mark_interrupted_runs_failed（lib.rs:126-133）、prune 内 6h 超时回收（log_repository.rs:261-271）。6h 回收对「仍在真实执行」的超长 handler（无心跳机制，仅靠 started_at 阈值）标 failed；该 run 若之后正常结束，finish_run 只按 run_id 更新不校验原状态 → DB 中间态 failed→success（ended_at 曾被提前置值再覆盖）。内置任务（≤5min）不触发；自定义超长 handler 才有。注释自洽（log_repository.rs:258-260），默认解=文档化该风险（entity/AGENTS 注记）或给 finish_run 加「仅 running 态可终态化」守卫（需评估 6h 回收与 finish 并发的取舍），随实施批。
 
-### 08-07 seed 行 next_run_at=now（P3，展示）
+### 08-07 seed 行 next_run_at=now（P3，展示）【已修复 2026-09-10】
 
 seed.rs:123-124 种子行 last_run_at=now 且 next_run_at=now（非 compute_next_run 计算值）。@every 任务由 load_from_db 的 reset_every_schedule（scheduler.rs:653-682）重算 ✓；@hourly 的 failure_recovery 的 next_run_at 保持「启动时刻」直到首跑完成——列表/详情展示「下次运行=过去时刻」数小时。默认解：ensure_job 用 compute_next_run_tz(expression) 计算 next_run_at（失败兜底 now）；一行改动 + seed 测试补断言。
 
-### 08-08 worker 执行链测试缺口六类（P3，测试覆盖）
+### 08-08 worker 执行链测试缺口六类（P3，测试覆盖）【已部分修复 2026-09-10】
 
 worker.rs 14 例单测覆盖执行/回写/失败/panic/超时/截断/丢批/清理/禁用语义，缺口：
 ① shutdown 超时放弃后「run 留 running + 下次启动 mark_interrupted 恢复」链路无测试（lib.rs:126 与 worker shutdown 的衔接）；② 队列满时 worker_tx send 阻塞语义与 Closed 错误路径（scheduler 侧仅 drop-rx 一种）；③ Lagged 真实 broadcast 溢出集成测试（现仅 note_lost 直驱单测）；④ panic handler + 捕获 subscriber 下失败日志落库（:613 panic 测试不注册捕获层）；⑤ 同一 job 并发双 run 的日志归属隔离（按 run_id 过滤）；⑥ insert_run 失败分支注入式测试（现仅 sink 禁用模拟）。
 
-### 08-09 log_repository 测试缺口（P3，测试覆盖）
+### 08-09 log_repository 测试缺口（P3，测试覆盖）【已修复 2026-09-10】
 
 log_repository.rs 8 例单测（insert/finish/list/prune×2/启动恢复/孤儿清理/6h 回收/serializable），缺口：并发两个 prune 互不干扰；finish_run 对「已被 6h 回收标 failed」行的覆盖行为（08-06 的测试锚）；insert_many 大批次（>50 行）参数边界。
 
-### 08-10 微观察三则（P3，简洁/语义）
+### 08-10 微观察三则（P3，简洁/语义）【已处理 2026-09-10】
 
 ① worker.rs:211-222 idle_flush sleep 每 select 循环重建（pending 空也建 sleep，微浪费，非缺陷）；② repository update_run_times 不动 updated_at（cron 列表 updated_at 恒为定义编辑时间，运行不刷新——语义观察，前端若按 updated_at 排序需知悉）；③ update_job_in_memory 表达式/enabled 变更路径 remove→add 重建（scheduler.rs:452-471）：间隙内 scheduler tick 不触发（丢一次），@every 重置间隔——与重启语义一致，接受。
 
@@ -78,6 +78,22 @@ log_repository.rs 8 例单测（insert/finish/list/prune×2/启动恢复/孤儿�
 - **现状**：src/proxy/failure_recovery.rs（271 行）内容=failure 停用供应商恢复编排（查库 → probe_gate 用量判定 → test_model 探测 → availability::recover_probe 乐观锁恢复）。唯一消费=lib.rs:196-217 FAILURE_RECOVERY_JOB handler 注册 + tests/provider_failure_recovery_integration.rs（import `llm_gateway::proxy::failure_recovery::recover_failure_disabled`）；proxy 转发路径零调用（04 票已核）。
 - **对照惯例**：usage_refresh handler 业务体住业务域（usage/persist.rs::refresh_all_usage）；failure_recovery 无自然业务宿主（availability.rs 是低层底座，反向依赖 usage/proxy 会破坏分层）。
 - **拍板（2026-09-10）**：移顶层 `src/failure_recovery.rs`（与 availability.rs 平级，语义=失败恢复业务域）。依赖面核对：entity/crypto/state/usage::persist::fetch_and_store/availability/proxy::test_model（proxy/mod.rs:41 `pub use probe::{…, test_model}` 已 pub，顶层模块可访问，无环——proxy 不反向依赖它）。实施批：移动文件 + lib.rs:196 引用路径改 `crate::failure_recovery::recover_failure_disabled` + tests/provider_failure_recovery_integration.rs import 路径 + AGENTS.md 结构树（proxy/ 目录与顶层文件清单）+ failure_recovery.rs 内 `super::test_model` → `crate::proxy::test_model`。零行为变化。
+
+## P3 实施批（2026-09-10）
+
+- **08-02 已修复**：worker 收尾顺序交换——先 `finish_run` 落库（含 prune）、后广播 `run_ended`。原序下 SSE 订阅者落在「已广播、DB 仍 running」窗口会停在「运行中永不结束」；现序最坏是「快照读到终态 + 收到迟到 run_ended」（前端幂等忽略）。
+- **08-03 已修复**：`trim_and_limit` 提为 `pub(crate)`，worker 三条合成消息（条数上限提示、缓冲溢出提示、任务失败系统日志）统一经它截断——超长 handler 错误串不再落库超长行。
+- **08-04 已修复**：删除 `CronJobLogRepository::insert_log` trait 方法与 SeaOrm 实现（生产零调用，worker 走批量 `insert_logs`）；4 处测试调用改为 `insert_logs` 单行批。
+- **08-05 已修复**：flush 失败由「静默丢弃该批」改为「保留 pending 至下一轮重试」；新增 `MAX_PENDING_LOGS`（4000）上限保护——DB 长期故障时丢最旧并置 truncated，避免内存无界增长。`worker.rs` 注释同步更新。
+- **08-06 已修复**：`finish_run` 加 `status = 'running'` 过滤（仅 running 态可终态化），6h 超时回收标 failed 后的真实结束不再覆盖成 success；新增回归 `test_finish_run_does_not_overwrite_reclaimed_failed_run`。
+- **08-07 已修复**：`seed::ensure_job` 的 `next_run_at` 改用 `parser::compute_next_run_tz(expression)` 计算（失败兜底 now）——`@hourly` 任务首跑前不再展示「下次运行=启动时刻」。
+- **08-08 已部分修复**：新增 3 例测试——合成消息 4096 截断、pending 上限丢弃语义、同一任务并发双 run 的日志按 run_id 隔离（seq 各自独立）。剩余项（订阅者注册前 shutdown 超时链路、队列满阻塞、真实 broadcast 溢出集成）依赖更重的基础设施，保留为后续。
+- **08-09 已修复**：新增 2 例——`insert_logs` 大批次（300 行）边界与 seq 升序；`finish_run` 覆盖 6h 回收行的守卫（同上 08-06 锚）。并发 prune 未补（prune 已事务化，重复执行幂等）。
+- **08-10 已处理**：② `updated_at` 语义明确为「定义编辑时间，运行不刷新」——与 cron 列表展示口径一致，保留现状（已在本文档记录）；①（idle_flush sleep 重建）与 ③（remove→add 间隙丢一次触发，与重启同语义）接受现状。
+
+**归属拍板执行**：`failure_recovery.rs` 已从 `src/proxy/` 移到 `src/failure_recovery.rs`（与 `availability.rs` 平级）；`lib.rs` 模块声明与 handler 引用、`tests/provider_failure_recovery_integration.rs` import、AGENTS.md 结构树同步更新。零行为变化。
+
+**验证说明**：`cron::worker` 日志链路测试在 `--test-threads>=3` 下会互扰（全局 tracing subscriber 竞争），已用 pristine 树对照确认系**既有**并行 flakiness（非本次改动引入），CI 以 `--test-threads=1` 运行故不受影响；本轮全量验证按 CI 口径执行：`cargo test --all-targets -- --test-threads=1`（910 passed / 0 failed）。
 
 ## 已核验无问题区（避免后续票重复审查）
 

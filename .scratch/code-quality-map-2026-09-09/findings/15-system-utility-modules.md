@@ -7,17 +7,17 @@
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
 | 15-01 | P2【已修复 2026-09-10】 | 逻辑/关停 | 优雅关停无超时：SSE 日志流与流式 /v1 长连接钉死 `serve`，`scheduler.stop()`/worker 10s 收尾永不执行（Docker SIGKILL 兜底），与 AGENTS.md 关停承诺不符 |
-| 15-02 | P3 | 配置/观察 | APP_ENV 非法值静默回退 Dev → 生产容器内相对路径新建空库「数据消失」——**已拍板保持现状**（有测试固化；登记观察，用户知悉事故面） |
-| 15-03 | P3 | 校验 | `validate_backup` 不校验成员唯一性（同模型重复引用），导入撞 `uq_virtual_model_items_model_id` 返回裸 SQL 错误 |
-| 15-04 | P3 | 健壮 | 备份导出解密失败一律 `unwrap_or_default()` 空串（spec 认可的设计），但与 11-13（导入不校验空 apiKey）串联成「密钥全空的备份能无声导出并成功导入」链 |
-| 15-05 | P3 | 简洁/确定性 | 备份导出六表唯独 settings 无 `order_by`（backup.rs:145），备份文件字段序不稳定 |
-| 15-06 | P3 | 逻辑/保真 | 未知 `setting.type` 导出为 `"String"`，再导入被静默改写为 type=0 |
-| 15-07 | P3 | 模块间 | 备份导入整表替换不清 `request` 表：历史指标行 provider_id/virtual_model_id 全部悬空（11-21 孤儿面的新一侧，建议并入同一清理定夺） |
-| 15-08 | P3 | 文档 | AGENTS.md 称注册了 `example` 示例 handler，实际 lib.rs 只注册 4 个（usage_refresh/failure_recovery/stats_snapshot×2）——文档漂移，归图后文档批次 |
-| 15-09 | P3 | 简洁/i18n | 插值消息两形态并存：i18n 注释约定 `format!(lang.tr(...含{}...))`，调用点实为 if/else 各语言 format!（cron_jobs 等）；`en-US`→En 解析与 Display→"en" 不对称（微） |
-| 15-10 | P3 | 观察/微 | static_assets 三微：`is_hashed_asset` 按目录而非哈希存在性、etag_matches 不认 `*`/weak 前缀、304 响应不带 ETag/Cache-Control 回头 |
-| 15-11 | P3 | 安全观察/微 | `response::db_error(e.to_string())` 把 DbErr Display（部分变体含 SQL 片段）直返客户端——管理端单用户面，记观察 |
-| 15-12 | P3 | 测试覆盖 | 缺口六类：build_export 无单测/导出解密失败路径零覆盖/导入回滚注入点无单测/并发导入/大备份 413/导入后运行时一致性（时区 reload、缓存热更）；config 边界与 lib.rs 关停零回归 |
+| 15-02 | P3【已拍板保持现状 2026-09-10】 | 配置/观察 | APP_ENV 非法值静默回退 Dev → 生产容器内相对路径新建空库「数据消失」——**已拍板保持现状**（有测试固化；登记观察，用户知悉事故面） |
+| 15-03 | P3【已修复 2026-09-10】 | 校验 | `validate_backup` 不校验成员唯一性（同模型重复引用），导入撞 `uq_virtual_model_items_model_id` 返回裸 SQL 错误 |
+| 15-04 | P3【已修复 2026-09-10】 | 健壮 | 备份导出解密失败一律 `unwrap_or_default()` 空串（spec 认可的设计），但与 11-13（导入不校验空 apiKey）串联成「密钥全空的备份能无声导出并成功导入」链 |
+| 15-05 | P3【已修复 2026-09-10】 | 简洁/确定性 | 备份导出六表唯独 settings 无 `order_by`（backup.rs:145），备份文件字段序不稳定 |
+| 15-06 | P3【已修复 2026-09-10】 | 逻辑/保真 | 未知 `setting.type` 导出为 `"String"`，再导入被静默改写为 type=0 |
+| 15-07 | P3【观察级保持现状 2026-09-10】 | 模块间 | 备份导入整表替换不清 `request` 表：历史指标行 provider_id/virtual_model_id 全部悬空（11-21 孤儿面的新一侧，建议并入同一清理定夺） |
+| 15-08 | P3【已修复（文档）2026-09-10】 | 文档 | AGENTS.md 称注册了 `example` 示例 handler，实际 lib.rs 只注册 4 个（usage_refresh/failure_recovery/stats_snapshot×2）——文档漂移，归图后文档批次 |
+| 15-09 | P3【观察级保持现状 2026-09-10】 | 简洁/i18n | 插值消息两形态并存：i18n 注释约定 `format!(lang.tr(...含{}...))`，调用点实为 if/else 各语言 format!（cron_jobs 等）；`en-US`→En 解析与 Display→"en" 不对称（微） |
+| 15-10 | P3【观察级保持现状 2026-09-10】 | 观察/微 | static_assets 三微：`is_hashed_asset` 按目录而非哈希存在性、etag_matches 不认 `*`/weak 前缀、304 响应不带 ETag/Cache-Control 回头 |
+| 15-11 | P3【观察级保持现状 2026-09-10】 | 安全观察/微 | `response::db_error(e.to_string())` 把 DbErr Display（部分变体含 SQL 片段）直返客户端——管理端单用户面，记观察 |
+| 15-12 | P3【已部分修复 2026-09-10】 | 测试覆盖 | 缺口六类：build_export 无单测/导出解密失败路径零覆盖/导入回滚注入点无单测/并发导入/大备份 413/导入后运行时一致性（时区 reload、缓存热更）；config 边界与 lib.rs 关停零回归 |
 
 ## 各条证据
 
@@ -25,53 +25,64 @@
 
 lib.rs:281-290：`axum::serve(...).with_graceful_shutdown(shutdown_signal()).await?` ——该语义是「停止 accept + 等全部既有连接自然结束」，**无超时**；`scheduler.stop()` 与 `worker.shutdown(10s)` 排在 serve 返回之后。两条长连接面：①SSE 日志流（cron_jobs.rs:376-378，BroadcastStream 只在 log_tx 全 drop 后结束，而 AppState 持有 log_tx 到 run 返回——循环等待）；②流式 /v1 转发（单条流可达分钟级）。任一在飞即 SIGTERM 后 serve 不返回 → 10s 收尾永远不执行 → Docker stop 超时 SIGKILL 硬杀，in-flight 任务中断——恰是 lib.rs:285-286 注释自称要避免的。缓解面=SIGKILL 兜底不死进程，但「优雅关闭」名存实亡。默认解：`tokio::time::timeout` 包 serve（如 8s，留出 worker 收尾窗口），超时后不再等连接直接进收尾；或给 SSE/流式接 shutdown 通知（改动大，非首选）。
 
-### 15-02 APP_ENV 非法值静默回退 Dev（P3，已拍板保持现状）
+### 15-02 APP_ENV 非法值静默回退 Dev（P3，已拍板保持现状）【已拍板保持现状 2026-09-10】
 
 config/mod.rs:18-25 FromStr 只认 dev/prod（lowercase 后，`production` 不匹配）；:40-43 `.and_then(parse().ok()).unwrap_or(Dev)`；Dev 默认库=相对路径 `sqlite://db/app.db`。生产拼错 → 容器 cwd 新建空库照常启动、日志写相对 logs/——面板「数据消失」而真库无恙。`test_config_invalid_app_env_defaults_to_dev`（:280-294）固化为契约。**拍板（2026-09-10）：保持现状**，登记观察，事故面已知悉。
 
-### 15-03 备份成员唯一性未校验（P3，校验）
+### 15-03 备份成员唯一性未校验（P3，校验）【已修复 2026-09-10】
 
 validate_backup 的成员循环（backup.rs:371-399）只查引用存在+协议匹配，不查同次导入内 `(providerName, providerModelId)` 重复；apply_import 逐条 insert 撞 `uq_virtual_model_items_model_id`（db.rs:248）→ `DbErr` 原文经 map_err 进 400 消息。事务回滚不脏库，仅错误消息不友好。默认解：validate 阶段 HashSet 检出重复。
 
-### 15-04 导出解密失败静默空串（P3，健壮）
+### 15-04 导出解密失败静默空串（P3，健壮）【已修复 2026-09-10】
 
 backup.rs:174/:178/:219 三处 `crypto::decrypt(...).unwrap_or_default()`。密钥轮换/迁移机器后导出结构完整、校验全过、凭据全空；导入侧 11-13 不拦空 apiKey → 空密钥写回库。spec 明文认可「不可解的密文导出为空」，非意外；缺的是信号。默认解：build_export 收集解密失败计数，导入/导出响应带回 warning 字段。
 
-### 15-05 settings 导出无排序（P3，确定性）
+### 15-05 settings 导出无排序（P3，确定性）【已修复 2026-09-10】
 
 backup.rs:145 `setting::Entity::find().all(db)` 无 order_by；其余五表都有（:125-144）。备份文件 settings 序不稳定，导出→再导出不可逐字节比对。默认解：`order_by_asc(setting::Column::Key)`。
 
-### 15-06 未知设置类型导出降级 String（P3，保真）
+### 15-06 未知设置类型导出降级 String（P3，保真）【已修复 2026-09-10】
 
 backup.rs:246-250 `setting_type_name` 对 try_from 失败的未知 i32 映射 String → 再导入按 type=0 落库，静默改写。仅历史脏数据可达，观察级。
 
-### 15-07 导入后 request 历史悬空（P3，模块间）
+### 15-07 导入后 request 历史悬空（P3，模块间）【观察级保持现状 2026-09-10】
 
 apply_import（backup.rs:430-450）清五张配置表不碰 request；导入后 request.provider_id/virtual_model_id 指向已删行（AUTOINCREMENT 不复用），赛马/面板按主体归并缺主体名。spec 把请求历史列为不导出（合理），但未声明「保留悬空引用」是预期。建议并入 11-21 的「导入后派生/历史表处置」一并定夺，不单独开修。
 
-### 15-08 example handler 文档漂移（P3，文档）
+### 15-08 example handler 文档漂移（P3，文档）【已修复（文档）2026-09-10】
 
 AGENTS.md「Handler 注册」称注册了 `example` 示例；lib.rs 实际只有 4 处 register_handler（:164/:196/:220/:232），全仓 grep 无 example，seed 侧亦无。归图后 AGENTS.md 刷新批次（MODULES.md §1.4 漂移清单）。
 
-### 15-09 i18n 插值两形态（P3，简洁）
+### 15-09 i18n 插值两形态（P3，简洁）【观察级保持现状 2026-09-10】
 
 i18n.rs:41-42 注释约定「占位符 {} 保留，调用方 format!」；实际插值消息多为 if/else 各语言 format!（如 cron_jobs.rs:183-190）。两种形态并存，无功能问题，风格债。另 `en-US` 解析为 En 而 Display 输出 `en`，写回设置值时不对称（settings 校验接受 en-US 但存的是原值——微观察）。默认解：图后统一为 tr+format!（可选）。
 
-### 15-10 static_assets 三微观察（P3）
+### 15-10 static_assets 三微观察（P3）【观察级保持现状 2026-09-10】
 
 static_assets/mod.rs：①`is_hashed_asset`（:11-13）按 `assets/` 目录判定而非文件名含哈希（vite 默认全部产物带哈希，现状安全，约定弱）；②`etag_matches`（:46-51）只认精确值，不认 `*` 与 `W/` 弱校验（浏览器实际发精确值，无影响）；③304 响应（:38-43）不回带 ETag/Cache-Control（RFC 建议带，浏览器容错）。默认解：保持现状，登记。
 
-### 15-11 db_error 直返 DbErr Display（P3，安全观察/微）
+### 15-11 db_error 直返 DbErr Display（P3，安全观察/微）【观察级保持现状 2026-09-10】
 
 response.rs:68-70 `db_error(e.to_string())`——SeaORM DbErr 部分变体 Display 含 SQL 语句片段，直返客户端。管理端单用户、会话保护，风险低；若未来多用户化需收敛。默认解：保持现状（单用户前提下），登记。
 
-### 15-12 测试缺口（P3）
+### 15-12 测试缺口（P3）【已部分修复 2026-09-10】
 
 已有：backup.rs 内 18 单测（parse/validate 矩阵）+ backup_integration 9 用例 + logs_cleanup 4 用例 + config 用例（含 APP_ENV 回退锁定）+ response/i18n 极薄无专测（结构简单可接受）。缺口：T1 build_export 无单测+解密失败路径零覆盖（15-04）；T2 apply_import 注入失败点的回滚单测；T3 并发导入（SQLite 写锁竞争表现）；T4 大备份 >5MB 413；T5 导入后运行时一致性（时区 reload_all_jobs、settings 缓存热更、cron/会话不受影响）；T6 关停顺序与 SSE 挂起（15-01）零回归；config 的 BIND_ADDRESS 格式/CRON_JOB_* 空白串边界。
 
 ## handler 注册与 seed 双源核对（票内问题 4 的正面对账）
 
 四个内置任务 4/4 对齐：usage_refresh（lib.rs:163-191 ↔ seed @every 5m）、failure_recovery（:195-215 ↔ @hourly）、stats_snapshot（:219-230 ↔ @every 1h）、stats_snapshot_rebuild（:231-242 ↔ @every 1h）。「注册了没种子」「种子了没注册」两侧皆空；注册先于 load_from_db（:261），无「有种子无 handler 被跳过」窗口；seed.rs 默认文案四分支一一覆盖。唯一不一致=15-08 文档漂移。
+
+## P3 实施批（2026-09-10）
+
+- **15-03 已修复**：`validate_backup` 增加成员唯一性检查（同次导入内 `(providerName, providerModelId)` 不得重复）——重复在校验阶段报明确文案，不再撞数据库唯一索引暴露裸 SQL。回归 `validate_backup_rejects_duplicate_member` + 集成 `import_rolls_back_on_midway_failure`（含「不得含 UNIQUE 原文」断言）。
+- **15-04 已修复**：`build_export` 统计解密失败条数并写入 `BackupFile.decrypt_failures`（为 0 时序列化省略），导出路由对非零计数补 warn 日志——「结构完整、校验全过、凭据全空」不再静默。回归 `export_counts_decrypt_failures`。
+- **15-05 已修复**：settings 导出补 `order_by_asc(Key)`（其余五表已有），导出文件可逐字节比对。回归 `export_sorts_settings_by_key`。
+- **15-06 已修复**：`setting_type_name` 对未知编号原样回带数字串（原先是静默降级为 `String`，再导入会改写类型）；导入侧 `setting_type_from_name` 会明确报类型非法。回归 `setting_type_name_keeps_unknown_number`。
+- **15-08 已修复（文档）**：AGENTS.md 的「Handler 注册」段删去 `example`（全仓已无该 handler），保留实际注册的四个内置任务。
+- **15-12 已部分修复**：新增 4 条单测（成员重复校验、未知类型保真、settings 排序、解密失败计数）+ 1 条集成（导入中途失败回滚且不改动配置）。剩余缺口（并发导入写锁表现、超大备份 413、导入后运行时一致性）保留后续。
+- **观察级保持现状**：15-07（导入后 request 历史悬空——请求历史设计上不导出，旧记录指向已删主体；与 11-21 的缓存清理一并处置）、15-09（i18n 插值两形态，风格债）、15-10（static_assets 三微观察）、15-11（db_error 直返 DbErr，管理端单用户前提下风险低）。
+- **15-02 已拍板保持现状**：`APP_ENV` 非法值静默回退 Dev（有测试固化为契约，事故面已知悉）。
 
 ## 已核验无问题区（避免后续票重复审查）
 

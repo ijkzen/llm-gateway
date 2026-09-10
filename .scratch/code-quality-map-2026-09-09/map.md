@@ -40,14 +40,21 @@
 
 ## 实施进度
 
-**状态（2026-09-10 收尾）**：全部 **2 条 P1 + 31 条 P2 已修复并提交**，文档逐条标记；
-P3（约 230 条）按用户决定留待后续排期，本轮不动。6 次提交：
-`d8f7825`（P1 两条）→ `92cd523`（02-01/03-03/08-01/21-01）→ `384b402`
+**状态（2026-09-10 P3 轮收尾）**：**P1、P2、P3 三轮全部处理完毕**——2 条 P1 +
+31 条 P2 已修复并提交（6 次提交见下）；**P3 逐条按「场景化描述 → 用户拍板 → 实施 → 文档标记」
+走完 21 个模块**，每份 findings 末尾均有「实施进度」段记录处置结论（已修复 / 保持现状 / 销账）。
+P3 处置口径：多数按推荐方案修复；少数经拍板保留现状并写明理由（如 16-16 赛马表虚拟滚动、
+19-05 MidEllipsis 共享测量节点、15-07/09/10/11 等观察项），个别条目重估后结论修正
+（如 18-18 证实 effect 非冗余、20-03 死键实测 104 而非 160）。
+本轮顺带修出两处真实缺陷：`error.requestAborted` 缺键（20-07 新测试当场抓出）、
+设置表搜索不重置页码（18-18 结论修正）。
+P2 六次提交：`d8f7825`（P1 两条）→ `92cd523`（02-01/03-03/08-01/21-01）→ `384b402`
 （11-01/11-02/11-03/11-25/14-01/14-05）→ `7674205`（17-01~17-05 + 19-02~19-04）
 → `4863c53`（16-01~16-07 + 17-06 + 15-01 + 12-01）→ `a5f8b83`
 （03-01/03-02 + 18-01~18-04 + 19-01 + 20-01/20-02）。
-质量门：后端 `cargo test --all-targets` 853 passed；前端 vitest 429 passed；
-`cargo fmt --check` / `clippy -D warnings` / `biome check` / `tsc --noEmit` 全绿。
+质量门（P3 轮结束后）：后端 `cargo test --all-targets -- --test-threads=1` **933 passed / 0 failed**；
+前端 vitest **500 passed / 64 files**；`cargo fmt` / `clippy -D warnings` / `biome check` /
+`tsc --noEmit` 全绿。
 
 - **03-01/03-02（P2/P3）已修复**：带内错误事件补发 error 帧（假成功消除）+ [DONE] 后 teardown 噪音按成功结束。
 - **18-01~18-04（P2）已修复**：SSE seq 前端生效、reset 合并、language 热切换、设置弹窗类型控件。
@@ -65,6 +72,53 @@ P3（约 230 条）按用户决定留待后续排期，本轮不动。6 次提�
 - **21-01（P2）已修复**：初始化保存竞态 → saveInitSettings 移入 init onSuccess + 回归测试。
 - **10-01（P1）已修复**：insight day 分位尾桶覆盖写 → 同层帧直落 + 跨层细帧时长加权合并 + 未闭段实时同权并入（d8f7825）。
 - **10-02（P1）已修复**：provider-model-rank 单侧过滤快照全量读 → 主体集合过滤（d8f7825）。
+
+## P3 轮实施进度（2026-09-10）
+
+**状态**：21 个模块的 P3 清单全部处理并逐条标记。处置分布：
+
+| 模块 | 已修复 | 保持现状/销账 | 备注 |
+| --- | --- | --- | --- |
+| 02 proxy 编排 | 全部 P3 | 1（S3 表保留） | — |
+| 03 流式记账 | 全部 P3 | 7（用户拍板项） | — |
+| 04 上游传输 | 全部 P3 | 9（观察/拍板项） | — |
+| 05 协议转换 | 全部 P3 | 6（含 05-01 SSRF 观察） | — |
+| 06 usage 抓取 | 全部 P3 | 4（先实测再定两项） | — |
+| 07 usage 持久化 | 全部 P3 | 0 | — |
+| 08 cron 域 | 全部 P3 | 0 | — |
+| 09 快照域 | 全部 P3 | 7（哨兵行等拍板项） | — |
+| 10 stats 读端点 | 全部 P3 | 3 | — |
+| 11 CRUD API | 全部 P3 | 11（含两条语义拍板） | — |
+| 12 鉴权中间件 | 全部 P3 | 5 | — |
+| 13 数据实体层 | 全部 P3 | 4 | — |
+| 14 供应商数据 | 全部 P3 | 6 | — |
+| 15 系统工具 | 全部 P3 | 15（用户拍板保持现状） | — |
+| 16 FE 数据面板 | 16 | 1（16-16 虚拟滚动） | 抽 `MetricRaceCard` + `AnalysisSections` |
+| 17 FE 配置管理 | 21 | 1（17-16 归 20 票） | 25 项含关键测试补齐 |
+| 18 FE 任务/设置 | 16 | 0 | 含 SSE 退避重连、Json 丢数据拦截 |
+| 19 FE 共享基建 | 17 | 1（19-05 共享测量） | 含 i18n/网络栈/可访问性 |
+| 20 FE i18n | 8 | 0 | 删 104 死键 + 新增一致性测试 |
+| 21 会话演示 | 3 | 0 | 流内 error 帧 + SSE 多行 data |
+
+**新增测试**（P3 轮）：后端 853 → **933** passed；前端 429 → **500** passed。
+新增测试文件：`i18n/__tests__/locales-consistency.test.ts`、`lib/__tests__/utils.test.ts`、
+`hooks/__tests__/use-stats-time-zone.test.tsx`、`hooks/__tests__/use-auth.test.tsx`、
+`components/__tests__/sidebar.test.tsx`、`components/__tests__/setting-edit-dialog.test.tsx`、
+`__tests__/settings-page.test.tsx`、`__tests__/providers-page.test.tsx`。
+
+**新增源文件**：`components/metric-race-card.tsx`（泛型赛马卡）、
+`components/settings/use-setting-submit-callbacks.ts`、
+`hooks/use-debounced-value.ts`、`src/vite-env.d.ts`。
+
+**重估修正的条目**（盘点结论经复核不成立或与实测不符）：
+- **18-18**：原判断「effect 冗余、职责由 TanStack autoResetPageIndex 承担」——实测搜索收窄结果时框架并不重置页码，改为依赖 `filteredSettings` 让 effect 真正生效。
+- **20-03**：原报「160 键零引用」——脚本实测为 104 键（zh/en 各删 110 行）。
+
+**本轮新发现并修复的真实缺陷**：
+- `lib/api.ts` 引用 `error.requestAborted`，实际键名是 `error.aborted`——中断提示一向显示字面 key；由 20-07 新增的一致性测试当场抓出。
+- 设置表搜索后页码不重置（18-18 复核中发现并修复）。
+
+**未纳入**（仍留后续）：无。P1/P2/P3 三轮结束，`docs/agents` 与 AGENTS.md 的结构树可另行对账。
 
 ## Not yet specified
 

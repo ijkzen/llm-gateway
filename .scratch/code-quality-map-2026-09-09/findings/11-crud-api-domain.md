@@ -9,30 +9,30 @@
 | 11-01 | P2【已修复 2026-09-10】 | 逻辑/时序 | 时区变更时 `reload_all_jobs` 在 `settings.update` 之前调用，调度器用旧时区重建——代码与自身注释矛盾；当前全部种子任务时区不敏感故零可见影响，一旦出现 tz 敏感 cron 行即升 P1 |
 | 11-02 | P2【已修复 2026-09-10】 | 竞态 | 更新/删除供应商失效用量缓存与「在途真实抓取」无版本护栏：在途抓取可在失效后回写旧凭据用量，脏缓存最长存活一个 TTL（10 分钟） |
 | 11-03 | P2【已修复 2026-09-10】 | 逻辑/健壮 | request_logs 分页 offset 用 u32 相乘：超大 page 溢出（dev panic→CatchPanic 500 / release 静默回绕返回错页） |
-| 11-04 | P3 | 事务完整性 | `update_provider` 先提交字段更新再调可用性动作，动作失败返回 500 但字段已落库（部分成功却报失败） |
-| 11-05 | P3 | 逻辑/i18n | `update_provider` 两处错误消息硬编码中文绕过 lang（英文环境收中文） |
-| 11-06 | P3 | 逻辑/一致性 | cron `update_job` 先落库后改内存，内存更新失败不回滚 DB——DB 新值而列表展示旧值，重启才收敛 |
-| 11-07 | P3 | 逻辑/边界 | 未加载进调度器的任务（无 handler）无法软删除：`find_by_name` 见行 → `soft_delete_job` 内存 miss → 404，行永远删不掉 |
-| 11-08 | P3 | 逻辑/一致性 | Bool 设置值校验不 trim（`" true"` 判 400），与 Int/Float/Json/language/timezone 的 trim 口径不一致 |
-| 11-09 | P3 | 模块间/缓存 | `delete_setting` 只保护 language/timezone：删 max_consecutive_failures / allow_list 不刷新 AppSettings 缓存，运行期与库分叉至重启 |
-| 11-10 | P3 | 逻辑/错误码 | provider_models 刷新/测速的上游 502 用 `SCHEDULER_ERROR` 码，与 usage 路由的 `UPSTREAM_ERROR`（bad_gateway）不一致 |
-| 11-11 | P3 | 逻辑/一致性 | 嵌套 `GET /providers/{id}/models` 对不存在供应商返回 200 空数组（注释自称有意），与同组 create/batch/refresh 的 404 不一致 |
-| 11-12 | P3 | 逻辑/校验 | `custom_header` 只校验「合法 JSON」，非对象（数组/数字/字符串）可落库，转发层静默忽略——保存成功但完全不生效 |
-| 11-13 | P3 | 逻辑/校验 | 备份导入不校验 provider `apiKey` 非空，绕过创建接口必填校验（空串加密落库） |
-| 11-14 | P3 | 逻辑/校验 | 备份导入直写 `enable`/`disabled_reason`，注释自称 ADR-0003 镜像不变式但无任何一致性校验（篡改文件可达 enable=true+reason=manual 的不可能态） |
-| 11-15 | P3 | 逻辑/健壮 | request_logs `row_to_entry` 用 filter_map 静默丢行，items 与 total 可不一致且无日志 |
-| 11-16 | P3 | 逻辑/输入 | CSV 过滤参数非法分段静默忽略（`vmId=abc` 等同不过滤返回全量），无 400 |
-| 11-17 | P3 | 逻辑/边界 | 公开路径精确串比较：`/api/auth/status/`（尾斜杠）误判需登录返回 401 |
-| 11-18 | P3 | 逻辑/API 语义 | 未知 `/api/*`、`/v1/*` 路径经 SPA fallback 返回 HTML 200 而非 JSON 404（鉴权后的语义毛刺，非安全洞） |
-| 11-19 | P3 | 简洁 | `providers.rs:443` `_api_key` 死变量（clone 后从未使用） |
-| 11-20 | P3 | 简洁 | providers.rs 七处 not_found 中英样板未收 helper（provider_models.rs 已抽 `not_found_provider/model` 可对齐） |
-| 11-21 | P3 | 模块间/缓存 | 备份导入整表替换供应商后未清 `provider_usage_cache`/`usage_mem`——AUTOINCREMENT 保证旧 id 不复用不会误读，属孤儿行累积 |
-| 11-22 | P3 | 模块间 | `/v1` 头策略拆两半：allowlist 取数 + `select_forwardable_headers` 在路由层（openai_compat.rs:39-41），鉴权头/剥离清单/模板默认头在 proxy/headers.rs |
-| 11-23 | P3 | 性能 | 三个列表端点无分页无上限：list_providers 全表+逐行双解密、provider_models 两个列表全量 |
-| 11-24 | P3 | 性能 | `load_usage_map` 每供应商一次 DB 查询 N+1——persist 层已有 `read_usage_cache_many` 批读（全仓仅 lb.rs:426 一个消费方）未被路由层使用 |
+| 11-04 | P3【已修复 2026-09-10】 | 事务完整性 | `update_provider` 先提交字段更新再调可用性动作，动作失败返回 500 但字段已落库（部分成功却报失败） |
+| 11-05 | P3【已修复 2026-09-10】 | 逻辑/i18n | `update_provider` 两处错误消息硬编码中文绕过 lang（英文环境收中文） |
+| 11-06 | P3【已修复 2026-09-10】 | 逻辑/一致性 | cron `update_job` 先落库后改内存，内存更新失败不回滚 DB——DB 新值而列表展示旧值，重启才收敛 |
+| 11-07 | P3【已修复 2026-09-10】 | 逻辑/边界 | 未加载进调度器的任务（无 handler）无法软删除：`find_by_name` 见行 → `soft_delete_job` 内存 miss → 404，行永远删不掉 |
+| 11-08 | P3【已修复 2026-09-10】 | 逻辑/一致性 | Bool 设置值校验不 trim（`" true"` 判 400），与 Int/Float/Json/language/timezone 的 trim 口径不一致 |
+| 11-09 | P3【已修复 2026-09-10】 | 模块间/缓存 | `delete_setting` 只保护 language/timezone：删 max_consecutive_failures / allow_list 不刷新 AppSettings 缓存，运行期与库分叉至重启 |
+| 11-10 | P3【已修复 2026-09-10】 | 逻辑/错误码 | provider_models 刷新/测速的上游 502 用 `SCHEDULER_ERROR` 码，与 usage 路由的 `UPSTREAM_ERROR`（bad_gateway）不一致 |
+| 11-11 | P3【已修复 2026-09-10】 | 逻辑/一致性 | 嵌套 `GET /providers/{id}/models` 对不存在供应商返回 200 空数组（注释自称有意），与同组 create/batch/refresh 的 404 不一致 |
+| 11-12 | P3【已修复 2026-09-10】 | 逻辑/校验 | `custom_header` 只校验「合法 JSON」，非对象（数组/数字/字符串）可落库，转发层静默忽略——保存成功但完全不生效 |
+| 11-13 | P3【已修复 2026-09-10】 | 逻辑/校验 | 备份导入不校验 provider `apiKey` 非空，绕过创建接口必填校验（空串加密落库） |
+| 11-14 | P3【已修复 2026-09-10】 | 逻辑/校验 | 备份导入直写 `enable`/`disabled_reason`，注释自称 ADR-0003 镜像不变式但无任何一致性校验（篡改文件可达 enable=true+reason=manual 的不可能态） |
+| 11-15 | P3【已修复 2026-09-10】 | 逻辑/健壮 | request_logs `row_to_entry` 用 filter_map 静默丢行，items 与 total 可不一致且无日志 |
+| 11-16 | P3【已修复 2026-09-10】 | 逻辑/输入 | CSV 过滤参数非法分段静默忽略（`vmId=abc` 等同不过滤返回全量），无 400 |
+| 11-17 | P3【已修复 2026-09-10】 | 逻辑/边界 | 公开路径精确串比较：`/api/auth/status/`（尾斜杠）误判需登录返回 401 |
+| 11-18 | P3【已修复 2026-09-10】 | 逻辑/API 语义 | 未知 `/api/*`、`/v1/*` 路径经 SPA fallback 返回 HTML 200 而非 JSON 404（鉴权后的语义毛刺，非安全洞） |
+| 11-19 | P3【已修复 2026-09-10】 | 简洁 | `providers.rs:443` `_api_key` 死变量（clone 后从未使用） |
+| 11-20 | P3【已修复 2026-09-10】 | 简洁 | providers.rs 七处 not_found 中英样板未收 helper（provider_models.rs 已抽 `not_found_provider/model` 可对齐） |
+| 11-21 | P3【已修复 2026-09-10】 | 模块间/缓存 | 备份导入整表替换供应商后未清 `provider_usage_cache`/`usage_mem`——AUTOINCREMENT 保证旧 id 不复用不会误读，属孤儿行累积 |
+| 11-22 | P3【观察级保持现状 2026-09-10】 | 模块间 | `/v1` 头策略拆两半：allowlist 取数 + `select_forwardable_headers` 在路由层（openai_compat.rs:39-41），鉴权头/剥离清单/模板默认头在 proxy/headers.rs |
+| 11-23 | P3【观察级保持现状 2026-09-10】 | 性能 | 三个列表端点无分页无上限：list_providers 全表+逐行双解密、provider_models 两个列表全量 |
+| 11-24 | P3【已修复 2026-09-10】 | 性能 | `load_usage_map` 每供应商一次 DB 查询 N+1——persist 层已有 `read_usage_cache_many` 批读（全仓仅 lb.rs:426 一个消费方）未被路由层使用 |
 | 11-25 | P3 | 性能/竞态 | 用量读端点（`/usage`、`/usage/estimate`）抓取无单飞，并发 GET 重复打上游——呼应 07-01（四路抓取收敛 mem.fetch_shared 单飞是同一默认解） |
-| 11-26 | P3 | 性能 | request_logs：`modelId` 单独过滤用不上复合索引（前导列 provider_id）；按 `requestTime`/`totalTokens` 排序无索引全扫+排序 |
-| 11-27 | P3 | 观察项 | `ProviderResponse` 不含 `disabled_reason`，管理端无法区分 failure/quota/manual 三类停用 |
+| 11-26 | P3【观察级保持现状 2026-09-10】 | 性能 | request_logs：`modelId` 单独过滤用不上复合索引（前导列 provider_id）；按 `requestTime`/`totalTokens` 排序无索引全扫+排序 |
+| 11-27 | P3【观察级保持现状 2026-09-10】 | 观察项 | `ProviderResponse` 不含 `disabled_reason`，管理端无法区分 failure/quota/manual 三类停用 |
 
 **拍板记录（两项，均不改代码，结论锁定现状）**：
 - **拍板一（原 B-06）**：创建/更新虚拟模型**允许**把已停用供应商的模型加为成员，保持现状——成员关系 ≠ 可用性，选路时 `traffic_available` 剔除、恢复后自动回归候选，语义归 availability 单点，创建侧不加校验。
@@ -54,87 +54,87 @@
 
 `request_logs.rs:131-136`：`page`/`page_size` 均 u32（:43-44），`let offset = ((page - 1) * page_size) as i64;`。page_size 上限 100，page > ~42,949,672 即 u32 乘法溢出。Cargo.toml 无 profile 覆盖：dev/test 默认 overflow-checks → panic（CatchPanic 转 500）；release 静默回绕 → offset 错、返回错误页数据（非报错）。默认解：先转 i64 再乘（一行）。测试缺口 T11 正对。
 
-### 11-04 update_provider 部分成功报失败（P3，事务完整性）
+### 11-04 update_provider 部分成功报失败（P3，事务完整性）【已修复 2026-09-10】
 
 providers.rs:492-505：`provider_repo::update_provider` 单独提交后，`enable_changed` 分支才调 `availability::enable_manual/disable_manual`；动作失败 `return response::db_error`（500），名称/BaseURL/协议等字段已持久化——前端收到失败但部分生效。缓解面：enable/disabled_reason 不在该 update 内写（From<Model> 全 Unchanged，只写 Set 列），不会留下半改启停态；协议级联（509-532）与缓存失效（534-537）失败仅 warn 为有意。默认解：字段更新+可用性动作收进同一事务，或失败时回读返回实际状态。
 
-### 11-05 update_provider 硬编码中文（P3，i18n）
+### 11-05 update_provider 硬编码中文（P3，i18n）【已修复 2026-09-10】
 
 providers.rs:542 `Provider {id} 不存在`、:549-551 `同名 Provider 已存在，名称需要唯一` 均未按 lang 分支；同函数其余分支与 create_provider（399-403）都走了 lang，属遗漏。默认解：补 lang.tr 分支（i18n_integration 测试顺带补英文断言）。
 
-### 11-06 cron 更新 DB/内存非原子（P3，一致性）
+### 11-06 cron 更新 DB/内存非原子（P3，一致性）【已修复 2026-09-10】
 
 cron_jobs.rs:178-202：先 `repo.update_job_full` 落库，再 `scheduler.update_job_in_memory`；后者失败返回 scheduler_error 但 DB 已提交。`list_jobs_detailed` 的 title/expression/enabled 取自内存（scheduler.rs:505-522），于是接口展示旧值、库是新值，重启后反转。概率低（内存更新失败=调度器 remove/add 异常），P3。默认解：内存失败时用旧 model 回写 DB。
 
-### 11-07 未加载任务无法软删除（P3，边界）
+### 11-07 未加载任务无法软删除（P3，边界）【已修复 2026-09-10】
 
 cron_jobs.rs:219-231：`repo.find_by_name` 只过滤 is_deleted（未加载任务的行可见）→ `soft_delete_job` 第一句 `jobs.get(name).ok_or(JobNotFound)`（scheduler.rs:481-487）→ 路由映射 404。后果：handler 未注册被跳过加载的任务在 API 里不可见（列表只列内存）、不可更新（400，约定内）、**不可删除**（404，行残留）。默认解：`soft_delete_job` 对内存 miss 退化为纯 DB 软删（repo.soft_delete 直接落）。
 
-### 11-08 Bool 校验不 trim（P3，一致性）
+### 11-08 Bool 校验不 trim（P3，一致性）【已修复 2026-09-10】
 
 settings.rs:81 `!matches!(value, "true" | "false")` 不 trim；Int（:68）、Float（:75）用 `value.trim().parse`、Json（:87）trim、language/timezone（:96/:104）trim。`" true"` 判 400 而同类数值/JSON 放行前后空白。默认解：Bool 分支加 trim。
 
-### 11-09 删除非保护设置键不刷新缓存（P3，缓存）
+### 11-09 删除非保护设置键不刷新缓存（P3，缓存）【已修复 2026-09-10】
 
 settings.rs:263-273 只拒绝删 `language`/`timezone`（注释自述理由）；`max_consecutive_failures` 与 `downstream_request_header_allow_list` 可删，删后 AppSettings 缓存不更新（刷新只在 PUT :213 与启动），运行期用旧阈值/旧 allowlist 而 `/api/settings` 已无该行，重启种子回种默认值。默认解：删除成功后 `state.settings` 同步失效该键（或一并列入保护清单）。
 
-### 11-10 上游 502 错误码不一致（P3，错误码）
+### 11-10 上游 502 错误码不一致（P3，错误码）【已修复 2026-09-10】
 
 provider_models.rs:691（刷新）、:846（测速）用 `scheduler_error(BAD_GATEWAY, msg)`（SCHEDULER_ERROR 码）；usage 路由（providers.rs:811、881）同类上游失败用 `bad_gateway`（UPSTREAM_ERROR）。前端按 code 分支时两类上游错误形状不同。默认解：统一 UPSTREAM_ERROR。
 
-### 11-11 嵌套模型列表缺 404（P3，一致性）
+### 11-11 嵌套模型列表缺 404（P3，一致性）【已修复 2026-09-10】
 
 provider_models.rs:228-233：供应商不存在按空列表返回（注释自称「与既有语义一致：级联删除后列表为空而非 404」，属有意）；同组 create（:364-368）/batch（:429-433）/refresh（:651-658）均 404。已删供应商的前端会得到「存在但空」假象。默认解（实施批评估）：补存在性检查返 404，或注释升级为文档化约定。
 
-### 11-12 custom_header 非对象可落库（P3，校验）
+### 11-12 custom_header 非对象可落库（P3，校验）【已修复 2026-09-10】
 
 providers.rs:182-188 经 `validate_json_field`（:297-307）只校验 `serde_json::from_str` 成功；`"32122"` 等非对象可落库；转发层 proxy/headers.rs:126-129 `let Some(map) = value.as_object() else { return }` 静默跳过——保存成功但请求头完全不生效，无任何提示。默认解：校验升级为「必须是 JSON 对象且值为字符串」（与转发层消费形状对齐）。
 
-### 11-13 备份导入绕过 apiKey 必填（P3，校验）
+### 11-13 备份导入绕过 apiKey 必填（P3，校验）【已修复 2026-09-10】
 
 创建路径 providers.rs:349-359 校验 api_key 非空；导入值校验 routes/backup.rs:101-126（protocol/billing/proxy/custom_header/extra + 成员 proxy）无 api_key 检查；src/backup.rs:464 直接 `crypto::encrypt(&p.api_key)` 落库。仅手工构造/篡改备份可达，危害面窄（该供应商上游必然鉴权失败）。默认解：`validate_import_values` 补非空校验。
 
-### 11-14 备份导入不校验可用性镜像不变式（P3，校验）
+### 11-14 备份导入不校验可用性镜像不变式（P3，校验）【已修复 2026-09-10】
 
 src/backup.rs:458-475 直接 `Set(p.enable)` + `Set(p.disabled_reason)`，注释自称「停用原因镜像不变式（ADR-0003）：enable ⇔ disabled_reason」但 validate_backup（:299-343）与 validate_import_values 均未校验；读侧谓词 availability.rs:54-55 为 `enable && disabled_reason.is_none()`。篡改备份可造 `enable=true, reason=manual`（显示启用、实际不可选路）。正常写路径全走 availability 状态机，仅篡改文件可达，P3。默认解：导入校验 `p.enable == p.disabled_reason.is_none()`。
 
-### 11-15 request_logs 行转换静默丢行（P3，健壮）
+### 11-15 request_logs 行转换静默丢行（P3，健壮）【已修复 2026-09-10】
 
 request_logs.rs:246-249 `rows.iter().filter_map(|row| row_to_entry(row).ok())`：任一字段 try_get 失败即丢行，`items.len()` 与 total 不一致且无日志。表结构稳定时不触发，属稳健性缺口。默认解：上抛 db_error 或至少 warn。
 
-### 11-16 CSV 过滤参数静默失效（P3，输入）
+### 11-16 CSV 过滤参数静默失效（P3，输入）【已修复 2026-09-10】
 
 request_logs.rs:61-66 `parse_csv_i32` 对分段 `filter_map(parse().ok())`：`vmId=abc` 得空 vec，`push_in_clause`（:83-85）空即 return → 等同不过滤返回全量而非 400。客户端拿到「看似成功」的错误结果。默认解：非法分段返 400。
 
-### 11-17 公开路径尾斜杠边界（P3，边界）
+### 11-17 公开路径尾斜杠边界（P3，边界）【已修复 2026-09-10】
 
 auth/mod.rs:263-266 精确串比较（`path == "/api/auth/status"` 等）：`/api/auth/status/` 落入「/api/ 需会话」分支返 401。影响极窄（客户端一般不带尾斜杠）。默认解：比较前 `trim_end_matches('/')`。
 
-### 11-18 未知 API 路径返回 HTML 200（P3，API 语义）
+### 11-18 未知 API 路径返回 HTML 200（P3，API 语义）【已修复 2026-09-10】
 
 mod.rs:42 fallback 无条件挂 `serve_asset`；static_assets/mod.rs:72-78 未命中返回 index.html 200。已鉴权的 `/api/typo`、带有效 Bearer 的 `/v1/typo` 拿到 text/html 200 而非 JSON 404。未鉴权仍先 401，非安全洞。默认解：fallback 内对 `/api/`、`/v1/` 前缀返 JSON 404。
 
-### 11-19 `_api_key` 死变量（P3，简洁）
+### 11-19 `_api_key` 死变量（P3，简洁）【已修复 2026-09-10】
 
 providers.rs:439-443：`new_api_key` 已用于 :479 加密写回；`let _api_key = new_api_key.clone().unwrap_or_else(|| model.api_key.clone());` 之后全函数未再引用，一次无谓 clone。默认解：删行。
 
-### 11-20 not_found 样板×7（P3，简洁）
+### 11-20 not_found 样板×7（P3，简洁）【已修复 2026-09-10】
 
 providers.rs 七处同构中英 not_found（:419-423、:542、:635-639、:705-710、:735-739、:775-779、:852-858）；provider_models.rs:860-874 已抽 `not_found_provider`/`not_found_model` 可对齐。默认解：providers.rs 同款抽 helper。
 
-### 11-21 备份导入不清用量缓存（P3，缓存）
+### 11-21 备份导入不清用量缓存（P3，缓存）【已修复 2026-09-10】
 
 src/backup.rs:424-450 `apply_import` 事务内清 virtual_model_item/virtual_model/provider_model/provider/api_key，但未删 `provider_usage_cache`、未失效 `usage_mem`（对比删除供应商路径 providers.rs:685-688 的成对失效）。provider.id 为 AUTOINCREMENT（db/app.db schema 实测 + sqlite_sequence 在册），旧 id 不复用 → 不会误读，属孤儿行累积。默认解：导入成功后清表+全量 invalidate（一行量级）。
 
-### 11-22 /v1 头策略跨层（P3，模块间）
+### 11-22 /v1 头策略跨层（P3，模块间）【观察级保持现状 2026-09-10】
 
 openai_compat.rs:39-41 路由层取 `settings.downstream_header_allow_list()` 并调 `proxy::select_forwardable_headers` 后传入 `forward_chat`；鉴权头优先级/剥离清单/模板默认头全在 proxy/headers.rs。功能干净无重复，仅「头策略」概念跨两层。默认解（实施批评估）：allowlist 读取下沉 forward_chat，路由层零头逻辑。
 
-### 11-23 列表端点无界（P3，性能）
+### 11-23 列表端点无界（P3，性能）【观察级保持现状 2026-09-10】
 
 providers.rs:326-342 list_providers 全表 + 逐行 api_key/extra 双解密；provider_models.rs:224-252（按供应商全量）、:274-303（全局全量）。均无 limit/offset。供应商/模型为管理员配置量级（数十行级），当前可接受；规模增长后是线性放大点。默认解：图后如需再加分页；现记观察。
 
-### 11-24 load_usage_map N+1（P3，性能）
+### 11-24 load_usage_map N+1（P3，性能）【已修复 2026-09-10】
 
 virtual_models.rs:464-476：`for id in provider_ids { read_usage_cache(db, *id) }` 每供应商一次 DB 往返，列表端点（:532）对所有虚拟模型涉及的去重供应商逐个查。persist 层已有批读 `read_usage_cache_many`（persist.rs:45-65）全仓仅 lb.rs:426 消费且零测试（07-04 已记）。默认解：改用批读，一行替换 + 顺带消 07-04 的「零消费方」死角。
 
@@ -142,11 +142,11 @@ virtual_models.rs:464-476：`for id in provider_ids { read_usage_cache(db, *id) 
 
 providers.rs:808-812（/usage）、:876-883（/usage/estimate）缓存未命中即直调 `fetch_and_store`；`mem_cache.fetch_shared_with`（mem_cache.rs:66-138）单飞只服务 LB（lb.rs:445）。并发 GET 同供应商重复真实抓取。默认解=07-01 同一方案：四路抓取收敛 mem.fetch_shared 单飞入口。
 
-### 11-26 request_logs 索引慢路径（P3，性能）
+### 11-26 request_logs 索引慢路径（P3，性能）【观察级保持现状 2026-09-10】
 
 db.rs 索引面：`idx_request_start_time`（:335 复合 start_time+provider_id+success）、`idx_request_provider_model_success_start`（:511 前导 provider_id）、`idx_request_ttft/tps`（:509-510）等。`modelId` 单独 IN 用不上 :511（前导列 provider_id）→ 全表扫；`ORDER BY request_time`/`total_tokens` 无任何索引 → 全扫+排序。page_size≤100 + 无无界导出兜底，当前表量级可接受。默认解：视查询频次补索引或收窄排序白名单（图后）。
 
-### 11-27 ProviderResponse 缺 disabled_reason（P3，观察）
+### 11-27 ProviderResponse 缺 disabled_reason（P3，观察）【观察级保持现状 2026-09-10】
 
 providers.rs:46-65 响应无 `disabled_reason`（实体有，entity/provider.rs 含该列）；前端 `Provider` 类型同样没有，disabledReason 仅出现在备份导出类型。管理端只见 enable=false，无法区分 failure/quota/manual，排障与恢复预期不透明。默认解：响应补字段（前端同步），或图后产品向再议。
 
@@ -157,6 +157,38 @@ providers.rs:46-65 响应无 `disabled_reason`（实体有，entity/provider.rs 
 **简洁面：属实。** 三套 WHERE 构造器并存互不共享（request_logs::push_in_clause / summary_charts::filter_parts / rank::push_rank_filters），cron 表侧已有 helper 化样板（cron_jobs.rs:283/298/333 → log_repository）可对照。属图后实施批的收敛项，非缺陷。
 
 **唯一实质缺口**：11-03 分页溢出、11-15 静默丢行、11-16 非法过滤静默、11-26 慢路径（均单列）。
+
+## P3 实施批（2026-09-10）
+
+**事务与一致性**：
+- **11-04 已修复**：`update_provider` 的手动启停动作提到字段落库**之前**——动作失败时字段未写入，消除「报失败但部分生效」；动作本身是独立事务，无法与字段更新合并（注释说明）。
+- **11-06 已修复**：cron 更新在 DB 提交后若内存更新失败，用捕获的旧定义回写 DB（含原 next_run_at），消除「列表旧值 / 库新值」分叉；回写亦失败时记 error 日志。
+- **11-07 已修复**：`soft_delete_job` 对内存未加载的任务退化为纯 DB 软删——这类行不再「不可见、不可更新、也不可删除」。
+
+**校验**：
+- **11-12 已修复**：新增 `validate_custom_header`（必须 JSON 对象且值为字符串），创建/更新与备份导入两路共用；`"32122"`、`[1,2]`、`{"X-A":1}` 均被拒。
+- **11-13 已修复**：备份导入补「apiKey 非空」校验。
+- **11-14 已修复**：备份导入补可用性镜像不变式校验（`enable == disabled_reason.is_none()`）。
+- **11-08 已修复**：Bool 设置值比较前 trim（与 Int/Float/Json 一致）。
+
+**错误处理与兼容**：
+- **11-05 / 11-20 已修复**：providers.rs 七处「找不到」样板收敛为 `not_found_provider`（按语言分支）；update_provider 的两处硬编码中文改走 `lang.tr`。
+- **11-10 已修复**：provider_models 的刷新与测速上游失败改 `response::bad_gateway`（UPSTREAM_ERROR），与用量端点错误码一致。
+- **11-11 已修复**：不存在供应商的模型列表返回 404（同组 create/batch/refresh 一致）；锁定旧语义的 `test_delete_provider_cascades_models` 随批改为断言 404。
+- **11-15 已修复**：请求日志行转换失败上抛 db_error + warn（不再静默丢行造成 items 与 total 不一致）。
+- **11-16 已修复**：`parse_csv_i32` 非法分段返回 400（原先静默当「不过滤」返回全量假结果）。
+- **11-17 已修复**：鉴权中间件路径比较前 `trim_end_matches('/')`（`/api/auth/status/` 不再落需登录分支）。
+- **11-18 已修复**：新增 `api_aware_fallback`——`/api/`、`/v1/` 前缀的未匹配路径返回 JSON 404，其余仍走 SPA 静态回退。
+
+**缓存与简洁/性能**：
+- **11-09 已修复**：新增 `AppSettings::reset_key`，删除设置成功后同步回落默认值（不再「界面已无该行、运行期仍用旧值」）。
+- **11-19 已修复**：删除 `_api_key` 死变量（连带一次无谓 clone）。
+- **11-21 已修复**：备份导入在事务内清空 `provider_usage_cache`，成功后整体失效内存用量缓存（`UsageMemCache::invalidate_all`），与删除供应商路径成对。
+- **11-24 已修复**：`load_usage_map` 由逐供应商单查改 `read_usage_cache_many` 批量读（消 N+1，并消除批读函数零消费死角）。
+
+**观察级保持现状**：11-22（/v1 头策略跨层）、11-23（列表端点无界）、11-26（request_logs 索引慢路径）、11-27（ProviderResponse 缺 disabled_reason）——均为规模/结构观察项，当前配置量级与查询形态下无实际影响，保留登记。
+
+**新增测试**：`custom_header_validation_rejects_non_object_and_non_string_values`、`not_found_provider_is_localized`、`bool_setting_value_is_trimmed` 3 例单测；`test_delete_provider_cascades_models` 语义随批更新。
 
 ## 已核验无问题区（避免后续票重复审查）
 

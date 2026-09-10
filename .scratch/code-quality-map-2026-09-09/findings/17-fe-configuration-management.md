@@ -12,28 +12,28 @@
 | 17-04 | P2【已修复 2026-09-10】 | i18n | 使用了不存在的 key `apiKeys.showKeyFailed`（两 locale 均无）——取明文失败时 toast 标题显示原始 key 字面量 |
 | 17-05 | P2【已修复 2026-09-10】 | 逻辑/健壮 | ProviderDetail 对 `extra`/`customHeader` 无保护 `JSON.parse`：密钥丢失时后端透传密文（非 JSON）→ 渲染抛错整页 ErrorBoundary |
 | 17-06 | P2【已修复 2026-09-10】 | 逻辑/交互 | Add 弹窗「手动/待确认」候选卡整卡可点，卡内数字输入无 stopPropagation——点击/回车冒泡触发跳转卸载输入框，这两个态的数字字段根本填不进去（现有测试全用 fireEvent.change 故未暴露） |
-| 17-07 | P3 | 逻辑/校验 | 前端代理地址校验缺 `@` 拒绝规则，与后端 validate_proxy 口径不齐（只能吃服务端报错） |
-| 17-08 | P3 | 规范 | ProviderEditDialog:308 模板候选文案用 `truncate`，违反「单行截断一律 MidEllipsis」约定（全 scope 唯一一处） |
-| 17-09 | P3 | 简洁 | ApiKeyCell 详情拉取失败静默显示掩码无提示（与 ProviderDetail 的 toast 不一致） |
-| 17-10 | P3 | 安全/一致性 | ApiKeyCell 把明文 Key 写进 React Query 缓存（gcTime 5min），与 ProviderDetail「明文不进任何缓存」注释策略相悖；波及面：useApiKeyDetail 亦被 api-key-overview 消费 |
-| 17-11 | P3 | 逻辑 | 删除当前选中供应商后详情面板空白，不回落列表首个 |
-| 17-12 | P3 | 性能 | 供应商页一挂载即全局拉全部供应商模型（SpeedTestDialog 无条件挂载再客户端过滤）；后端有按 provider 作用域端点未用 |
-| 17-13 | P3 | 逻辑 | ApiKeysTable 任何数据 identity 变化（如启停开关触发 invalidate）都把分页打回第 1 页 |
-| 17-14 | P3 | 简洁 | ProviderDetail 手写协议/付费标签映射重复 ProtocolIcon 导出（`billingModeLabel` 全仓零消费=死导出） |
-| 17-15 | P3 | 逻辑/文案 | 编辑模式 API Key 输入框标必填星号，实际留空=不修改——误导 |
-| 17-16 | P3 | i18n | ProviderUsageCard 硬编码 zh-CN/中文串（:55/:64/:202），EN 下穿帮（01 盘点已归 20 票域，此记实例） |
-| 17-17 | P3 | 简洁 | 创建模式应用模板时 extra 可编辑键默认值全置空——模板一旦带非空默认值即被丢弃（当前种子全空占位，无实害） |
-| 17-18 | P3 | 健壮 | Add 弹窗 numberEdits 更新用渲染闭包旧 `edits` 展开（非 prev[id]），同批更新互相覆盖（窄） |
-| 17-19 | P3 | 规范 | ProviderModelDetailDialog/VirtualModelItemDetailDialog 把 overflow-y-auto 放整个 DialogContent——标题/底部随内容滚动，违反固定头底约定（同族大弹窗做对了） |
-| 17-20 | P3 | 失效面 | `useDeleteProvider` 漏失效 `providerModelKeys`——删供应商（后端级联删模型）后 RequestLogsTable 模型筛选短暂展示已删模型（波及 16 域冻结 hook，仅追加失效不动签名） |
-| 17-21 | P3 | i18n | ProviderModelSection「添加」按钮硬编码中文（同文件其余走 t()） |
-| 17-22 | P3 | 逻辑 | VM 编辑弹窗对 providerModels 中缺失的草稿成员不可见却仍提交，接口类型变更确认也漏算 → 后端 400 而前端无提示（触发面窄：正常态列表完整） |
-| 17-23 | P3 | 逻辑 | ProviderModelDetailDialog 的 reset effect 依赖 model 对象身份——后台 refetch 即静默丢弃编辑态退回只读 |
-| 17-24 | P3 | 性能 | Add 弹窗候选全量渲染无虚拟化（数百候选 × 2 受控数字输入，大目录供应商刷新可感知卡顿） |
-| 17-25 | P3 | 性能/简洁 | VM 弹窗 `providers.map(groupOf)` 算两遍 + modelById/providerById 每渲染重建（O(2·P·M·D)，量级可接受） |
-| 17-26 | P3 | 简洁 | 能力图标两实现近同构（CapabilityIcons vs ItemCapabilityIcons）+ 只读详情 dl 两弹窗重复 + 手动表单两处重复 |
-| 17-27 | P3 | 注释漂移 | `modelSearchDebounced` 名为防抖实则同步逐字请求目录搜索（注释自述防抖） |
-| 17-28 | P3 | 测试覆盖 | 缺口族：候选卡输入点击/回车（17-06 回归网缺失根因）/批量选择矩阵/四条 onError 失败路径/接口类型变更确认全链路零覆盖/详情弹窗 protocolType 与能力开关提交/ProvidersPage 无测试/ hooks 零直测（useMatchTemplate 404 分支、useApiKeyDetail、useProviderUsage） |
+| 17-07 | P3【已修复 2026-09-10】 | 逻辑/校验 | 前端代理地址校验缺 `@` 拒绝规则，与后端 validate_proxy 口径不齐（只能吃服务端报错） |
+| 17-08 | P3【已修复 2026-09-10】 | 规范 | ProviderEditDialog:308 模板候选文案用 `truncate`，违反「单行截断一律 MidEllipsis」约定（全 scope 唯一一处） |
+| 17-09 | P3【已修复 2026-09-10】 | 简洁 | ApiKeyCell 详情拉取失败静默显示掩码无提示（与 ProviderDetail 的 toast 不一致） |
+| 17-10 | P3【已修复 2026-09-10】 | 安全/一致性 | ApiKeyCell 把明文 Key 写进 React Query 缓存（gcTime 5min），与 ProviderDetail「明文不进任何缓存」注释策略相悖；波及面：useApiKeyDetail 亦被 api-key-overview 消费 |
+| 17-11 | P3【已修复 2026-09-10】 | 逻辑 | 删除当前选中供应商后详情面板空白，不回落列表首个 |
+| 17-12 | P3【已修复 2026-09-10】 | 性能 | 供应商页一挂载即全局拉全部供应商模型（SpeedTestDialog 无条件挂载再客户端过滤）；后端有按 provider 作用域端点未用 |
+| 17-13 | P3【已修复 2026-09-10】 | 逻辑 | ApiKeysTable 任何数据 identity 变化（如启停开关触发 invalidate）都把分页打回第 1 页 |
+| 17-14 | P3【已修复 2026-09-10】 | 简洁 | ProviderDetail 手写协议/付费标签映射重复 ProtocolIcon 导出（`billingModeLabel` 全仓零消费=死导出） |
+| 17-15 | P3【已修复 2026-09-10】 | 逻辑/文案 | 编辑模式 API Key 输入框标必填星号，实际留空=不修改——误导 |
+| 17-16 | P3【销账：归 20 票域处理，2026-09-10】 | i18n | ProviderUsageCard 硬编码 zh-CN/中文串（:55/:64/:202），EN 下穿帮（01 盘点已归 20 票域，此记实例） |
+| 17-17 | P3【已修复 2026-09-10】 | 简洁 | 创建模式应用模板时 extra 可编辑键默认值全置空——模板一旦带非空默认值即被丢弃（当前种子全空占位，无实害） |
+| 17-18 | P3【已修复 2026-09-10】 | 健壮 | Add 弹窗 numberEdits 更新用渲染闭包旧 `edits` 展开（非 prev[id]），同批更新互相覆盖（窄） |
+| 17-19 | P3【已修复 2026-09-10】 | 规范 | ProviderModelDetailDialog/VirtualModelItemDetailDialog 把 overflow-y-auto 放整个 DialogContent——标题/底部随内容滚动，违反固定头底约定（同族大弹窗做对了） |
+| 17-20 | P3【已修复 2026-09-10】 | 失效面 | `useDeleteProvider` 漏失效 `providerModelKeys`——删供应商（后端级联删模型）后 RequestLogsTable 模型筛选短暂展示已删模型（波及 16 域冻结 hook，仅追加失效不动签名） |
+| 17-21 | P3【已修复 2026-09-10】 | i18n | ProviderModelSection「添加」按钮硬编码中文（同文件其余走 t()） |
+| 17-22 | P3【已修复 2026-09-10】 | 逻辑 | VM 编辑弹窗对 providerModels 中缺失的草稿成员不可见却仍提交，接口类型变更确认也漏算 → 后端 400 而前端无提示（触发面窄：正常态列表完整） |
+| 17-23 | P3【已修复 2026-09-10】 | 逻辑 | ProviderModelDetailDialog 的 reset effect 依赖 model 对象身份——后台 refetch 即静默丢弃编辑态退回只读 |
+| 17-24 | P3【已修复 2026-09-10】 | 性能 | Add 弹窗候选全量渲染无虚拟化（数百候选 × 2 受控数字输入，大目录供应商刷新可感知卡顿） |
+| 17-25 | P3【已修复 2026-09-10】 | 性能/简洁 | VM 弹窗 `providers.map(groupOf)` 算两遍 + modelById/providerById 每渲染重建（O(2·P·M·D)，量级可接受） |
+| 17-26 | P3【已修复 2026-09-10】 | 简洁 | 能力图标两实现近同构（CapabilityIcons vs ItemCapabilityIcons）+ 只读详情 dl 两弹窗重复 + 手动表单两处重复 |
+| 17-27 | P3【已修复 2026-09-10】 | 注释漂移 | `modelSearchDebounced` 名为防抖实则同步逐字请求目录搜索（注释自述防抖） |
+| 17-28 | P3【已修复 2026-09-10（关键缺口）】 | 测试覆盖 | 缺口族：候选卡输入点击/回车（17-06 回归网缺失根因）/批量选择矩阵/四条 onError 失败路径/接口类型变更确认全链路零覆盖/详情弹窗 protocolType 与能力开关提交/ProvidersPage 无测试/ hooks 零直测（useMatchTemplate 404 分支、useApiKeyDetail、useProviderUsage） |
 
 **弹窗脚手架收敛定案（01 盘点候选，给 19 票）**：只抽「固定头/尾+可滚动主体」的布局原语 `DialogScrollShell`（ProviderEditDialog 与 ProviderSpeedTestDialog 头栏 className 逐字节相同可证），**不抽** form/zod/toast/reset 装配（四弹窗差异结构性，参数化=ADR-0004 已否决的泥潭；若采纳需在 ADR-0004 加 addendum 划清边界）。19 落地、17 域五弹窗消费。
 
@@ -65,91 +65,91 @@ ProviderDetail.tsx:253/268 两处 JSON.parse 仅 `!== "{}"` 守卫；ProviderRes
 
 AddProviderModelsDialog.tsx:547-577：manual/pending 候选整卡挂 role=button + onClick=jump + onKeyDown(Enter/Space→jump)；卡内数字输入（:595-638）无 stopPropagation（仅 Checkbox :583 有）。点击聚焦冒泡→jump 切手动 Tab→输入卸载；Enter 同理。而 manual/pending 正是需要手填 contextLength/maxOutputTokens 的态。现有测试全用 fireEvent.change 不产生 click/keydown（provider-models-dialogs.test.tsx:211-212 等）故未暴露。默认解：输入容器 stopPropagation，或 jump 下移到标题区，或 clickable 候选不渲染数字输入。
 
-### 17-07 代理 @ 校验口径不齐（P3）
+### 17-07 代理 @ 校验口径不齐（P3）【已修复 2026-09-10】
 
 ProxyConfigFields.tsx:25-42 只查非空+http:// 前缀；后端 providers.rs:194-222 额外拒 `@`。前端放行后吃服务端 toast。默认解：proxySuperRefine 补 @ 规则。
 
-### 17-08 truncate 违规（P3，规范）
+### 17-08 truncate 违规（P3，规范）【已修复 2026-09-10】
 
 ProviderEditDialog.tsx:308 模板候选按钮内 `<span className="truncate">`（全 scope 唯一）。默认解：换 MidEllipsis。
 
-### 17-09 ApiKeyCell 错误静默（P3）
+### 17-09 ApiKeyCell 错误静默（P3）【已修复 2026-09-10】
 
 ApiKeyCell.tsx:23-55：详情 query 失败→detail undefined→永远掩码，无 toast/错误态。默认解：暴露 error 并 toast。
 
-### 17-10 明文 Key 缓存策略不一（P3，安全/一致性）
+### 17-10 明文 Key 缓存策略不一（P3，安全/一致性）【已修复 2026-09-10】
 
 ProviderDetail.tsx:99 注释「明文不进任何缓存」；ApiKeyCell.tsx:23 用 useApiKeyDetail（React Query 缓存）+ :32-37 queryClient.fetchQuery 写缓存，gcTime 5min。两处策略相悖（仅内存，风险有限）。默认解：detail query 设 gcTime:0 或复制走命令式。波及面：useApiKeyDetail 被 api-key-overview.tsx:46 消费（只取名称），改缓存策略需回归该页。
 
-### 17-11 删除选中项后空白（P3）
+### 17-11 删除选中项后空白（P3）【已修复 2026-09-10】
 
 pages/providers.tsx:29-30：`hasUserSelected` 后删除该项，selectedId 悬空 → 右侧空态不回落首个。默认解：providers 找不到 selectedId 时重置选择态。
 
-### 17-12 测速弹窗全局拉模型（P3，性能）
+### 17-12 测速弹窗全局拉模型（P3，性能）【已修复 2026-09-10】
 
 ProviderSpeedTestDialog.tsx:42 useProviderModels() 全量 + :77-80 客户端过滤；弹窗在 providers.tsx:110-114 无条件挂载 → 打开供应商页即拉全量模型。后端有 `/{provider_id}/models` 作用域端点未用。默认解：作用域 query 或 open 门控 enabled。波及面：useProviderModels 是 16 域冻结共享 hook，改签名需协商；新增独立作用域 hook 则安全。
 
-### 17-13 分页被 identity 重置（P3）
+### 17-13 分页被 identity 重置（P3）【已修复 2026-09-10】
 
 ApiKeysTable.tsx:184-186 `useEffect(..., [apiKeys])`：启停 invalidate → 新数组 identity → pageIndex=0。默认解：依赖改 apiKeys.length 或仅总页数下降时重置。
 
-### 17-14 标签映射重复+死导出（P3）
+### 17-14 标签映射重复+死导出（P3）【已修复 2026-09-10】
 
 ProviderDetail.tsx:44-54 手写 PROTOCOL_LABELS/BILLING_LABELS 与 ProtocolIcon.tsx 的 labelKey 同源；ProtocolIcon 导出的 billingModeLabel（:28-30）全仓零消费。默认解：ProviderDetail 改用 protocolLabel/billingModeLabel，回收死导出。
 
-### 17-15 编辑态必填星号（P3，文案）
+### 17-15 编辑态必填星号（P3，文案）【已修复 2026-09-10】
 
 ProviderEditDialog.tsx:339 `<FormLabel required>` 无条件；编辑态留空=不修改（:215/:343 占位符自述）。默认解：`required={!isEdit}`。
 
-### 17-16 用量卡 i18n 绕过（P3）
+### 17-16 用量卡 i18n 绕过（P3）【销账：归 20 票域，2026-09-10】
 
 ProviderUsageCard.tsx:55 固定 `Intl.DateTimeFormat("zh-CN")`、:64 拼「月/日」、:202 `toLocaleTimeString("zh-CN")`。归 20 票 i18n 域一并处理，此记实例锚点。
 
-### 17-17 模板 extra 默认值丢弃（P3）
+### 17-17 模板 extra 默认值丢弃（P3）【已修复 2026-09-10】
 
 ProviderEditDialog.tsx:200-206 applyTemplate 对可编辑键一律 `defaults[key]=""`（编辑模式 :177-182 会带模板值）；提交 :252-256 用 extraValues 覆盖模板值。当前种子全空占位无实害；模板带非空默认即被丢。默认解：defaults 取模板值兜底。
 
-### 17-18 numberEdits 闭包覆盖（P3，健壮）
+### 17-18 numberEdits 闭包覆盖（P3，健壮）【已修复 2026-09-10】
 
 AddProviderModelsDialog.tsx:606-614/627-635：`{...edits, ...}` 用渲染闭包旧快照而非 `prev[id]`；同批两字段更新互相覆盖。实际逐事件触发+React 重渲染，面窄。默认解：改 `prev[candidate.providerModelId]` 展开。
 
-### 17-19 详情弹窗滚动形态违规（P3，规范）
+### 17-19 详情弹窗滚动形态违规（P3，规范）【已修复 2026-09-10】
 
 ProviderModelDetailDialog.tsx:191、VirtualModelItemDetailDialog.tsx:90：`DialogContent className="max-h-[85vh] overflow-y-auto"` 整窗滚动，标题/底部随之滚动；违反 AGENTS 固定头底约定（同族 AddProviderModelsDialog:435/VirtualModelEditDialog:461 做对了）。默认解：改 flex 三分布局（正好是定案 DialogScrollShell 的首批消费方）。
 
-### 17-20 useDeleteProvider 漏失效 providerModelKeys（P3，失效面）
+### 17-20 useDeleteProvider 漏失效 providerModelKeys（P3，失效面）【已修复 2026-09-10】
 
 use-providers.ts:160-164 只失效 providerKeys+virtualModelKeys；后端删除供应商级联删 provider_model（providers.rs:668）；RequestLogsTable.tsx:157 的模型筛选消费 useProviderModels → 短暂展示已删模型。默认解：onSuccess 补 providerModelKeys.all。波及面：16 域冻结 hook 仅追加失效、不动签名，低风险。
 
-### 17-21 「添加」硬编码（P3，i18n）
+### 17-21 「添加」硬编码（P3，i18n）【已修复 2026-09-10】
 
 ProviderModelSection.tsx:69-72 按钮文案直写中文，同文件其余走 t()。默认解：走 providerModels.* key。
 
-### 17-22 不可解析草稿成员仍提交（P3，逻辑）
+### 17-22 不可解析草稿成员仍提交（P3，逻辑）【已修复 2026-09-10】
 
 VirtualModelEditDialog：mismatchedDrafts（:182-188）与 groupOf（:273-289）用 modelById（源自 providerModels prop）解析草稿，缺失即 undefined → 不成行、不计入候选；onSubmit（:301-314）仍从 draftItems 全量提交 → 后端 400「成员协议不匹配」而前端无提示；接口类型变更确认（:191-210）漏算这类成员。触发面窄（级联清理保证正常态完整）。默认解：提交前对不可解析成员兜底提示/剔除。
 
-### 17-23 详情弹窗 refetch 丢编辑态（P3）
+### 17-23 详情弹窗 refetch 丢编辑态（P3）【已修复 2026-09-10】
 
 ProviderModelDetailDialog.tsx:117-134：reset effect 依赖 `[open, model, form]`，model 由页面 useMemo 派生自 react-query 数组——任何 refetch（失效/stale 后回焦）产新对象身份 → form.reset+setEditing(false)，编辑中改动静默丢失。默认解：依赖改 `model?.modelId`+open。
 
-### 17-24 Add 弹窗无虚拟化（P3，性能）
+### 17-24 Add 弹窗无虚拟化（P3，性能）【已修复 2026-09-10】
 
 AddProviderModelsDialog.tsx:543-642 候选全量 map，每卡 Checkbox+2 受控数字输入；大目录供应商（300+ 模型）刷新可感知卡顿。搜索只定位高亮不裁剪渲染集。默认解：按查询过滤渲染集或窗口化（观察级）。
 
-### 17-25 VM 弹窗重复计算（P3，性能/简洁）
+### 17-25 VM 弹窗重复计算（P3，性能/简洁）【已修复 2026-09-10】
 
 VirtualModelEditDialog.tsx:293-299 providers.map(groupOf) 两遍；groupOf→candidatesOf 内层 filter+some 约 O(2·P·M·D)；modelById/providerById 每渲染重建。默认解：算一次再 filter 分区 + useMemo 两个 Map。
 
-### 17-26 三处近重复（P3，简洁）
+### 17-26 三处近重复（P3，简洁）【已修复 2026-09-10（能力图标合一）】
 
 CapabilityIcons.tsx:20-49 vs ItemCapabilityIcons.tsx:17-40 近同构（入参类型不同）；只读详情 dl（ProviderModelDetailDialog:292-362 vs VirtualModelItemDetailDialog:116-185）；手动表单（AddProviderModelsDialog:654-778 vs ProviderModelDetailDialog:209-290，schema 已由 provider-model-form 复用）。默认解：能力图标合一（结构化入参可覆盖），只读 dl 抽 ModelInfoList。
 
-### 17-27 假防抖（P3，注释漂移）
+### 17-27 假防抖（P3，注释漂移）【已修复 2026-09-10】
 
 AddProviderModelsDialog.tsx:125-127 注释称防抖，:187-192 同步 setState；useCatalogSearch（use-provider-models.ts:88-101）逐键发请求。默认解：加真防抖或改名改注释。
 
-### 17-28 测试缺口族（P3）
+### 17-28 测试缺口族（P3）【已修复 2026-09-10（关键缺口）】
 
 已有：provider-models-dialogs 963 行 33 例、virtual-models-dialogs 833 行 19 例、virtual-model-interface-type 4 例、provider-models-page 11 例、virtual-models-page 13 例、provider-detail 22 例、provider-edit-dialog 3 例、provider-usage-card 10 例、api-keys-page 11 例、providers-list-reorder 6 例。缺口：①候选卡输入 click/keydown（17-06 根因=测试全用 fireEvent.change）；②批量选择矩阵+坏数字提交提示；③四条 onError 失败路径（createModel/batchCreate/VM onSubmit/VM 删除）；④接口类型变更确认全链路（mismatchedDrafts→确认→级联移除）与「协议不匹配候选隐藏」；⑤详情弹窗 protocolType Select 与能力开关提交；⑥pages/providers.tsx 整页无测试（默认选中/删除回落 17-11/弹窗接线）；⑦hooks 零直测（useMatchTemplate 404/useApiKeyDetail enabled/useProviderUsage refresh 拼装）；⑧窄面观察：ProviderModelDetailDialog:355-359 继承代理展示未门控 provider.proxyEnabled（VirtualModelItemDetailDialog:166-168 有门控），关闭代理未清空地址时误显示「继承」。
 
@@ -171,6 +171,29 @@ AddProviderModelsDialog.tsx:125-127 注释称防抖，:187-192 同步 setState�
 无 P1/P2 性能项。主要浪费=17-03（每键击 2 请求且无防抖）与 17-12（页面挂载即全量拉模型）；Add 弹窗全量渲染（17-24）与 VM 弹窗重复计算（17-25）为观察级；ProviderUsageCard 的 refreshToken 换 key 短时堆积旧缓存条目（量微）。全局 staleTime 5min+手动刷新符合管理端形态。结论：修 17-03 顺带防抖是本域最高性价比性能项。
 
 ## 实施进度（2026-09-10）
+
+- **17-07 已修复**：`proxySuperRefine` 补 `@` 拒绝规则（与后端 `validate_proxy` 同口径），新增 `providers.proxyAddrAuthUnsupported` 双语词条。
+- **17-08 已修复**：模板候选按钮改 `MidEllipsis`（模板名走中间省略，前后缀 shrink-0），移除全 scope 唯一的 `truncate`。
+- **17-09 已修复**：`ApiKeyCell` 补拉取失败 toast（按 id 去重，避免每次重渲染重复弹）。
+- **17-10 已修复**：`useApiKeyDetail` 设 `gcTime: 0`（观察者卸载即出缓存），`ApiKeyCell` 复制改为直接请求明文、不再写查询缓存——与 ProviderDetail「明文不进任何缓存」对齐。
+- **17-11 已修复**：ProvidersPage 判断选中项是否仍在列表中，不在则回落列表首个；新增整页测试并验证过「去掉修复该测试即红」。
+- **17-12 已修复**：新增 `useProviderModelsScoped(providerId)`（走 `/api/providers/{id}/models`），测速弹窗改用之——弹窗关闭不再发请求，客户端过滤删除。
+- **17-13 已修复**：ApiKeysTable 分页仅在当前页越界时回落到末页（不再因任何数据刷新回到第 1 页）。
+- **17-14 已修复**：ProviderDetail 删除本地 `PROTOCOL_LABELS`/`BILLING_LABELS`，改用 `protocolLabel`/`billingModeLabel`（死导出被消费）。
+- **17-15 已修复**：编辑态 API Key 标签不标必填星号（`required={!isEdit}`）。
+- **17-17 已修复**：`applyTemplate` 对可编辑 extra 键取模板中的非空字符串默认值（不再一律置空）。
+- **17-18 已修复**：两处 `numberEdits` 更新改为以 `prev[id]` 最新值为基础展开。
+- **17-19 已修复**：`ProviderModelDetailDialog` 与 `VirtualModelItemDetailDialog` 改为固定头/尾 + 仅主体滚动的三分布局（对齐同族大弹窗约定）。
+- **17-20 已修复**：`useDeleteProvider` 追加失效 `providerModelKeys.all`（仅追加，不动签名）。
+- **17-21 已修复**：`ProviderModelSection` 的「添加」走 `common.add`（新增双语词条）。
+- **17-22 已修复**：VM 编辑弹窗提交前统计模型列表中已不存在的草稿成员，存在则报错拦截（新增 `virtualModels.staleDraftMembers` 词条）。
+- **17-23 已修复**：详情弹窗 reset effect 依赖收敛为 `[open, modelKey, form]`（用 ref 读当前 model），后台 refetch 不再丢弃编辑态。
+- **17-24 已修复**：候选列表按搜索关键词收窄渲染集（无关键词时仍全量），大目录供应商的受控输入数量随之下降。
+- **17-25 已修复**：VM 弹窗 `providers.map(groupOf)` 只算一次再分区。
+- **17-26 已修复（能力图标合一）**：`CapabilityIcons` 入参改为结构化 `CapabilitySource`，删除重复的 `ItemCapabilityIcons.tsx`，两个消费方改用前者。只读 dl 与手动表单的进一步合并按拍板不做（差异结构性）。
+- **17-27 已修复**：抽出共享 `useDebouncedValue`（`hooks/use-debounced-value.ts`），目录搜索真正走 300ms 防抖，注释与行为一致。
+- **17-28 已修复（关键缺口）**：新增候选卡数字输入 click/keydown 回归（17-06 根因网）、同批双字段更新回归（17-18）、ProvidersPage 整页测试（默认选中 / 切换 / 17-11 删除回落，已验证红→绿）。批量选择矩阵、四条 onError、接口类型变更全链路与 hooks 直测按拍板不做。
+- **17-16 销账**：ProviderUsageCard 的硬编码 zh-CN/中文串归 20 号 i18n 票统一处理。
 
 - **17-01 已修复**：`ProviderDetail` 增加 `activeIdRef`，明文请求返回后比对当前供应商 id，不一致即丢弃（不 setState、不 toast、不关 loading）；一键复制同样比对。回归测试「在途期间切换供应商时丢弃迟到的明文」（先红后绿语义）。
 - **17-02 已修复**：`ProviderEditDialog` 新增 `hasUsageKey`（`"usage" in parseExtra(...)`），用量开关可见性由 `usage===true` 改判「存在 usage 键」——关掉一次后仍可再打开。

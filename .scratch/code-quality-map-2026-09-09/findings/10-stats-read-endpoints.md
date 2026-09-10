@@ -9,13 +9,13 @@
 | 10-01 | P1【已修复 2026-09-10，d8f7825】 | 逻辑/分位 | insight day 粒度窗口含今日未闭天时，小时帧 p 标量覆盖写今日日桶分位（「过去 7 天」常见查询必现，尾点错）——group_percentiles 未校验帧级 == 查询粒度 |
 | 10-02 | P1【已修复 2026-09-10，d8f7825】 | 逻辑/过滤 | provider-model-rank 单侧过滤：仅 modelId 时快照 exact=None 读入全量 model 行混入其它供应商/模型（亲验）；providerId-only 被展示层 meta 的 provider 过滤兜住（响应正确但 fold 浪费）——修复=单侧过滤整窗兑底 |
 | 10-03 | P3·语义【已拍板：接受现状+注释与测试锁定】 | 逻辑/删后时序 | pm/Key 硬删后（四个硬删端点已确认）闭桶历史快照态消失、兑底态按原文保留（pm_rank raw: 孤儿键即此设计）——「快照=加速层」在此时序不成立；快照行只存主键 id 无原文，schema 级统一成本高 |
-| 10-04 | P3 | 逻辑/注入面 | api_key_rank 按 name 反查 id 用内联拼接（rank_impl.rs:723-727）——name 无字符集限制，含 `'` 即破坏 SQL；应改 `?` 绑定 |
-| 10-05 | P3 | 健壮/契约 | PRIM_COUNT=9（rank_snap.rs:13）与 registry SuccessPrim 段序是运行期偶合——加/减原语不同步会在 fold 越界 panic，无 debug_assert 护栏 |
-| 10-06 | P3 | 简洁/绕行 | charts 快照读用手写字面量 `&["calls","tokens_all"]`（summary_charts.rs:430/578/584）——summary/insight 已用常量数组，键改名会静默漏行 |
-| 10-07 | P3 | 简洁/重复 | 逐 level 快照行折叠循环 ×5 处同形（summary/charts trend/model_distribution/insight/rank_snap）+ 桶 key 数学/补零输出 ×2——可收敛共享 helper |
-| 10-08 | P3 | 测试覆盖 | api_key_rank 的 api_key_model 快照分支零等价测试；「今日未闭尾部」rank/metrics 等价缺（summary/charts 有）；空表/并列排序序/仅失败流量断言缺 |
-| 10-09 | P3 | 健壮/风格 | insight p 标量快照读错误 `unwrap_or_default()` 静默吞（:467-469）退化为逐桶实时全扫——与同文件「Err 即响应」风格不一致 |
-| 10-10 | P3·观察 | 微观察 | summary all_time 向兑底推 `(now, i64::MAX)` 未来段产生无意义扫描（:164-167）；window Granularity 字段在 30 天块缺省窗标 Hour（名实不符，内部）；charts/insight 单参窗口静默回退 24h vs summary 单参 400（旧行为非回归） |
+| 10-04 | P3【已修复 2026-09-10】 | 逻辑/注入面 | api_key_rank 按 name 反查 id 用内联拼接（rank_impl.rs:723-727）——name 无字符集限制，含 `'` 即破坏 SQL；应改 `?` 绑定 |
+| 10-05 | P3【已修复 2026-09-10】 | 健壮/契约 | PRIM_COUNT=9（rank_snap.rs:13）与 registry SuccessPrim 段序是运行期偶合——加/减原语不同步会在 fold 越界 panic，无 debug_assert 护栏 |
+| 10-06 | P3【已修复 2026-09-10】 | 简洁/绕行 | charts 快照读用手写字面量 `&["calls","tokens_all"]`（summary_charts.rs:430/578/584）——summary/insight 已用常量数组，键改名会静默漏行 |
+| 10-07 | P3【观察级保持现状 2026-09-10】 | 简洁/重复 | 逐 level 快照行折叠循环 ×5 处同形（summary/charts trend/model_distribution/insight/rank_snap）+ 桶 key 数学/补零输出 ×2——可收敛共享 helper |
+| 10-08 | P3【已部分修复 2026-09-10】 | 测试覆盖 | api_key_rank 的 api_key_model 快照分支零等价测试；「今日未闭尾部」rank/metrics 等价缺（summary/charts 有）；空表/并列排序序/仅失败流量断言缺 |
+| 10-09 | P3【已修复 2026-09-10】 | 健壮/风格 | insight p 标量快照读错误 `unwrap_or_default()` 静默吞（:467-469）退化为逐桶实时全扫——与同文件「Err 即响应」风格不一致 |
+| 10-10 | P3·观察【已处理 2026-09-10】 | 微观察 | summary all_time 向兑底推 `(now, i64::MAX)` 未来段产生无意义扫描（:164-167）；window Granularity 字段在 30 天块缺省窗标 Hour（名实不符，内部）；charts/insight 单参窗口静默回退 24h vs summary 单参 400（旧行为非回归） |
 | S5 | — | 归位遗留重估 | 同窗 ~12 次聚合：新结构已消解为每端点「快照 1 次批量取 + 兑底每段 1 条 GROUP BY（registry select_list 全指标单遍）」——**定案：已解决，关闭** |
 
 ## 各条证据
@@ -38,31 +38,31 @@ rank_impl.rs provider_model_rank（:232-397）：`supported`（:247）只排除 
 
 **拍板（2026-09-10）**：接受现状。实施批=读侧注释化该时序差异（pm_rank raw 键保留 vs 快照丢的不对称在 subject/rank_impl 注释明示）+ 等价测试补一条「删主体后查含闭桶窗口」用例锁定现状语义（数字=快照丢、兑底留），防止未来误改。
 
-### 10-04 api_key_rank name 内联拼接（P3，注入面）
+### 10-04 api_key_rank name 内联拼接（P3，注入面）【已修复 2026-09-10】
 
 rank_impl.rs:723-727 `SELECT id AS v FROM api_key WHERE name = '{name}'`——name 来自 request 表 api_key_name（创建时仅 trim 校验，无字符集限制，api_keys.rs:106-109），含 `'` 的名称会破坏/改变该 SELECT。值域系统自产、低危。默认解：改 `Statement::from_sql_and_values` + `?` 绑定（与文件内其余风格一致）。
 
-### 10-05 PRIM_COUNT 运行期偶合（P3，健壮）
+### 10-05 PRIM_COUNT 运行期偶合（P3，健壮）【已修复 2026-09-10】
 
 rank_snap.rs:13 `PRIM_COUNT = 9` + :36-62 九个下标访问器 + registry.rs:84-130 SuccessPrim 段序三方偶合：registry 段序是「过滤后枚举序」源头，fold_row 按**别名名**取值（抗列序漂移 ✓），但 Prims 数组下标仍由 success_prims() 枚举序决定——加/减原语不同步会在 fold 越界 panic 或口径错位，仅注释+等价测试约束（两侧共用同一 derive，错位时等价测试仍绿）。默认解：`debug_assert_eq!(PRIM_COUNT, success_prims().count())` 类守卫 + 访问器改由枚举序生成。
 
-### 10-06 charts 快照指标名手写字面量（P3，绕行）
+### 10-06 charts 快照指标名手写字面量（P3，绕行）【已修复 2026-09-10】
 
 summary_charts.rs:430/578/584 快照读用手写 `&["calls","tokens_all"]` 字面量；summary 用 `SUMMARY_METRICS` 常量（:96 区）、insight 用 `SERIES_METRICS`（insight.rs:86-95）——指标键同一事实源（registry::metrics）下 charts 绕行，键改名会静默漏行（等价测试可兜但迟）。默认解：charts 快照名单并入常量（如 `CHARTS_SNAP_METRICS`）或复用 SUMMARY_METRICS。
 
-### 10-07 读侧同构重复五处（P3，简洁）
+### 10-07 读侧同构重复五处（P3，简洁）【观察级保持现状 2026-09-10】
 
 「coverage.snapshots 按 level 分组 → 逐 level snapshot_rows → 按别名取值累加」循环同形出现在 summary（:172-197）、charts trend（:407-452）、model_distribution（:566-590）、insight fold_snapshot_rows（:244-265）、rank_snap fold_snapshot（:111-135）五处；桶 key 数学（`(ts+off).div_euclid`/period key）与补零输出在 charts（:511-538）与 insight（:284-314）各一份。默认解：抽共享 helper（fold_snapshot 泛化到任意指标名集合 + 按 entity 过滤），随 10-06 同批。
 
-### 10-08 rank/metrics/insight 等价与断言缺口（P3，测试覆盖）
+### 10-08 rank/metrics/insight 等价与断言缺口（P3，测试覆盖）【已部分修复 2026-09-10】
 
 ① api_key_rank 的 api_key_model 快照分支（rank_impl.rs:660-682，唯一手写 fold）零等价测试（等价只锁 ∅ 与 pm 精确）；②「今日未闭尾部 + 闭桶」混合 coverage 的 rank/metrics 等价缺（summary/charts 有 `summary_and_charts_equality_with_today_tail` 同形可参照——10-01/10-02 修复的回归锚即此形态）；③ 空表/单主体/并列排序序/仅失败流量（request_count==0 跳过）断言缺。默认解：随两张 P1 回归同批补 ①②。
 
-### 10-09 p 标量读错误静默吞（P3，风格/健壮）
+### 10-09 p 标量读错误静默吞（P3，风格/健壮）【已修复 2026-09-10】
 
 insight.rs:467-469 `snapshot_rows(...).await.unwrap_or_default()`——DB 读错误被吞为「无标量」，:479-488 对整窗闭桶逐桶实时全扫兜底（正确但掩盖故障 + 潜在 24 次全表扫描），与同文件其余分支「Err → db_error 响应」风格不一致。默认解：改 `?` 传播（闭桶缺标量仍走实时回算，读错误不应降级）。
 
-### 10-10 微观察（P3）
+### 10-10 微观察（P3）【已处理 2026-09-10】
 
 ① summary all_time 向兑底 live 推 `(now, i64::MAX)` 段（:164-167）——对 request 表未来范围的无意义扫描（旧 SQL 无上界语义的迁就），可改「无上界」专用路径或接受（正确性无损，每全量 summary 一次空扫）；② resolve_chart_window 无显式粒度 62d+ 窗口返回 granularity=Hour 但 bucket_ms=30*DAY_MS（window.rs:139-147）——granularity 字段名实不符（仅内部标记用，行为正确）；③ charts/insight 单参窗口静默回退 24h vs summary 单参 400——历史行为，非回归。
 
@@ -72,6 +72,17 @@ insight.rs:467-469 `snapshot_rows(...).await.unwrap_or_default()`——DB 读错
 - **重估（新结构）**：09-07 起读路径被 registry 单源化 + 桶迭代/快照兑底收敛重写——现状每端点 SQL 次数：**快照侧 1 次批量行取**（coverage 哨兵 1 次 IN 查询 + snapshot_rows 每 level 1 次 IN 查询）；**兑底侧每 live 段 1 条聚合 SQL**（summary 无分组单行、charts/insight 一条 `GROUP BY bucket` 携带全部 registry 表达式 select_list、rank/metrics 一条 `GROUP BY key` 携带九原语）——「同窗 12 次独立扫描」已消解为段数级的 1-3 条，且分位闭桶走快照标量（仅 hour/day 存储、缺标量桶才实时回算，不再整窗逐值拉回）；insight 失败原因整窗 1 条独立查询属不同构型（不可与系列合并）；month_mode 分位短路已前置（insight.rs:451-453）。
 - **残余观察**：10-09（p 标量读错误静默降级可能触发整窗逐桶回算）、缺标量桶的逐桶实时回算（罕见，闭桶必有标量——仅生成滞后窗口）。月/年分位恒空为接口语义（registry percentile_level_ok），非扫描浪费。
 - **定案**：S5 目标（同窗聚合合并单遍 + 分位免逐值拉回 + month_mode 前置短路）在新结构全部达成，**关闭**，不另行开票；残余为 10-09 单条。
+
+## P3 实施批（2026-09-10）
+
+- **10-04 已修复**：api_key_rank 的主体解析由 `format!` 内联拼接改为 `Statement::from_sql_and_values` + `?` 绑定（名称含单引号不再破坏语句）。
+- **10-05 已修复**：`prim_select_list` 入口加 `debug_assert_eq!(PRIM_COUNT, success_prims().count())`——加/减指标忘同步时在首次取值路径立即暴露（release 零开销；`success_prims` 返回 opaque iterator，无法用 const 断言）。
+- **10-06 已修复**：charts 的两处 `&["calls","tokens_all"]` 字面量收敛为 `CHARTS_SNAP_METRICS` 常量（消费 registry 的 `metrics::*`，改名不再静默漏行）。
+- **10-07 观察级保持现状**：读侧同构折叠循环五处保留（各端点指标集与过滤面不同，抽 helper 的泛型参数化收益有限），随后续按需收敛。
+- **10-08 已部分修复**：新增 2 条等价测试——`api_key_model_rank_equality_snapshot_vs_live`（api-key-rank 带 providerId+modelId 触发的手写 fold 分支，快照态与实时态逐字节一致）、`rank_and_metrics_equality_with_today_tail`（闭桶 + 今日未闭尾部混合窗口下 provider-model-rank/virtual-model-rank/api-key-rank/provider-metrics/insight 五端点逐字节一致，即 10-01/10-02 两张 P1 的回归形态）。剩余（空表/单主体/并列排序序）断言保留后续。
+- **10-09 已修复**：insight 的分位标量读由 `unwrap_or_default()`（吞成「无标量」并触发整窗实时扫描）改为 `?` 传播——`group_percentiles` 闭包改为返回 `Result<Vec<PercentilePoint>, String>`，两处调用点按 `response::db_error` 返回。
+- **10-10 已处理**：② 与 ③ 为观察级现状（粒度字段名实不符仅内部标记用、charts/insight 单参回退差异属历史行为），保留登记。①（all_time 向兑底推 `(now, i64::MAX)` 段）保留：全量语义要求「now 之后的实时行也计入」（与旧 SQL 无上界一致），去掉会改变语义，空扫代价可接受。
+
 
 ## 已核验无问题区（避免后续票重复审查）
 

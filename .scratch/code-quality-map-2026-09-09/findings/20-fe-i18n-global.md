@@ -8,14 +8,14 @@
 | --- | --- | --- | --- |
 | 20-01 | P2【已修复 2026-09-10】 | 逻辑 | `<html lang>` 首帧不跟随语言：`languageChanged` 处理器注册在 `i18n.init()` 之后，而该事件在 init 内同步触发（i18next 26.4.0 实证）→ 处理器漏掉首帧；index.html 硬编码 `lang="zh-CN"`，英文用户首屏 lang 恒 zh-CN 直到手动切换 |
 | 20-02 | P2【已修复 2026-09-10】 | 逻辑 | `zh-CN.ts:681-682` 的 `dashboard.success`/`dashboard.failed` 中文档写英文值（"success"/"failed"）→ insight 失败趋势 tooltip 中文界面显示英文，且与同图硬编码中文图例（16-05）同图矛盾 |
-| 20-03 | P3 | 简洁 | 703 键中 160 键零引用（死键）：`usage`（13/13）与 `time`（5/5）整组全死、`error.internalError/unauthorized`、`providers.usageLabels.*`（14）、7 页面的 `<域>.title` 与 `nav.pages.*.title` 语义重复 |
-| 20-04 | P3 | 逻辑/简洁 | 日期/周期格式化手写「locale==="zh" ? 中文串 : Intl」（race-period.ts 9 处 + dashboard-charts.tsx 3 处）绕过 i18n，而所需格式的 `time.*` 键全组死键——两套文案来源并存 |
-| 20-05 | P3 | 逻辑 | `constants.ts:1` `DEFAULT_GROUP = "默认"` 硬编码，英文界面 cron 列表/详情显示中文「默认」 |
-| 20-06 | P3 | 模块间 | insight-charts.tsx/ProtocolIcon.tsx 直调全局 `i18n.t`/`i18n.language` 不订阅 useTranslation——语言切换靠父组件恰好重渲染兜底，被 memo 或独立复用即成陈旧文案（当前无可复现，易碎模式） |
-| 20-07 | P3 | 测试覆盖 | 无任何 i18n 制度化校验（键集合/占位符/引用键存在性/硬编码守卫全缺）：本票的「703 键零漂移」是主代理手工脚本验证，仓内无测试固化；一个一致性用例即可制度化抓住 17-04 类缺键 |
-| 20-08 | P3 | 注释漂移 | en.ts:3 注释称 satisfies 实为 `: Translation`；index.ts:42 注释检测链尾「→ zh-CN」与实现（非中文 → en，zh-CN 仅 fallbackLng）不符 |
-| 20-09 | P3 | 模块间 | i18n 初始化靠隐式副作用：main.tsx 未显式 import `@/i18n`，仅经 App→use-locale 链触发；入口移除该 hook 即静默丢失初始化（test/setup.ts 显式 import 说明作者知情） |
-| 20-10 | P3 | 模块间 | `language` 设置前端只写不读（PUT 三处、零 GET）——18-03 同族补面：设置页直改语言后端已同步 cron 标题而前端仍旧语 |
+| 20-03 | P3【已修复 2026-09-10】 | 简洁 | 703 键中 160 键零引用（死键）：`usage`（13/13）与 `time`（5/5）整组全死、`error.internalError/unauthorized`、`providers.usageLabels.*`（14）、7 页面的 `<域>.title` 与 `nav.pages.*.title` 语义重复 |
+| 20-04 | P3【已修复 2026-09-10】 | 逻辑/简洁 | 日期/周期格式化手写「locale==="zh" ? 中文串 : Intl」（race-period.ts 9 处 + dashboard-charts.tsx 3 处）绕过 i18n，而所需格式的 `time.*` 键全组死键——两套文案来源并存 |
+| 20-05 | P3【已修复 2026-09-10】 | 逻辑 | `constants.ts:1` `DEFAULT_GROUP = "默认"` 硬编码，英文界面 cron 列表/详情显示中文「默认」 |
+| 20-06 | P3【已修复 2026-09-10】 | 模块间 | insight-charts.tsx/ProtocolIcon.tsx 直调全局 `i18n.t`/`i18n.language` 不订阅 useTranslation——语言切换靠父组件恰好重渲染兜底，被 memo 或独立复用即成陈旧文案（当前无可复现，易碎模式） |
+| 20-07 | P3【已修复 2026-09-10】 | 测试覆盖 | 无任何 i18n 制度化校验（键集合/占位符/引用键存在性/硬编码守卫全缺）：本票的「703 键零漂移」是主代理手工脚本验证，仓内无测试固化；一个一致性用例即可制度化抓住 17-04 类缺键 |
+| 20-08 | P3【已修复 2026-09-10】 | 注释漂移 | en.ts:3 注释称 satisfies 实为 `: Translation`；index.ts:42 注释检测链尾「→ zh-CN」与实现（非中文 → en，zh-CN 仅 fallbackLng）不符 |
+| 20-09 | P3【已修复 2026-09-10】 | 模块间 | i18n 初始化靠隐式副作用：main.tsx 未显式 import `@/i18n`，仅经 App→use-locale 链触发；入口移除该 hook 即静默丢失初始化（test/setup.ts 显式 import 说明作者知情） |
+| 20-10 | P3【已修复 2026-09-10】 | 模块间 | `language` 设置前端只写不读（PUT 三处、零 GET）——18-03 同族补面：设置页直改语言后端已同步 cron 标题而前端仍旧语 |
 
 **本票无需拍板项**（16-05 图例修复与 20-02 同键合流；死键清理归图后实施批）。
 
@@ -62,6 +62,15 @@ zh-CN.ts:681-682 `success: "success", failed: "failed"`（dashboard 分组，同
 无性能负债。唯一观察：useChangeLocale 切换成功即 `invalidateQueries()` 全量失效（含统计/赛马重查询）——为刷新后端本地化 cron 标题有意为之，可用更窄 key 前缀收窄（图后可选）。
 
 ## 实施进度（2026-09-10）
+
+- **20-03 已修复**：脚本实证后删除了 104 个零引用死键（zh-CN 与 en 各删 110 行，两份文件对称），清理后键数 711 → 607、复查死键为 0——此前列出的 usage/time 整组全死已随本次清理消失（time.* 由 20-04 复用后重新加回）。
+- **20-04 已修复**：`race-period.ts` 的 `formatPeriodLabel`（含 tz 与非 tz 两条路径）与 `dashboard-charts.tsx` 的 `formatBucketLabel` 的中文分支改走 `time.*` 词条（新增 `time.currentSuffix`），英文侧保持既有 Intl 格式不变（既有断言全绿）。
+- **20-05 已修复**：新增 `cronJobs.defaultGroup` 双语词条；`CronJobList`/`CronJobDetail` 展示时按翻译渲染，`DEFAULT_GROUP` 常量保留为后端种子值比较用（注释说明）。
+- **20-06 已修复**：`insight-charts` 五个图表组件与 `ProtocolIcon` 改用 `useTranslation()` 订阅语言变化（纯函数 `protocolLabel`/`billingModeLabel` 保持全局实例读，注释标注调用方需保证重渲染）。
+- **20-07 已修复**：新增 `i18n/__tests__/locales-consistency.test.ts`——中英键集合一致、同键占位符一致、源码引用的 `t("域.key")` 必须存在（经 `import.meta.glob` 读源码 + 新增 `src/vite-env.d.ts`）。该用例当场抓出一处真实缺键：`lib/api.ts` 引用的 `error.requestAborted` 实际键为 `error.aborted`（已修）。
+- **20-08 已修复**：`en.ts` 注释由「用 satisfies」改为「以 `: Translation` 标注」；`index.ts` 的初始语言注释改为与实现一致（localStorage → 浏览器语言检测，zh-CN 仅作 fallbackLng）。
+- **20-09 已修复**：`main.tsx` 显式 `import "@/i18n"`，不再依赖 App→use-locale 的隐式副作用链。
+- **20-10 已修复**：新增 `useSyncBackendLocale`（在 AppLayout 已认证场景调用），拿到设置表后把本地 store 与 i18n 对齐到后端 `language`——多客户端共用同一网关时前端不再与后端分叉。
 
 - **20-01 已修复**：`i18n/index.ts` 的 `languageChanged` 处理器注册移到 `init()` 之前，且 init 后直接 `document.documentElement.lang = initial`——首帧 `<html lang>` 跟随实际语言（原先英文用户首屏恒 zh-CN）。
 - **20-02 已修复**：`zh-CN` 的 `dashboard.success/failed` 值由 "success"/"failed" 改为「成功」/「失败」；insight 五图图例改走 i18n（16-05），同图 tooltip 与图例语言一致。
