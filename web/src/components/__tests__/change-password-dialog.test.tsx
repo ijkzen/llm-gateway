@@ -80,4 +80,22 @@ describe("ChangePasswordDialog", () => {
 		});
 		expect(onOpenChange).not.toHaveBeenCalledWith(false);
 	});
+
+	it("长度按 UTF-8 字节校验：128 个汉字（384 字节）被前端拦下（18-15）", async () => {
+		renderDialog();
+		// 128 个汉字 = 384 字节，超过后端 128 字节上限；旧实现按字符数放行 → 后端 400。
+		const longPassword = "密".repeat(128);
+		fillAndSubmit("old-pass", longPassword, longPassword);
+
+		await waitFor(() => expect(screen.getByText("新密码最多 128 个字节")).toBeTruthy());
+		expect(mutateMock).not.toHaveBeenCalled();
+	});
+
+	it("长度边界：恰 128 字节（128 个 ASCII 字符）放行提交", async () => {
+		renderDialog();
+		const boundaryPassword = "a".repeat(128);
+		fillAndSubmit("old-pass", boundaryPassword, boundaryPassword);
+
+		await waitFor(() => expect(mutateMock).toHaveBeenCalled());
+	});
 });

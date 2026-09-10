@@ -1,5 +1,6 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { MidEllipsis } from "@/components/mid-ellipsis";
+import { CapabilityIcons } from "@/components/provider-models/CapabilityIcons";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -27,7 +28,6 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { ItemCapabilityIcons } from "@/components/virtual-models/ItemCapabilityIcons";
 import {
 	type DraftItem,
 	type DraftMember,
@@ -290,16 +290,27 @@ export function VirtualModelEditDialog({
 
 	// 已使用组：组间按组内最优先成员的后端 LB 位置排序（与主列表用量感知 LB 序同口径）；
 	// 未使用组无成员、无 LB 位置，保持 providers 顺序。
-	const usedGroups = providers
-		.map(groupOf)
+	// 17-25：分组只算一遍（此前已用/未用各 map(groupOf) 一次，等于把 O(P·D) 走两趟）。
+	const allGroups = providers.map(groupOf);
+	const usedGroups = allGroups
 		.filter((group) => group.rows.length > 0)
 		.sort((a, b) => a.lbIndex - b.lbIndex);
-	const unusedGroups = providers
-		.map(groupOf)
-		.filter((group) => group.rows.length === 0 && group.candidates.length > 0);
+	const unusedGroups = allGroups.filter(
+		(group) => group.rows.length === 0 && group.candidates.length > 0,
+	);
 
 	const onSubmit = (values: FormValues) => {
 		if (draftItems.length === 0) return;
+		// 17-22：草稿成员在模型列表中查不到（模型被删）时界面不展示它，若照常提交
+		// 后端会以「成员协议不匹配」拒绝而前端毫无提示；这里提交前先拦下。
+		const staleCount = draftItems.filter((draft) => !modelById.has(draft.modelId)).length;
+		if (staleCount > 0) {
+			toastError(
+				t("common.saveFailed"),
+				new Error(t("virtualModels.staleDraftMembers", { count: staleCount })),
+			);
+			return;
+		}
 		const items: VirtualModelItemPayload[] = draftItems.map(({ modelId, enable }) => ({
 			modelId,
 			enable,
@@ -387,7 +398,7 @@ export function VirtualModelEditDialog({
 												)}
 											</p>
 										</div>
-										<ItemCapabilityIcons item={model} className="shrink-0" />
+										<CapabilityIcons model={model} className="shrink-0" />
 										<Switch
 											checked={draft.enable}
 											disabled={updateModel.isPending || createModel.isPending}

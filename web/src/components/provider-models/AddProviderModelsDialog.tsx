@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import {
 	type CatalogCandidate,
 	type CatalogSuggestion,
@@ -122,9 +123,8 @@ export function AddProviderModelsDialog({
 	const [activeTab, setActiveTab] = useState<"auto" | "manual">("auto");
 	const [catalogOpen, setCatalogOpen] = useState(false);
 	const catalogRef = useRef<HTMLDivElement>(null);
-	// 手动添加的模型 ID 联想：防抖后的搜索关键词（空 = 不搜索）。
+	// 手动添加的模型 ID 联想：输入关键词（空 = 不搜索；发请求前经防抖）。
 	const [modelSearchQuery, setModelSearchQuery] = useState("");
-	const [modelSearchDebounced, setModelSearchDebounced] = useState("");
 	// 已从目录选中的模型 ID：应用后隐藏下拉，直到用户重新输入。
 	const [appliedModelId, setAppliedModelId] = useState<string | null>(null);
 	// 待确认候选跳转手动添加时携带的目录建议：右上角徽章 + 参数预填来源。
@@ -143,7 +143,7 @@ export function AddProviderModelsDialog({
 	// 尝试刷新失败时用弹窗展示完整错误详情（上游报错信息较长，toast 展示不完整）。
 	const [refreshError, setRefreshError] = useState<string | null>(null);
 
-	const { data: catalogHits } = useCatalogSearch(modelSearchDebounced);
+	const { data: catalogHits } = useCatalogSearch(useDebouncedValue(modelSearchQuery, 300));
 
 	useEffect(() => {
 		const closeCatalog = (event: PointerEvent) => {
@@ -174,7 +174,6 @@ export function AddProviderModelsDialog({
 	useEffect(() => {
 		if (!open) return;
 		setModelSearchQuery("");
-		setModelSearchDebounced("");
 		setAppliedModelId(null);
 		setPendingSuggest(null);
 		setCandidateQuery("");
@@ -183,12 +182,12 @@ export function AddProviderModelsDialog({
 		setCatalogOpen(false);
 	}, [open]);
 
-	// 输入时立即搜索，用户重新输入时恢复联想。
+	// 输入时立即打开联想，关键词经 useDebouncedValue 去抖后才发目录搜索（17-27：
+	// 此前虽然名字叫 debounced 但实际逐键同步请求，注释与行为不符）。
 	const handleModelIdChange = (value: string) => {
 		if (appliedModelId) setAppliedModelId(null);
 		setCatalogOpen(true);
 		setModelSearchQuery(value);
-		setModelSearchDebounced(value);
 	};
 
 	/** 点击候选：自动填充模型 ID 与全部字段（能力开关按目录预置）。 */
@@ -201,7 +200,6 @@ export function AddProviderModelsDialog({
 		form.setValue("imageUnderstand", hit.imageUnderstand);
 		form.setValue("videoUnderstand", hit.videoUnderstand);
 		setModelSearchQuery(hit.id);
-		setModelSearchDebounced("");
 		setAppliedModelId(hit.id);
 		setCatalogOpen(false);
 		setPendingSuggest(null);
@@ -269,6 +267,16 @@ export function AddProviderModelsDialog({
 		return (candidates ?? [])
 			.filter((candidate) => candidate.providerModelId.toLowerCase().includes(query))
 			.slice(0, 8);
+	}, [candidates, candidateQuery]);
+
+	// 17-24：候选卡全量渲染在大目录供应商（数百条 × 2 个受控数字输入）下开销可观；
+	// 搜索框有关键词时把渲染集收窄到命中项，无关键词时保持全量。
+	const visibleCandidates = useMemo(() => {
+		const query = candidateQuery.trim().toLowerCase();
+		if (!query) return candidates ?? [];
+		return (candidates ?? []).filter((candidate) =>
+			candidate.providerModelId.toLowerCase().includes(query),
+		);
 	}, [candidates, candidateQuery]);
 
 	/** 点击搜索结果：滚动定位到候选卡并短暂高亮。 */
@@ -362,7 +370,6 @@ export function AddProviderModelsDialog({
 	const jumpToManual = (candidate: RefreshCandidate) => {
 		form.setValue("providerModelId", candidate.providerModelId);
 		setModelSearchQuery(candidate.providerModelId);
-		setModelSearchDebounced("");
 		setAppliedModelId(candidate.providerModelId);
 		setCatalogOpen(false);
 		setActiveTab("manual");
@@ -376,7 +383,6 @@ export function AddProviderModelsDialog({
 		if (top) applySuggestion(top);
 		form.setValue("providerModelId", candidate.providerModelId);
 		setModelSearchQuery(candidate.providerModelId);
-		setModelSearchDebounced("");
 		setAppliedModelId(candidate.providerModelId);
 		setCatalogOpen(false);
 		setPendingSuggest({ remoteId: candidate.providerModelId, suggestions });
@@ -416,7 +422,6 @@ export function AddProviderModelsDialog({
 						videoUnderstand: false,
 					});
 					setModelSearchQuery("");
-					setModelSearchDebounced("");
 					setAppliedModelId(null);
 					setPendingSuggest(null);
 				},
@@ -541,7 +546,7 @@ export function AddProviderModelsDialog({
 								) : (
 									<div className="space-y-3">
 										<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-											{candidates.map((candidate) => {
+											{visibleCandidates.map((candidate) => {
 												const edits = editsOf(candidate);
 												const selectable = isSelectable(candidate);
 												// manual/pending 候选整卡可点：跳转手动添加表单（pending 额外预填建议参数）。
@@ -613,7 +618,9 @@ export function AddProviderModelsDialog({
 																		setNumberEdits((prev) => ({
 																			...prev,
 																			[candidate.providerModelId]: {
-																				...edits,
+																				// 17-18：从 prev 取该候选的最新值展开，避免用渲染期
+																				// 快照覆盖同批已更新的另一个字段。
+																				...(prev[candidate.providerModelId] ?? edits),
 																				contextLength: e.target.value,
 																			},
 																		}))
@@ -634,7 +641,8 @@ export function AddProviderModelsDialog({
 																		setNumberEdits((prev) => ({
 																			...prev,
 																			[candidate.providerModelId]: {
-																				...edits,
+																				// 17-18：同上，以 prev 最新值为基础更新。
+																				...(prev[candidate.providerModelId] ?? edits),
 																				maxOutputTokens: e.target.value,
 																			},
 																		}))

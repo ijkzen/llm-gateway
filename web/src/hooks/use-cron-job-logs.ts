@@ -27,7 +27,7 @@ export interface CronJobLog {
 
 /** SSE 实时流的当前状态 */
 export interface CronJobLogStreamState {
-	/** 连接状态：open / reconnecting / closed */
+	/** 连接状态：open / reconnecting / closed（closed 含重连超限后放弃） */
 	connection: "open" | "reconnecting" | "closed";
 	/** 当前正在执行的 run（无执行时为空） */
 	currentRun: { run_id: string; started_at: string } | null;
@@ -35,6 +35,8 @@ export interface CronJobLogStreamState {
 	logs: CronJobLog[];
 	/** 当前 run 已结束时的状态（无执行中或未结束时为空） */
 	ended: { status: CronJobRunStatus; ended_at: string; truncated: boolean } | null;
+	/** 重连次数超限后置位：提示用户手动刷新（会话过期等不可恢复场景）。 */
+	reconnectExhausted: boolean;
 }
 
 const initialStreamState: CronJobLogStreamState = {
@@ -42,7 +44,11 @@ const initialStreamState: CronJobLogStreamState = {
 	currentRun: null,
 	logs: [],
 	ended: null,
+	reconnectExhausted: false,
 };
+
+/** 断线重连退避上限（18-11）：超过则停止重连并提示，避免会话过期时无限转圈。 */
+const MAX_RECONNECT_ATTEMPTS = 5;
 
 export const cronJobLogsKeys = {
 	runs: (name: string) => ["cron-job-logs", name] as const,
@@ -98,113 +104,147 @@ export function useCronJobLogStream(name: string) {
 			return;
 		}
 
-		const es = new EventSource(`/api/cron-jobs/${encodeURIComponent(name)}/logs/stream`);
+		// 18-11：EventSource 自带无限自动重连，会话过期（401）时会永久「重连中」。
+		// 这里自带退避：连续失败达上限即停连并置 reconnectExhausted（界面提示手动
+		// 刷新/重新登录），半途断开则按 2^n 秒退避后重建连接。
+		let attempts = 0;
+		let retryTimer: ReturnType<typeof setTimeout> | null = null;
+		let disposed = false;
+		let es: EventSource | null = null;
 
-		es.onopen = () => setState((s) => ({ ...s, connection: "open" }));
-		es.onerror = () => setState((s) => ({ ...s, connection: "reconnecting" }));
+		const connect = () => {
+			if (disposed) return;
+			const stream = new EventSource(`/api/cron-jobs/${encodeURIComponent(name)}/logs/stream`);
+			es = stream;
 
-		es.addEventListener("snapshot", (e: MessageEvent) => {
-			const data = JSON.parse(e.data) as {
-				run_id: string;
-				started_at: string;
-				logs: CronJobLog[];
+			stream.onopen = () => {
+				attempts = 0;
+				setState((s) => ({ ...s, connection: "open", reconnectExhausted: false }));
 			};
-			setState({
-				connection: "open",
-				currentRun: { run_id: data.run_id, started_at: data.started_at },
-				logs: data.logs,
-				ended: null,
-			});
-		});
-
-		es.addEventListener("idle", () => {
-			setState((s) => ({ ...s, currentRun: null, logs: [], ended: null }));
-		});
-
-		es.addEventListener("log", (e: MessageEvent) => {
-			const data = JSON.parse(e.data) as {
-				run_id: string;
-				seq: number;
-				level: CronJobLogLevel;
-				message: string;
-				ts: string;
+			stream.onerror = () => {
+				if (disposed) return;
+				attempts += 1;
+				stream.close();
+				if (attempts > MAX_RECONNECT_ATTEMPTS) {
+					setState((s) => ({ ...s, connection: "closed", reconnectExhausted: true }));
+					return;
+				}
+				setState((s) => ({ ...s, connection: "reconnecting" }));
+				retryTimer = setTimeout(connect, Math.min(30_000, 1000 * 2 ** (attempts - 1)));
 			};
-			setState((s) => {
-				if (s.currentRun?.run_id !== data.run_id) return s;
-				const last = s.logs[s.logs.length - 1];
-				// 与 snapshot 回放可能重叠，按 seq 去重。
-				if (last && data.seq <= last.seq) return s;
-				return {
-					...s,
-					logs: [
-						...s.logs,
-						{ seq: data.seq, level: data.level, message: data.message, ts: data.ts },
-					],
+
+			stream.addEventListener("snapshot", (e: MessageEvent) => {
+				const data = JSON.parse(e.data) as {
+					run_id: string;
+					started_at: string;
+					logs: CronJobLog[];
 				};
-			});
-		});
-
-		es.addEventListener("run_started", (e: MessageEvent) => {
-			const data = JSON.parse(e.data) as { run_id: string; ts: string };
-			setState((s) => ({
-				...s,
-				currentRun: { run_id: data.run_id, started_at: data.ts },
-				logs: [],
-				ended: null,
-			}));
-			queryClient.invalidateQueries({ queryKey: cronJobLogsKeys.runs(name) });
-		});
-
-		es.addEventListener("run_ended", (e: MessageEvent) => {
-			const data = JSON.parse(e.data) as {
-				run_id: string;
-				status: CronJobRunStatus;
-				truncated: boolean;
-				ts: string;
-			};
-			setState((s) => {
-				if (s.currentRun?.run_id !== data.run_id) return s;
-				return {
-					...s,
-					ended: { status: data.status, ended_at: data.ts, truncated: data.truncated },
-				};
-			});
-			queryClient.invalidateQueries({ queryKey: cronJobLogsKeys.runs(name) });
-		});
-
-		es.addEventListener("reset", () => {
-			// 接收端积压丢事件：重新拉取当前 run 的全量日志。
-			const current = stateRef.current;
-			if (!current.currentRun) return;
-			const runId = current.currentRun.run_id;
-			// 18-02：拉取期间新到的实时日志不能被整体替换掉——按 seq 合并
-			// （拉回的是历史快照，本地可能已有更靠后的增量）；同时绕过
-			// staleTime 用 fetchQuery 的最新结果，避免命中旧缓存导致日志回退。
-			queryClient
-				.fetchQuery({
-					queryKey: cronJobLogsKeys.runLogs(name, runId),
-					queryFn: () => fetchRunLogs(name, runId),
-					staleTime: 0,
-				})
-				.then((logs) => {
-					setState((s) => {
-						if (s.currentRun?.run_id !== runId) return s;
-						const bySeq = new Map<number, CronJobLog>();
-						for (const log of logs) bySeq.set(log.seq, log);
-						for (const log of s.logs) bySeq.set(log.seq, log);
-						return {
-							...s,
-							logs: [...bySeq.values()].sort((a, b) => a.seq - b.seq),
-						};
-					});
-				})
-				.catch(() => {
-					// 拉取失败保持现状，后续增量按 seq 去重仍会补齐
+				setState({
+					connection: "open",
+					currentRun: { run_id: data.run_id, started_at: data.started_at },
+					logs: data.logs,
+					ended: null,
+					reconnectExhausted: false,
 				});
-		});
+				// 18-05：断线期间可能有执行结束，重连收快照时一并刷新历史列表。
+				queryClient.invalidateQueries({ queryKey: cronJobLogsKeys.runs(name) });
+			});
+
+			stream.addEventListener("idle", () => {
+				setState((s) => ({ ...s, currentRun: null, logs: [], ended: null }));
+				// 18-05：同上——错过 run_ended 时靠这次失效把历史列表拉新。
+				queryClient.invalidateQueries({ queryKey: cronJobLogsKeys.runs(name) });
+			});
+
+			stream.addEventListener("log", (e: MessageEvent) => {
+				const data = JSON.parse(e.data) as {
+					run_id: string;
+					seq: number;
+					level: CronJobLogLevel;
+					message: string;
+					ts: string;
+				};
+				setState((s) => {
+					if (s.currentRun?.run_id !== data.run_id) return s;
+					const last = s.logs[s.logs.length - 1];
+					// 与 snapshot 回放可能重叠，按 seq 去重。
+					if (last && data.seq <= last.seq) return s;
+					return {
+						...s,
+						logs: [
+							...s.logs,
+							{ seq: data.seq, level: data.level, message: data.message, ts: data.ts },
+						],
+					};
+				});
+			});
+
+			stream.addEventListener("run_started", (e: MessageEvent) => {
+				const data = JSON.parse(e.data) as { run_id: string; ts: string };
+				setState((s) => ({
+					...s,
+					currentRun: { run_id: data.run_id, started_at: data.ts },
+					logs: [],
+					ended: null,
+				}));
+				queryClient.invalidateQueries({ queryKey: cronJobLogsKeys.runs(name) });
+			});
+
+			stream.addEventListener("run_ended", (e: MessageEvent) => {
+				const data = JSON.parse(e.data) as {
+					run_id: string;
+					status: CronJobRunStatus;
+					truncated: boolean;
+					ts: string;
+				};
+				setState((s) => {
+					if (s.currentRun?.run_id !== data.run_id) return s;
+					return {
+						...s,
+						ended: { status: data.status, ended_at: data.ts, truncated: data.truncated },
+					};
+				});
+				queryClient.invalidateQueries({ queryKey: cronJobLogsKeys.runs(name) });
+			});
+
+			stream.addEventListener("reset", () => {
+				// 接收端积压丢事件：重新拉取当前 run 的全量日志。
+				const current = stateRef.current;
+				if (!current.currentRun) return;
+				const runId = current.currentRun.run_id;
+				// 18-02：拉取期间新到的实时日志不能被整体替换掉——按 seq 合并
+				// （拉回的是历史快照，本地可能已有更靠后的增量）；同时绕过
+				// staleTime 用 fetchQuery 的最新结果，避免命中旧缓存导致日志回退。
+				queryClient
+					.fetchQuery({
+						queryKey: cronJobLogsKeys.runLogs(name, runId),
+						queryFn: () => fetchRunLogs(name, runId),
+						staleTime: 0,
+					})
+					.then((logs) => {
+						setState((s) => {
+							if (s.currentRun?.run_id !== runId) return s;
+							const bySeq = new Map<number, CronJobLog>();
+							for (const log of logs) bySeq.set(log.seq, log);
+							for (const log of s.logs) bySeq.set(log.seq, log);
+							return {
+								...s,
+								logs: [...bySeq.values()].sort((a, b) => a.seq - b.seq),
+							};
+						});
+					})
+					.catch(() => {
+						// 拉取失败保持现状，后续增量按 seq 去重仍会补齐
+					});
+			});
+		};
+
+		connect();
 
 		return () => {
-			es.close();
+			disposed = true;
+			if (retryTimer) clearTimeout(retryTimer);
+			es?.close();
 		};
 	}, [name, queryClient]);
 

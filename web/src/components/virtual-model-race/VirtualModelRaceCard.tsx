@@ -1,6 +1,5 @@
-import { RaceCardShell, useRaceCardWindow } from "@/components/race-card-shell";
-import { type RaceWindowState, windowQueryString } from "@/components/race-window-control";
-import { SortableMetricTable, useRaceSort } from "@/components/sortable-metric-table";
+import { MetricRaceCard, raceHref } from "@/components/metric-race-card";
+import type { RaceWindowState } from "@/components/race-window-control";
 import { type VirtualModelRankItem, useVirtualModelRace } from "@/hooks/use-virtual-model-race";
 import { Layers } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -23,41 +22,26 @@ export function VirtualModelRaceCard({
 }) {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
-	const view = useRaceCardWindow(initialWindow);
-
-	// 排序：默认按总计 Token 降序；点击表头切换升/降。
-	const { sort, onSort } = useRaceSort();
-
-	const query = useVirtualModelRace(view.window, sort, view.inView, apiKey);
-
-	const openVirtualModelOverview = (item: VirtualModelRankItem) => {
-		navigate(
-			`/virtual-models/${item.virtualModelId}/overview?${windowQueryString(view.windowState, view.window)}`,
-		);
-	};
 
 	return (
-		<RaceCardShell
-			view={view}
+		<MetricRaceCard<VirtualModelRankItem>
 			icon={Layers}
 			titleKey="dashboard.virtualModelRace"
-			status={{
-				isLoading: query.isLoading,
-				isError: query.isError,
-				isEmpty: !query.data || query.data.items.length === 0,
-				onRetry: () => query.refetch(),
-			}}
-		>
-			<SortableMetricTable
-				items={query.data?.items ?? []}
-				sort={sort}
-				onSort={onSort}
-				nameHeader="dashboard.virtualModelColumn"
-				renderName={(item) => item.virtualModelDisplayId || t("race.unknownVirtualModel")}
-				rowKey={(item) => item.virtualModelId}
-				onRowClick={openVirtualModelOverview}
-				rowTitleKey="race.openVirtualModelOverview"
-			/>
-		</RaceCardShell>
+			nameHeader="dashboard.virtualModelColumn"
+			initialWindow={initialWindow}
+			useQuery={(view, sort, inView) => useVirtualModelRace(view.window, sort, inView, apiKey)}
+			renderName={(item) => item.virtualModelDisplayId || t("race.unknownVirtualModel")}
+			rowKey={(item) => item.virtualModelId}
+			onRowClick={(item, view) =>
+				navigate(
+					raceHref(
+						`/virtual-models/${item.virtualModelId}/overview`,
+						view.windowState,
+						view.window,
+					),
+				)
+			}
+			rowTitleKey="race.openVirtualModelOverview"
+		/>
 	);
 }

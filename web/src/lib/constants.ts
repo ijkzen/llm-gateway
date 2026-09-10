@@ -1,3 +1,5 @@
+// 19/20-05：分组名的展示走 i18n（cronJobs.defaultGroup）；该常量仅用于
+// 判断「是否未分组」与后端种子值比较，故与后端存储值保持一致。
 export const DEFAULT_GROUP = "默认";
 
 export const SETTING_TYPES = ["String", "Int", "Float", "Bool", "Json"] as const;

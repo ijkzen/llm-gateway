@@ -74,12 +74,19 @@ export function ImportDialog({ open, onOpenChange }: ImportDialogProps) {
 
 	const handleChoose = () => inputRef.current?.click();
 
+	/** 18-14：清空已选文件（含隐藏 input 的 value，否则重选同一文件不触发 change）。 */
+	const clearFile = () => {
+		setFile(null);
+		if (inputRef.current) inputRef.current.value = "";
+	};
+
 	const doImport = async () => {
 		if (!file) return;
 		setImporting(true);
 		try {
 			await importBackup(file.text);
 			toastSuccess(t("backup.importSuccess"));
+			clearFile();
 			onOpenChange(false);
 			queryClient.invalidateQueries();
 		} catch (error) {
@@ -98,7 +105,14 @@ export function ImportDialog({ open, onOpenChange }: ImportDialogProps) {
 
 	return (
 		<>
-			<Dialog open={open} onOpenChange={onOpenChange}>
+			{/* 18-14：弹窗关闭（含取消）后清空已选文件，重开不再残留旧文件可直接导入。 */}
+			<Dialog
+				open={open}
+				onOpenChange={(next) => {
+					if (!next) clearFile();
+					onOpenChange(next);
+				}}
+			>
 				<DialogContent className="sm:max-w-[520px]">
 					<DialogHeader>
 						<DialogTitle>{t("backup.importDialogTitle")}</DialogTitle>

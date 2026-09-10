@@ -12,7 +12,7 @@ import {
 import type { CronJob } from "@/hooks/use-cron-jobs";
 import { cn } from "@/lib/utils";
 import { ArrowDown, ChevronDown, ChevronRight, ScrollText } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 interface CronJobLogsDialogProps {
@@ -38,7 +38,8 @@ function formatDateTime(ts: string) {
 	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-function LogLine({ log }: { log: CronJobLog }) {
+/** 单行日志（18-09：memo + 时间戳随日志对象预格式化，追加日志时旧行不重算不重渲）。 */
+const LogLine = memo(function LogLine({ log }: { log: CronJobLog }) {
 	return (
 		<div className="flex gap-2 px-3 py-0.5 font-mono text-xs leading-relaxed">
 			<span className="shrink-0 whitespace-nowrap text-muted-foreground">
@@ -50,7 +51,7 @@ function LogLine({ log }: { log: CronJobLog }) {
 			<span className="min-w-0 whitespace-pre-wrap break-all">{log.message}</span>
 		</div>
 	);
-}
+});
 
 function runStatusBadge(
 	run: CronJobRun,
@@ -189,6 +190,21 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 							</div>
 							{stream.connection === "reconnecting" && (
 								<span className="text-xs text-warning">{t("cronJobs.reconnecting")}</span>
+							)}
+							{/* 18-11：退避重连达上限后停止静默转圈，提示用户手动刷新（会话过期等）。 */}
+							{stream.reconnectExhausted && (
+								<span className="flex items-center gap-2 text-xs text-destructive">
+									{t("cronJobs.reconnectFailed")}
+									<Button
+										type="button"
+										variant="outline"
+										size="sm"
+										className="h-6 px-2 text-xs"
+										onClick={() => window.location.reload()}
+									>
+										{t("common.refresh")}
+									</Button>
+								</span>
 							)}
 						</div>
 						<div

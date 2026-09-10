@@ -1,6 +1,6 @@
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { useSettingSubmitCallbacks } from "@/components/settings/use-setting-submit-callbacks";
 import { type Setting, useDeleteSetting } from "@/hooks/use-settings";
-import { useToastActions } from "@/hooks/use-toast";
 
 interface SettingDeleteDialogProps {
 	setting: Setting | null;
@@ -10,20 +10,14 @@ interface SettingDeleteDialogProps {
 
 /** 删除设置二次确认弹窗：展示将被删除的 key，确认后调用删除接口。 */
 export function SettingDeleteDialog({ setting, open, onOpenChange }: SettingDeleteDialogProps) {
-	const { toastSuccess, toastError } = useToastActions();
 	const deleteSetting = useDeleteSetting();
+
+	// 18-17：成功关窗 + 提示的三处样板收敛到域内 helper。
+	const callbacks = useSettingSubmitCallbacks(onOpenChange, "删除成功", "删除失败");
 
 	const handleConfirm = () => {
 		if (!setting) return;
-		deleteSetting.mutate(setting.key, {
-			onSuccess: () => {
-				onOpenChange(false);
-				toastSuccess("删除成功");
-			},
-			onError: (error) => {
-				toastError("删除失败", error);
-			},
-		});
+		deleteSetting.mutate(setting.key, callbacks);
 	};
 
 	return (

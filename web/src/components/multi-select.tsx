@@ -4,7 +4,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronRight, Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 export interface MultiSelectOption {
@@ -26,6 +26,8 @@ interface MultiSelectProps {
 
 export function MultiSelect({ options, selected, onChange, className, ...rest }: MultiSelectProps) {
 	const { t } = useTranslation();
+	// 19-07：同页可有多个实例（请求日志页一屏 4 个），id 必须唯一。
+	const uid = useId();
 	const [open, setOpen] = useState(false);
 	const [keyword, setKeyword] = useState("");
 	/** 折叠的分组标题（group 标签集合）；默认空 = 全展开。 */
@@ -132,11 +134,11 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 					/>
 				</div>
 				<label
-					htmlFor="multi-select-select-all"
+					htmlFor={`${uid}-select-all`}
 					className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-accent"
 				>
 					<Checkbox
-						id="multi-select-select-all"
+						id={`${uid}-select-all`}
 						checked={allChecked ? true : someChecked ? "indeterminate" : false}
 						onCheckedChange={() => onChange([])}
 						aria-label={t("multiSelect.selectAll")}
@@ -163,11 +165,11 @@ export function MultiSelect({ options, selected, onChange, className, ...rest }:
 						) : (
 							<label
 								key={row.option.value}
-								htmlFor={`multi-select-${row.option.value}`}
+								htmlFor={`${uid}-${row.option.value}`}
 								className="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-accent"
 							>
 								<Checkbox
-									id={`multi-select-${row.option.value}`}
+									id={`${uid}-${row.option.value}`}
 									aria-label={row.option.label}
 									checked={isAll ? false : selectedSet.has(row.option.value)}
 									onCheckedChange={() => toggle(row.option.value)}

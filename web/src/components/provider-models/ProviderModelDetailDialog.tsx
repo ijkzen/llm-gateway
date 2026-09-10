@@ -44,7 +44,7 @@ import {
 import { useToastActions } from "@/hooks/use-toast";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ChevronRight, FlaskConical, Loader2, Pencil, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useForm } from "react-hook-form";
 import { useTranslation } from "react-i18next";
@@ -113,25 +113,31 @@ export function ProviderModelDetailDialog({
 		},
 	});
 
-	// 打开弹窗或切换目标模型时重置表单与编辑态。
+	// 打开弹窗或切换到另一条模型时重置表单与编辑态。
+	// 17-23：依赖收敛到主键 + open——列表 refetch 会产出新的 model 对象身份，
+	// 若直接依赖 model，编辑中的改动会被静默重置回只读。
+	const modelRef = useRef(model);
+	modelRef.current = model;
+	const modelKey = model?.providerModelId ?? null;
 	useEffect(() => {
-		if (!open || !model) return;
+		const current = modelRef.current;
+		if (!open || !current || current.providerModelId !== modelKey) return;
 		form.reset({
-			providerModelId: model.providerModelId,
-			contextLength: model.contextLength,
-			maxOutputTokens: model.maxOutputTokens,
-			reasoning: model.reasoning,
-			toolUse: model.toolUse,
-			imageUnderstand: model.imageUnderstand,
-			videoUnderstand: model.videoUnderstand,
-			protocolType: model.protocolType ?? null,
-			proxyEnabled: model.proxyEnabled,
-			proxyAddr: model.proxyAddr,
+			providerModelId: current.providerModelId,
+			contextLength: current.contextLength,
+			maxOutputTokens: current.maxOutputTokens,
+			reasoning: current.reasoning,
+			toolUse: current.toolUse,
+			imageUnderstand: current.imageUnderstand,
+			videoUnderstand: current.videoUnderstand,
+			protocolType: current.protocolType ?? null,
+			proxyEnabled: current.proxyEnabled,
+			proxyAddr: current.proxyAddr,
 		});
 		setEditing(false);
 		setConfirmingDelete(false);
 		setTestError(null);
-	}, [open, model, form]);
+	}, [open, modelKey, form]);
 
 	const onSubmit = (values: FormValues) => {
 		// 进入编辑态后未改动任何值不提交：防止双击「编辑」时第二击落在同槽位的「更新」上，
@@ -188,8 +194,9 @@ export function ProviderModelDetailDialog({
 					onOpenChange(next);
 				}}
 			>
-				<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[520px]">
-					<DialogHeader className="space-y-3">
+				{/* 17-19：固定头/尾 + 仅中间主体滚动的三分布局（与同族大弹窗一致）。 */}
+				<DialogContent className="flex h-[min(720px,85vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[520px]">
+					<DialogHeader className="shrink-0 space-y-3 px-6 pb-4 pt-6">
 						<DialogTitle className="min-w-0">
 							<Link
 								to={`/models/${model.modelId}/overview`}
@@ -206,163 +213,169 @@ export function ProviderModelDetailDialog({
 						</DialogDescription>
 					</DialogHeader>
 
-					{editing ? (
-						<Form {...form}>
-							<form
-								id="provider-model-detail-form"
-								onSubmit={form.handleSubmit(onSubmit)}
-								className="space-y-4"
-							>
-								<FormField
-									control={form.control}
-									name="providerModelId"
-									render={({ field }) => (
-										<FormItem>
-											<FormLabel required>{t("providerModels.modelId")}</FormLabel>
-											<FormControl>
-												<Input placeholder={t("providerModels.modelIdPlaceholder")} {...field} />
-											</FormControl>
-											<FormMessage />
-										</FormItem>
-									)}
-								/>
-								<FormField
-									control={form.control}
-									name="protocolType"
-									render={({ field }) => (
-										<FormItem>
-											<FormLabel>{t("providerModels.protocolType")}</FormLabel>
-											<Select
-												value={field.value === null ? "null" : String(field.value)}
-												onValueChange={(v) => field.onChange(v === "null" ? null : Number(v))}
-											>
+					<div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+						{editing ? (
+							<Form {...form}>
+								<form
+									id="provider-model-detail-form"
+									onSubmit={form.handleSubmit(onSubmit)}
+									className="space-y-4"
+								>
+									<FormField
+										control={form.control}
+										name="providerModelId"
+										render={({ field }) => (
+											<FormItem>
+												<FormLabel required>{t("providerModels.modelId")}</FormLabel>
 												<FormControl>
-													<SelectTrigger>
-														<SelectValue placeholder={t("providerModels.selectProtocol")} />
-													</SelectTrigger>
+													<Input placeholder={t("providerModels.modelIdPlaceholder")} {...field} />
 												</FormControl>
-												<SelectContent>
-													<SelectItem value="null">{t("providerModels.followProvider")}</SelectItem>
-													{PROTOCOL_TYPES.map((p) => (
-														<SelectItem key={p.value} value={String(p.value)}>
-															{t(p.labelKey)}
+												<FormMessage />
+											</FormItem>
+										)}
+									/>
+									<FormField
+										control={form.control}
+										name="protocolType"
+										render={({ field }) => (
+											<FormItem>
+												<FormLabel>{t("providerModels.protocolType")}</FormLabel>
+												<Select
+													value={field.value === null ? "null" : String(field.value)}
+													onValueChange={(v) => field.onChange(v === "null" ? null : Number(v))}
+												>
+													<FormControl>
+														<SelectTrigger>
+															<SelectValue placeholder={t("providerModels.selectProtocol")} />
+														</SelectTrigger>
+													</FormControl>
+													<SelectContent>
+														<SelectItem value="null">
+															{t("providerModels.followProvider")}
 														</SelectItem>
-													))}
-												</SelectContent>
-											</Select>
-											<FormMessage />
-										</FormItem>
-									)}
-								/>
-								<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-									<FormField
-										control={form.control}
-										name="contextLength"
-										render={({ field }) => (
-											<FormItem>
-												<FormLabel required>{t("providerModels.contextLength")}</FormLabel>
-												<FormControl>
-													<Input type="number" min={1} {...field} />
-												</FormControl>
+														{PROTOCOL_TYPES.map((p) => (
+															<SelectItem key={p.value} value={String(p.value)}>
+																{t(p.labelKey)}
+															</SelectItem>
+														))}
+													</SelectContent>
+												</Select>
 												<FormMessage />
 											</FormItem>
 										)}
 									/>
-									<FormField
-										control={form.control}
-										name="maxOutputTokens"
-										render={({ field }) => (
-											<FormItem>
-												<FormLabel required>{t("providerModels.maxOutput")}</FormLabel>
-												<FormControl>
-													<Input type="number" min={1} {...field} />
-												</FormControl>
-												<FormMessage />
-											</FormItem>
-										)}
-									/>
-								</div>
-								<CapabilitySwitchGrid control={form.control} />
+									<div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+										<FormField
+											control={form.control}
+											name="contextLength"
+											render={({ field }) => (
+												<FormItem>
+													<FormLabel required>{t("providerModels.contextLength")}</FormLabel>
+													<FormControl>
+														<Input type="number" min={1} {...field} />
+													</FormControl>
+													<FormMessage />
+												</FormItem>
+											)}
+										/>
+										<FormField
+											control={form.control}
+											name="maxOutputTokens"
+											render={({ field }) => (
+												<FormItem>
+													<FormLabel required>{t("providerModels.maxOutput")}</FormLabel>
+													<FormControl>
+														<Input type="number" min={1} {...field} />
+													</FormControl>
+													<FormMessage />
+												</FormItem>
+											)}
+										/>
+									</div>
+									<CapabilitySwitchGrid control={form.control} />
 
-								{/* 模型级网络代理：开关 + 条件显示地址输入（优先于供应商代理）。 */}
-								<ProxyConfigFields control={form.control} />
-							</form>
-						</Form>
-					) : (
-						<dl className="space-y-3">
-							<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
-								<dt className="text-sm text-muted-foreground">{t("providerModels.modelId")}</dt>
-								<dd className="min-w-0 font-mono text-sm">
-									<MidEllipsis text={model.providerModelId} />
-								</dd>
-							</div>
-							<div className="grid grid-cols-2 gap-3">
-								<div className="rounded-lg border px-4 py-2.5">
+									{/* 模型级网络代理：开关 + 条件显示地址输入（优先于供应商代理）。 */}
+									<ProxyConfigFields control={form.control} />
+								</form>
+							</Form>
+						) : (
+							<dl className="space-y-3">
+								<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
+									<dt className="text-sm text-muted-foreground">{t("providerModels.modelId")}</dt>
+									<dd className="min-w-0 font-mono text-sm">
+										<MidEllipsis text={model.providerModelId} />
+									</dd>
+								</div>
+								<div className="grid grid-cols-2 gap-3">
+									<div className="rounded-lg border px-4 py-2.5">
+										<dt className="text-xs text-muted-foreground">
+											{t("providerModels.contextLength")}
+										</dt>
+										<dd className="mt-0.5 text-sm font-medium">
+											{model.contextLength.toLocaleString()}
+										</dd>
+									</div>
+									<div className="rounded-lg border px-4 py-2.5">
+										<dt className="text-xs text-muted-foreground">
+											{t("providerModels.maxOutput")}
+										</dt>
+										<dd className="mt-0.5 text-sm font-medium">
+											{model.maxOutputTokens.toLocaleString()}
+										</dd>
+									</div>
+								</div>
+								<div className="rounded-lg border px-4 py-3">
 									<dt className="text-xs text-muted-foreground">
-										{t("providerModels.contextLength")}
+										{t("providerModels.modelCapabilities")}
 									</dt>
-									<dd className="mt-0.5 text-sm font-medium">
-										{model.contextLength.toLocaleString()}
+									<dd className="mt-2 grid grid-cols-2 gap-2">
+										{CAPABILITIES.map(({ key, labelKey, icon: Icon }) => (
+											<span
+												key={key}
+												className={
+													model[key]
+														? "flex items-center gap-1.5 text-sm text-success"
+														: "flex items-center gap-1.5 text-sm text-muted-foreground/60"
+												}
+											>
+												<Icon className="size-3.5" />
+												{t(labelKey)}
+												{model[key]
+													? t("providerModels.supported")
+													: t("providerModels.notSupported")}
+											</span>
+										))}
 									</dd>
 								</div>
-								<div className="rounded-lg border px-4 py-2.5">
-									<dt className="text-xs text-muted-foreground">{t("providerModels.maxOutput")}</dt>
-									<dd className="mt-0.5 text-sm font-medium">
-										{model.maxOutputTokens.toLocaleString()}
+								<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
+									<dt className="text-sm text-muted-foreground">
+										{t("providerModels.protocolType")}
+									</dt>
+									<dd className="text-sm font-medium">
+										{model.protocolType !== null
+											? // 模型单独指定了协议：直接显示该协议名。
+												protocolLabel(model.protocolType)
+											: // 跟随供应商：显示「跟随供应商（供应商协议名）」。
+												t("providerModels.followProviderWith", {
+													protocol: protocolLabel(providerProtocolType),
+												})}
 									</dd>
 								</div>
-							</div>
-							<div className="rounded-lg border px-4 py-3">
-								<dt className="text-xs text-muted-foreground">
-									{t("providerModels.modelCapabilities")}
-								</dt>
-								<dd className="mt-2 grid grid-cols-2 gap-2">
-									{CAPABILITIES.map(({ key, labelKey, icon: Icon }) => (
-										<span
-											key={key}
-											className={
-												model[key]
-													? "flex items-center gap-1.5 text-sm text-success"
-													: "flex items-center gap-1.5 text-sm text-muted-foreground/60"
-											}
-										>
-											<Icon className="size-3.5" />
-											{t(labelKey)}
-											{model[key]
-												? t("providerModels.supported")
-												: t("providerModels.notSupported")}
-										</span>
-									))}
-								</dd>
-							</div>
-							<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
-								<dt className="text-sm text-muted-foreground">
-									{t("providerModels.protocolType")}
-								</dt>
-								<dd className="text-sm font-medium">
-									{model.protocolType !== null
-										? // 模型单独指定了协议：直接显示该协议名。
-											protocolLabel(model.protocolType)
-										: // 跟随供应商：显示「跟随供应商（供应商协议名）」。
-											t("providerModels.followProviderWith", {
-												protocol: protocolLabel(providerProtocolType),
-											})}
-								</dd>
-							</div>
-							<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
-								<dt className="text-sm text-muted-foreground">{t("providers.proxyEnabled")}</dt>
-								<dd>
-									<ProviderProxyRow
-										enabled={model.proxyEnabled}
-										addr={model.proxyAddr}
-										inherited={providerProxyAddr}
-									/>
-								</dd>
-							</div>
-						</dl>
-					)}
+								<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
+									<dt className="text-sm text-muted-foreground">{t("providers.proxyEnabled")}</dt>
+									<dd>
+										<ProviderProxyRow
+											enabled={model.proxyEnabled}
+											addr={model.proxyAddr}
+											inherited={providerProxyAddr}
+										/>
+									</dd>
+								</div>
+							</dl>
+						)}
+					</div>
 
-					<DialogFooter className="gap-2 pt-2">
+					<DialogFooter className="shrink-0 gap-2 border-t px-6 py-4">
 						{editing ? (
 							<>
 								<Button

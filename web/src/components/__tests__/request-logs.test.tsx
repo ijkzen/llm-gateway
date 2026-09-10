@@ -82,6 +82,12 @@ function mockQuery(data: { items: ReturnType<typeof makeRow>[]; total: number })
 	});
 }
 
+/** 最近一次传给 useRequestLogs 的查询参数。 */
+function lastParams(): Record<string, unknown> | undefined {
+	const calls = mocks.useRequestLogs.mock.calls;
+	return calls[calls.length - 1]?.[0];
+}
+
 describe("RequestLogsTable", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -180,6 +186,51 @@ describe("RequestLogsTable", () => {
 		expect(start.getHours()).toBe(0);
 		expect(start.getMinutes()).toBe(0);
 		expect(typeof params.endTime).toBe("number");
+	});
+
+	it("时间窗口变更重置回第一页（16-03 回归）", () => {
+		// total 400 / 每页 20 → 20 页，可翻到第 2 页。
+		mockQuery({ items: [makeRow()], total: 400 });
+		render(<RequestLogsTable />);
+
+		fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+		expect(lastParams()?.page).toBe(2);
+
+		// 切周期（周）后必须回到第 1 页，否则窄窗口下停在越界页显示空态假死。
+		fireEvent.click(screen.getByRole("button", { name: "周" }));
+		expect(lastParams()?.page).toBe(1);
+	});
+
+	it("后端不支持排序的四列不渲染排序入口（16-04 回归）", () => {
+		mockQuery({ items: [makeRow()], total: 1 });
+		render(<RequestLogsTable />);
+
+		// 不在后端 SORTABLE_COLUMNS 白名单内：纯文本表头，没有排序按钮。
+		for (const label of ["虚拟模型", "供应商", "输入", "输出"]) {
+			expect(screen.queryByRole("button", { name: label })).toBeNull();
+		}
+		// 白名单内的列仍是可排序按钮（对照组）。
+		for (const label of ["API Key", "上游模型", "结果", "耗时", "时间"]) {
+			expect(screen.getByRole("button", { name: label })).toBeTruthy();
+		}
+	});
+
+	it("点排序菜单把 sortBy/sortOrder 传给请求（16-04 回归）", () => {
+		mockQuery({ items: [makeRow()], total: 1 });
+		render(<RequestLogsTable />);
+
+		// 默认按开始时间倒序。
+		expect(lastParams()?.sortBy).toBe("startTime");
+		expect(lastParams()?.sortOrder).toBe("desc");
+
+		// 「上游模型」表头 → 菜单 → 升序。
+		fireEvent.keyDown(screen.getByRole("button", { name: "上游模型" }), { key: "ArrowDown" });
+		fireEvent.click(screen.getByRole("menuitem", { name: "升序" }));
+
+		const params = lastParams();
+		expect(params?.sortBy).toBe("modelId");
+		expect(params?.sortOrder).toBe("asc");
+		expect(params?.page).toBe(1);
 	});
 
 	it("重置后 endTime 刷新为新的当前时刻（修复固化 now 导致查不到最新日志）", () => {

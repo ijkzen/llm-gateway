@@ -179,11 +179,14 @@ export function ApiKeysTable({ apiKeys, onDelete }: ApiKeysTableProps) {
 		getPaginationRowModel: getPaginationRowModel(),
 	});
 
-	// 数据变化时回到第一页，避免停留在空页。
-	// biome-ignore lint/correctness/useExhaustiveDependencies: apiKeys 变化本身就是重置页码的触发条件
+	// 仅在当前页越界（数据变少）时回落到末页（17-13）：此前任何数据刷新的新数组
+	// identity 都会把分页打回第 1 页——翻到第 3 页时拨一下启用开关就得重翻。
+	const pageCount = Math.max(1, Math.ceil((apiKeys?.length ?? 0) / pagination.pageSize));
 	useEffect(() => {
-		setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-	}, [apiKeys]);
+		setPagination((prev) =>
+			prev.pageIndex > pageCount - 1 ? { ...prev, pageIndex: pageCount - 1 } : prev,
+		);
+	}, [pageCount]);
 
 	const rows = table.getRowModel().rows;
 

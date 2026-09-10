@@ -79,6 +79,21 @@ describe("SettingsTable", () => {
 		expect(screen.getByText("第 2 / 3 页")).toBeInTheDocument();
 	});
 
+	it("搜索后回到第一页（18-18：由表格库 autoResetPageIndex 承担）", () => {
+		const settings = Array.from({ length: 25 }, (_, i) =>
+			makeSetting(`key-${String(i).padStart(2, "0")}`),
+		);
+		renderTable(settings);
+
+		fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+		expect(screen.getByText("第 2 / 3 页")).toBeInTheDocument();
+
+		// 搜索把数据集收窄到 1 条：页码必须回到第 1 页，不能停在越界页。
+		fireEvent.change(screen.getByPlaceholderText("搜索键或值..."), { target: { value: "key-24" } });
+		expect(within(getDataRowAt(0)).getByText("key-24")).toBeInTheDocument();
+		expect(getDataRows()).toHaveLength(1);
+	});
+
 	it("hides a column via view options", () => {
 		renderTable([makeSetting("a")]);
 

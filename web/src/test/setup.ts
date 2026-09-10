@@ -64,9 +64,25 @@ if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
 	Element.prototype.scrollIntoView = () => {};
 }
 
+// jsdom 未实现 window.matchMedia（use-mobile / 响应式组件用），补最小可用桩：
+// 默认不匹配（桌面语义），监听器为空实现。
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
+	window.matchMedia = ((query: string) => ({
+		matches: false,
+		media: query,
+		onchange: null,
+		addEventListener: () => {},
+		removeEventListener: () => {},
+		addListener: () => {},
+		removeListener: () => {},
+		dispatchEvent: () => false,
+	})) as unknown as typeof window.matchMedia;
+}
+
 // 数据面板口径时区 hook 全局 mock：测试里返回运行机器本地 IANA 时区，
 // 使周期窗口推导退化为「浏览器本地」旧语义（tz 数学本身由
-// race-period.test.ts 的固定 IANA 用例覆盖）。
+// race-period.test.ts 的固定 IANA 用例覆盖）。真实实现的直测见
+// hooks/__tests__/use-stats-time-zone.test.tsx（19-22）。
 vi.mock("@/hooks/use-stats-time-zone", () => ({
 	useStatsTimeZone: () => Intl.DateTimeFormat().resolvedOptions().timeZone,
 	DEFAULT_STATS_TIME_ZONE: "Asia/Shanghai",

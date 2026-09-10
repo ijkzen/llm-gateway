@@ -241,7 +241,8 @@ const ChartTooltipContent = React.forwardRef<
 														{itemConfig?.label || item.name}
 													</span>
 												</div>
-												{item.value && (
+												{/* 19-08：0 是合法数值，用 != null 判定而非真假值。 */}
+												{item.value != null && (
 													<span className="font-mono font-medium tabular-nums text-foreground">
 														{item.value.toLocaleString()}
 													</span>

@@ -37,11 +37,14 @@ export function useApiKeys() {
 	});
 }
 
+/** 单 Key 详情（含明文）。17-10：`gcTime: 0` 让明文在观察者卸载后立即出缓存，
+ *  与 ProviderDetail「明文不进任何缓存」的策略对齐（api-key 概览页只取名称，重取无碍）。 */
 export function useApiKeyDetail(id: number | null) {
 	return useQuery<ApiKeyDetail>({
 		queryKey: apiKeyKeys.detail(id ?? -1),
 		queryFn: () => fetchApiKeyDetail(id as number),
 		enabled: id !== null,
+		gcTime: 0,
 	});
 }
 

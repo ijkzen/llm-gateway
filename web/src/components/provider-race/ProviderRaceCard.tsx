@@ -1,6 +1,5 @@
-import { RaceCardShell, useRaceCardWindow } from "@/components/race-card-shell";
-import { type RaceWindowState, windowQueryString } from "@/components/race-window-control";
-import { SortableMetricTable, useRaceSort } from "@/components/sortable-metric-table";
+import { MetricRaceCard, raceHref } from "@/components/metric-race-card";
+import type { RaceWindowState } from "@/components/race-window-control";
 import { type ProviderRankItem, useProviderRace } from "@/hooks/use-provider-race";
 import { TrendingUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -23,41 +22,20 @@ export function ProviderRaceCard({
 }) {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
-	const view = useRaceCardWindow(initialWindow);
-
-	// 排序：默认按总计 Token 降序；点击表头切换升/降。
-	const { sort, onSort } = useRaceSort();
-
-	const query = useProviderRace(view.window, sort, view.inView, apiKey);
-
-	const openProviderOverview = (item: ProviderRankItem) => {
-		navigate(
-			`/providers/${item.providerId}/overview?${windowQueryString(view.windowState, view.window)}`,
-		);
-	};
 
 	return (
-		<RaceCardShell
-			view={view}
+		<MetricRaceCard<ProviderRankItem>
 			icon={TrendingUp}
 			titleKey="dashboard.providerRace"
-			status={{
-				isLoading: query.isLoading,
-				isError: query.isError,
-				isEmpty: !query.data || query.data.items.length === 0,
-				onRetry: () => query.refetch(),
-			}}
-		>
-			<SortableMetricTable
-				items={query.data?.items ?? []}
-				sort={sort}
-				onSort={onSort}
-				nameHeader="dashboard.providerColumn"
-				renderName={(item) => item.providerName || t("race.unknownProvider")}
-				rowKey={(item) => item.providerId}
-				onRowClick={openProviderOverview}
-				rowTitleKey="race.openProviderOverview"
-			/>
-		</RaceCardShell>
+			nameHeader="dashboard.providerColumn"
+			initialWindow={initialWindow}
+			useQuery={(view, sort, inView) => useProviderRace(view.window, sort, inView, apiKey)}
+			renderName={(item) => item.providerName || t("race.unknownProvider")}
+			rowKey={(item) => item.providerId}
+			onRowClick={(item, view) =>
+				navigate(raceHref(`/providers/${item.providerId}/overview`, view.windowState, view.window))
+			}
+			rowTitleKey="race.openProviderOverview"
+		/>
 	);
 }

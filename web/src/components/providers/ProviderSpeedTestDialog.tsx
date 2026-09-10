@@ -13,13 +13,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import {
 	type ProviderModel,
-	useProviderModels,
+	useProviderModelsScoped,
 	useTestProviderModel,
 } from "@/hooks/use-provider-models";
 import { type Provider, useUpdateProvider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
 import { Gauge, Loader2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 interface ProviderSpeedTestDialogProps {
@@ -39,7 +39,9 @@ export function ProviderSpeedTestDialog({
 }: ProviderSpeedTestDialogProps) {
 	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
-	const { data: models, isLoading } = useProviderModels();
+	// 17-12：按当前供应商作用域拉取模型——弹窗关闭（provider 为 null）时不发请求，
+	// 也不再需要客户端过滤全量列表。
+	const { data: models, isLoading } = useProviderModelsScoped(provider?.id ?? null);
 	const testModel = useTestProviderModel(provider?.id ?? 0);
 	const updateProvider = useUpdateProvider();
 	// 本地乐观的启用态：开关先即时反映，请求失败再回滚。provider 切换/弹窗重开时重置。
@@ -74,10 +76,7 @@ export function ProviderSpeedTestDialog({
 		);
 	};
 
-	const providerModels = useMemo(
-		() => (models ?? []).filter((m) => provider !== null && m.providerId === provider.id),
-		[models, provider],
-	);
+	const providerModels = models ?? [];
 
 	const runTest = (model: ProviderModel) => {
 		if (testModel.isPending) return;

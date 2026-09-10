@@ -4,7 +4,7 @@ import { ScrollToTop } from "@/components/scroll-to-top";
 import { Toaster } from "@/components/ui/sonner";
 import { useInitLocale } from "@/hooks/use-locale";
 import { useInitTheme } from "@/hooks/use-theme";
-import { lazy } from "react";
+import { Suspense, lazy } from "react";
 import { Route, Routes } from "react-router-dom";
 
 const OverviewPage = lazy(() => import("./pages/overview"));
@@ -30,34 +30,44 @@ function App() {
 	return (
 		<>
 			<ScrollToTop />
-			<Routes>
-				<Route
-					element={
-						<RequireAuth>
-							<AppLayout />
-						</RequireAuth>
-					}
-				>
-					<Route path="/" element={<OverviewPage />} />
-					<Route path="/chat" element={<ChatPage />} />
-					<Route path="/providers/:providerId/overview" element={<ProviderOverviewPage />} />
+			{/* 19-12：/login 在 AppLayout 之外，若只靠 layout 内的 Suspense，直达或
+			    硬刷新登录页时 chunk 未就绪会白屏挂起——这里兜住整棵路由树。 */}
+			<Suspense
+				fallback={
+					<div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+						…
+					</div>
+				}
+			>
+				<Routes>
 					<Route
-						path="/virtual-models/:virtualModelId/overview"
-						element={<VirtualModelOverviewPage />}
-					/>
-					<Route path="/models/:modelId/overview" element={<ModelOverviewPage />} />
-					<Route path="/api-keys/:id/overview" element={<ApiKeyOverviewPage />} />
-					<Route path="/cron-jobs" element={<CronJobsPage />} />
-					<Route path="/providers" element={<ProvidersPage />} />
-					<Route path="/provider-models" element={<ProviderModelsPage />} />
-					<Route path="/virtual-models" element={<VirtualModelsPage />} />
-					<Route path="/api-keys" element={<ApiKeysPage />} />
-					<Route path="/request-logs" element={<RequestLogsPage />} />
-					<Route path="/settings" element={<SettingsPage />} />
-					<Route path="*" element={<NotFoundPage />} />
-				</Route>
-				<Route path="/login" element={<LoginPage />} />
-			</Routes>
+						element={
+							<RequireAuth>
+								<AppLayout />
+							</RequireAuth>
+						}
+					>
+						<Route path="/" element={<OverviewPage />} />
+						<Route path="/chat" element={<ChatPage />} />
+						<Route path="/providers/:providerId/overview" element={<ProviderOverviewPage />} />
+						<Route
+							path="/virtual-models/:virtualModelId/overview"
+							element={<VirtualModelOverviewPage />}
+						/>
+						<Route path="/models/:modelId/overview" element={<ModelOverviewPage />} />
+						<Route path="/api-keys/:id/overview" element={<ApiKeyOverviewPage />} />
+						<Route path="/cron-jobs" element={<CronJobsPage />} />
+						<Route path="/providers" element={<ProvidersPage />} />
+						<Route path="/provider-models" element={<ProviderModelsPage />} />
+						<Route path="/virtual-models" element={<VirtualModelsPage />} />
+						<Route path="/api-keys" element={<ApiKeysPage />} />
+						<Route path="/request-logs" element={<RequestLogsPage />} />
+						<Route path="/settings" element={<SettingsPage />} />
+						<Route path="*" element={<NotFoundPage />} />
+					</Route>
+					<Route path="/login" element={<LoginPage />} />
+				</Routes>
+			</Suspense>
 			<Toaster />
 		</>
 	);

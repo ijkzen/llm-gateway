@@ -14,7 +14,7 @@ import type { CronJob } from "@/hooks/use-cron-jobs";
 import { useRunCronJob, useUpdateCronJob } from "@/hooks/use-cron-jobs";
 import { useToastActions } from "@/hooks/use-toast";
 import { DEFAULT_GROUP } from "@/lib/constants";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, localeOf } from "@/lib/utils";
 import { MoreHorizontal, Pencil, Play, ScrollText, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -26,7 +26,7 @@ interface CronJobDetailProps {
 }
 
 export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDetailProps) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const updateCronJob = useUpdateCronJob();
 	const runCronJob = useRunCronJob();
@@ -78,19 +78,25 @@ export function CronJobDetail({ job, onEdit, onDelete, onViewLogs }: CronJobDeta
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
 							{t("cronJobs.group")}
 						</p>
-						<p className="mt-1 text-sm">{job.group || DEFAULT_GROUP}</p>
+						<p className="mt-1 text-sm">
+							{job.group && job.group !== DEFAULT_GROUP ? job.group : t("cronJobs.defaultGroup")}
+						</p>
 					</div>
 					<div>
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
 							{t("cronJobs.lastRunAt")}
 						</p>
-						<p className="mt-1 text-sm">{formatDateTime(job.last_run_at)}</p>
+						<p className="mt-1 text-sm">
+							{formatDateTime(job.last_run_at, localeOf(i18n.language))}
+						</p>
 					</div>
 					<div>
 						<p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
 							{t("cronJobs.nextRunAt")}
 						</p>
-						<p className="mt-1 text-sm">{formatDateTime(job.next_run_at)}</p>
+						<p className="mt-1 text-sm">
+							{formatDateTime(job.next_run_at, localeOf(i18n.language))}
+						</p>
 					</div>
 				</div>
 

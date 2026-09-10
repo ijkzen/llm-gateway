@@ -1,6 +1,13 @@
-import { apiCodeOfError, beforeErrorHook, unwrap, userErrorMessage } from "@/lib/api";
+import {
+	AUTH_REDIRECT_FROM_KEY,
+	apiCodeOfError,
+	beforeErrorHook,
+	readStoredRedirectFrom,
+	unwrap,
+	userErrorMessage,
+} from "@/lib/api";
 import { HTTPError, TimeoutError } from "ky";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 function httpError(status: number, body?: unknown): HTTPError {
 	const response = new Response(body === undefined ? null : JSON.stringify(body), {
@@ -63,5 +70,21 @@ describe("unwrap", () => {
 		await expect(unwrap({ code: "0", msg: "ok" })).rejects.toMatchObject({
 			code: "MISSING_DATA",
 		});
+	});
+});
+
+describe("401 跳转的来源路径暂存（19-14）", () => {
+	afterEach(() => {
+		window.sessionStorage.clear();
+	});
+
+	it("读取即消费：首次读出后即清除", () => {
+		window.sessionStorage.setItem(AUTH_REDIRECT_FROM_KEY, "/providers?x=1");
+		expect(readStoredRedirectFrom()).toBe("/providers?x=1");
+		expect(readStoredRedirectFrom()).toBeNull();
+	});
+
+	it("无暂存时返回 null", () => {
+		expect(readStoredRedirectFrom()).toBeNull();
 	});
 });

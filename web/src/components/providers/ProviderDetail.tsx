@@ -1,5 +1,6 @@
 import { EmptyState } from "@/components/empty-state";
 import { MidEllipsis } from "@/components/mid-ellipsis";
+import { billingModeLabel, protocolLabel } from "@/components/providers/ProtocolIcon";
 import { ProviderProxyRow } from "@/components/providers/ProviderProxyRow";
 import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
 import { Button } from "@/components/ui/button";
@@ -18,7 +19,7 @@ import { Switch } from "@/components/ui/switch";
 import { type Provider, fetchProviderApiKey, useUpdateProvider } from "@/hooks/use-providers";
 import { useToastActions } from "@/hooks/use-toast";
 import { useUsageEstimate } from "@/hooks/use-usage-estimate";
-import { cn, formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime, localeOf } from "@/lib/utils";
 import {
 	ChevronRight,
 	Copy,
@@ -40,18 +41,6 @@ interface ProviderDetailProps {
 	onDelete: (provider: Provider) => void;
 	onSpeedTest: (provider: Provider) => void;
 }
-
-const PROTOCOL_LABELS: Record<number, string> = {
-	0: "providers.protocol.openaiCompat",
-	1: "providers.protocol.responses",
-	2: "providers.protocol.anthropic",
-	3: "providers.protocol.gemini",
-};
-
-const BILLING_LABELS: Record<number, string> = {
-	0: "providers.payAsYouGo",
-	1: "providers.subscription",
-};
 
 /** 详情字段网格中的一行。 */
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -105,7 +94,7 @@ function safeParseObject(text: string): Record<string, unknown> | null {
 }
 
 export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: ProviderDetailProps) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
 	const updateProvider = useUpdateProvider();
 	// 明文仅本地展示用，不在任何缓存中保存；每次点开/复制都重新请求。
@@ -255,19 +244,19 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 						)}
 					</DetailRow>
 					<DetailRow label={t("providers.protocolType")}>
-						{t(PROTOCOL_LABELS[provider.protocolType] ?? "common.unknown")}
+						{protocolLabel(provider.protocolType)}
 					</DetailRow>
 					<DetailRow label={t("providers.billingModeDetail")}>
-						{t(BILLING_LABELS[provider.billingMode] ?? "common.unknown")}
+						{billingModeLabel(provider.billingMode)}
 					</DetailRow>
 					<DetailRow label={t("providers.proxyEnabled")}>
 						<ProviderProxyRow enabled={provider.proxyEnabled} addr={provider.proxyAddr} />
 					</DetailRow>
 					<DetailRow label={t("providers.createdAt")}>
-						{formatDateTime(provider.createdAt)}
+						{formatDateTime(provider.createdAt, localeOf(i18n.language))}
 					</DetailRow>
 					<DetailRow label={t("providers.updatedAt")}>
-						{formatDateTime(provider.updatedAt)}
+						{formatDateTime(provider.updatedAt, localeOf(i18n.language))}
 					</DetailRow>
 				</div>
 

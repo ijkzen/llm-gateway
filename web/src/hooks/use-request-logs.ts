@@ -57,6 +57,16 @@ export const requestLogKeys = {
 	list: (filters: RequestLogFilters) => ["request-logs", filters] as const,
 };
 
+/**
+ * 逗号是后端 CSV 过滤参数的分隔符（`split(',')`），而 API Key 名允许含逗号
+ * （后端仅校验非空）。名字里带逗号时会被拆成两段、静默扩大过滤范围，故此处
+ * 剔除含分隔符的值（16-13：约束在生成侧显式化；后端侧同族问题见 11-16）。
+ */
+function csvValue(values: string[] | undefined): string | undefined {
+	const cleaned = values?.filter((v) => !v.includes(","));
+	return cleaned?.length ? cleaned.join(",") : undefined;
+}
+
 function buildQuery(filters: RequestLogFilters): string {
 	const params = new URLSearchParams();
 	params.set("page", String(filters.page));
@@ -65,7 +75,8 @@ function buildQuery(filters: RequestLogFilters): string {
 	if (filters.providerId?.length) params.set("providerId", filters.providerId.join(","));
 	if (filters.modelId?.length) params.set("modelId", filters.modelId.join(","));
 	if (filters.success !== undefined) params.set("success", String(filters.success));
-	if (filters.apiKey?.length) params.set("apiKey", filters.apiKey.join(","));
+	const apiKeyCsv = csvValue(filters.apiKey);
+	if (apiKeyCsv) params.set("apiKey", apiKeyCsv);
 	if (filters.startTime !== undefined) params.set("startTime", String(filters.startTime));
 	if (filters.endTime !== undefined) params.set("endTime", String(filters.endTime));
 	if (filters.sortBy) params.set("sortBy", filters.sortBy);

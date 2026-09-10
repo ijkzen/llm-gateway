@@ -22,10 +22,16 @@ interface ChatMessage {
 	error?: string;
 }
 
-/** 从 SSE 事件文本中提取 data 载荷（非 data 行与空行忽略）。 */
+/** 从 SSE 事件文本中提取 data 载荷（非 data 行与空行忽略）。
+ *  21-03：SSE 规范允许多个 data 行组成一个载荷（以 \n 拼接）；网关当前单行输出，
+ *  这里按规范合并以防上游/未来变更导致载荷被截断。 */
 function eventData(event: string): string | null {
-	const line = event.split("\n").find((l) => l.startsWith("data: "));
-	return line ? line.slice(6) : null;
+	const parts = event
+		.split("\n")
+		.filter((l) => l.startsWith("data:"))
+		.map((l) => l.slice(5).replace(/^ /, ""));
+	if (parts.length === 0) return null;
+	return parts.join("\n");
 }
 
 /** 解析一个 OpenAI chunk 的 delta 增量。思考字段同时兼容 DeepSeek 风格
@@ -36,9 +42,20 @@ function deltaOf(data: string): {
 	reasoning?: string;
 	content?: string;
 	details?: unknown[];
+	error?: string;
 } {
 	if (data === "[DONE]") return {};
 	const parsed: unknown = JSON.parse(data);
+	// 21-02：网关在流中转换失败时发 `{"error":{...}}` 帧——此前无 choices 被
+	// 静默忽略，表现为内容戛然而止；这里提取为错误展示。
+	const errorField = (parsed as { error?: unknown }).error;
+	if (errorField) {
+		const message =
+			typeof errorField === "string"
+				? errorField
+				: ((errorField as { message?: string }).message ?? JSON.stringify(errorField));
+		return { error: message };
+	}
 	const delta = (parsed as { choices?: Array<{ delta?: Record<string, unknown> }> }).choices?.[0]
 		?.delta;
 	const reasoning = delta?.reasoning_content ?? delta?.reasoning;
@@ -169,6 +186,12 @@ export default function ChatPage() {
 					const data = eventData(event);
 					if (!data) continue;
 					const delta = deltaOf(data);
+					if (delta.error !== undefined) {
+						// 21-02：流内错误帧标记到当前消息并结束本轮。
+						const message = delta.error;
+						patchLast((msg) => ({ ...msg, error: message }));
+						break;
+					}
 					if (delta.reasoning !== undefined) {
 						patchLast((msg) => ({
 							...msg,

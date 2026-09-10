@@ -4,14 +4,13 @@ import {
 	type RaceWindowState,
 	defaultRaceWindowState,
 	raceWindowBounds,
+	useSectionSubtitle,
 } from "@/components/race-window-control";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInView } from "@/hooks/use-in-view";
 import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
-import { formatPeriodLabel } from "@/lib/race-period";
 import type { RaceWindow } from "@/lib/race-types";
-import { localeOf } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
 import { type ReactNode, type RefObject, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -73,8 +72,8 @@ export function RaceCardShell({
 	status,
 	children,
 }: RaceCardShellProps) {
-	const { t, i18n } = useTranslation();
-	const tz = useStatsTimeZone();
+	const { t } = useTranslation();
+	const subtitle = useSectionSubtitle();
 	const { now, windowState, onWindowChange, ref, inView } = view;
 	return (
 		<Card ref={ref} className="p-5">
@@ -86,17 +85,7 @@ export function RaceCardShell({
 					<h3 className="text-sm font-semibold text-foreground">{t(titleKey)}</h3>
 					<MidEllipsis
 						className="text-xs text-muted-foreground"
-						text={
-							windowState.period === "custom"
-								? t("overview.customWindow")
-								: formatPeriodLabel(
-										windowState.period,
-										windowState.offset,
-										now,
-										localeOf(i18n.language),
-										tz,
-									)
-						}
+						text={subtitle(windowState, now)}
 					/>
 				</div>
 

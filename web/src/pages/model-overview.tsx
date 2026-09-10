@@ -4,6 +4,7 @@ import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card"
 import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
+import { initialWindowFromUrl } from "@/components/race-window-control";
 import {
 	CardStatsSection,
 	StatsSection,
@@ -21,8 +22,9 @@ import { useProviderModelDetail } from "@/hooks/use-provider-models";
 import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import { formatTokenCount, localeOf } from "@/lib/utils";
 import { TrendingUp } from "lucide-react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 const SECTION_KEYS = ["call", "token", "metrics", "insight"] as const;
 
@@ -35,6 +37,9 @@ export default function ModelOverviewPage() {
 	const { t, i18n } = useTranslation();
 	const navigate = useNavigate();
 	const { modelId: modelIdParam } = useParams();
+	const [searchParams] = useSearchParams();
+	// 16-09：排行卡与区块共享同一 URL 初始窗（此前排行卡固定当天，深链时不一致）。
+	const urlInitial = useMemo(() => initialWindowFromUrl(searchParams), [searchParams]);
 	const modelId = Number.parseInt(modelIdParam ?? "", 10);
 	const idValid = Number.isFinite(modelId);
 	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS);
@@ -200,7 +205,10 @@ export default function ModelOverviewPage() {
 
 			{/* API Key 赛马：独立时间段（按当前供应商+模型过滤） */}
 			{modelDetail !== undefined && (
-				<ApiKeyRaceCard filter={{ providerId, modelId: remoteModelId }} />
+				<ApiKeyRaceCard
+					filter={{ providerId, modelId: remoteModelId }}
+					initialWindow={urlInitial}
+				/>
 			)}
 		</div>
 	);

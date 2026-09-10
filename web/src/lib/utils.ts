@@ -45,10 +45,12 @@ function trimTrailingZeros(text: string): string {
 
 /** 超过 maxLength 时按码点保留首尾、中间以 … 省略（如 "阿里云・deepseek-chat" → "阿里云…eepseek-chat"）。 */
 export function middleEllipsis(text: string, maxLength: number): string {
-	if (text.length <= maxLength) {
+	const chars = Array.from(text);
+	// 19-16：守卫与截断同按码点计数——用 UTF-16 length 判断时，含代理对的
+	// 文本（emoji 等）会被判为未超长而原样返回，长度实际超出预算。
+	if (chars.length <= maxLength) {
 		return text;
 	}
-	const chars = Array.from(text);
 	const ellipsis = "…";
 	const keep = Math.max(0, maxLength - ellipsis.length);
 	const head = Math.ceil(keep / 2);
@@ -135,12 +137,13 @@ export function formatContextLength(value: number): string {
 	return String(value);
 }
 
-/** ISO 时间串 → 本地化展示；空串/非法/零值返回占位符「—」。 */
-export function formatDateTime(dateStr: string): string {
+/** ISO 时间串 → 本地化展示；空串/非法/零值返回占位符「—」。
+ *  `locale` 缺省 zh（19-20：英文界面传 localeOf(i18n.language) 得到对应格式）。 */
+export function formatDateTime(dateStr: string, locale: Locale = "zh"): string {
 	if (!dateStr) return "—";
 	const ts = new Date(dateStr).getTime();
 	if (Number.isNaN(ts) || ts <= 0) return "—";
-	return new Date(dateStr).toLocaleString("zh-CN");
+	return new Date(dateStr).toLocaleString(locale === "en" ? "en-US" : "zh-CN");
 }
 
 /** 按 value 降序取前 limit 名，其余合并为 other（value 求和）。 */

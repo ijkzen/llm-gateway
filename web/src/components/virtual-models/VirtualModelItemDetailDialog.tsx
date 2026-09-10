@@ -87,8 +87,9 @@ export function VirtualModelItemDetailDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-[520px]">
-				<DialogHeader className="space-y-3">
+			{/* 17-19：固定头/尾 + 仅中间主体滚动的三分布局（与同族大弹窗一致）。 */}
+			<DialogContent className="flex h-[min(720px,85vh)] flex-col gap-0 overflow-hidden p-0 sm:max-w-[520px]">
+				<DialogHeader className="shrink-0 space-y-3 px-6 pb-4 pt-6">
 					<DialogTitle className="min-w-0">
 						<Link
 							to={`/models/${currentItem.modelId}/overview`}
@@ -113,78 +114,82 @@ export function VirtualModelItemDetailDialog({
 					</DialogDescription>
 				</DialogHeader>
 
-				<dl className="space-y-3">
-					<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
-						<dt className="text-sm text-muted-foreground">{t("providerModels.modelId")}</dt>
-						<dd className="min-w-0 font-mono text-sm">
-							<MidEllipsis text={currentItem.providerModelId} />
-						</dd>
-					</div>
-					<div className="grid grid-cols-2 gap-3">
-						<div className="rounded-lg border px-4 py-2.5">
-							<dt className="text-xs text-muted-foreground">{t("providerModels.contextLength")}</dt>
-							<dd className="mt-0.5 text-sm font-medium">
-								{currentItem.contextLength.toLocaleString()}
+				<div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+					<dl className="space-y-3">
+						<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
+							<dt className="text-sm text-muted-foreground">{t("providerModels.modelId")}</dt>
+							<dd className="min-w-0 font-mono text-sm">
+								<MidEllipsis text={currentItem.providerModelId} />
 							</dd>
 						</div>
-						<div className="rounded-lg border px-4 py-2.5">
-							<dt className="text-xs text-muted-foreground">{t("providerModels.maxOutput")}</dt>
-							<dd className="mt-0.5 text-sm font-medium">
-								{currentItem.maxOutputTokens.toLocaleString()}
+						<div className="grid grid-cols-2 gap-3">
+							<div className="rounded-lg border px-4 py-2.5">
+								<dt className="text-xs text-muted-foreground">
+									{t("providerModels.contextLength")}
+								</dt>
+								<dd className="mt-0.5 text-sm font-medium">
+									{currentItem.contextLength.toLocaleString()}
+								</dd>
+							</div>
+							<div className="rounded-lg border px-4 py-2.5">
+								<dt className="text-xs text-muted-foreground">{t("providerModels.maxOutput")}</dt>
+								<dd className="mt-0.5 text-sm font-medium">
+									{currentItem.maxOutputTokens.toLocaleString()}
+								</dd>
+							</div>
+						</div>
+						<div className="rounded-lg border px-4 py-3">
+							<dt className="text-xs text-muted-foreground">
+								{t("providerModels.modelCapabilities")}
+							</dt>
+							<dd className="mt-2 grid grid-cols-2 gap-2">
+								{CAPABILITIES.map(({ key, labelKey, icon: Icon }) => (
+									<span
+										key={key}
+										className={
+											currentItem[key]
+												? "flex items-center gap-1.5 text-sm text-success"
+												: "flex items-center gap-1.5 text-sm text-muted-foreground/60"
+										}
+									>
+										<Icon className="size-3.5" />
+										{t(labelKey)}
+										{currentItem[key]
+											? t("providerModels.supported")
+											: t("providerModels.notSupported")}
+									</span>
+								))}
 							</dd>
 						</div>
-					</div>
-					<div className="rounded-lg border px-4 py-3">
-						<dt className="text-xs text-muted-foreground">
-							{t("providerModels.modelCapabilities")}
-						</dt>
-						<dd className="mt-2 grid grid-cols-2 gap-2">
-							{CAPABILITIES.map(({ key, labelKey, icon: Icon }) => (
-								<span
-									key={key}
-									className={
-										currentItem[key]
-											? "flex items-center gap-1.5 text-sm text-success"
-											: "flex items-center gap-1.5 text-sm text-muted-foreground/60"
+						<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
+							<dt className="text-sm text-muted-foreground">{t("providers.proxyEnabled")}</dt>
+							<dd>
+								<ProviderProxyRow
+									enabled={currentItem.modelProxyEnabled}
+									addr={currentItem.modelProxyAddr}
+									inherited={
+										currentItem.providerProxyEnabled ? currentItem.providerProxyAddr : undefined
 									}
-								>
-									<Icon className="size-3.5" />
-									{t(labelKey)}
-									{currentItem[key]
-										? t("providerModels.supported")
-										: t("providerModels.notSupported")}
-								</span>
-							))}
-						</dd>
-					</div>
-					<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
-						<dt className="text-sm text-muted-foreground">{t("providers.proxyEnabled")}</dt>
-						<dd>
-							<ProviderProxyRow
-								enabled={currentItem.modelProxyEnabled}
-								addr={currentItem.modelProxyAddr}
-								inherited={
-									currentItem.providerProxyEnabled ? currentItem.providerProxyAddr : undefined
-								}
-							/>
-						</dd>
-					</div>
-					<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
-						<dt className="text-sm text-muted-foreground">
-							{t("virtualModels.enableInVirtualModel")}
-						</dt>
-						<dd>
-							<Switch
-								checked={currentItem.enable}
-								disabled={updateModel.isPending}
-								onCheckedChange={toggle}
-								aria-label={`${t("virtualModels.enableInVirtualModel")} ${currentItem.providerModelId}`}
-							/>
-						</dd>
-					</div>
-				</dl>
+								/>
+							</dd>
+						</div>
+						<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
+							<dt className="text-sm text-muted-foreground">
+								{t("virtualModels.enableInVirtualModel")}
+							</dt>
+							<dd>
+								<Switch
+									checked={currentItem.enable}
+									disabled={updateModel.isPending}
+									onCheckedChange={toggle}
+									aria-label={`${t("virtualModels.enableInVirtualModel")} ${currentItem.providerModelId}`}
+								/>
+							</dd>
+						</div>
+					</dl>
+				</div>
 
-				<DialogFooter className="gap-2 pt-2">
+				<DialogFooter className="shrink-0 gap-2 border-t px-6 py-4">
 					<Button
 						type="button"
 						variant="outline"

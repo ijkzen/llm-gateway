@@ -23,10 +23,18 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
+/** UTF-8 字节长度（18-15：后端按字节校验 6-128，前端不能按 JS 字符数放行）。 */
+function utf8Length(value: string): number {
+	return new TextEncoder().encode(value).length;
+}
+
 const changePasswordSchema = z
 	.object({
 		oldPassword: z.string().min(1, "请输入旧密码"),
-		newPassword: z.string().min(6, "新密码至少 6 个字符").max(128, "新密码最多 128 个字符"),
+		newPassword: z
+			.string()
+			.refine((v) => utf8Length(v) >= 6, "新密码至少 6 个字节")
+			.refine((v) => utf8Length(v) <= 128, "新密码最多 128 个字节"),
 		confirmPassword: z.string(),
 	})
 	.refine((values) => values.newPassword === values.confirmPassword, {

@@ -1,5 +1,6 @@
 import i18n from "@/i18n";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 
 /**
  * 协议类型枚举（与后端 entity::provider_template 一致）：
@@ -48,6 +49,9 @@ interface ProtocolIconProps {
  * 未知协议（0-3 之外）用中性圆环兜底。
  */
 export function ProtocolIcon({ protocolType, className }: ProtocolIconProps) {
+	// 20-06：组件订阅语言变化（纯函数 protocolLabel/billingModeLabel 仍读全局实例，
+	// 调用方需自行保证语言切换后重渲染）。
+	const { t } = useTranslation();
 	const path = BRAND_PATHS[protocolType];
 	if (!path) {
 		return (
@@ -56,7 +60,7 @@ export function ProtocolIcon({ protocolType, className }: ProtocolIconProps) {
 					"flex size-6 shrink-0 items-center justify-center rounded-full border-2 border-current text-xs font-semibold",
 					className,
 				)}
-				aria-label={i18n.t("providers.unknownProtocol")}
+				aria-label={t("providers.unknownProtocol")}
 			>
 				?
 			</span>

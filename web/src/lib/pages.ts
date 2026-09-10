@@ -78,18 +78,6 @@ export const REQUEST_LOGS_PAGE: PageConfig = {
 	icon: ScrollText,
 };
 
-export const PAGES: readonly PageConfig[] = [
-	OVERVIEW_PAGE,
-	CHAT_PAGE,
-	CRON_JOBS_PAGE,
-	PROVIDERS_PAGE,
-	PROVIDER_MODELS_PAGE,
-	VIRTUAL_MODELS_PAGE,
-	API_KEYS_PAGE,
-	REQUEST_LOGS_PAGE,
-	SETTINGS_PAGE,
-];
-
 /** 侧边栏导航分组：概览 / 接入配置 / 观测 / 管理。 */
 export const NAV_GROUPS: readonly PageGroup[] = [
 	{ labelKey: "nav.groups.overview", pages: [OVERVIEW_PAGE, CHAT_PAGE] },

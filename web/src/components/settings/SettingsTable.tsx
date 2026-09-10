@@ -70,6 +70,9 @@ function getTypeBadgeVariant(type: SettingType) {
 
 const PLAIN_HEADER_CLASS = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
 
+/** 后端拒绝删除的内置设置键（18-20：前端同步置灰删除入口，不再靠 400 兜底）。 */
+const PROTECTED_KEYS = new Set(["language", "timezone"]);
+
 export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps) {
 	const { t } = useTranslation();
 	const [searchQuery, setSearchQuery] = useState("");
@@ -168,6 +171,12 @@ export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps
 									</DropdownMenuItem>
 									<DropdownMenuItem
 										className="text-destructive focus:text-destructive"
+										disabled={PROTECTED_KEYS.has(setting.key)}
+										title={
+											PROTECTED_KEYS.has(setting.key)
+												? t("settings.builtinNotDeletable")
+												: undefined
+										}
 										onClick={() => onDelete(setting)}
 									>
 										<Trash2 className="size-4" />
@@ -180,7 +189,7 @@ export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps
 				},
 			},
 		],
-		[onEdit, onDelete],
+		[onEdit, onDelete, t],
 	);
 
 	const table = useReactTable({
@@ -195,11 +204,13 @@ export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps
 		getPaginationRowModel: getPaginationRowModel(),
 	});
 
-	// 搜索/筛选导致数据变化时回到第一页，避免停留在空页
-	// biome-ignore lint/correctness/useExhaustiveDependencies: settings 变化本身就是重置页码的触发条件
+	// 搜索/筛选导致结果变化时回到第一页，避免停留在越界空页。
+	// 18-18：此前依赖 [settings]，搜索收窄结果时不触发（实测 TanStack 的
+	// autoResetPageIndex 在此场景不生效）——改依赖已过滤结果。
+	// biome-ignore lint/correctness/useExhaustiveDependencies: 过滤结果变化即重置页码，setPagination 为稳定 setter
 	useEffect(() => {
 		setPagination((prev) => ({ ...prev, pageIndex: 0 }));
-	}, [settings]);
+	}, [filteredSettings]);
 
 	const rows = table.getRowModel().rows;
 
@@ -223,6 +234,8 @@ export function SettingsTable({ settings, onEdit, onDelete }: SettingsTableProps
 									{type}
 								</SelectItem>
 							))}
+							{/* 18-19：后端对无法映射的存储类型返回 Unknown，补筛选项（徽章已有兜底）。 */}
+							<SelectItem value="Unknown">Unknown</SelectItem>
 						</SelectContent>
 					</Select>
 					<DataTableViewOptions table={table} />

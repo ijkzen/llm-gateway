@@ -67,6 +67,8 @@ export interface ProviderModelPayload {
 
 export const providerModelKeys = {
 	all: ["provider-models"] as const,
+	/** 单供应商作用域（与 all 同前缀，失效 all 会一并失效）。 */
+	scoped: (providerId: number) => ["provider-models", "scoped", providerId] as const,
 	detail: (modelId: number) => ["provider-models", modelId] as const,
 	catalogSearch: (q: string) => ["provider-models", "catalog-search", q] as const,
 };
@@ -107,6 +109,21 @@ export function useProviderModels() {
 			const res = await api.get("provider-models").json<ApiResponse<ProviderModel[]>>();
 			return unwrap(res);
 		},
+	});
+}
+
+/** 单个供应商名下的模型（17-12：后端作用域端点，免拉全量再前端过滤）。
+ *  `providerId` 为 null 时不查询——测速弹窗关闭时不再有请求。 */
+export function useProviderModelsScoped(providerId: number | null) {
+	return useQuery<ProviderModel[]>({
+		queryKey: providerModelKeys.scoped(providerId ?? -1),
+		queryFn: async () => {
+			const res = await api
+				.get(`providers/${providerId as number}/models`)
+				.json<ApiResponse<ProviderModel[]>>();
+			return unwrap(res);
+		},
+		enabled: providerId !== null,
 	});
 }
 

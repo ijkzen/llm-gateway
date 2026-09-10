@@ -14,9 +14,11 @@ import {
 	defaultCustomWindow,
 	formatCompactPeriodLabel,
 	formatDateTimeLabel,
+	formatPeriodLabel,
 	periodBounds,
 	toLocalInputValue,
 } from "@/lib/race-period";
+import { localeOf } from "@/lib/utils";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -42,6 +44,17 @@ export interface RaceWindowState {
 
 /** 合法的 period 取值（URL 参数白名单：非法值回落 day，16-01）。 */
 const PERIOD_WHITELIST = ["day", "week", "month", "year", "custom"] as const;
+
+/** 时间窗副标题：自定义区间文案 / 周期标签（区块壳与赛马卡壳共用一份，
+ *  16-10 从 stats-section 归位）。标签按数据面板口径时区（设置表）解释。 */
+export function useSectionSubtitle() {
+	const { t, i18n } = useTranslation();
+	const tz = useStatsTimeZone();
+	return (state: RaceWindowState, now: number) =>
+		state.period === "custom"
+			? t("overview.customWindow")
+			: formatPeriodLabel(state.period, state.offset, now, localeOf(i18n.language), tz);
+}
 
 /** 从 URL query 解析初始时间段（缺省当天）；列表页/赛马行跳转时携带。 */
 export function initialWindowFromUrl(searchParams: URLSearchParams): RaceWindowState {
@@ -103,7 +116,8 @@ export function RaceWindowControl({
 		onChange({ period: next });
 		if (next === "custom" && !state.appliedCustom) {
 			// 首次进入自定义：默认「过去 7 天」（7 天前 0 点 ~ 明天 0 点）并立即生效。
-			const defaults = defaultCustomWindow(now);
+			// 16-08：自定义窗口取整走设置表时区（与预设周期同口径）。
+			const defaults = defaultCustomWindow(now, tz);
 			onChange({
 				customStart: defaults.startTime,
 				customEnd: defaults.endTime,

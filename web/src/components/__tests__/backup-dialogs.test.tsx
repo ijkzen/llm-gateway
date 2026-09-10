@@ -205,4 +205,40 @@ describe("ImportDialog", () => {
 		expect(screen.getByText("providers[0].name 重复：openai")).toBeInTheDocument();
 		expect(onOpenChange).not.toHaveBeenCalled();
 	});
+
+	it("导入成功后清空已选文件（18-14 不再残留可重复导入）", async () => {
+		mocks.importBackup.mockResolvedValue({
+			providers: 0,
+			models: 0,
+			virtualModels: 0,
+			apiKeys: 0,
+			settings: 0,
+		});
+		renderWithProvider(<ImportDialog open onOpenChange={vi.fn()} />);
+		await attachFile(MINIMAL_JSON);
+
+		fireEvent.click(screen.getByRole("button", { name: "确认导入" }));
+		await screen.findByRole("heading", { name: "确认恢复备份" });
+		clickConfirmDialogAction();
+
+		// 成功收尾：文件状态清空，确认按钮回到禁用态（防止再次误导入）。
+		await waitFor(() => expect(mocks.importBackup).toHaveBeenCalled());
+		await waitFor(() => expect(screen.getByRole("button", { name: "确认导入" })).toBeDisabled());
+		expect(screen.queryByText(/backup\.json/)).toBeNull();
+	});
+
+	it("关闭弹窗时清空已选文件（18-14 重开不残留）", async () => {
+		const onOpenChange = vi.fn();
+		renderWithProvider(<ImportDialog open onOpenChange={onOpenChange} />);
+		await attachFile(MINIMAL_JSON);
+		expect(screen.getByText(/backup\.json/)).toBeInTheDocument();
+
+		// 用户按 Esc 取消关闭弹窗（Radix 触发 onOpenChange(false)）。
+		fireEvent.keyDown(document.body, { key: "Escape" });
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+
+		// 文件已清空：文件名不再展示，确认按钮禁用。
+		await waitFor(() => expect(screen.getByRole("button", { name: "确认导入" })).toBeDisabled());
+		expect(screen.queryByText(/backup\.json/)).toBeNull();
+	});
 });

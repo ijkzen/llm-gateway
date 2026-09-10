@@ -1,12 +1,15 @@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import type { ProviderModel } from "@/hooks/use-provider-models";
 import { cn } from "@/lib/utils";
 import { Brain, Image, type LucideIcon, Video, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-/** 模型能力定义：key 对应 ProviderModel 上的布尔字段。 */
+/** 能力图标的数据来源：供应商模型与虚拟模型成员条目的公共子集（17-26 合一）。 */
+export type CapabilityKey = "reasoning" | "toolUse" | "imageUnderstand" | "videoUnderstand";
+export type CapabilitySource = Record<CapabilityKey, boolean>;
+
+/** 模型能力定义：key 对应能力布尔字段。 */
 export const CAPABILITIES: {
-	key: keyof Pick<ProviderModel, "reasoning" | "toolUse" | "imageUnderstand" | "videoUnderstand">;
+	key: CapabilityKey;
 	labelKey: string;
 	icon: LucideIcon;
 }[] = [
@@ -21,7 +24,8 @@ export function CapabilityIcons({
 	model,
 	className,
 }: {
-	model: ProviderModel;
+	/** 具备四个能力布尔字段的模型/成员条目（结构化入参，两处调用方共用）。 */
+	model: CapabilitySource;
 	className?: string;
 }) {
 	const { t } = useTranslation();

@@ -1,4 +1,4 @@
-import { formatBucketLabel, inferGranularity } from "@/components/dashboard-charts";
+import { formatBucketLabel, inferGranularity, labelInterval } from "@/components/dashboard-charts";
 import {
 	ChartContainer,
 	ChartLegend,
@@ -8,10 +8,10 @@ import {
 } from "@/components/ui/chart";
 import type { FloatTrendPoint, PercentilePoint, TrendPoint } from "@/hooks/use-dashboard-insight";
 import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
-import i18n from "@/i18n";
 import type { ChartGranularity } from "@/lib/race-period";
 import { formatPercent, formatReadableNumber, localeOf } from "@/lib/utils";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { Area, AreaChart, CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 
 /** tooltip 单行：彩色图例标签 + 冒号 + 等宽数值（标签颜色与图例一致）。 */
@@ -46,10 +46,6 @@ function bucketLabelData(
 	return data.map((p) => formatBucketLabel(p.bucketStart, resolved, locale, timeZone));
 }
 
-function labelInterval(count: number): number {
-	return Math.max(0, Math.floor(count / 6) - 1);
-}
-
 /** 面积图纵向渐变填充（顶部 45% → 底部 8% 透明度），替代纯色平铺。 */
 function AreaGradient({ id, color }: { id: string; color: string }) {
 	return (
@@ -71,6 +67,7 @@ export function PercentileLineChart({
 	granularity?: ChartGranularity;
 }) {
 	const tz = useStatsTimeZone();
+	const { i18n } = useTranslation();
 	const labels = bucketLabelData(data, granularity, localeOf(i18n.language), tz);
 	const chartData = data.map((point, index) => ({
 		label: labels[index],
@@ -166,6 +163,7 @@ export function FailureTrendChart({
 	granularity?: ChartGranularity;
 }) {
 	const tz = useStatsTimeZone();
+	const { t, i18n } = useTranslation();
 	const labels = bucketLabelData(callTrend, granularity, localeOf(i18n.language), tz);
 	// 以调用趋势为主轴基准（三组长度一致），堆叠面积 = 成功数 + 失败数。
 	const chartData = callTrend.map((point, index) => ({
@@ -177,9 +175,9 @@ export function FailureTrendChart({
 	return (
 		<ChartContainer
 			config={{
-				success: { label: i18n.t("dashboard.success"), color: "hsl(var(--chart-2))" },
-				failed: { label: i18n.t("dashboard.failed"), color: "hsl(var(--chart-5))" },
-				failureRate: { label: i18n.t("dashboard.failureRate"), color: "hsl(var(--chart-1))" },
+				success: { label: t("dashboard.success"), color: "hsl(var(--chart-2))" },
+				failed: { label: t("dashboard.failed"), color: "hsl(var(--chart-5))" },
+				failureRate: { label: t("dashboard.failureRate"), color: "hsl(var(--chart-1))" },
 			}}
 			className="h-[260px] w-full"
 		>
@@ -211,10 +209,10 @@ export function FailureTrendChart({
 								<TooltipLabelRow
 									label={
 										name === "failureRate"
-											? i18n.t("dashboard.failureRate")
+											? t("dashboard.failureRate")
 											: name === "success"
-												? i18n.t("dashboard.success")
-												: i18n.t("dashboard.failed")
+												? t("dashboard.success")
+												: t("dashboard.failed")
 									}
 									color={item?.color}
 								>
@@ -272,6 +270,7 @@ export function TokenStructureChart({
 	formatValue?: (value: number) => string;
 }) {
 	const tz = useStatsTimeZone();
+	const { t, i18n } = useTranslation();
 	const labels = bucketLabelData(inputTokenTrend, granularity, localeOf(i18n.language), tz);
 	const chartData = inputTokenTrend.map((point, index) => ({
 		label: labels[index],
@@ -282,10 +281,10 @@ export function TokenStructureChart({
 	return (
 		<ChartContainer
 			config={{
-				input: { label: i18n.t("dashboard.tokenInput"), color: "hsl(var(--chart-1))" },
-				output: { label: i18n.t("dashboard.tokenOutput"), color: "hsl(var(--chart-3))" },
+				input: { label: t("dashboard.tokenInput"), color: "hsl(var(--chart-1))" },
+				output: { label: t("dashboard.tokenOutput"), color: "hsl(var(--chart-3))" },
 				cacheHitRate: {
-					label: i18n.t("dashboard.tokenCacheHitRate"),
+					label: t("dashboard.tokenCacheHitRate"),
 					color: "hsl(var(--chart-4))",
 				},
 			}}
@@ -325,10 +324,10 @@ export function TokenStructureChart({
 								<TooltipLabelRow
 									label={
 										name === "input"
-											? i18n.t("dashboard.tokenInput")
+											? t("dashboard.tokenInput")
 											: name === "output"
-												? i18n.t("dashboard.tokenOutput")
-												: i18n.t("dashboard.tokenCacheHitRate")
+												? t("dashboard.tokenOutput")
+												: t("dashboard.tokenCacheHitRate")
 									}
 									color={item?.color}
 								>
@@ -389,6 +388,7 @@ export function ThroughputChart({
 	formatValue?: (value: number) => string;
 }) {
 	const tz = useStatsTimeZone();
+	const { t, i18n } = useTranslation();
 	const labels = bucketLabelData(rpmTrend, granularity, localeOf(i18n.language), tz);
 	const chartData = rpmTrend.map((point, index) => ({
 		label: labels[index],
@@ -402,7 +402,7 @@ export function ThroughputChart({
 				rpm: { label: "RPM", color: "hsl(var(--chart-1))" },
 				tpm: { label: "TPM", color: "hsl(var(--chart-2))" },
 				streamRatio: {
-					label: i18n.t("dashboard.streamRatio"),
+					label: t("dashboard.streamRatio"),
 					color: "hsl(var(--chart-3))",
 				},
 			}}
@@ -448,11 +448,7 @@ export function ThroughputChart({
 							formatter={(value, name, item) => (
 								<TooltipLabelRow
 									label={
-										name === "rpm"
-											? "RPM"
-											: name === "tpm"
-												? "TPM"
-												: i18n.t("dashboard.streamRatio")
+										name === "rpm" ? "RPM" : name === "tpm" ? "TPM" : t("dashboard.streamRatio")
 									}
 									color={item?.color}
 								>
@@ -508,6 +504,7 @@ export function OutputPerSecLineChart({
 	granularity?: ChartGranularity;
 }) {
 	const tz = useStatsTimeZone();
+	const { i18n } = useTranslation();
 	const labels = bucketLabelData(data, granularity, localeOf(i18n.language), tz);
 	const chartData = data.map((point, index) => ({
 		label: labels[index],

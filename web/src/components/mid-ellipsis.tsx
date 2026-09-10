@@ -24,6 +24,13 @@ export function MidEllipsis({ text, className, title }: MidEllipsisProps) {
 
 		const recompute = () => {
 			const available = box.clientWidth;
+			// 19-06：容器尚未布局（隐藏页签/首帧 clientWidth=0）时不能判定溢出——
+			// 二分恒不满足会先渲染成「…」，交回全文让 ResizeObserver 触发后重算。
+			if (available <= 0) {
+				measure.textContent = "";
+				setSliced(null);
+				return;
+			}
 			measure.textContent = text;
 			if (measure.offsetWidth <= available) {
 				// 未溢出时清空测量文本，避免隐藏节点携带与展示相同的字符串

@@ -1,7 +1,9 @@
+import { useSettingSubmitCallbacks } from "@/components/settings/use-setting-submit-callbacks";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
 	DialogContent,
+	DialogDescription,
 	DialogFooter,
 	DialogHeader,
 	DialogTitle,
@@ -17,7 +19,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { type Setting, useUpdateSetting } from "@/hooks/use-settings";
-import { useToastActions } from "@/hooks/use-toast";
 import type { SettingType } from "@/lib/constants";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useEffect, useMemo } from "react";
@@ -56,7 +57,6 @@ interface SettingEditDialogProps {
 }
 
 export function SettingEditDialog({ setting, open, onOpenChange }: SettingEditDialogProps) {
-	const { toastSuccess, toastError } = useToastActions();
 	const updateSetting = useUpdateSetting();
 	const { t } = useTranslation();
 	// 18-04：按声明类型校验（Int/Bool/Float 不再等到提交后吃后端 400）。
@@ -86,20 +86,12 @@ export function SettingEditDialog({ setting, open, onOpenChange }: SettingEditDi
 		}
 	}, [open, form]);
 
+	// 18-17：成功关窗 + 提示的三处样板收敛到域内 helper。
+	const callbacks = useSettingSubmitCallbacks(onOpenChange, "更新成功", "更新失败");
+
 	const onSubmit = (values: SettingFormValues) => {
 		if (!setting) return;
-		updateSetting.mutate(
-			{ key: setting.key, value: values.value },
-			{
-				onSuccess: () => {
-					onOpenChange(false);
-					toastSuccess("更新成功");
-				},
-				onError: (error) => {
-					toastError("更新失败", error);
-				},
-			},
-		);
+		updateSetting.mutate({ key: setting.key, value: values.value }, callbacks);
 	};
 
 	return (
@@ -107,6 +99,11 @@ export function SettingEditDialog({ setting, open, onOpenChange }: SettingEditDi
 			<DialogContent className="sm:max-w-[500px]">
 				<DialogHeader className="space-y-3">
 					<DialogTitle>编辑设置</DialogTitle>
+					{/* 18-12：补上下文——同时编辑多项时明确当前改的是哪个键、什么类型。 */}
+					<DialogDescription className="flex items-center gap-2">
+						<span className="font-mono">{setting?.key}</span>
+						<span className="rounded-full bg-muted px-2 py-0.5 text-xs">{setting?.type}</span>
+					</DialogDescription>
 				</DialogHeader>
 				<Form {...form}>
 					<form onSubmit={form.handleSubmit(onSubmit)}>

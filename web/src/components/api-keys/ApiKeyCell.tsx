@@ -1,11 +1,10 @@
 import { MidEllipsis } from "@/components/mid-ellipsis";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { type ApiKey, apiKeyKeys, fetchApiKeyDetail, useApiKeyDetail } from "@/hooks/use-api-keys";
+import { type ApiKey, fetchApiKeyDetail, useApiKeyDetail } from "@/hooks/use-api-keys";
 import { useToastActions } from "@/hooks/use-toast";
-import { useQueryClient } from "@tanstack/react-query";
 import { Copy, Eye, EyeOff, KeyRound } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 interface ApiKeyCellProps {
@@ -16,25 +15,32 @@ interface ApiKeyCellProps {
 export function ApiKeyCell({ apiKey }: ApiKeyCellProps) {
 	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
-	const queryClient = useQueryClient();
 	const [showKey, setShowKey] = useState(false);
 
 	// 仅在展示明文时拉取详情，避免列表加载即解密全部密钥。
-	const { data: detail, isLoading: detailLoading } = useApiKeyDetail(showKey ? apiKey.id : null);
+	const {
+		data: detail,
+		isLoading: detailLoading,
+		isError,
+		error,
+	} = useApiKeyDetail(showKey ? apiKey.id : null);
 	const effectiveShowKey = showKey && !detailLoading && detail?.id === apiKey.id;
+
+	// 17-09：拉取失败此前只静默停在掩码，用户会以为按钮失灵；补一次错误提示。
+	const reportedErrorId = useRef<number | null>(null);
+	useEffect(() => {
+		if (!isError || reportedErrorId.current === apiKey.id) return;
+		reportedErrorId.current = apiKey.id;
+		toastError(t("common.loadFailed"), error as Error);
+	}, [isError, error, apiKey.id, t, toastError]);
 
 	const handleCopy = async () => {
 		try {
-			// 已展开的用已加载明文，否则命令式拉取详情。
+			// 已展开的用已加载明文；否则直接请求（17-10：明文不进任何查询缓存）。
 			const plain =
 				effectiveShowKey && detail
 					? detail.key
-					: (
-							await queryClient.fetchQuery({
-								queryKey: apiKeyKeys.detail(apiKey.id),
-								queryFn: () => fetchApiKeyDetail(apiKey.id),
-							})
-						).key;
+					: await fetchApiKeyDetail(apiKey.id).then((d) => d.key);
 			await navigator.clipboard.writeText(plain);
 			toastSuccess(t("common.copiedToClipboard"));
 		} catch (error) {

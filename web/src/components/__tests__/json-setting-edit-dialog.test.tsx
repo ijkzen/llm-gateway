@@ -86,7 +86,7 @@ describe("JsonSettingEditDialog", () => {
 		);
 	});
 
-	it("对象模式：展示键值两列，空键行保存时被丢弃", () => {
+	it("对象模式：空键行保存被拦截并提示（18-13 不再静默丢弃）", () => {
 		render(
 			<JsonSettingEditDialog
 				open
@@ -97,13 +97,35 @@ describe("JsonSettingEditDialog", () => {
 		expect(screen.getByDisplayValue("X-A")).toBeInTheDocument();
 		expect(screen.getByDisplayValue("X-B")).toBeInTheDocument();
 
-		// 清空第一行键 → 保存时该行丢弃。
+		// 清空第一行键 → 保存被拦下，提示空键，不发请求。
 		fireEvent.change(screen.getByDisplayValue("X-A"), { target: { value: "" } });
 		fireEvent.click(screen.getByRole("button", { name: "保存" }));
+		expect(mocks.updateMutate).not.toHaveBeenCalled();
+		expect(screen.getByText("键不能为空，请补全或删除该行")).toBeTruthy();
+
+		// 补回键名后保存成功（第一行的键输入框）。
+		const keyInputs = screen.getAllByPlaceholderText("键");
+		fireEvent.change(keyInputs[0] as HTMLElement, { target: { value: "X-C" } });
+		fireEvent.click(screen.getByRole("button", { name: "保存" }));
 		expect(mocks.updateMutate).toHaveBeenCalledWith(
-			{ key: "downstream_request_header_allow_list", value: '{"X-B":"2"}' },
+			{ key: "downstream_request_header_allow_list", value: '{"X-C":"1","X-B":"2"}' },
 			expect.anything(),
 		);
+	});
+
+	it("对象模式：重复键保存被拦截（18-13 不再静默覆盖）", () => {
+		render(
+			<JsonSettingEditDialog
+				open
+				onOpenChange={vi.fn()}
+				setting={makeSetting('{"X-A":"1","X-B":"2"}')}
+			/>,
+		);
+		// 把第二行键改成与第一行相同。
+		fireEvent.change(screen.getByDisplayValue("X-B"), { target: { value: "X-A" } });
+		fireEvent.click(screen.getByRole("button", { name: "保存" }));
+		expect(mocks.updateMutate).not.toHaveBeenCalled();
+		expect(screen.getByText(/X-A.*重复/)).toBeTruthy();
 	});
 
 	it("嵌套 JSON 退回原文编辑并原样保存", () => {

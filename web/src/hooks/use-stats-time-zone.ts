@@ -1,7 +1,8 @@
 import { useSettings } from "@/hooks/use-settings";
+import { SETTING_KEY_TIMEZONE } from "@/i18n";
 
-/** 设置表时区键（与后端 app_settings::KEY_TIMEZONE 同值）。 */
-export const STATS_TIME_ZONE_KEY = "timezone";
+/** 设置表时区键（19-18：单源于 i18n/index，避免多处字面量漂移）。 */
+export const STATS_TIME_ZONE_KEY = SETTING_KEY_TIMEZONE;
 /** 缺省与后端 timezone_sync 一致（Asia/Shanghai）。 */
 export const DEFAULT_STATS_TIME_ZONE = "Asia/Shanghai";
 

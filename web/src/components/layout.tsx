@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLogout, useMe } from "@/hooks/use-auth";
+import { useSyncBackendLocale } from "@/hooks/use-locale";
 import { fetchHealth } from "@/lib/api";
 import { NAV_GROUPS } from "@/lib/pages";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -46,6 +47,8 @@ export default function AppLayout() {
 	const queryClient = useQueryClient();
 	const { data: me } = useMe();
 	const logout = useLogout();
+	// 20-10：已认证后以后端 language 设置为准对齐前端语言（多客户端共用同一网关）。
+	useSyncBackendLocale();
 	// 版本号动态读取（/api/healthz），发布新版无需改前端代码；取不到时只显示应用名。
 	const { data: health } = useQuery({
 		queryKey: ["health"],

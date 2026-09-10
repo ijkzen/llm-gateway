@@ -1,3 +1,4 @@
+import { useSettingSubmitCallbacks } from "@/components/settings/use-setting-submit-callbacks";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -8,9 +9,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { type Setting, useUpdateSetting } from "@/hooks/use-settings";
-import { useToastActions } from "@/hooks/use-toast";
 import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 /** 结构化编辑模式：字符串数组 / 键值对对象；不符（嵌套等）退回原文编辑。 */
 type JsonEditMode = "array" | "object" | "raw";
@@ -55,11 +56,15 @@ interface JsonSettingEditDialogProps {
 }
 
 export function JsonSettingEditDialog({ setting, open, onOpenChange }: JsonSettingEditDialogProps) {
-	const { toastSuccess, toastError } = useToastActions();
+	const { t } = useTranslation();
 	const updateSetting = useUpdateSetting();
 	const [mode, setMode] = useState<JsonEditMode>("raw");
 	const [rows, setRows] = useState<JsonRow[]>([]);
 	const [rawValue, setRawValue] = useState("");
+	/** 结构化模式的保存前校验提示（18-13：空条目/空键/重复键不再静默丢弃）。 */
+	const [rowError, setRowError] = useState<string | null>(null);
+	// 18-17：成功关窗 + 提示的三处样板收敛到域内 helper。
+	const callbacks = useSettingSubmitCallbacks(onOpenChange, "更新成功", "更新失败");
 
 	useEffect(() => {
 		if (open && setting) {
@@ -82,29 +87,34 @@ export function JsonSettingEditDialog({ setting, open, onOpenChange }: JsonSetti
 		if (!setting) return;
 		let value: string;
 		if (mode === "array") {
-			value = JSON.stringify(rows.map((row) => row.value.trim()).filter((v) => v !== ""));
+			// 18-13：空条目此前被静默丢弃——先提示，避免用户以为保存成功。
+			if (rows.some((row) => row.value.trim() === "")) {
+				setRowError(t("settings.jsonEmptyEntry"));
+				return;
+			}
+			value = JSON.stringify(rows.map((row) => row.value.trim()));
 		} else if (mode === "object") {
+			const keys = rows.map((row) => row.key.trim());
+			if (keys.some((key) => key === "")) {
+				setRowError(t("settings.jsonEmptyKey"));
+				return;
+			}
+			// 18-13：重复键此前是「后者覆盖前者」的静默丢数据。
+			const duplicate = keys.find((key, i) => keys.indexOf(key) !== i);
+			if (duplicate !== undefined) {
+				setRowError(t("settings.jsonDuplicateKey", { key: duplicate }));
+				return;
+			}
 			const obj: Record<string, string> = {};
-			for (const row of rows) {
-				const key = row.key.trim();
-				if (key) obj[key] = row.value;
+			for (const [i, key] of keys.entries()) {
+				obj[key] = rows[i]?.value ?? "";
 			}
 			value = JSON.stringify(obj);
 		} else {
 			value = rawValue.trim();
 		}
-		updateSetting.mutate(
-			{ key: setting.key, value },
-			{
-				onSuccess: () => {
-					onOpenChange(false);
-					toastSuccess("更新成功");
-				},
-				onError: (error) => {
-					toastError("更新失败", error);
-				},
-			},
-		);
+		setRowError(null);
+		updateSetting.mutate({ key: setting.key, value }, callbacks);
 	};
 
 	return (
@@ -179,6 +189,9 @@ export function JsonSettingEditDialog({ setting, open, onOpenChange }: JsonSetti
 							<Plus className="size-4" />
 							新增
 						</Button>
+					) : null}
+					{mode !== "raw" && rowError ? (
+						<p className="mt-2 text-sm text-destructive">{rowError}</p>
 					) : null}
 					<DialogFooter className="gap-2">
 						<Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

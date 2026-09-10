@@ -5,6 +5,9 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
+// 20-09：显式初始化 i18n（此前仅靠 App→use-locale 的副作用链触发，
+// 入口重构会静默丢失初始化）。
+import "@/i18n";
 import "./index.css";
 import "./sticky-header.css";
 

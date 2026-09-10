@@ -68,7 +68,7 @@ export function ProviderModelSection({
 					/>
 					<Button size="sm" onClick={() => onAdd(provider)}>
 						<Plus className="mr-2 size-4" />
-						添加
+						{t("common.add")}
 					</Button>
 				</div>
 			</div>

@@ -83,6 +83,13 @@ export function CronJobEditDialog({ job, open, onOpenChange }: CronJobEditDialog
 					toastSuccess(t("common.updateSuccess"));
 				},
 				onError: (error) => {
+					// 18-06：表达式语法只有后端会解析——把「表达式无效/不能为空」类错误
+					// 落到字段上，用户不必从泛化 toast 里猜错在哪。
+					const message = error instanceof Error ? error.message : String(error);
+					if (message.includes("表达式")) {
+						form.setError("expression", { type: "server", message });
+						return;
+					}
 					toastError(t("common.updateFailed"), error);
 				},
 			},

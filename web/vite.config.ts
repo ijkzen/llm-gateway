@@ -29,7 +29,9 @@ export default defineConfig({
 		rollupOptions: {
 			output: {
 				manualChunks(id) {
-					if (id.includes("node_modules/react-router-dom")) return "router";
+					// 19-21：核心包是 node_modules/react-router/，只匹配 react-router-dom
+					// 会分出一个空壳 chunk，路由核心仍落默认包。
+					if (id.includes("node_modules/react-router")) return "router";
 					if (id.includes("node_modules/@tanstack/react-query")) return "query";
 					if (id.includes("node_modules/@radix-ui")) return "ui";
 					if (id.includes("node_modules/lucide-react")) return "icons";

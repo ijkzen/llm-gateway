@@ -36,8 +36,9 @@ vi.mock("@/hooks/use-provider-models", async () => {
 	);
 	return {
 		...actual,
-		useProviderModels: () => ({
-			data: mocks.models,
+		// 17-12：测速弹窗改用按供应商作用域的 hook（providerId 为 null 时不查询）。
+		useProviderModelsScoped: (providerId: number | null) => ({
+			data: providerId === null ? [] : mocks.models,
 			isLoading: mocks.modelsLoading,
 			isError: false,
 		}),
@@ -372,12 +373,8 @@ function renderSpeedTestDialog(open = true) {
 
 describe("ProviderSpeedTestDialog 测速弹窗", () => {
 	it("列出该供应商名下的模型，每行左侧名称、右侧测试按钮", () => {
-		mocks.models = [
-			makeModel(),
-			makeModel({ modelId: 2, providerModelId: "gpt-4o-mini" }),
-			// 其他供应商的模型不应出现。
-			makeModel({ modelId: 3, providerId: 99, providerModelId: "claude" }),
-		];
+		// 17-12：过滤改由后端作用域端点承担，hook 只返回本供应商的模型。
+		mocks.models = [makeModel(), makeModel({ modelId: 2, providerModelId: "gpt-4o-mini" })];
 		renderSpeedTestDialog();
 
 		expect(screen.getByRole("dialog")).toBeTruthy();
@@ -385,7 +382,6 @@ describe("ProviderSpeedTestDialog 测速弹窗", () => {
 		expect(screen.getByText("OpenAI · 模型测速")).toBeTruthy();
 		expect(screen.getByText("gpt-4o")).toBeTruthy();
 		expect(screen.getByText("gpt-4o-mini")).toBeTruthy();
-		expect(screen.queryByText("claude")).toBeNull();
 		const testButtons = screen.getAllByRole("button", { name: "测试" });
 		expect(testButtons).toHaveLength(2);
 	});

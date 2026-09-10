@@ -104,6 +104,17 @@ const SidebarProvider = React.forwardRef<
 		// Adds a keyboard shortcut to toggle the sidebar.
 		React.useEffect(() => {
 			const handleKeyDown = (event: KeyboardEvent) => {
+				// 19-09：输入框内的 Ctrl/Cmd+B 属于编辑操作；长按重复触发也应忽略。
+				if (event.repeat) return;
+				const target = event.target as HTMLElement | null;
+				if (
+					target?.isContentEditable ||
+					target?.tagName === "INPUT" ||
+					target?.tagName === "TEXTAREA" ||
+					target?.tagName === "SELECT"
+				) {
+					return;
+				}
 				if (event.key === SIDEBAR_KEYBOARD_SHORTCUT && (event.metaKey || event.ctrlKey)) {
 					event.preventDefault();
 					toggleSidebar();

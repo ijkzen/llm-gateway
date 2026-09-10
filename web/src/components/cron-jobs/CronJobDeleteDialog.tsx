@@ -22,7 +22,7 @@ export function CronJobDeleteDialog({ jobName, open, onOpenChange }: CronJobDele
 				toastSuccess(t("common.deleteSuccess"));
 			},
 			onError: (error) => {
-				onOpenChange(false);
+				// 18-08：失败保持弹窗打开（与其余三个删除弹窗一致），用户能看到出错上下文。
 				toastError(t("common.deleteFailed"), error);
 			},
 		});

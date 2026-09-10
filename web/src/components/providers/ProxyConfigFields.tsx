@@ -19,23 +19,31 @@ interface ProxyLike {
 }
 
 /**
- * proxy 校验规则（superRefine 回调）：开启时地址必填且需 http:// 开头。
+ * proxy 校验规则（superRefine 回调）：开启时地址必填、需 http:// 开头且不含
+ * `user:pass@`（与后端 `validate_proxy` 同口径，避免前端放行后由服务端打回）。
  * 与本组件的渲染字段同址——供应商编辑弹窗与模型详情弹窗共用同一规则。
  */
 export function proxySuperRefine<T extends ProxyLike>(t: (key: string) => string) {
 	return (values: T, ctx: z.RefinementCtx) => {
 		if (!values.proxyEnabled) return;
-		if (!values.proxyAddr.trim()) {
+		const addr = values.proxyAddr.trim();
+		if (!addr) {
 			ctx.addIssue({
 				code: z.ZodIssueCode.custom,
 				path: ["proxyAddr"],
 				message: t("providers.proxyAddrRequired"),
 			});
-		} else if (!values.proxyAddr.trim().startsWith("http://")) {
+		} else if (!addr.startsWith("http://")) {
 			ctx.addIssue({
 				code: z.ZodIssueCode.custom,
 				path: ["proxyAddr"],
 				message: t("providers.proxyAddrInvalid"),
+			});
+		} else if (addr.includes("@")) {
+			ctx.addIssue({
+				code: z.ZodIssueCode.custom,
+				path: ["proxyAddr"],
+				message: t("providers.proxyAddrAuthUnsupported"),
 			});
 		}
 	};

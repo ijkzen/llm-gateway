@@ -1,13 +1,11 @@
-import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
 import { ErrorState } from "@/components/error-state";
-import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
 import { ProviderModelRaceCard } from "@/components/provider-model-race/ProviderModelRaceCard";
 import { ProviderRaceCard } from "@/components/provider-race/ProviderRaceCard";
 import { initialWindowFromUrl } from "@/components/race-window-control";
 import {
-	StatsSection,
+	AnalysisSections,
 	sectionGranularity,
 	sectionWindow,
 	useSectionSubtitle,
@@ -128,70 +126,21 @@ export default function ApiKeyOverviewPage() {
 				/>
 			)}
 
-			{/* 调用分析：独立时间段（CallAnalysisCard 自带卡片壳） */}
+			{/* 调用 / Token / 性能与可靠性分析：各自独立时间段 */}
 			{keyName !== null && (
-				<StatsSection
+				<AnalysisSections
 					now={now}
-					windowState={windows.call}
-					onWindowChange={setWindow("call")}
-					status={{
-						isLoading: callCharts.isLoading,
-						isError: callCharts.isError || !callCharts.data,
-						onRetry: () => callCharts.refetch(),
+					windows={windows}
+					onWindowChange={setWindow}
+					granularities={{
+						call: callGranularity,
+						token: tokenGranularity,
+						insight: insightGranularity,
 					}}
-				>
-					{callCharts.data && (
-						<CallAnalysisCard
-							charts={callCharts.data}
-							subtitle={subtitle(windows.call, now)}
-							granularity={callGranularity}
-						/>
-					)}
-				</StatsSection>
-			)}
-
-			{/* Token 分析：独立时间段（TokenAnalysisCard 自带卡片壳） */}
-			{keyName !== null && (
-				<StatsSection
-					now={now}
-					windowState={windows.token}
-					onWindowChange={setWindow("token")}
-					status={{
-						isLoading: tokenCharts.isLoading,
-						isError: tokenCharts.isError || !tokenCharts.data,
-						onRetry: () => tokenCharts.refetch(),
-					}}
-				>
-					{tokenCharts.data && (
-						<TokenAnalysisCard
-							charts={tokenCharts.data}
-							subtitle={subtitle(windows.token, now)}
-							granularity={tokenGranularity}
-						/>
-					)}
-				</StatsSection>
-			)}
-
-			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳） */}
-			{keyName !== null && (
-				<StatsSection
-					now={now}
-					windowState={windows.insight}
-					onWindowChange={setWindow("insight")}
-					status={{
-						isLoading: insightQuery.isLoading,
-						isError: insightQuery.isError || !insightQuery.data,
-						onRetry: () => insightQuery.refetch(),
-					}}
-				>
-					{insightQuery.data && (
-						<InsightAnalysisCard
-							data={insightQuery.data}
-							subtitle={subtitle(windows.insight, now)}
-							granularity={insightGranularity}
-						/>
-					)}
-				</StatsSection>
+					callCharts={callCharts}
+					tokenCharts={tokenCharts}
+					insight={insightQuery}
+				/>
 			)}
 
 			{/* 排行：该 key 用到的虚拟模型 / 供应商 / 模型（各自独立时间窗 + 行深链） */}

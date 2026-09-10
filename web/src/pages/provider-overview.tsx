@@ -1,10 +1,9 @@
-import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
 import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
 import { ErrorState } from "@/components/error-state";
-import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
 import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
+import { initialWindowFromUrl } from "@/components/race-window-control";
 import {
 	type RaceWindowState,
 	raceWindowBounds,
@@ -12,8 +11,8 @@ import {
 } from "@/components/race-window-control";
 import { SortableMetricTable, useRaceSort } from "@/components/sortable-metric-table";
 import {
+	AnalysisSections,
 	CardStatsSection,
-	StatsSection,
 	sectionGranularity,
 	sectionWindow,
 	useSectionSubtitle,
@@ -28,8 +27,9 @@ import { useProviderMetrics } from "@/hooks/use-stats-metrics";
 import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import { useUsageEstimate } from "@/hooks/use-usage-estimate";
 import { Boxes } from "lucide-react";
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 const SECTION_KEYS = ["metrics", "call", "token", "race", "insight"] as const;
 
@@ -75,6 +75,9 @@ function InternalModelRaceTable({
 export default function ProviderOverviewPage() {
 	const { t } = useTranslation();
 	const { providerId: providerIdParam } = useParams();
+	const [searchParams] = useSearchParams();
+	// 16-09：排行卡与区块共享同一 URL 初始窗（此前排行卡固定当天，深链时不一致）。
+	const urlInitial = useMemo(() => initialWindowFromUrl(searchParams), [searchParams]);
 	const navigate = useNavigate();
 	const providerId = Number.parseInt(providerIdParam ?? "", 10);
 	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS);
@@ -167,68 +170,26 @@ export default function ProviderOverviewPage() {
 				}
 			/>
 
-			{/* 调用分析：独立时间段（CallAnalysisCard 自带卡片壳） */}
-			<StatsSection
+			{/* 调用 / Token / 性能与可靠性分析：各自独立时间段 */}
+			<AnalysisSections
 				now={now}
-				windowState={windows.call}
-				onWindowChange={setWindow("call")}
-				status={{
-					isLoading: callCharts.isLoading,
-					isError: callCharts.isError || !callCharts.data,
-					onRetry: () => callCharts.refetch(),
+				windows={windows}
+				onWindowChange={setWindow}
+				granularities={{
+					call: callGranularity,
+					token: tokenGranularity,
+					insight: insightGranularity,
 				}}
-			>
-				{callCharts.data && (
-					<CallAnalysisCard
-						charts={callCharts.data}
-						subtitle={subtitle(windows.call, now)}
-						granularity={callGranularity}
-					/>
-				)}
-			</StatsSection>
-
-			{/* Token 分析：独立时间段（TokenAnalysisCard 自带卡片壳） */}
-			<StatsSection
-				now={now}
-				windowState={windows.token}
-				onWindowChange={setWindow("token")}
-				status={{
-					isLoading: tokenCharts.isLoading,
-					isError: tokenCharts.isError || !tokenCharts.data,
-					onRetry: () => tokenCharts.refetch(),
-				}}
-			>
-				{tokenCharts.data && (
-					<TokenAnalysisCard
-						charts={tokenCharts.data}
-						subtitle={subtitle(windows.token, now)}
-						granularity={tokenGranularity}
-					/>
-				)}
-			</StatsSection>
-
-			{/* 性能与可靠性分析：独立时间段（InsightAnalysisCard 自带卡片壳） */}
-			<StatsSection
-				now={now}
-				windowState={windows.insight}
-				onWindowChange={setWindow("insight")}
-				status={{
-					isLoading: insightQuery.isLoading,
-					isError: insightQuery.isError || !insightQuery.data,
-					onRetry: () => insightQuery.refetch(),
-				}}
-			>
-				{insightQuery.data && (
-					<InsightAnalysisCard
-						data={insightQuery.data}
-						subtitle={subtitle(windows.insight, now)}
-						granularity={insightGranularity}
-					/>
-				)}
-			</StatsSection>
+				callCharts={callCharts}
+				tokenCharts={tokenCharts}
+				insight={insightQuery}
+			/>
 
 			{/* API Key 赛马：独立时间段（可靠性分析之下、内部模型赛马之上） */}
-			<ApiKeyRaceCard filter={Number.isFinite(providerId) ? { providerId } : undefined} />
+			<ApiKeyRaceCard
+				filter={Number.isFinite(providerId) ? { providerId } : undefined}
+				initialWindow={urlInitial}
+			/>
 
 			{/* 供应商内部模型赛马：独立时间段 */}
 			<CardStatsSection

@@ -8,6 +8,8 @@
  * - 历史周期（offset<0）/未来周期（offset>0）：[周期起点, 下一周期起点) 半开区间。
  */
 
+import i18n from "@/i18n";
+
 export type RacePeriod = "day" | "week" | "month" | "year";
 
 /** 图表桶粒度（透传给 /api/stats/charts 的 granularity 参数）。 */
@@ -257,7 +259,15 @@ export function formatPeriodLabel(
 	const bounds = periodBounds(period, offset, now, timeZone);
 	const startMs = bounds.startTime;
 	const isCurrent = bounds.endTime === now;
-	const currentSuffix = isCurrent ? (locale === "zh" ? "（当前）" : " (current)") : "";
+	// 20-04：中文文案统一从 locales 取（time.*），不再在代码里手写；
+	// 英文侧保留各自 Intl/手写格式（与既有断言一致）。
+	const tr = (key: string, opts: Record<string, unknown>) =>
+		i18n.getFixedT(null, "translation")(key, opts);
+	const currentSuffix = isCurrent
+		? locale === "zh"
+			? tr("time.currentSuffix", {})
+			: " (current)"
+		: "";
 	const start = new Date(startMs);
 
 	if (timeZone) {
@@ -265,45 +275,52 @@ export function formatPeriodLabel(
 		switch (period) {
 			case "day":
 				return locale === "zh"
-					? `${p.y}年${p.m}月${p.d}日${currentSuffix}`
+					? `${tr("time.yearMonth", { year: p.y, month: p.m }).replace(`${p.m}月`, `${p.m}月${p.d}日`)}${currentSuffix}`
 					: `${new Intl.DateTimeFormat("en-US", { timeZone, month: "short", day: "numeric" }).format(start)}${currentSuffix}`;
 			case "week":
 				return locale === "zh"
-					? `${p.y}年第${isoWeekNumberInTz(timeZone, startMs)}周${currentSuffix}`
+					? `${tr("time.yearWeek", { year: p.y, week: isoWeekNumberInTz(timeZone, startMs) })}${currentSuffix}`
 					: `Week ${isoWeekNumberInTz(timeZone, startMs)}, ${p.y}${currentSuffix}`;
 			case "month":
 				return locale === "zh"
-					? `${p.y}年${p.m}月${currentSuffix}`
+					? `${tr("time.yearMonth", { year: p.y, month: p.m })}${currentSuffix}`
 					: `${monthNameInTz(timeZone, startMs)} ${p.y}${currentSuffix}`;
 			case "year":
-				return locale === "zh" ? `${p.y}年${currentSuffix}` : `${p.y}${currentSuffix}`;
+				return locale === "zh"
+					? `${tr("time.year", { year: p.y })}${currentSuffix}`
+					: `${p.y}${currentSuffix}`;
 		}
 	}
 
 	switch (period) {
-		case "day":
+		case "day": {
+			const month = start.getMonth() + 1;
+			const tr = i18n.getFixedT(null, "translation");
 			return locale === "zh"
-				? `${start.getFullYear()}年${start.getMonth() + 1}月${start.getDate()}日${currentSuffix}`
+				? `${tr("time.monthDay", { month, day: start.getDate() }).replace(`${month}月`, `${start.getFullYear()}年${month}月`)}${currentSuffix}`
 				: `${start.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}${currentSuffix}`;
+		}
 		case "week": {
 			// 周数按 ISO 8601：周一为一周起点。
 			const weekNumber = isoWeekNumber(start);
 			return locale === "zh"
-				? `${start.getFullYear()}年第${weekNumber}周${currentSuffix}`
+				? `${i18n.getFixedT(null, "translation")("time.yearWeek", { year: start.getFullYear(), week: weekNumber })}${currentSuffix}`
 				: `Week ${weekNumber}, ${start.getFullYear()}${currentSuffix}`;
 		}
 		case "month":
 			return locale === "zh"
-				? `${start.getFullYear()}年${start.getMonth() + 1}月${currentSuffix}`
+				? `${i18n.getFixedT(null, "translation")("time.yearMonth", { year: start.getFullYear(), month: start.getMonth() + 1 })}${currentSuffix}`
 				: `${start.toLocaleDateString("en-US", { year: "numeric", month: "short" })}${currentSuffix}`;
 		case "year":
 			return locale === "zh"
-				? `${start.getFullYear()}年${currentSuffix}`
+				? `${i18n.getFixedT(null, "translation")("time.year", { year: start.getFullYear() })}${currentSuffix}`
 				: `${start.getFullYear()}${currentSuffix}`;
 	}
 }
 
-/** 自定义时间输入框的本地时间字符串（datetime-local 格式 yyyy-MM-ddTHH:mm）。 */
+/** 自定义时间输入框的本地时间字符串（datetime-local 格式 yyyy-MM-ddTHH:mm）。
+ *  固定按浏览器本地时区解释：`<input type="datetime-local">` 原生只认本地墙钟值，
+ *  无法承载设置表时区（16-08）；窗口边界本身已由 `defaultCustomWindow(tz)` 对齐。 */
 export function toLocalInputValue(ms: number): string {
 	const date = new Date(ms);
 	const pad = (n: number) => n.toString().padStart(2, "0");
@@ -423,8 +440,23 @@ export function formatDateTimeLabel(ms: number): string {
 	return `${date.getFullYear()}/${pad2(date.getMonth() + 1)}/${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
 }
 
-/** 自定义窗口默认值：开始 = 7 天前 0 点，结束 = 明天 0 点（覆盖「过去 7 天含今天」）。 */
-export function defaultCustomWindow(now: number): { startTime: number; endTime: number } {
+/**
+ * 自定义窗口默认值：开始 = 7 天前 0 点，结束 = 明天 0 点（覆盖「过去 7 天含今天」）。
+ *
+ * `timeZone` 为设置表口径时区（16-08）：预设周期的取整走该时区，自定义窗口也
+ * 必须一致，否则浏览器时区与设置表不同时两者整体偏移、与后端分桶不对齐。
+ * 缺省用浏览器本地时区（无设置来源的调用场景）。
+ */
+export function defaultCustomWindow(
+	now: number,
+	timeZone?: string,
+): { startTime: number; endTime: number } {
+	if (timeZone) {
+		const p = wallParts(timeZone, now);
+		const start = wallDayStart(timeZone, p.y, p.m, p.d - 7);
+		const end = wallDayStart(timeZone, p.y, p.m, p.d + 1);
+		return { startTime: start, endTime: end };
+	}
 	const start = new Date(now);
 	start.setDate(start.getDate() - 7);
 	start.setHours(0, 0, 0, 0);

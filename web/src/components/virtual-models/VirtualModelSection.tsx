@@ -1,4 +1,5 @@
 import { MidEllipsis } from "@/components/mid-ellipsis";
+import { CapabilityIcons } from "@/components/provider-models/CapabilityIcons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -10,7 +11,6 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
-import { ItemCapabilityIcons } from "@/components/virtual-models/ItemCapabilityIcons";
 import type { VirtualModel, VirtualModelItem } from "@/hooks/use-virtual-models";
 import { fallbackLabel, interfaceTypeLabel, loadBalancingLabel } from "@/lib/constants";
 import { cn } from "@/lib/utils";
@@ -69,7 +69,7 @@ function MemberCard({
 					<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 				</span>
 				<span data-static className="flex shrink-0 items-center">
-					<ItemCapabilityIcons item={item} className="shrink-0" />
+					<CapabilityIcons model={item} className="shrink-0" />
 				</span>
 			</div>
 			<p className="flex items-center gap-1.5 text-xs text-muted-foreground">

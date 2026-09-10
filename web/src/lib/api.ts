@@ -22,7 +22,6 @@ export class ApiError extends Error {
 	constructor(
 		message: string,
 		public readonly code: string,
-		public readonly statusCode?: number,
 	) {
 		super(message);
 		this.name = "ApiError";
@@ -61,6 +60,9 @@ export const beforeErrorHook: BeforeErrorHook = async (error) => {
 	return error;
 };
 
+/** 会话过期跳转前暂存来源路径的 sessionStorage 键（19-14：登录后回跳）。 */
+export const AUTH_REDIRECT_FROM_KEY = "lg.auth.from";
+
 /**
  * 全局 401 处理：会话过期时跳转登录页。
  * 认证接口本身（/api/auth/*）与登录页内的请求不触发跳转，避免死循环。
@@ -71,16 +73,40 @@ const afterResponseHook: AfterResponseHook = async (request, _options, response)
 		const isAuthEndpoint = url.pathname.startsWith("/api/auth/");
 		const onLoginPage = window.location.pathname.startsWith("/login");
 		if (!isAuthEndpoint && !onLoginPage) {
+			// 19-14：整页跳转会丢失 react-router 的 state.from，先落到 sessionStorage，
+			// 登录页从中恢复——会话过期后仍能回到原页面。
+			try {
+				window.sessionStorage.setItem(
+					AUTH_REDIRECT_FROM_KEY,
+					`${window.location.pathname}${window.location.search}`,
+				);
+			} catch {
+				// 隐私模式等禁用 storage：退化为不回跳，不影响跳转本身。
+			}
 			window.location.assign("/login");
 		}
 	}
 	return response;
 };
 
+/** 读取并清除会话过期时暂存的来源路径（19-14；读取即消费，避免长期残留）。 */
+export function readStoredRedirectFrom(): string | null {
+	if (typeof window === "undefined") return null;
+	try {
+		const value = window.sessionStorage.getItem(AUTH_REDIRECT_FROM_KEY);
+		if (value) window.sessionStorage.removeItem(AUTH_REDIRECT_FROM_KEY);
+		return value;
+	} catch {
+		return null;
+	}
+}
+
 export const api = ky.create({
 	prefixUrl: "/api",
 	timeout: 30000,
-	retry: 1,
+	// 19-13：HTTP 层不自带重试——重试统一由 react-query 的 `retry: 1` 承担
+	// （两层各一次会让单次失败打满 4 次请求）。
+	retry: 0,
 	hooks: {
 		afterResponse: [afterResponseHook],
 		beforeError: [beforeErrorHook],
@@ -120,7 +146,7 @@ export function apiCodeOfError(error: unknown): string | undefined {
  */
 export function userErrorMessage(error: unknown): string {
 	if (error instanceof DOMException && error.name === "AbortError") {
-		return i18n.t("error.requestAborted");
+		return i18n.t("error.aborted");
 	}
 	if (error instanceof TimeoutError) {
 		const method = error.request?.method ?? "";

@@ -1,3 +1,4 @@
+import { MidEllipsis } from "@/components/mid-ellipsis";
 import { BILLING_MODES, PROTOCOL_TYPES } from "@/components/providers/ProtocolIcon";
 import { ProxyConfigFields, proxySuperRefine } from "@/components/providers/ProxyConfigFields";
 import { Button } from "@/components/ui/button";
@@ -203,9 +204,12 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 			form.setValue("customHeader", JSON.stringify(merged));
 		}
 		const keys = editableExtraKeys(template.extra);
+		const templateExtra = parseExtra(template.extra);
 		const defaults: Record<string, string> = {};
 		for (const key of keys) {
-			defaults[key] = "";
+			// 17-17：模板键的非空默认值一并带出（此前一律置空，模板默认值会被丢弃）。
+			const value = templateExtra[key];
+			defaults[key] = typeof value === "string" ? value : "";
 		}
 		setExtraKeys(keys);
 		setExtraValues({ ...defaults });
@@ -310,11 +314,9 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 														className="flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted/60"
 													>
 														<Sparkles className="size-4 shrink-0 text-success" />
-														<span className="truncate">
-															{t("providers.applyTemplate")}{" "}
-															<span className="font-medium">{template.name}</span>{" "}
-															{t("providers.templateSuffix")}
-														</span>
+														<span className="shrink-0">{t("providers.applyTemplate")}</span>
+														<MidEllipsis className="min-w-0 font-medium" text={template.name} />
+														<span className="shrink-0">{t("providers.templateSuffix")}</span>
 													</button>
 												))}
 											</div>
@@ -341,7 +343,8 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 								name="apiKey"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel required>{t("providers.apiKey")}</FormLabel>
+										{/* 编辑态留空=不修改，故不标必填星号（避免误导必须重填）。 */}
+										<FormLabel required={!isEdit}>{t("providers.apiKey")}</FormLabel>
 										<FormControl>
 											<Input
 												type="password"

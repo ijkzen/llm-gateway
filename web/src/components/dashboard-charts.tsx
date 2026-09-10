@@ -7,6 +7,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ModelValue, TrendPoint } from "@/hooks/use-dashboard-stats";
 import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
+import i18n from "@/i18n";
 import type { ChartGranularity } from "@/lib/race-period";
 import { type Locale, cn, localeOf, middleEllipsis, topWithOther } from "@/lib/utils";
 import { useState } from "react";
@@ -26,7 +27,7 @@ import {
 } from "recharts";
 import type { PieSectorDataItem } from "recharts/types/polar/Pie";
 
-export const CHART_COLORS = [
+const CHART_COLORS = [
 	"hsl(var(--chart-1))",
 	"hsl(var(--chart-2))",
 	"hsl(var(--chart-3))",
@@ -50,19 +51,26 @@ const MONTHS_EN = [
 	"Dec",
 ] as const;
 
-export const OTHER_LABEL = "其他";
+/** Top10+其他聚合行的内部哨兵 modelId：只作数据区分，实际展示文案走 `otherLabel(t)`。 */
+const OTHER_LABEL = "其他";
 
 /** 当前语言的「其他」标签（Top N + 其他聚合项）；翻译函数由调用方注入。 */
 export function otherLabel(t: (key: string) => string): string {
 	return t("dashboard.other");
 }
 
-export function chartColorAt(index: number): string {
+/** X 轴标签密度：约每 6 个点显示一个标签（避免 24 点小时图过密 / 7 点周图过疏）。
+ *  折线图（dashboard-charts）与全部 insight 图共用同一口径（16-12）。 */
+export function labelInterval(count: number): number {
+	return Math.max(0, Math.floor(count / 6) - 1);
+}
+
+function chartColorAt(index: number): string {
 	return CHART_COLORS[index % CHART_COLORS.length] ?? "hsl(var(--chart-1))";
 }
 
 /** 展示标签：供应商・模型（供应商缺失时退化为模型名）。 */
-export function modelLabel(item: Pick<ModelValue, "providerName" | "modelId">): string {
+function modelLabel(item: Pick<ModelValue, "providerName" | "modelId">): string {
 	return item.providerName ? `${item.providerName}・${item.modelId}` : item.modelId;
 }
 
@@ -115,22 +123,26 @@ export function formatBucketLabel(
 			return `${hour.toString().padStart(2, "0")}:00`;
 		}
 		case "day":
-			return zh ? `${month}月${day}日` : `${MONTHS_EN[month - 1]} ${day}`;
+			// 20-04：中文格式统一从 locales 的 time.* 取。
+			return zh ? i18n.t("time.monthDay", { month, day }) : `${MONTHS_EN[month - 1]} ${day}`;
 		case "month":
-			return zh ? `${year}年${month}月` : `${MONTHS_EN[month - 1]} ${year}`;
+			return zh ? i18n.t("time.yearMonth", { year, month }) : `${MONTHS_EN[month - 1]} ${year}`;
 		case "year":
-			return zh ? `${year}年` : `${year}`;
+			return zh ? i18n.t("time.year", { year }) : `${year}`;
 	}
 }
 
 /** 由相邻桶间距推断粒度：1h=小时桶，24h=天桶，否则月桶。 */
-export function inferGranularity(bucketStart: number[]): "hour" | "day" | "month" {
+export function inferGranularity(bucketStart: number[]): ChartGranularity {
 	const first = bucketStart[0];
 	const second = bucketStart[1];
 	if (first !== undefined && second !== undefined) {
 		const gap = second - first;
 		if (gap <= 3_600_000) return "hour";
 		if (gap <= 24 * 3_600_000) return "day";
+		// 16-14：>90 天按年桶（与 chartGranularity 的 >366d→year 口径对齐）；
+		// 此前一律落 month，属未爆弹（当前调用方都显式传粒度）。
+		if (gap > 90 * 24 * 3_600_000) return "year";
 	}
 	return "month";
 }
@@ -160,8 +172,6 @@ export function TrendLineChart({
 		label: formatBucketLabel(point.bucketStart, resolvedGranularity, localeOf(i18n.language), tz),
 		value: point.value,
 	}));
-	// 标签密度自适应：约每 6 个点显示一个标签，避免 24 点小时图过密 / 7 点周图过疏。
-	const labelInterval = Math.max(0, Math.floor(chartData.length / 6) - 1);
 	return (
 		<ChartContainer
 			config={{ value: { label, color: "hsl(var(--chart-1))" } }}
@@ -173,7 +183,7 @@ export function TrendLineChart({
 					dataKey="label"
 					tickLine={false}
 					axisLine={false}
-					interval={labelInterval}
+					interval={labelInterval(chartData.length)}
 					tickMargin={8}
 				/>
 				<YAxis

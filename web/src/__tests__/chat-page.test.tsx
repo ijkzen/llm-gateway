@@ -242,4 +242,58 @@ describe("ChatPage", () => {
 		selectModelAndSend("嗨");
 		await waitFor(() => expect(screen.getByText(/上游挂了/)).toBeInTheDocument());
 	});
+
+	it("流内 error 帧标记到气泡（21-02 回归）", async () => {
+		const errorFrame = new TextEncoder().encode(
+			`data: ${JSON.stringify({ error: { message: "转换失败：上游返回了非法 JSON" } })}\n\n`,
+		);
+		const { fetchMock } = mockStreamingFetch(
+			[
+				new TextDecoder().decode(sseFrame({ content: "部分内容" })),
+				new TextDecoder().decode(errorFrame),
+				"data: [DONE]\n\n",
+			],
+			false,
+			30,
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		renderPage();
+		selectModelAndSend("嗨");
+
+		// 已收内容保留，同时展示流内错误（此前静默忽略、内容戛然而止）。
+		await waitFor(() => expect(screen.getByText("部分内容")).toBeInTheDocument());
+		await waitFor(() => expect(screen.getByText(/非法 JSON/)).toBeInTheDocument());
+	});
+
+	it("SSE 多行 data 拼接为一个载荷（21-03）", async () => {
+		// 规范允许一个事件拆多行 data；载荷被拆开时仍应完整解析。
+		const payload = JSON.stringify({ choices: [{ delta: { content: "第一段" } }] });
+		const multiLine = new TextEncoder().encode(
+			`data: ${payload.slice(0, 20)}\ndata: ${payload.slice(20)}\n\n`,
+		);
+		const { fetchMock } = mockStreamingFetch(
+			[new TextDecoder().decode(multiLine), "data: [DONE]\n\n"],
+			false,
+			30,
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		renderPage();
+		selectModelAndSend("嗨");
+
+		await waitFor(() => expect(screen.getByText("第一段")).toBeInTheDocument());
+	});
+
+	it("畸形 JSON chunk 触发错误标记而非静默中断", async () => {
+		const { fetchMock } = mockStreamingFetch(
+			["data: {不是合法 JSON}\n\n", "data: [DONE]\n\n"],
+			false,
+			30,
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		renderPage();
+		selectModelAndSend("嗨");
+
+		// JSON.parse 抛错 → catch 路径标记错误（不静默）。
+		await waitFor(() => expect(document.querySelector(".text-destructive")).toBeTruthy());
+	});
 });

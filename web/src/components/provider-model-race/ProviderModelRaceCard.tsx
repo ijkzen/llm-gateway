@@ -1,6 +1,5 @@
-import { RaceCardShell, useRaceCardWindow } from "@/components/race-card-shell";
-import { type RaceWindowState, windowQueryString } from "@/components/race-window-control";
-import { SortableMetricTable, useRaceSort } from "@/components/sortable-metric-table";
+import { MetricRaceCard, raceHref } from "@/components/metric-race-card";
+import type { RaceWindowState } from "@/components/race-window-control";
 import { type ProviderModelRankItem, useProviderModelRace } from "@/hooks/use-provider-model-race";
 import { Boxes } from "lucide-react";
 import { useNavigate } from "react-router-dom";
@@ -8,6 +7,11 @@ import { useNavigate } from "react-router-dom";
 /** 名称列标签：供应商・模型（供应商缺失时退化为纯模型 ID）。 */
 function modelLabel(item: Pick<ProviderModelRankItem, "providerName" | "modelId">): string {
 	return item.providerName ? `${item.providerName}・${item.modelId}` : item.modelId;
+}
+
+/** 行可点判定：已删除（无主键）的历史聚合行不可点击。 */
+function isRowClickable(item: ProviderModelRankItem): boolean {
+	return item.modelPk !== null && item.modelPk !== undefined;
 }
 
 /**
@@ -26,45 +30,26 @@ export function ProviderModelRaceCard({
 	initialWindow?: RaceWindowState;
 }) {
 	const navigate = useNavigate();
-	const view = useRaceCardWindow(initialWindow);
-
-	// 排序：默认按总计 Token 降序；点击表头切换升/降。
-	const { sort, onSort } = useRaceSort();
-
-	const query = useProviderModelRace(view.window, sort, view.inView, undefined, apiKey);
-
-	const openModelOverview = (item: ProviderModelRankItem) => {
-		if (item.modelPk === null || item.modelPk === undefined) {
-			return;
-		}
-		navigate(
-			`/models/${item.modelPk}/overview?${windowQueryString(view.windowState, view.window)}`,
-		);
-	};
 
 	return (
-		<RaceCardShell
-			view={view}
+		<MetricRaceCard<ProviderModelRankItem>
 			icon={Boxes}
 			titleKey="dashboard.providerModelRace"
-			status={{
-				isLoading: query.isLoading,
-				isError: query.isError,
-				isEmpty: !query.data || query.data.items.length === 0,
-				onRetry: () => query.refetch(),
+			nameHeader="dashboard.providerModel"
+			initialWindow={initialWindow}
+			useQuery={(view, sort, inView) =>
+				useProviderModelRace(view.window, sort, inView, undefined, apiKey)
+			}
+			renderName={modelLabel}
+			rowKey={(item) => `${item.providerName}::${item.modelId}`}
+			onRowClick={(item, view) => {
+				if (item.modelPk === null || item.modelPk === undefined) {
+					return;
+				}
+				navigate(raceHref(`/models/${item.modelPk}/overview`, view.windowState, view.window));
 			}}
-		>
-			<SortableMetricTable
-				items={query.data?.items ?? []}
-				sort={sort}
-				onSort={onSort}
-				nameHeader="dashboard.providerModel"
-				renderName={modelLabel}
-				rowKey={(item) => `${item.providerName}::${item.modelId}`}
-				onRowClick={openModelOverview}
-				isRowClickable={(item) => item.modelPk !== null && item.modelPk !== undefined}
-				rowTitleKey="race.openModelDetail"
-			/>
-		</RaceCardShell>
+			isRowClickable={isRowClickable}
+			rowTitleKey="race.openModelDetail"
+		/>
 	);
 }

@@ -39,7 +39,8 @@ export function storedLocale(): Locale | null {
 	}
 }
 
-/** 初始语言：localStorage → 浏览器语言 → zh-CN。 */
+/** 初始语言：localStorage（有则用）→ 浏览器语言检测（中文→zh-CN，其余→en）。
+ *  zh-CN 仅作为 i18next 的 fallbackLng，不在此步产出。 */
 export function initialLocale(): Locale {
 	return storedLocale() ?? detectBrowserLocale();
 }

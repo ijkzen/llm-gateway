@@ -1,7 +1,8 @@
+import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { providerModelKeys } from "@/hooks/use-provider-models";
 import { virtualModelKeys } from "@/hooks/use-virtual-models";
 import { type ApiResponse, api, unwrap } from "@/lib/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
 
 export interface Provider {
 	id: number;
@@ -91,16 +92,6 @@ export function useProviderDetail(id: number | null) {
 	});
 }
 
-/** 简单防抖值（17-03：模板匹配逐键触发会放大为双请求）。 */
-function useDebouncedValue(value: string, delayMs: number): string {
-	const [debounced, setDebounced] = useState(value);
-	useEffect(() => {
-		const timer = setTimeout(() => setDebounced(value), delayMs);
-		return () => clearTimeout(timer);
-	}, [value, delayMs]);
-	return debounced;
-}
-
 /** 按 Base URL 匹配模板，返回全部命中（同一 host 可能有多个模板）；未命中返回空数组（后端 404 在此吞掉）。 */
 export function useMatchTemplate(baseUrl: string) {
 	// 17-03：请求本身会抛 HTTPError（ky 默认 throwHttpErrors），await 必须在 try
@@ -175,6 +166,9 @@ export function useDeleteProvider() {
 			queryClient.invalidateQueries({ queryKey: providerKeys.all });
 			// 删除供应商会级联清理虚拟模型成员，一并刷新。
 			queryClient.invalidateQueries({ queryKey: virtualModelKeys.all });
+			// 17-20：后端同时级联删除该供应商的模型，同步失效模型缓存——否则请求
+			// 日志页的模型筛选下拉会短暂列出已删除的模型。
+			queryClient.invalidateQueries({ queryKey: providerModelKeys.all });
 		},
 	});
 }

@@ -41,7 +41,10 @@ export function CronJobList({ jobs, selectedName, onSelect }: CronJobListProps) 
 			{groupedJobs.map(([group, groupJobs]) => (
 				<Card key={group}>
 					<CardHeader className="py-4">
-						<CardTitle className="text-sm font-medium text-muted-foreground">{group}</CardTitle>
+						<CardTitle className="text-sm font-medium text-muted-foreground">
+							{/* 20-05：未分组任务在英文界面显示 Default，存储值仍是后端种子值。 */}
+							{group === DEFAULT_GROUP ? t("cronJobs.defaultGroup") : group}
+						</CardTitle>
 					</CardHeader>
 					<CardContent className="p-2">
 						<ul className="space-y-1">

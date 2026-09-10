@@ -26,7 +26,12 @@ export default function ProvidersPage() {
 
 	// 默认选中第一个供应商（数据加载后尚未手动选择时）。
 	const [hasUserSelected, setHasUserSelected] = useState(false);
-	const effectiveSelectedId = hasUserSelected ? selectedId : (providers?.[0]?.id ?? null);
+	// 17-11：手动选中的供应商被删除（或列表刷新后消失）时回落到列表首个，
+	// 否则右侧详情会停在空白态。
+	const selectedExists =
+		selectedId !== null && (providers?.some((p) => p.id === selectedId) ?? false);
+	const effectiveSelectedId =
+		hasUserSelected && selectedExists ? selectedId : (providers?.[0]?.id ?? null);
 	const effectiveProvider = providers?.find((p) => p.id === effectiveSelectedId) ?? undefined;
 
 	if (isLoading) {

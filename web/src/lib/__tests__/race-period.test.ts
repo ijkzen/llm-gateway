@@ -183,7 +183,7 @@ describe("formatCompactPeriodLabel 紧凑周期标题", () => {
 		expect(formatCompactPeriodLabel("day", 1, NOW_MS)).toBe("2026/08/31");
 	});
 
-	it("周 → 2026-36W（当前周）", () => {
+	it("周 → 2026-35W（当前周）", () => {
 		// 2026-08-24 周一起点所在周 = ISO 第 35 周（formatPeriodLabel 已有断言）。
 		expect(formatCompactPeriodLabel("week", 0, NOW_MS)).toBe("2026-35W");
 		expect(formatCompactPeriodLabel("week", -1, NOW_MS)).toBe("2026-34W");
@@ -276,5 +276,26 @@ describe("periodBounds 指定 IANA 时区（设置表口径）", () => {
 		expect(formatPeriodLabel("day", 0, now, "zh", "Asia/Shanghai")).toBe("2026年3月17日（当前）");
 		expect(formatPeriodLabel("month", 0, now, "en", "Asia/Shanghai")).toBe("Mar 2026 (current)");
 		expect(formatCompactPeriodLabel("day", 0, now, "Asia/Shanghai")).toBe("2026/03/17");
+	});
+});
+
+describe("ISO 周界（16-15：简化公式的实际行为钉死）", () => {
+	// formatPeriodLabel 的周分支使用简化公式（1 月 1 日起算 + 首日星期偏移），
+	// 不是严格 ISO-8601（12/29-1/3 的归属年可能与 ISO 不同）。这里把实际行为
+	// 锁定，避免未来误以为已是严格 ISO 而改动展示口径。
+	it("跨年边界（12 月末 / 1 月初）不抛错且给出当周编号", () => {
+		const decEnd = new Date("2026-12-31T12:00:00+08:00").getTime();
+		const janStart = new Date("2027-01-01T12:00:00+08:00").getTime();
+		for (const ms of [decEnd, janStart]) {
+			const label = formatPeriodLabel("week", 0, ms, "zh");
+			expect(label).toMatch(/\d{4}年第\d+周/);
+		}
+	});
+
+	it("同一 ISO 周内两天给出一致的周编号", () => {
+		// 2026-08-25（周二）与 2026-08-30（周日）同属一周。
+		const tue = new Date("2026-08-25T12:00:00+08:00").getTime();
+		const sun = new Date("2026-08-30T12:00:00+08:00").getTime();
+		expect(formatPeriodLabel("week", 0, tue, "zh")).toBe(formatPeriodLabel("week", 0, sun, "zh"));
 	});
 });

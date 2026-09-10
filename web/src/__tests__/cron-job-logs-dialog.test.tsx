@@ -24,6 +24,30 @@ vi.mock("@/hooks/use-cron-job-logs", async (importOriginal) => {
 	};
 });
 
+vi.mock("@/lib/api", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@/lib/api")>();
+	return {
+		...actual,
+		// reset 分支的 fetchQuery 走真实 fetchRunLogs（不经过被 mock 的 hook），
+		// 把网络层替换成 mocks.runLogs 以驱动合并逻辑。
+		api: {
+			get: (path: string) => {
+				const runId = path.split("/").pop() ?? "";
+				return {
+					json: async () => ({
+						code: "0",
+						msg: "ok",
+						data: mocks.runLogs[runId] ?? [],
+					}),
+				};
+			},
+			post: () => ({ json: async () => ({ code: "0", msg: "ok" }) }),
+			put: () => ({ json: async () => ({ code: "0", msg: "ok" }) }),
+			delete: () => ({ json: async () => ({ code: "0", msg: "ok" }) }),
+		},
+	};
+});
+
 function makeLog(
 	seq: number,
 	level: "INFO" | "WARN" | "ERROR" = "INFO",
@@ -267,5 +291,77 @@ describe("CronJobLogsDialog", () => {
 
 		unmount();
 		expect(instance().closed).toBe(true);
+	});
+
+	it("run_started 清空旧日志并切换当前执行", () => {
+		renderDialog();
+		emitSnapshot("run-old", [makeLog(1, "INFO", "旧执行日志")]);
+		expect(screen.getByText("旧执行日志")).toBeInTheDocument();
+
+		act(() => {
+			instance().emit("run_started", {
+				kind: "run_started",
+				job_name: "example",
+				run_id: "run-new",
+				ts: "2026-08-13T09:00:00Z",
+			});
+		});
+
+		// 旧执行的日志被清空（新执行的实时区从空开始）。
+		expect(screen.queryByText("旧执行日志")).not.toBeInTheDocument();
+
+		// 新执行的日志正常接收。
+		emitLog("run-new", makeLog(1, "INFO", "新执行日志"));
+		expect(screen.getByText("新执行日志")).toBeInTheDocument();
+	});
+
+	it("reset 事件按 seq 合并重拉日志，不丢实时增量（18-02 回归）", async () => {
+		mocks.runLogs["run-r"] = [makeLog(1, "INFO", "拉回的一"), makeLog(2, "INFO", "拉回的二")];
+		renderDialog();
+		emitSnapshot("run-r", [makeLog(1, "INFO", "拉回的一")]);
+		// 拉取在途时又到了一条实时日志。
+		emitLog("run-r", makeLog(3, "INFO", "在途实时三"));
+
+		act(() => {
+			instance().emit("reset", {});
+		});
+
+		// 合并结果：拉回的 1/2 + 本地更靠后的 3，且不重复。
+		await screen.findByText("拉回的二");
+		expect(screen.getByText("在途实时三")).toBeInTheDocument();
+		expect(screen.getAllByText("拉回的一")).toHaveLength(1);
+	});
+
+	it("断开连接进入重连态（18-11 退避重连）", () => {
+		renderDialog();
+		emitSnapshot("run-x", [makeLog(1)]);
+
+		act(() => {
+			instance().onerror?.();
+		});
+		expect(screen.getByText("连接断开，正在重连…")).toBeInTheDocument();
+	});
+
+	it("多次重连失败后停止重试并提示刷新（18-11）", () => {
+		vi.useFakeTimers();
+		try {
+			renderDialog();
+			emitSnapshot("run-x", [makeLog(1)]);
+
+			// 连续失败超过上限（5）：每次失败后推进退避计时器，新一轮重建后继续失败。
+			for (let i = 0; i < 6; i += 1) {
+				act(() => {
+					const latest = MockEventSource.instances[MockEventSource.instances.length - 1];
+					latest?.onerror?.();
+				});
+				act(() => {
+					vi.advanceTimersByTime(60_000);
+				});
+			}
+
+			expect(screen.getByText(/实时连接已中断/)).toBeInTheDocument();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });

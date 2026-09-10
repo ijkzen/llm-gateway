@@ -186,6 +186,72 @@ describe("AddProviderModelsDialog 候选三态", () => {
 		expect((checkbox as HTMLButtonElement).disabled).toBe(true);
 	});
 
+	it("数字输入区点击/回车不触发整卡跳转（17-06 回归）", () => {
+		mocks.refreshMutate.mockImplementation((_args, opts) => {
+			opts.onSuccess([
+				makeCandidate({
+					providerModelId: "manual/only-model",
+					matchState: "manual",
+					contextLength: null,
+					maxOutputTokens: null,
+					reasoning: false,
+					toolUse: false,
+				}),
+			]);
+		});
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
+		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
+
+		// 自动添加页签下的两个数字输入。
+		const inputs = screen.getAllByRole("spinbutton");
+		const contextInput = required(inputs[0]);
+
+		// 点击输入框：不应冒泡到整卡 jump（否则切到手动 Tab、输入框被卸载）。
+		fireEvent.click(contextInput);
+		fireEvent.focus(contextInput);
+		expect(screen.getByRole("tab", { name: "自动添加" }).getAttribute("aria-selected")).toBe(
+			"true",
+		);
+		expect(screen.getAllByRole("spinbutton")).toHaveLength(2);
+
+		// 在输入框内回车同样不跳转，且仍可写入数值。
+		fireEvent.keyDown(contextInput, { key: "Enter" });
+		expect(screen.getByRole("tab", { name: "自动添加" }).getAttribute("aria-selected")).toBe(
+			"true",
+		);
+		fireEvent.change(contextInput, { target: { value: "8192" } });
+		expect((contextInput as HTMLInputElement).value).toBe("8192");
+	});
+
+	it("同批更新两个数字字段互不覆盖（17-18 回归）", async () => {
+		mocks.refreshMutate.mockImplementation((_args, opts) => {
+			opts.onSuccess([
+				makeCandidate({
+					providerModelId: "manual/only-model",
+					matchState: "manual",
+					contextLength: null,
+					maxOutputTokens: null,
+					reasoning: false,
+					toolUse: false,
+				}),
+			]);
+		});
+		render(<AddProviderModelsDialog open onOpenChange={vi.fn()} provider={provider} />);
+		fireEvent.click(screen.getByRole("tab", { name: "自动添加" }));
+		fireEvent.click(screen.getByRole("button", { name: "尝试刷新" }));
+
+		// 同一个事件批内更新两个字段：第二个更新必须保留第一个的写入。
+		const inputs = screen.getAllByRole("spinbutton");
+		await act(async () => {
+			fireEvent.change(required(inputs[0]), { target: { value: "8192" } });
+			fireEvent.change(required(inputs[1]), { target: { value: "1024" } });
+		});
+
+		expect((required(inputs[0]) as HTMLInputElement).value).toBe("8192");
+		expect((required(inputs[1]) as HTMLInputElement).value).toBe("1024");
+	});
+
 	it("补齐缺失数字后解锁勾选，勾选并点击添加触发批量导入", () => {
 		mocks.refreshMutate.mockImplementation((_args, opts) => {
 			opts.onSuccess([
@@ -376,14 +442,15 @@ describe("AddProviderModelsDialog Tab 与目录候选", () => {
 		const input = screen.getByPlaceholderText("如 gpt-4o");
 		fireEvent.change(input, { target: { value: "gpt" } });
 		fireEvent.focus(input);
-		expect(screen.getByRole("button", { name: "gpt-4o-mini" })).toBeTruthy();
+		// 17-27：目录搜索经 300ms 防抖后才发请求，联想浮层延迟出现。
+		await waitFor(() => expect(screen.getByRole("button", { name: "gpt-4o-mini" })).toBeTruthy());
 		fireEvent.pointerDown(screen.getByRole("tab", { name: "手动添加" }));
 		expect(screen.queryByRole("button", { name: "gpt-4o-mini" })).toBeNull();
 
 		fireEvent.focus(input);
 		fireEvent.click(screen.getByRole("button", { name: "gpt-4o-mini" }));
 		expect((input as HTMLInputElement).value).toBe("gpt-4o-mini");
-		expect(screen.queryByRole("button", { name: "gpt-4o-mini" })).toBeNull();
+		await waitFor(() => expect(screen.queryByRole("button", { name: "gpt-4o-mini" })).toBeNull());
 	});
 });
 

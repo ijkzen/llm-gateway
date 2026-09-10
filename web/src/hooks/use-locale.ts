@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import { useSettings } from "@/hooks/use-settings";
 import { LOCALE_STORAGE_KEY, type Locale, SETTING_KEY_LANGUAGE, initialLocale } from "@/i18n";
 import { api } from "@/lib/api";
 
@@ -73,4 +74,28 @@ export function useChangeLocale() {
 			// 未登录（401）或网络失败时静默：本地语言已切换，登录后会同步。
 		}
 	};
+}
+
+/**
+ * 20-10：已登录后以后端设置表为准同步一次前端语言。
+ *
+ * 前端语言本地持久化在 localStorage，后端 `language` 设置还会影响 cron 标题等
+ * 服务端内容（18-03）。多浏览器/多客户端共用同一网关时，本地值与后端可能分叉
+ * ——这里在拿到设置表数据后把本地 store 与 i18n 对齐到后端值，用户不必手动切回。
+ * 仅在 AppLayout（已认证）调用，避免登录页触发无谓的 401。
+ */
+export function useSyncBackendLocale() {
+	const setLocale = useLocale((state) => state.setLocale);
+	const hasHydrated = useLocale((state) => state._hasHydrated);
+	const { data: settings } = useSettings();
+	const { i18n } = useTranslation();
+
+	useEffect(() => {
+		if (!hasHydrated) return;
+		const backend = settings?.find((s) => s.key === SETTING_KEY_LANGUAGE)?.value;
+		if (backend !== "zh-CN" && backend !== "en") return;
+		if (useLocale.getState().locale === backend && i18n.language === backend) return;
+		setLocale(backend);
+		void i18n.changeLanguage(backend);
+	}, [settings, hasHydrated, setLocale, i18n]);
 }

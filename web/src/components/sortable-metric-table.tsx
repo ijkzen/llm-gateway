@@ -103,83 +103,87 @@ export function SortableMetricTable<T extends Record<RaceSortKey, number>>({
 	const locale = localeOf(i18n.language);
 	const clickable = (item: T) => (isRowClickable ? isRowClickable(item) : Boolean(onRowClick));
 	return (
+		// 16-16：行数无上限（四级页面聚合可达数百上千行），加纵向滚动容器避免
+		// 整页被表格撑长（后端 rank 无分页参数，虚拟滚动属前后端协同项，暂不做）。
 		<div className="overflow-x-auto">
-			<table className="w-full min-w-[720px] border-collapse text-sm">
-				<thead>
-					<tr className="border-b border-foreground/10">
-						<th className="w-10 px-2 py-2 text-left text-xs font-medium text-muted-foreground">
-							#
-						</th>
-						<th className="px-2 py-2 text-left text-xs font-medium text-muted-foreground">
-							{t(nameHeader)}
-						</th>
-						{RACE_COLUMNS.map((column) => {
-							const active = sort.sortBy === column.key;
-							const label = t(column.labelKey);
+			<div className="max-h-[480px] overflow-y-auto">
+				<table className="w-full min-w-[720px] border-collapse text-sm">
+					<thead>
+						<tr className="border-b border-foreground/10">
+							<th className="w-10 px-2 py-2 text-left text-xs font-medium text-muted-foreground">
+								#
+							</th>
+							<th className="px-2 py-2 text-left text-xs font-medium text-muted-foreground">
+								{t(nameHeader)}
+							</th>
+							{RACE_COLUMNS.map((column) => {
+								const active = sort.sortBy === column.key;
+								const label = t(column.labelKey);
+								return (
+									<th key={column.key} className="px-2 py-2 text-right">
+										<button
+											type="button"
+											onClick={() => onSort(column.key)}
+											aria-label={label}
+											className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium transition-colors hover:bg-foreground/5 ${
+												active ? "text-foreground" : "text-muted-foreground"
+											}`}
+										>
+											{label}
+											{active &&
+												(sort.sortOrder === "asc" ? (
+													<ArrowUp data-testid={`sort-${column.key}`} className="h-3 w-3" />
+												) : (
+													<ArrowDown data-testid={`sort-${column.key}`} className="h-3 w-3" />
+												))}
+										</button>
+									</th>
+								);
+							})}
+						</tr>
+					</thead>
+					<tbody>
+						{items.map((item, index) => {
+							const canClick = clickable(item);
 							return (
-								<th key={column.key} className="px-2 py-2 text-right">
-									<button
-										type="button"
-										onClick={() => onSort(column.key)}
-										aria-label={label}
-										className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium transition-colors hover:bg-foreground/5 ${
-											active ? "text-foreground" : "text-muted-foreground"
-										}`}
-									>
-										{label}
-										{active &&
-											(sort.sortOrder === "asc" ? (
-												<ArrowUp data-testid={`sort-${column.key}`} className="h-3 w-3" />
-											) : (
-												<ArrowDown data-testid={`sort-${column.key}`} className="h-3 w-3" />
-											))}
-									</button>
-								</th>
+								<tr
+									key={rowKey(item)}
+									onClick={canClick ? () => onRowClick?.(item) : undefined}
+									onKeyDown={
+										canClick
+											? (e) => {
+													if (e.key === "Enter") {
+														onRowClick?.(item);
+													}
+												}
+											: undefined
+									}
+									tabIndex={canClick ? 0 : undefined}
+									title={canClick && rowTitleKey ? t(rowTitleKey) : undefined}
+									className={`border-b border-foreground/5 last:border-0 ${
+										canClick ? "cursor-pointer hover:bg-foreground/5" : ""
+									} ${rowClassName?.(item) ?? ""}`}
+								>
+									<td className="px-2 py-2 text-left font-mono text-xs text-muted-foreground">
+										{index + 1}
+									</td>
+									<td className="px-2 py-2 text-left font-medium text-foreground">
+										{renderName(item)}
+									</td>
+									{RACE_COLUMNS.map((column) => (
+										<td
+											key={column.key}
+											className="px-2 py-2 text-right font-mono text-xs tabular-nums text-foreground"
+										>
+											{column.format(item[column.key], locale)}
+										</td>
+									))}
+								</tr>
 							);
 						})}
-					</tr>
-				</thead>
-				<tbody>
-					{items.map((item, index) => {
-						const canClick = clickable(item);
-						return (
-							<tr
-								key={rowKey(item)}
-								onClick={canClick ? () => onRowClick?.(item) : undefined}
-								onKeyDown={
-									canClick
-										? (e) => {
-												if (e.key === "Enter") {
-													onRowClick?.(item);
-												}
-											}
-										: undefined
-								}
-								tabIndex={canClick ? 0 : undefined}
-								title={canClick && rowTitleKey ? t(rowTitleKey) : undefined}
-								className={`border-b border-foreground/5 last:border-0 ${
-									canClick ? "cursor-pointer hover:bg-foreground/5" : ""
-								} ${rowClassName?.(item) ?? ""}`}
-							>
-								<td className="px-2 py-2 text-left font-mono text-xs text-muted-foreground">
-									{index + 1}
-								</td>
-								<td className="px-2 py-2 text-left font-medium text-foreground">
-									{renderName(item)}
-								</td>
-								{RACE_COLUMNS.map((column) => (
-									<td
-										key={column.key}
-										className="px-2 py-2 text-right font-mono text-xs tabular-nums text-foreground"
-									>
-										{column.format(item[column.key], locale)}
-									</td>
-								))}
-							</tr>
-						);
-					})}
-				</tbody>
-			</table>
+					</tbody>
+				</table>
+			</div>
 		</div>
 	);
 }

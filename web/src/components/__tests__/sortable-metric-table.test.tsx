@@ -1,4 +1,8 @@
-import { defaultRaceWindowState, windowQueryString } from "@/components/race-window-control";
+import {
+	defaultRaceWindowState,
+	initialWindowFromUrl,
+	windowQueryString,
+} from "@/components/race-window-control";
 import { RACE_COLUMNS, useRaceSort } from "@/components/sortable-metric-table";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
@@ -63,6 +67,7 @@ describe("windowQueryString 与 initialWindowFromUrl 往返", () => {
 	});
 
 	it("深链串可被 initialWindowFromUrl 还原出同一窗口参数", () => {
+		// 16-17：直调真实函数（原实现是复刻解析逻辑，16-01 的越界 bug 因此没被拦住）。
 		for (const state of [
 			defaultRaceWindowState(),
 			{ ...defaultRaceWindowState(), period: "month" as const, offset: 1 },
@@ -74,23 +79,21 @@ describe("windowQueryString 与 initialWindowFromUrl 往返", () => {
 		]) {
 			const bounds =
 				state.period === "custom" ? { startTime: 500, endTime: 900 } : { startTime: 0, endTime: 0 };
-			// eslint 不涉及：直接构造 URLSearchParams 模拟 URL 解析。
 			const searchParams = new URLSearchParams(windowQueryString(state, bounds));
-			const restored = (() => {
-				// 与 initialWindowFromUrl 相同的解析契约（其内部还依赖 Date.now 兜底，
-				// 这里只校验 period/offset/起止三个往返字段）。
-				const period = searchParams.get("period") ?? "day";
-				const offset = Number.parseInt(searchParams.get("offset") ?? "0", 10) || 0;
-				const startTime = Number(searchParams.get("startTime"));
-				const endTime = Number(searchParams.get("endTime"));
-				return { period, offset, startTime, endTime };
-			})();
+			const restored = initialWindowFromUrl(searchParams);
 			expect(restored.period).toBe(state.period);
 			expect(restored.offset).toBe(state.offset);
 			if (state.period === "custom") {
-				expect(restored.startTime).toBe(bounds.startTime);
-				expect(restored.endTime).toBe(bounds.endTime);
+				expect(restored.appliedCustom).toEqual({ startTime: 500, endTime: 900 });
+			} else {
+				expect(restored.appliedCustom).toBeNull();
 			}
 		}
+	});
+
+	it("非法 period 回落 day（16-01 回归）", () => {
+		const restored = initialWindowFromUrl(new URLSearchParams("period=foo&offset=3"));
+		expect(restored.period).toBe("day");
+		expect(restored.offset).toBe(3);
 	});
 });
