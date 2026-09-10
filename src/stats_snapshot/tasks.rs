@@ -3,6 +3,7 @@
 //! （stats_snapshot / stats_snapshot_rebuild），进程级互斥防重叠。
 
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use chrono::{Offset, TimeZone};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
@@ -26,6 +27,75 @@ const META_WM: [(&str, Level); 4] = [
 
 fn task_lock() -> &'static Mutex<()> {
     SNAPSHOT_TASK_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+/// 一次固化运行的统计（结束日志数据）：本次固化的桶数与覆盖范围。
+#[derive(Default)]
+struct RunStats {
+    /// 各粒度桶数（只登记实际固化过桶的粒度）。
+    per_level: std::collections::BTreeMap<Level, usize>,
+    first_start: Option<i64>,
+    last_end: Option<i64>,
+}
+
+impl RunStats {
+    fn record(&mut self, frame: Frame) {
+        *self.per_level.entry(frame.level).or_default() += 1;
+        self.first_start = Some(self.first_start.map_or(frame.start, |v| v.min(frame.start)));
+        self.last_end = Some(self.last_end.map_or(frame.end, |v| v.max(frame.end)));
+    }
+
+    /// 「小时桶 2 个 / 天桶 1 个 / 月桶 0 个 / 年桶 0 个」。
+    fn per_level_text(&self) -> String {
+        [Level::Hour, Level::Day, Level::Month, Level::Year]
+            .iter()
+            .map(|level| {
+                let count = self.per_level.get(level).copied().unwrap_or(0);
+                format!("{} {count} 个", level_label(*level))
+            })
+            .collect::<Vec<_>>()
+            .join(" / ")
+    }
+
+    /// 「覆盖 2026-08-01 00:00 ~ 2026-09-10 12:00」（本轮没固化任何桶时为 None）。
+    fn coverage_text(&self) -> Option<String> {
+        let (Some(start), Some(end)) = (self.first_start, self.last_end) else {
+            return None;
+        };
+        Some(format!("覆盖 {} ~ {}", fmt_ts(start), fmt_ts(end)))
+    }
+}
+
+/// 结束日志里的粒度名。
+fn level_label(level: Level) -> &'static str {
+    match level {
+        Level::Hour => "小时桶",
+        Level::Day => "天桶",
+        Level::Month => "月桶",
+        Level::Year => "年桶",
+    }
+}
+
+/// epoch ms → 设置表时区「YYYY-MM-DD HH:MM」（结束日志的覆盖范围段）。
+fn fmt_ts(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms)
+        .map(|dt| {
+            dt.with_timezone(&crate::app_settings::timezone_sync())
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|| ms.to_string())
+}
+
+/// 结束日志统一格式：固化桶数 + 可选覆盖范围 + 耗时（生成/回填/自愈共用）。
+fn log_finished(what: &str, stats: &RunStats, coverage: Option<String>, elapsed: Duration) {
+    let coverage = coverage
+        .map(|range| format!("，{range}"))
+        .unwrap_or_default();
+    tracing::info!(
+        "{what}：本次固化 {}{coverage}，耗时 {elapsed:?}",
+        stats.per_level_text()
+    );
 }
 
 /// 当前设置表时区偏移（分钟，按此刻求固定偏移；与 stats 读取端同口径源）。
@@ -79,12 +149,15 @@ fn latest_closed_start(level: Level, offset: i32, now: i64, horizon: i64) -> i64
 }
 
 /// 增量生成入口（stats_snapshot 任务与启动回填共用，进程级互斥）。
-/// 返回本次是否实际执行（被并发锁跳过时为 false）。
+/// 返回本次是否实际执行（被并发锁跳过时为 false）。每次实际执行都打
+/// 开始/结束两行日志（空转也打），结束行带固化桶数与耗时。
 pub(crate) async fn run_snapshot_generation(db: &DatabaseConnection) -> anyhow::Result<bool> {
     let Ok(_guard) = task_lock().try_lock() else {
         tracing::warn!("统计快照生成上次仍在运行，本次跳过");
         return Ok(false);
     };
+    let started = Instant::now();
+    tracing::info!("统计快照生成开始");
     let now = chrono::Utc::now().timestamp_millis();
     let offset = tz_offset_minutes_now();
     let offset_str = offset.to_string();
@@ -93,9 +166,15 @@ pub(crate) async fn run_snapshot_generation(db: &DatabaseConnection) -> anyhow::
     let stored_offset = meta_get(db, META_TZ_OFFSET).await?;
     if !initialized {
         tracing::info!("统计快照表为空，开始全量回填整个 request 历史");
-        full_backfill(db, offset, now).await?;
+        let stats = full_backfill(db, offset, now).await?;
         meta_set(db, "initialized", "1").await?;
         meta_set(db, META_TZ_OFFSET, &offset_str).await?;
+        log_finished(
+            "统计快照全量回填完成",
+            &stats,
+            stats.coverage_text(),
+            started.elapsed(),
+        );
         return Ok(true);
     }
     if stored_offset.as_deref() != Some(offset_str.as_str()) {
@@ -109,13 +188,20 @@ pub(crate) async fn run_snapshot_generation(db: &DatabaseConnection) -> anyhow::
         for (key, _) in META_WM {
             meta_delete(db, key).await?;
         }
-        full_backfill(db, offset, now).await?;
+        let stats = full_backfill(db, offset, now).await?;
         meta_set(db, META_TZ_OFFSET, &offset_str).await?;
+        log_finished(
+            "统计快照时区变更重算完成",
+            &stats,
+            stats.coverage_text(),
+            started.elapsed(),
+        );
         return Ok(true);
     }
 
     // 增量：各粒度固化「水位之后、已闭桶」的桶（幂等 upsert，可安全重跑）。
     let horizon = now - MARGIN_MS;
+    let mut stats = RunStats::default();
     for (meta_key, level) in META_WM {
         let wm: i64 = meta_get(db, meta_key)
             .await?
@@ -133,15 +219,17 @@ pub(crate) async fn run_snapshot_generation(db: &DatabaseConnection) -> anyhow::
             }
             finalize_bucket(db, frame).await?;
             newest = frame.start;
+            stats.record(frame);
         }
         meta_set(db, meta_key, &newest.to_string()).await?;
     }
+    log_finished("统计快照生成完成", &stats, None, started.elapsed());
     Ok(true)
 }
 
 /// 全量回填：从最早请求所在帧起，把所有已闭桶帧按粒度固化（幂等，可整体重跑）；
 /// 每级水位收在最近闭桶帧，空桶哨兵链由后续增量生成补起。
-async fn full_backfill(db: &DatabaseConnection, offset: i32, now: i64) -> anyhow::Result<()> {
+async fn full_backfill(db: &DatabaseConnection, offset: i32, now: i64) -> anyhow::Result<RunStats> {
     let earliest: Option<i64> = db
         .query_one_raw(Statement::from_string(
             DbBackend::Sqlite,
@@ -150,6 +238,7 @@ async fn full_backfill(db: &DatabaseConnection, offset: i32, now: i64) -> anyhow
         .await?
         .and_then(|row| row.try_get("", "v").ok());
     let horizon = now - MARGIN_MS;
+    let mut stats = RunStats::default();
     for (meta_key, level) in META_WM {
         let mut newest = 0i64;
         if let Some(earliest) = earliest {
@@ -159,6 +248,7 @@ async fn full_backfill(db: &DatabaseConnection, offset: i32, now: i64) -> anyhow
                 }
                 finalize_bucket(db, frame).await?;
                 newest = frame.start;
+                stats.record(frame);
             }
         }
         if newest == 0 {
@@ -166,22 +256,27 @@ async fn full_backfill(db: &DatabaseConnection, offset: i32, now: i64) -> anyhow
         }
         meta_set(db, meta_key, &newest.to_string()).await?;
     }
-    Ok(())
+    Ok(stats)
 }
 
 /// 自愈入口（stats_snapshot_rebuild 任务）：补算最近 7 天缺哨兵行的闭桶
-/// 小时/天桶，并点检最近两个闭月/闭年。进程级互斥；快照未初始化时让位给生成任务。
+/// 小时/天桶，并点检最近两个闭月/闭年。进程级互斥；快照未初始化时让位给
+/// 生成任务（打一行说明收尾）。正常执行打开始/结束两行日志（无缺失也打）。
 pub(crate) async fn run_snapshot_heal(db: &DatabaseConnection) -> anyhow::Result<bool> {
     let Ok(_guard) = task_lock().try_lock() else {
         tracing::warn!("统计快照自愈上次仍在运行，本次跳过");
         return Ok(false);
     };
+    let started = Instant::now();
+    tracing::info!("统计快照自愈开始");
     if meta_get(db, "initialized").await?.is_none() {
+        tracing::info!("统计快照未初始化，本次跳过自愈（等待生成任务回填）");
         return Ok(true);
     }
     let now = chrono::Utc::now().timestamp_millis();
     let offset = tz_offset_minutes_now();
     let horizon = now - MARGIN_MS;
+    let mut checked = 0usize;
     let mut healed = 0usize;
 
     // 小时/天：最近 7 天闭桶桶。
@@ -190,6 +285,7 @@ pub(crate) async fn run_snapshot_heal(db: &DatabaseConnection) -> anyhow::Result
             if frame.end > horizon {
                 continue;
             }
+            checked += 1;
             if !crate::stats_snapshot::bucket_finalized(db, level, frame.start).await? {
                 finalize_bucket(db, frame).await?;
                 healed += 1;
@@ -204,15 +300,17 @@ pub(crate) async fn run_snapshot_heal(db: &DatabaseConnection) -> anyhow::Result
             .collect();
         closed.sort_by_key(|f| f.start);
         for frame in closed.iter().rev().take(2) {
+            checked += 1;
             if !crate::stats_snapshot::bucket_finalized(db, level, frame.start).await? {
                 finalize_bucket(db, *frame).await?;
                 healed += 1;
             }
         }
     }
-    if healed > 0 {
-        tracing::info!("统计快照自愈补算 {healed} 个缺失闭桶");
-    }
+    tracing::info!(
+        "统计快照自愈完成：检查闭桶 {checked} 个，补算 {healed} 个，耗时 {:?}",
+        started.elapsed()
+    );
     Ok(true)
 }
 
@@ -260,6 +358,107 @@ mod tests {
         .unwrap()
         .and_then(|row| row.try_get("", "v").ok())
         .unwrap_or(0)
+    }
+
+    /// 测试用日志缓冲：把 tracing 输出收进内存供断言。`set_default` 是线程
+    /// 局部的，用例必须跑在 current_thread runtime（`#[tokio::test]` 默认）。
+    #[derive(Clone, Default)]
+    struct LogBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogBuffer {
+        type Writer = LogBuffer;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// 挂测试 subscriber，返回（日志缓冲，作用域守卫）。
+    fn capture_logs() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
+        let buf = LogBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_ansi(false)
+            .without_time()
+            .finish();
+        (buf, tracing::subscriber::set_default(subscriber))
+    }
+
+    /// 取走缓冲中已累积的日志文本并清空（按次断言）。
+    fn take_logs(buf: &LogBuffer) -> String {
+        let mut guard = buf.0.lock().unwrap();
+        let text = String::from_utf8_lossy(&guard).into_owned();
+        guard.clear();
+        text
+    }
+
+    /// 用户诉求回归：生成任务每次执行都留下开始/结束日志，空转（无新闭桶）
+    /// 也不例外；结束日志带各粒度固化桶数与耗时（回填场景另带覆盖范围）。
+    #[tokio::test]
+    async fn generation_logs_start_and_finish_with_bucket_counts() {
+        let _serial = test_lock().await;
+        let db = setup().await;
+        let now = now_ms();
+        let (older, closed) = closed_hour_frame(now);
+        insert_request(&db, "a1", older.start + 1000).await;
+        insert_request(&db, "a2", closed.start + 1000).await;
+        let (buf, _guard) = capture_logs();
+
+        run_snapshot_generation(&db).await.unwrap();
+        let first = take_logs(&buf);
+        assert!(first.contains("统计快照生成开始"), "{first}");
+        assert!(first.contains("统计快照全量回填完成"), "{first}");
+        assert!(first.contains("小时桶 "), "{first}");
+        assert!(!first.contains("小时桶 0 个"), "回填应固化闭桶：{first}");
+        assert!(first.contains("覆盖 "), "{first}");
+        assert!(first.contains("耗时 "), "{first}");
+
+        // 无新闭桶的空转：桶数 0 也要留下开始/结束两行。
+        run_snapshot_generation(&db).await.unwrap();
+        let second = take_logs(&buf);
+        assert!(second.contains("统计快照生成开始"), "{second}");
+        assert!(second.contains("统计快照生成完成：本次固化"), "{second}");
+        assert!(second.contains("小时桶 0 个"), "{second}");
+        assert!(second.contains("耗时 "), "{second}");
+    }
+
+    /// 用户诉求回归：自愈任务无论是否有缺失都留下开始/结束日志；没有缺失时
+    /// 结束行报「检查闭桶 N 个，补算 0 个」（N > 0，证明扫描确实发生）。
+    #[tokio::test]
+    async fn heal_logs_start_and_finish_even_without_missing_buckets() {
+        let _serial = test_lock().await;
+        let db = setup().await;
+        let now = now_ms();
+        let (_older, closed) = closed_hour_frame(now);
+        insert_request(&db, "a1", closed.start + 1000).await;
+        run_snapshot_generation(&db).await.unwrap();
+        let (buf, _guard) = capture_logs();
+
+        // 首轮：窗口内可能有生成未覆盖的桶（最早请求之前的天桶），只断言格式。
+        run_snapshot_heal(&db).await.unwrap();
+        let first = take_logs(&buf);
+        assert!(first.contains("统计快照自愈开始"), "{first}");
+        assert!(first.contains("统计快照自愈完成：检查闭桶 "), "{first}");
+        assert!(first.contains("个，补算 "), "{first}");
+        assert!(first.contains("耗时 "), "{first}");
+
+        // 第二轮：没有缺失也必须留痕（检查数 > 0、补算 0）。
+        run_snapshot_heal(&db).await.unwrap();
+        let second = take_logs(&buf);
+        assert!(second.contains("统计快照自愈开始"), "{second}");
+        assert!(second.contains("补算 0 个"), "{second}");
+        assert!(!second.contains("检查闭桶 0 个"), "{second}");
     }
 
     /// 找一个已闭桶小时桶（距今 ≥ 3 小时、对齐本地整点，上海偏移）。

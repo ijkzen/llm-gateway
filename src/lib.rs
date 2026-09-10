@@ -222,31 +222,19 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         })
         .await;
 
-    // 统计快照生成/自愈 handler（ADR-0021）：进程级互斥在 tasks 内部（静态锁），
-    // handler 只负责调用与记录错误，不阻塞转发路径。
+    // 统计快照生成/自愈 handler（ADR-0021）：进程级互斥在 tasks 内部（静态锁）；
+    // 失败交回 worker（run 记 failed + 追加「任务执行失败：…」）。
     scheduler
-        .register_handler(crate::cron::seed::STATS_SNAPSHOT_JOB, {
-            Arc::new(|ctx: JobContext| {
-                Box::pin(async move {
-                    if let Err(e) = crate::stats_snapshot::run_snapshot_generation(&ctx.db).await {
-                        tracing::error!("统计快照生成失败：{e}");
-                    }
-                    Ok(())
-                })
-            })
-        })
+        .register_handler(
+            crate::cron::seed::STATS_SNAPSHOT_JOB,
+            crate::stats_snapshot::generation_job_handler(),
+        )
         .await;
     scheduler
-        .register_handler(crate::cron::seed::STATS_SNAPSHOT_REBUILD_JOB, {
-            Arc::new(|ctx: JobContext| {
-                Box::pin(async move {
-                    if let Err(e) = crate::stats_snapshot::run_snapshot_heal(&ctx.db).await {
-                        tracing::error!("统计快照自愈失败：{e}");
-                    }
-                    Ok(())
-                })
-            })
-        })
+        .register_handler(
+            crate::cron::seed::STATS_SNAPSHOT_REBUILD_JOB,
+            crate::stats_snapshot::heal_job_handler(),
+        )
         .await;
 
     // 内置定时任务种子，与上面的 handler 注册一一对应。

@@ -8,6 +8,7 @@
 
 mod core;
 mod generator;
+mod jobs;
 mod math;
 mod reader;
 mod registry;
@@ -17,6 +18,7 @@ mod tasks;
 /// 公共 API（集成测试使用）：桶帧与固化入口。
 pub use core::{Frame, Level};
 pub use generator::finalize_bucket;
+pub use jobs::{generation_job_handler, heal_job_handler};
 
 pub(crate) use core::{MARGIN_MS, natural_periods, period_key_of_day_index, period_key_of_ts};
 // 测试专用（tasks/generator 单测直驱桶帧）。
