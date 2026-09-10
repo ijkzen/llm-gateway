@@ -360,6 +360,37 @@ fn opencode_session_fallback_is_stable_uuid_per_key() {
 }
 
 #[test]
+fn opencode_session_varies_per_day_and_is_stable_within_day() {
+    use chrono::TimeZone;
+
+    // 东八区 2026-09-10 23:59 与 2026-09-11 00:01 分属两个本地日。
+    let tz = chrono_tz::Asia::Shanghai;
+    let before = chrono::Utc
+        .with_ymd_and_hms(2026, 9, 10, 15, 59, 0)
+        .unwrap();
+    let after = chrono::Utc.with_ymd_and_hms(2026, 9, 10, 16, 1, 0).unwrap();
+    let key = "itest-key";
+    let d1 = opencode_session_day(before, tz);
+    let d2 = opencode_session_day(after, tz);
+    assert_eq!(d1, "2026-09-10");
+    assert_eq!(d2, "2026-09-11");
+    let s1 = opencode_session_for_day(key, &d1);
+    assert_eq!(
+        s1,
+        opencode_session_for_day(key, &d1),
+        "同一本地日应派生同值"
+    );
+    assert_ne!(s1, opencode_session_for_day(key, &d2), "跨本地日应轮换会话");
+    // 时区口径参与派生：同一时刻在 UTC 下仍属 09-10（15:59Z），日期键不同。
+    assert_eq!(opencode_session_day(before, chrono_tz::UTC), "2026-09-10");
+    assert_eq!(opencode_session_day(after, chrono_tz::UTC), "2026-09-10");
+    assert_ne!(
+        opencode_session_for_day(key, "2026-09-10"),
+        opencode_session_for_day(key, "2026-09-11")
+    );
+}
+
+#[test]
 fn opencode_member_injects_session_fallback() {
     let m = member_with_base_url(
         Protocol::OpenAiCompat,

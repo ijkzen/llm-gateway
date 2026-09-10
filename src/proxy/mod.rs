@@ -80,8 +80,9 @@ pub(crate) use failover::{
 pub(crate) use forward::build_member;
 pub(crate) use headers::{
     NEVER_OUTBOUND, OPENCODE_SESSION_HEADER, THINKING_DROPPED_HEADER, apply_protocol_auth_headers,
-    merge_custom_headers, merge_template_default_headers, opencode_session_fallback,
-    protocol_auth_header_names, with_thinking_dropped_header,
+    merge_custom_headers, merge_template_default_headers, opencode_session_day,
+    opencode_session_fallback, opencode_session_for_day, protocol_auth_header_names,
+    with_thinking_dropped_header,
 };
 pub(crate) use lb::{
     Member, format_usage, load_members, note_member_failure, order_members, rank_by_balance_with,

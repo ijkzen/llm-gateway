@@ -57,15 +57,27 @@ pub(crate) const NEVER_OUTBOUND: &[&str] = &[
 /// OpenCode Go 会话亲和头名（缺失时上游部分后端直接 400）。
 pub(crate) const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
 
-/// 按 API Key 派生稳定的回退会话 ID（UUIDv5）：网关无会话概念，取
-/// 「每个 API Key 一个稳定会话」作为会话亲和的近似——重启不漂移，换 Key 即换会话。
-/// 客户端自带的 `x-opencode-session` 透传值优先于此回退。
-pub(crate) fn opencode_session_fallback(api_key_name: &str) -> String {
+/// 会话回退的日期键：按设置表时区（缺省 Asia/Shanghai，与 cron/统计同口径）
+/// 把时刻折算为本地 `YYYY-MM-DD`。
+pub(crate) fn opencode_session_day(at: chrono::DateTime<chrono::Utc>, tz: chrono_tz::Tz) -> String {
+    at.with_timezone(&tz).format("%Y-%m-%d").to_string()
+}
+
+/// 按 API Key + 日期派生回退会话 ID（UUIDv5）：网关无会话概念，取
+/// 「每个 API Key 每天一个稳定会话」作为会话亲和的近似。
+pub(crate) fn opencode_session_for_day(api_key_name: &str, day: &str) -> String {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
-        format!("llm-gateway/opencode-session/{api_key_name}").as_bytes(),
+        format!("llm-gateway/opencode-session/{api_key_name}/{day}").as_bytes(),
     )
     .to_string()
+}
+
+/// 回退会话 ID：当日内恒定（重启不漂移），跨本地日零点轮换；换 Key 即换会话。
+/// 客户端自带的 `x-opencode-session` 透传值优先于此回退。
+pub(crate) fn opencode_session_fallback(api_key_name: &str) -> String {
+    let day = opencode_session_day(chrono::Utc::now(), crate::app_settings::timezone_sync());
+    opencode_session_for_day(api_key_name, &day)
 }
 
 /// 判定 header 名是否落在剥离/禁止清单。
