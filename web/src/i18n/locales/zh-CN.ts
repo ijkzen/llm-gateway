@@ -753,6 +753,8 @@ const zhCN = {
 		networkError: "网络请求失败",
 		missingData: "响应中缺少 data 字段",
 		unauthorized: "未登录或登录已过期",
+		timeout: "请求超时：{{method}} {{url}}",
+		aborted: "请求已取消",
 	},
 	time: {
 		yearMonth: "{{year}}年{{month}}月",

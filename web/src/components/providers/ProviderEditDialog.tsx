@@ -95,9 +95,14 @@ function editableExtraKeys(extra: string | undefined): string[] {
 	);
 }
 
-/** 模板 extra 中值为 true 的 usage 标记。 */
+/** 模板 extra 中值为 true 的 usage 标记（开关当前值）。 */
 function usageFlag(extra: string | undefined): boolean {
 	return parseExtra(extra).usage === true;
+}
+
+/** 模板 extra 中是否声明了 usage 键（开关可见性：关掉后仍能再打开，17-02）。 */
+function hasUsageKey(extra: string | undefined): boolean {
+	return "usage" in parseExtra(extra);
 }
 
 /** 用量开启后校验：extra 中所有非空模板字段都必须填写，返回缺失字段列表。 */
@@ -459,8 +464,9 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 												)}
 											/>
 										</div>
-										{/* 用量展示开关：仅模板支持用量查询时展示 */}
-										{templateExtra && usageFlag(templateExtra) && (
+										{/* 用量展示开关：extra 存在 usage 键即展示（17-02：绑 usage===true
+										    会让关掉一次后开关整块消失、再也无法打开） */}
+										{templateExtra && hasUsageKey(templateExtra) && (
 											<FormField
 												control={form.control}
 												name="usageEnabled"

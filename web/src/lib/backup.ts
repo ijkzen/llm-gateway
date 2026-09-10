@@ -83,7 +83,12 @@ export async function fetchBackupExport(): Promise<BackupFile> {
 /** 恢复备份：整体替换导入。成功返回导入计数，失败抛 ApiError（msg 为具体中文错误）。 */
 export async function importBackup(jsonText: string): Promise<ImportSummary> {
 	const res = await api
-		.post("backup/import", { body: jsonText, headers: { "content-type": "application/json" } })
+		// 整库替换在库大时较慢，给足超时（19-04）。
+		.post("backup/import", {
+			body: jsonText,
+			headers: { "content-type": "application/json" },
+			timeout: 120000,
+		})
 		.json<ApiResponse<ImportSummary>>();
 	return unwrap(res);
 }

@@ -92,6 +92,18 @@ function CollapsibleSection({ title, children }: { title: string; children: Reac
 	);
 }
 
+/** 安全解析 JSON 对象文本（密钥缺失时后端可能透传密文）：失败返回 null。 */
+function safeParseObject(text: string): Record<string, unknown> | null {
+	try {
+		const parsed: unknown = JSON.parse(text);
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: null;
+	} catch {
+		return null;
+	}
+}
+
 export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: ProviderDetailProps) {
 	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
@@ -100,8 +112,10 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 	const [plainKey, setPlainKey] = useState<string | null>(null);
 	const [keyLoading, setKeyLoading] = useState(false);
 
-	// 切换选择时重置明文展示状态。
+	// 切换选择时重置明文展示状态；activeIdRef 供在途请求比对丢弃迟到结果（17-01）。
 	const activeId = provider?.id;
+	const activeIdRef = useRef(activeId);
+	activeIdRef.current = activeId;
 	const previousId = useRef(activeId);
 	if (previousId.current !== activeId) {
 		previousId.current = activeId;
@@ -122,6 +136,13 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 		);
 	}
 
+	// 17-05：extra/customHeader 可能是后端透传的密文（非 JSON），解析失败即不渲染该块；
+	// 空对象与旧行为一致地不渲染。
+	const extraObject = safeParseObject(provider.extra);
+	const hasExtra = extraObject !== null && Object.keys(extraObject).length > 0;
+	const headerObject = safeParseObject(provider.customHeader);
+	const hasHeader = headerObject !== null && Object.keys(headerObject).length > 0;
+
 	const toggleEnable = () => {
 		updateProvider.mutate(
 			{ id: provider.id, enable: !provider.enable },
@@ -138,25 +159,33 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 			setPlainKey(null);
 			return;
 		}
+		const requestId = provider.id;
 		setKeyLoading(true);
 		try {
-			const key = await fetchProviderApiKey(provider.id);
+			const key = await fetchProviderApiKey(requestId);
+			// 17-01：在途期间切换了供应商则丢弃结果，避免明文串号。
+			if (activeIdRef.current !== requestId) return;
 			setPlainKey(key);
 		} catch (error) {
-			toastError(t("apiKeys.showKeyFailed"), error as Error);
+			if (activeIdRef.current !== requestId) return;
+			toastError(t("common.loadFailed"), error);
 		} finally {
-			setKeyLoading(false);
+			if (activeIdRef.current === requestId) {
+				setKeyLoading(false);
+			}
 		}
 	};
 
 	/** 一键复制：无论当前是否已展示明文，都重新请求明文后写入剪贴板。 */
 	const handleCopyKey = async () => {
+		const requestId = provider.id;
 		try {
-			const plain = await fetchProviderApiKey(provider.id);
+			const plain = await fetchProviderApiKey(requestId);
 			await navigator.clipboard.writeText(plain);
 			toastSuccess(t("common.copiedToClipboard"));
 		} catch (error) {
-			toastError(t("common.copyFailed"), error as Error);
+			if (activeIdRef.current !== requestId) return;
+			toastError(t("common.copyFailed"), error);
 		}
 	};
 
@@ -246,26 +275,24 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 					<ProviderUsageCard providerId={provider.id} estimate={usageEstimate.data} />
 				)}
 
-				{provider.extra && provider.extra !== "{}" && (
+				{hasExtra && (
 					// key 按供应商 id：切换供应商时 remount，折叠态随之重置。
 					<CollapsibleSection key={`extra-${provider.id}`} title={t("providers.extraConfig")}>
 						<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-							{Object.entries(JSON.parse(provider.extra) as Record<string, unknown>).map(
-								([key, value]) => (
-									<div key={key} className="space-y-1">
-										<Label className="text-xs text-muted-foreground">{key}</Label>
-										<Input readOnly value={String(value)} className="h-8 font-mono text-xs" />
-									</div>
-								),
-							)}
+							{Object.entries(extraObject).map(([key, value]) => (
+								<div key={key} className="space-y-1">
+									<Label className="text-xs text-muted-foreground">{key}</Label>
+									<Input readOnly value={String(value)} className="h-8 font-mono text-xs" />
+								</div>
+							))}
 						</div>
 					</CollapsibleSection>
 				)}
 
-				{provider.customHeader && provider.customHeader !== "{}" && (
+				{hasHeader && (
 					<CollapsibleSection key={`header-${provider.id}`} title={t("providers.customHeader")}>
 						<pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-3 font-mono text-xs">
-							{JSON.stringify(JSON.parse(provider.customHeader), null, 2)}
+							{JSON.stringify(headerObject, null, 2)}
 						</pre>
 					</CollapsibleSection>
 				)}

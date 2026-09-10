@@ -6,11 +6,11 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 17-01 | P2 | 逻辑/竞态 | ProviderDetail 切换供应商时，在途明文 Key 请求 resolve 后把 A 的密钥写到 B 的详情上（渲染期重置挡不住在途 setState） |
-| 17-02 | P2 | 逻辑/门控 | 编辑弹窗用量开关仅在 `extra.usage===true` 时渲染——关掉一次后开关整块消失，再也无法打开 |
-| 17-03 | P2 | 逻辑 | `useMatchTemplate` 声称吞 404 但 `await` 在 try 外：未命中模板（输入 URL 的绝大多数情况）ky 抛错 → 每个键击 2 次请求+静默 error 态，且无防抖 |
-| 17-04 | P2 | i18n | 使用了不存在的 key `apiKeys.showKeyFailed`（两 locale 均无）——取明文失败时 toast 标题显示原始 key 字面量 |
-| 17-05 | P2 | 逻辑/健壮 | ProviderDetail 对 `extra`/`customHeader` 无保护 `JSON.parse`：密钥丢失时后端透传密文（非 JSON）→ 渲染抛错整页 ErrorBoundary |
+| 17-01 | P2【已修复 2026-09-10】 | 逻辑/竞态 | ProviderDetail 切换供应商时，在途明文 Key 请求 resolve 后把 A 的密钥写到 B 的详情上（渲染期重置挡不住在途 setState） |
+| 17-02 | P2【已修复 2026-09-10】 | 逻辑/门控 | 编辑弹窗用量开关仅在 `extra.usage===true` 时渲染——关掉一次后开关整块消失，再也无法打开 |
+| 17-03 | P2【已修复 2026-09-10】 | 逻辑 | `useMatchTemplate` 声称吞 404 但 `await` 在 try 外：未命中模板（输入 URL 的绝大多数情况）ky 抛错 → 每个键击 2 次请求+静默 error 态，且无防抖 |
+| 17-04 | P2【已修复 2026-09-10】 | i18n | 使用了不存在的 key `apiKeys.showKeyFailed`（两 locale 均无）——取明文失败时 toast 标题显示原始 key 字面量 |
+| 17-05 | P2【已修复 2026-09-10】 | 逻辑/健壮 | ProviderDetail 对 `extra`/`customHeader` 无保护 `JSON.parse`：密钥丢失时后端透传密文（非 JSON）→ 渲染抛错整页 ErrorBoundary |
 | 17-06 | P2 | 逻辑/交互 | Add 弹窗「手动/待确认」候选卡整卡可点，卡内数字输入无 stopPropagation——点击/回车冒泡触发跳转卸载输入框，这两个态的数字字段根本填不进去（现有测试全用 fireEvent.change 故未暴露） |
 | 17-07 | P3 | 逻辑/校验 | 前端代理地址校验缺 `@` 拒绝规则，与后端 validate_proxy 口径不齐（只能吃服务端报错） |
 | 17-08 | P3 | 规范 | ProviderEditDialog:308 模板候选文案用 `truncate`，违反「单行截断一律 MidEllipsis」约定（全 scope 唯一一处） |
@@ -169,3 +169,11 @@ AddProviderModelsDialog.tsx:125-127 注释称防抖，:187-192 同步 setState�
 ## 性能/内存轮结论
 
 无 P1/P2 性能项。主要浪费=17-03（每键击 2 请求且无防抖）与 17-12（页面挂载即全量拉模型）；Add 弹窗全量渲染（17-24）与 VM 弹窗重复计算（17-25）为观察级；ProviderUsageCard 的 refreshToken 换 key 短时堆积旧缓存条目（量微）。全局 staleTime 5min+手动刷新符合管理端形态。结论：修 17-03 顺带防抖是本域最高性价比性能项。
+
+## 实施进度（2026-09-10）
+
+- **17-01 已修复**：`ProviderDetail` 增加 `activeIdRef`，明文请求返回后比对当前供应商 id，不一致即丢弃（不 setState、不 toast、不关 loading）；一键复制同样比对。回归测试「在途期间切换供应商时丢弃迟到的明文」（先红后绿语义）。
+- **17-02 已修复**：`ProviderEditDialog` 新增 `hasUsageKey`（`"usage" in parseExtra(...)`），用量开关可见性由 `usage===true` 改判「存在 usage 键」——关掉一次后仍可再打开。
+- **17-03 已修复**：`useMatchTemplate` 的 `await api.post(...)` 移入 try、queryKey/enabled 走 300ms 防抖值（`useDebouncedValue`）——未命中模板（404）不再逐键产生失败 query，也不再放大为双请求。
+- **17-04 已修复**：`ProviderDetail` 取明文失败的 toast 标题由不存在的 `apiKeys.showKeyFailed` 改为 `common.loadFailed`。
+- **17-05 已修复**：`ProviderDetail` 新增 `safeParseObject`，`extra`/`customHeader` 解析失败（密文透传）不再渲染该块、整页不再崩；空对象仍与旧行为一致不渲染；移除原来的双次 `JSON.parse`。

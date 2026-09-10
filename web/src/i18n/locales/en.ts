@@ -764,6 +764,8 @@ const en: Translation = {
 		networkError: "Network request failed",
 		missingData: "Response is missing the data field",
 		unauthorized: "Not signed in or session expired",
+		timeout: "Request timed out: {{method}} {{url}}",
+		aborted: "Request cancelled",
 	},
 	time: {
 		yearMonth: "{{month}} {{year}}",

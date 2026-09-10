@@ -7,9 +7,9 @@
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
 | 19-01 | P2 | 逻辑 | sidebar 折叠状态写 cookie 但全仓无任何读取点——刷新必回展开，注释声明的持久化不成立（shadcn SSR 遗产在 Vite SPA 无读者） |
-| 19-02 | P2 | 逻辑/网络栈 | `beforeError` 把 HTTPError 换成 ApiError（name 不匹配），ky 重试的 `isHTTPError` 判不上 → `retry.statusCodes` 白名单失效：GET 类 400/401/403/404 也被重试一次，429/503 的 Retry-After 尊重逻辑同被绕过 |
-| 19-03 | P2 | 逻辑/网络栈 | 网络错误/超时根本不过 `beforeError`（ky 只在 !response.ok 后调），`api.ts:53` 的 NETWORK_ERROR 分支不可达——网络故障 toast 显示英文原始消息 |
-| 19-04 | P2 | 逻辑/超时 | 全局 `timeout: 10000` 短于用量上游 15s：usage/estimate/backup import 未像 refresh(30s)/test(60s) 那样覆盖——前端先于后端超时，后端其实会成功落缓存 |
+| 19-02 | P2【已修复 2026-09-10】 | 逻辑/网络栈 | `beforeError` 把 HTTPError 换成 ApiError（name 不匹配），ky 重试的 `isHTTPError` 判不上 → `retry.statusCodes` 白名单失效：GET 类 400/401/403/404 也被重试一次，429/503 的 Retry-After 尊重逻辑同被绕过 |
+| 19-03 | P2【已修复 2026-09-10】 | 逻辑/网络栈 | 网络错误/超时根本不过 `beforeError`（ky 只在 !response.ok 后调），`api.ts:53` 的 NETWORK_ERROR 分支不可达——网络故障 toast 显示英文原始消息 |
+| 19-04 | P2【已修复 2026-09-10】 | 逻辑/超时 | 全局 `timeout: 10000` 短于用量上游 15s：usage/estimate/backup import 未像 refresh(30s)/test(60s) 那样覆盖——前端先于后端超时，后端其实会成功落缓存 |
 | 19-05 | P3 | 性能 | MidEllipsis 每实例挂载 O(log n) 次「写 DOM→读 offsetWidth」强制同步重排，46 处实例（表格按行）叠加无共享测量无缓存 |
 | 19-06 | P3 | 逻辑 | MidEllipsis 容器 clientWidth=0（隐藏页签/首帧未布局）时把任何非空文本渲染成「…」，靠 ResizeObserver 自愈 |
 | 19-07 | P3 | 健壮 | multi-select 硬编码 DOM id（select-all/选项值），RequestLogsTable 一页 4 实例重复 id（当前靠弹层互斥掩盖） |
@@ -142,3 +142,10 @@ test/setup.ts:70-74 mock @/hooks/use-stats-time-zone 返回本机时区；真实
 ## 性能/内存轮结论
 
 动作项=19-04（超时不匹配，影响用量刷新成功率，最优先）、19-13（双 retry）、19-05（MidEllipsis 列表场景收敛）、19-21（分包修正）。其余面健康：api 单例无请求级分配、面板查询无轮询、lazy+Suspense 粒度合适（仅 /login 缺边界）、chart/sidebar 无重渲染热点。结论：本域主干健康，网络栈三兄弟（19-02/19-03/19-04）是唯一值得实施批优先的簇。
+
+## 实施进度（2026-09-10）
+
+- **19-02 已修复**：`beforeError` 不再替换错误身份——改为在 `HTTPError` 上覆盖 `message`（后端信封 msg）并挂 `apiCode` 字段；ky 的 `isHTTPError()` 判定恢复，`retry.statusCodes` 白名单与 Retry-After 尊重重新生效（确定性 4xx 不再重试）。
+- **19-03 已修复**：新增 `userErrorMessage`（网络 TypeError → `error.networkError`、`TimeoutError` → 带方法/路径的 `error.timeout`、AbortError → `error.aborted`），`useToastActions.toastError` 统一经它取描述；两 locale 补 `error.timeout`/`error.aborted` 词条。
+- **19-04 已修复**：全局 timeout 10s → 30s；用量查询与用量预估显式 `timeout: 30000`（后端上游 15s），备份导入 `timeout: 120000`。
+- 测试：新增 `src/lib/__tests__/api.test.ts`（8 例：beforeError 两分支 + 错误身份保持、userErrorMessage 四分支、unwrap 两分支），`provider-detail.test.tsx` 补 17-01 竞态回归。前端 428 passed + tsc + biome 全绿。

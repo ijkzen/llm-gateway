@@ -1,3 +1,4 @@
+import { userErrorMessage } from "@/lib/api";
 import { useMemo } from "react";
 import { toast } from "sonner";
 
@@ -6,8 +7,10 @@ export function useToastActions() {
 	return useMemo(
 		() => ({
 			toastSuccess: (title: string) => toast.success(title),
-			toastError: (title: string, error: Error) =>
-				toast.error(title, { description: error.message }),
+			// 错误描述统一经 userErrorMessage：网络/超时错误不过 ky 的 beforeError，
+			// 直接取 message 会显示英文原文（19-03）。
+			toastError: (title: string, error: unknown) =>
+				toast.error(title, { description: userErrorMessage(error) }),
 		}),
 		[],
 	);

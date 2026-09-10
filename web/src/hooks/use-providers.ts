@@ -1,6 +1,7 @@
 import { virtualModelKeys } from "@/hooks/use-virtual-models";
 import { type ApiResponse, api, unwrap } from "@/lib/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 export interface Provider {
 	id: number;
@@ -90,21 +91,34 @@ export function useProviderDetail(id: number | null) {
 	});
 }
 
+/** 简单防抖值（17-03：模板匹配逐键触发会放大为双请求）。 */
+function useDebouncedValue(value: string, delayMs: number): string {
+	const [debounced, setDebounced] = useState(value);
+	useEffect(() => {
+		const timer = setTimeout(() => setDebounced(value), delayMs);
+		return () => clearTimeout(timer);
+	}, [value, delayMs]);
+	return debounced;
+}
+
 /** 按 Base URL 匹配模板，返回全部命中（同一 host 可能有多个模板）；未命中返回空数组（后端 404 在此吞掉）。 */
 export function useMatchTemplate(baseUrl: string) {
+	// 17-03：请求本身会抛 HTTPError（ky 默认 throwHttpErrors），await 必须在 try
+	// 内；未命中模板是输入 URL 的常态，逐键触发失败 query 会放大为双请求。
+	const debounced = useDebouncedValue(baseUrl, 300);
 	return useQuery<ProviderTemplate[]>({
-		queryKey: [...providerKeys.templateMatch, baseUrl],
+		queryKey: [...providerKeys.templateMatch, debounced],
 		queryFn: async () => {
-			const res = await api
-				.post("provider-templates/match", { json: { baseUrl } })
-				.json<ApiResponse<ProviderTemplate[]>>();
 			try {
+				const res = await api
+					.post("provider-templates/match", { json: { baseUrl: debounced } })
+					.json<ApiResponse<ProviderTemplate[]>>();
 				return unwrap(res);
 			} catch {
 				return [];
 			}
 		},
-		enabled: baseUrl.trim().length > 0,
+		enabled: debounced.trim().length > 0,
 	});
 }
 

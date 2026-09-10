@@ -28,7 +28,8 @@ export function useUsageEstimate(providerId: number | null) {
 		queryKey: usageEstimateKeys.estimate(providerId ?? -1),
 		queryFn: async () => {
 			const res = await api
-				.get(`providers/${providerId}/usage/estimate`)
+				// 内部会触发真实用量抓取（上游超时 15s），前端须留出余量（19-04）。
+				.get(`providers/${providerId}/usage/estimate`, { timeout: 30000 })
 				.json<ApiResponse<UsageEstimate>>();
 			return unwrap(res);
 		},

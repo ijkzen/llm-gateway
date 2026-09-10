@@ -41,7 +41,8 @@ export function useProviderUsage(id: number | null, refreshToken = 0) {
 		queryFn: async () => {
 			const suffix = refreshToken > 0 ? "?refresh=1" : "";
 			const res = await api
-				.get(`providers/${id}/usage${suffix}`)
+				// 上游用量抓取超时 15s（后端 usage/http.rs）：前端须留出余量（19-04）。
+				.get(`providers/${id}/usage${suffix}`, { timeout: 30000 })
 				.json<ApiResponse<ProviderUsage>>();
 			return unwrap(res);
 		},

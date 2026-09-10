@@ -173,6 +173,44 @@ describe("ProviderDetail 明文 API Key 展示", () => {
 		fireEvent.click(screen.getByRole("button", { name: "复制 API Key" }));
 		await waitFor(() => expect(mocks.toastError).toHaveBeenCalled());
 	});
+
+	it("在途期间切换供应商时丢弃迟到的明文（17-01 防串号）", async () => {
+		// 供应商 A 的明文请求挂起；期间把详情切到供应商 B，再让 A 的请求 resolve。
+		let resolveKey: ((v: string) => void) | undefined;
+		mocks.fetchProviderApiKey.mockImplementation(
+			() =>
+				new Promise<string>((resolve) => {
+					resolveKey = resolve;
+				}),
+		);
+		const { rerender } = render(
+			<MemoryRouter>
+				<ProviderDetail
+					provider={provider}
+					onEdit={vi.fn()}
+					onDelete={vi.fn()}
+					onSpeedTest={vi.fn()}
+				/>
+			</MemoryRouter>,
+		);
+		fireEvent.click(screen.getByRole("button", { name: "显示 API Key" }));
+
+		const other: Provider = { ...provider, id: 8, name: "Other", apiKeyMasked: "sk-****other" };
+		rerender(
+			<MemoryRouter>
+				<ProviderDetail
+					provider={other}
+					onEdit={vi.fn()}
+					onDelete={vi.fn()}
+					onSpeedTest={vi.fn()}
+				/>
+			</MemoryRouter>,
+		);
+		// A 的响应此刻才回来：不得写入 B 的详情。
+		resolveKey?.("sk-plain-of-A");
+		await waitFor(() => expect(screen.getByText("sk-****other")).toBeInTheDocument());
+		expect(screen.queryByText("sk-plain-of-A")).not.toBeInTheDocument();
+	});
 });
 
 describe("ProviderDetail 额外配置 / 自定义请求头折叠", () => {
