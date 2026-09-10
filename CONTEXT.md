@@ -30,12 +30,12 @@ _Avoid_: 出口代理（裸称）
 内嵌于二进制的 models.dev 全量模型元数据（363 条），是智能填充的唯一数据源。
 _Avoid_: models.json（实现指代）、知识库
 
-**刷新 (Refresh)**:
+**远端模型刷新 (Model Refresh)**:
 按供应商协议调用其 Models 接口，拉取远端模型 ID 列表作为待导入候选。
-_Avoid_: 同步、拉取
+_Avoid_: 同步、拉取、刷新（裸称，与页面刷新混淆）
 
 **候选模型 (Candidate)**:
-刷新返回的、尚未导入该供应商的远端模型条目，在添加弹窗中可勾选批量导入。
+远端模型刷新返回的、尚未导入该供应商的远端模型条目，在添加弹窗中可勾选批量导入。
 _Avoid_: 远端模型（裸称）
 
 **智能填充 (Smart Fill)**:
@@ -164,3 +164,9 @@ _Avoid_: 维度、实体行
 **思考载体 (Reasoning Details)**:
 上游思考输出的客户端侧载体（OpenRouter 兼容格式，ADR-0006）：非流式装 `message`、流式装 `delta.reasoning_details`，条目为 `reasoning.text`（明文）/ `reasoning.encrypted`（加密签名）并带 `format` 标记来源（anthropic-claude-v1 / openai-responses-v1 / google-gemini-v1）。网关把 Anthropic thinking+signature/redacted_thinking、Responses reasoning item encrypted_content（请求侧恒带 include）、Gemini thoughtSignature 捕获装入该载体；客户端把 assistant 消息原样回传后按 format 注入对应上游载体，跨 format/failover 换厂商 debug 丢弃，OpenAI Compat 直通剥离该字段（存量 `reasoning_content` 归一不受影响）。
 _Avoid_: 思考块（裸称）、thinking 字段（实现指代）
+
+### 前端域
+
+**页面刷新 (Page Refresh)**:
+顶栏刷新按钮的语义：清空全部非布局级前端查询缓存（登录态与健康检查除外）并重新取数当前页面；其它页面的缓存随之一并清空，切页时重新请求。
+_Avoid_: 缓存刷新、全量刷新、刷新（裸称，与远端模型刷新混淆）
