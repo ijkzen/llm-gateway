@@ -275,21 +275,21 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     tracing::info!("Listening on {}", config.bind_address);
 
     // 停止接收新连接并等既有连接收尾，但设上限（长连接不结束则超时进入收尾）。
-    let serve = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(HTTP_DRAIN_TIMEOUT_SECS),
+    // 关闭信号经 oneshot 转交 serve 触发优雅关停；上限只从信号到达后计时。
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
+        let _ = shutdown_rx.await;
+    });
+    let shutdown = async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(());
+    };
+    serve_until_shutdown(
         serve,
+        shutdown,
+        std::time::Duration::from_secs(HTTP_DRAIN_TIMEOUT_SECS),
     )
-    .await
-    {
-        Ok(result) => result?,
-        Err(_) => {
-            tracing::warn!(
-                "HTTP 服务在 {}s 内未完成收尾（长连接未结束），继续执行调度器与任务收尾",
-                HTTP_DRAIN_TIMEOUT_SECS
-            );
-        }
-    }
+    .await?;
 
     // Stop scheduling new runs first, then wait for in-flight jobs to finish
     // (bounded by a timeout) so jobs are not aborted mid-write.
@@ -300,6 +300,40 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     tracing::info!("Shutdown complete");
 
     Ok(())
+}
+
+/// 跑 HTTP 服务直到收到关闭信号，随后只给「收尾等待」设上限（15-01）。
+///
+/// 上限**必须**从信号到达后才开始计时：SSE 日志流与流式 /v1 长连接不会自行
+/// 结束，无上限会把 scheduler.stop 与 worker 收尾无限期钉死；而若把超时套在
+/// 整个 serve 上，未收到信号时进程也会在启动满 N 秒后走完超时分支自行退出
+/// （容器反复重启、健康检查永远不通过）。
+async fn serve_until_shutdown<S, G>(
+    serve: S,
+    shutdown: G,
+    drain_timeout: std::time::Duration,
+) -> std::io::Result<()>
+where
+    S: std::future::IntoFuture<Output = std::io::Result<()>>,
+    G: std::future::Future<Output = ()>,
+{
+    let serve = serve.into_future();
+    tokio::pin!(serve);
+    tokio::select! {
+        result = &mut serve => return result,
+        _ = shutdown => {}
+    }
+
+    match tokio::time::timeout(drain_timeout, &mut serve).await {
+        Ok(result) => result,
+        Err(_) => {
+            tracing::warn!(
+                "HTTP 服务在 {}s 内未完成收尾（长连接未结束），继续执行调度器与任务收尾",
+                drain_timeout.as_secs()
+            );
+            Ok(())
+        }
+    }
 }
 
 async fn shutdown_signal() {
@@ -326,4 +360,75 @@ async fn shutdown_signal() {
     }
 
     tracing::info!("Signal received, starting graceful shutdown");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::future::pending;
+    use std::time::Duration;
+
+    /// 回归（4863c53）：关闭信号到达前不得因收尾上限退出。
+    /// 曾把 timeout 套在整个 serve 上，导致启动满 8s 即自行退出、容器反复重启。
+    #[tokio::test(start_paused = true)]
+    async fn test_serve_until_shutdown_survives_past_drain_timeout_without_signal() {
+        let serve = pending::<std::io::Result<()>>();
+        let task = tokio::spawn(serve_until_shutdown(
+            serve,
+            pending::<()>(),
+            Duration::from_secs(HTTP_DRAIN_TIMEOUT_SECS),
+        ));
+
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        assert!(
+            !task.is_finished(),
+            "信号到达前不得因收尾上限退出（4863c53 回归）"
+        );
+
+        task.abort();
+    }
+
+    /// 信号到达后收尾仍未结束（长连接钉住）：上限放行，不再无限期等待。
+    #[tokio::test(start_paused = true)]
+    async fn test_serve_until_shutdown_releases_after_signal() {
+        let started = tokio::time::Instant::now();
+
+        serve_until_shutdown(
+            pending::<std::io::Result<()>>(),
+            async {},
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("超时放行应视为正常收尾");
+
+        assert_eq!(started.elapsed(), Duration::from_secs(5));
+    }
+
+    /// 信号到达且收尾及时完成：返回 serve 的结果。
+    #[tokio::test(start_paused = true)]
+    async fn test_serve_until_shutdown_returns_serve_result() {
+        let serve = async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok::<(), std::io::Error>(())
+        };
+        let started = tokio::time::Instant::now();
+
+        serve_until_shutdown(serve, async {}, Duration::from_secs(5))
+            .await
+            .expect("收尾完成应原样返回");
+
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
+    }
+
+    /// serve 自身失败（未收到信号）：错误直接上抛，不等信号也不吃上限。
+    #[tokio::test(start_paused = true)]
+    async fn test_serve_until_shutdown_propagates_serve_error() {
+        let serve = async { Err::<(), std::io::Error>(std::io::Error::other("bind failed")) };
+
+        let err = serve_until_shutdown(serve, pending::<()>(), Duration::from_secs(5))
+            .await
+            .expect_err("serve 错误必须上抛");
+
+        assert_eq!(err.to_string(), "bind failed");
+    }
 }
