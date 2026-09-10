@@ -243,7 +243,8 @@ pub fn chat_reasoning(chat: &Value) -> ChatReasoning {
     ChatReasoning::Unspecified
 }
 
-/// 拼接上游 URL：沿用 `build_models_url` 的版本段规则。
+/// 拼接上游 URL：版本段判定与刷新侧共用
+/// [`crate::provider_model::refresh::is_version_segment`]（单一事实源）。
 /// base 末段已是版本段（`v1`/`v1beta`/`v1alpha`，或 OpenAI 兼容服务自定义的
 /// `v2`/`v3`/`v4` 等纯数字版本）则直接拼子路径；否则按协议补默认版本段
 /// （OpenAI Compat 补 `v1`、Gemini 补 `v1beta`）。
@@ -252,11 +253,7 @@ pub fn chat_reasoning(chat: &Value) -> ChatReasoning {
 pub fn build_upstream_url(base_url: &str, protocol_type: i32, sub_path: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
     let last = trimmed.rsplit('/').next().unwrap_or("");
-    let is_version_segment = matches!(last, "v1" | "v1beta" | "v1alpha")
-        || (last.starts_with('v')
-            && last.len() > 1
-            && last[1..].chars().all(|c| c.is_ascii_digit()));
-    if is_version_segment {
+    if crate::provider_model::refresh::is_version_segment(last) {
         format!("{trimmed}/{sub_path}")
     } else if protocol_type == PROTOCOL_GEMINI {
         format!("{trimmed}/v1beta/{sub_path}")

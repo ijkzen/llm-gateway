@@ -800,12 +800,13 @@ async fn get_provider_usage(
         .refresh
         .as_deref()
         .is_some_and(|v| v == "1" || v == "true");
-    if !force_refresh
-        && let Ok(Some(data)) = crate::usage::persist::read_usage_cache(&state.db, id).await
+    // 单飞 + 失效代次护栏（11-02/11-25）：并发 GET 只打一次上游；抓取期间
+    // 凭据被更新则结果作废（502 类，客户端可重试）。
+    match state
+        .usage_mem
+        .fetch_shared_stored(&state.db, id, force_refresh)
+        .await
     {
-        return (StatusCode::OK, Json(Response::success(payload(data))));
-    }
-    match crate::usage::persist::fetch_and_store(&state.db, id).await {
         Ok(data) => (StatusCode::OK, Json(Response::success(payload(data)))),
         Err(e) if e.is_client_error() => response::bad_request(e.user_message(lang)),
         Err(e) => response::bad_gateway(e.user_message(lang)),
@@ -872,14 +873,15 @@ async fn get_provider_usage_estimate(
         );
     }
 
-    // 用量数据：数据库缓存新鲜直出，过期/缺失才真实抓取。
-    let data = match crate::usage::persist::read_usage_cache(&state.db, id).await {
-        Ok(Some(data)) => data,
-        _ => match crate::usage::persist::fetch_and_store(&state.db, id).await {
-            Ok(data) => data,
-            Err(e) if e.is_client_error() => return response::bad_request(e.user_message(lang)),
-            Err(e) => return response::bad_gateway(e.user_message(lang)),
-        },
+    // 用量数据：数据库缓存新鲜直出，过期/缺失才真实抓取（单飞 + 代次护栏）。
+    let data = match state
+        .usage_mem
+        .fetch_shared_stored(&state.db, id, false)
+        .await
+    {
+        Ok(data) => data,
+        Err(e) if e.is_client_error() => return response::bad_request(e.user_message(lang)),
+        Err(e) => return response::bad_gateway(e.user_message(lang)),
     };
 
     // 选取可用窗口：weekly 优先，其次 monthly。

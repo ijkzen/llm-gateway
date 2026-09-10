@@ -185,22 +185,10 @@ async fn update_setting(
                 return response::bad_request(msg);
             }
 
-            // 时区变更需要重建全部定时任务（cron 语义时区切换）：
-            // 先在内存里用新时区重建并重算 next_run_at，再落库。
+            // 时区变更需要重建全部定时任务（cron 语义时区切换）：先落库并刷新
+            // 进程内缓存，再用新时区重建任务——重算 next_run_at 读的是缓存，
+            // 顺序反了会按旧时区重建（与备份导入路径一致）。
             let timezone_changed = key == KEY_TIMEZONE && model.value != req.value;
-            if timezone_changed {
-                let repo = crate::cron::repository::SeaOrmCronJobRepository::new(state.db.clone());
-                if let Err(e) = state.scheduler.reload_all_jobs(&repo).await {
-                    tracing::error!("Failed to reload cron jobs after timezone change: {}", e);
-                    return response::scheduler_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        lang.tr(
-                            "时区变更后重建定时任务失败",
-                            "failed to rebuild cron jobs after timezone change",
-                        ),
-                    );
-                }
-            }
 
             let mut active: setting::ActiveModel = model.into();
             active.value = Set(req.value.clone());
@@ -208,9 +196,26 @@ async fn update_setting(
 
             match active.update(&state.db).await {
                 Ok(_) => {
-                    // 落库成功后刷新进程内缓存（失败时数据库已是新值，
-                    // 缓存以数据库为准，不阻塞响应）。
+                    // 落库成功后刷新进程内缓存（settings.update 不失败）。
                     state.settings.update(&key, &req.value).await;
+
+                    if timezone_changed {
+                        let repo =
+                            crate::cron::repository::SeaOrmCronJobRepository::new(state.db.clone());
+                        if let Err(e) = state.scheduler.reload_all_jobs(&repo).await {
+                            tracing::error!(
+                                "Failed to reload cron jobs after timezone change: {}",
+                                e
+                            );
+                            return response::scheduler_error(
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                lang.tr(
+                                    "时区变更后重建定时任务失败",
+                                    "failed to rebuild cron jobs after timezone change",
+                                ),
+                            );
+                        }
+                    }
 
                     // 语言切换：把未自定义标题/描述的任务同步为目标语言默认文案。
                     if key == KEY_LANGUAGE {

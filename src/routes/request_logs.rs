@@ -133,7 +133,8 @@ async fn list_request_logs(
         .page_size
         .unwrap_or(DEFAULT_PAGE_SIZE)
         .clamp(1, MAX_PAGE_SIZE);
-    let offset = ((page - 1) * page_size) as i64;
+    // 先转 i64 再乘：u32 相乘在 page > ~4294 万时溢出（dev panic / release 静默回绕）。
+    let offset = (i64::from(page) - 1) * i64::from(page_size);
 
     // 拼接 WHERE 条件与绑定参数。
     let mut where_sql = String::from("WHERE 1=1");

@@ -3,22 +3,35 @@
 //! DB 往返；缓存缺失时的真实抓取按 provider 单飞去重（同一瞬间多个并发
 //! 请求只发一次上游调用）。Provider 更新/删除时调用 [`UsageMemCache::invalidate`]
 //! 保持与数据库缓存同失效语义。
+//!
+//! 失效代次护栏（11-02）：invalidate 自增该 provider 的代次，抓取在开始前
+//! 记录代次、写库/回填前比对——期间发生过失效（凭据已变）则丢弃在途结果，
+//! 避免旧凭据抓到的数据把刚失效的缓存写回。
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sea_orm::DatabaseConnection;
 
+use super::error::UsageError;
 use super::persist::{cache_age_fresh, cache_age_fresh_at, fetch_and_store};
 use super::types::UsageData;
 
+/// 抓取结果（单飞通道载荷，保留错误供接口层按类型映射响应）。
+type FetchResult = Result<UsageData, UsageError>;
+
 /// 并发抓取 in-flight 表：provider_id → 完成通知通道。
-type InFlightMap = tokio::sync::Mutex<HashMap<i32, tokio::sync::watch::Sender<Option<UsageData>>>>;
+type InFlightMap = tokio::sync::Mutex<HashMap<i32, tokio::sync::watch::Sender<FetchResult>>>;
 
 #[derive(Clone, Default)]
 pub struct UsageMemCache {
     entries: Arc<tokio::sync::Mutex<HashMap<i32, UsageData>>>,
     in_flight: Arc<InFlightMap>,
+    /// provider_id → 失效代次（invalidate 自增；抓取写回前比对，11-02）。
+    generations: Arc<tokio::sync::Mutex<HashMap<i32, u64>>>,
+    /// 全局代次计数器（为每个 provider 分配单调递增的代次）。
+    generation_seq: Arc<AtomicU64>,
 }
 
 impl UsageMemCache {
@@ -56,19 +69,50 @@ impl UsageMemCache {
     }
 
     /// 失效单家（Provider 更新/删除后调用，避免旧凭据用量残留）。
+    /// 同时自增失效代次：在途抓取写回前比对不一致即丢弃（11-02）。
     pub async fn invalidate(&self, provider_id: i32) {
         self.entries.lock().await.remove(&provider_id);
         self.in_flight.lock().await.remove(&provider_id);
+        let seq = self.generation_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        self.generations.lock().await.insert(provider_id, seq);
+    }
+
+    /// 当前失效代次（抓取开始前记录，写回前比对）。
+    pub async fn generation(&self, provider_id: i32) -> u64 {
+        self.generations
+            .lock()
+            .await
+            .get(&provider_id)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// 并发去重的真实抓取：同 provider 同时只发一次上游调用，其余请求等结果。
     /// `fetch` 为实际抓取闭包（生产走 `fetch_and_store`），可注入计数便于测试。
+    ///
+    /// 失效代次护栏（11-02）：开始前记录代次，抓取期间发生过 invalidate
+    /// （凭据已变）则丢弃结果——不回填内存、不写库，调用方得到 None 走回退。
     pub async fn fetch_shared_with<F, Fut>(&self, provider_id: i32, fetch: F) -> Option<UsageData>
     where
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = Option<UsageData>>,
     {
-        let mut waiter: Option<tokio::sync::watch::Receiver<Option<UsageData>>> = None;
+        self.fetch_shared_result(provider_id, || async {
+            fetch().await.ok_or(UsageError::Auth)
+        })
+        .await
+        .ok()
+    }
+
+    /// 单飞抓取（保留错误类型供接口层映射响应；11-25 收敛路由与 LB 到同一入口）。
+    /// `fetch` 返回抓取结果（不含写缓存副作用），成功且未失效时由本方法回填内存。
+    pub async fn fetch_shared_result<F, Fut>(&self, provider_id: i32, fetch: F) -> FetchResult
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = FetchResult>,
+    {
+        let generation = self.generation(provider_id).await;
+        let mut waiter: Option<tokio::sync::watch::Receiver<FetchResult>> = None;
         let creator_tx = {
             let mut in_flight = self.in_flight.lock().await;
             match in_flight.get(&provider_id) {
@@ -77,7 +121,7 @@ impl UsageMemCache {
                     None
                 }
                 None => {
-                    let (tx, _rx) = tokio::sync::watch::channel(None);
+                    let (tx, _rx) = tokio::sync::watch::channel(Err(UsageError::Auth));
                     in_flight.insert(provider_id, tx.clone());
                     Some(tx)
                 }
@@ -85,17 +129,17 @@ impl UsageMemCache {
         };
 
         if let Some(mut rx) = waiter {
-            // 等待创建者完成；创建者被取消时 guard 也会通知 None，不会悬挂。
+            // 等待创建者完成；创建者被取消时 guard 也会通知，不会悬挂。
             let _ = rx.changed().await;
             return rx.borrow().clone();
         }
 
         // 创建者：负责真实抓取并通知等待者；guard 保证异常路径（future 被
-        // 取消）也会清理 in-flight 并通知 None，避免等待者悬挂。
+        // 取消）也会清理 in-flight 并通知，避免等待者悬挂。
         struct Cleanup<'a> {
             provider_id: i32,
             in_flight: &'a Arc<InFlightMap>,
-            tx: tokio::sync::watch::Sender<Option<UsageData>>,
+            tx: tokio::sync::watch::Sender<FetchResult>,
             sent: bool,
         }
         impl Drop for Cleanup<'_> {
@@ -104,8 +148,8 @@ impl UsageMemCache {
                 if let Ok(mut in_flight) = self.in_flight.try_lock() {
                     in_flight.remove(&self.provider_id);
                 }
-                if !self.sent && self.tx.borrow().is_none() {
-                    let _ = self.tx.send(None);
+                if !self.sent && self.tx.borrow().is_err() {
+                    let _ = self.tx.send(Err(UsageError::Auth));
                 }
             }
         }
@@ -115,8 +159,11 @@ impl UsageMemCache {
             tx: creator_tx.expect("创建者分支必有 sender"),
             sent: false,
         };
-        let result = fetch().await;
-        if let Some(data) = &result {
+        let mut result = fetch().await;
+        // 抓取期间发生过失效：丢弃结果，避免旧凭据数据写回刚清空的缓存。
+        if self.generation(provider_id).await != generation {
+            result = Err(UsageError::Stale);
+        } else if let Ok(data) = &result {
             self.store(data.clone()).await;
         }
         cleanup.sent = true;
@@ -133,6 +180,37 @@ impl UsageMemCache {
         let db = db.clone();
         self.fetch_shared_with(provider_id, move || async move {
             fetch_and_store(&db, provider_id).await.ok()
+        })
+        .await
+    }
+
+    /// 单飞抓取并写库（保留错误类型；供管理端用量接口使用）。
+    /// `force`：`?refresh=1` 等强制重取（跳过新鲜度短路，仍走单飞与代次护栏）。
+    pub async fn fetch_shared_stored(
+        &self,
+        db: &DatabaseConnection,
+        provider_id: i32,
+        force: bool,
+    ) -> FetchResult {
+        if !force && let Ok(Some(data)) = super::persist::read_usage_cache(db, provider_id).await {
+            return Ok(data);
+        }
+        // 闭包内先抓取、写库前再比对代次：抓取期间凭据被更新则连库缓存也不写。
+        let cache = self.clone();
+        self.fetch_shared_result(provider_id, move || {
+            let db = db.clone();
+            let cache = cache.clone();
+            async move {
+                let generation = cache.generation(provider_id).await;
+                let data = crate::usage::query_provider_usage(&db, provider_id).await?;
+                if cache.generation(provider_id).await != generation {
+                    return Err(UsageError::Stale);
+                }
+                super::persist::write_usage_cache(&db, &data)
+                    .await
+                    .map_err(|e| UsageError::Database(e.to_string()))?;
+                Ok(data)
+            }
         })
         .await
     }
@@ -188,6 +266,32 @@ mod tests {
         assert!(cache.read(9).await.is_some());
         cache.invalidate(9).await;
         assert!(cache.read(9).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn mem_cache_fetch_discards_result_when_invalidated_midflight() {
+        let cache = UsageMemCache::default();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let fetcher = cache.clone();
+        let handle = tokio::spawn(async move {
+            fetcher
+                .fetch_shared_with(11, move || async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    Some(balance_data(11, &[1.0]))
+                })
+                .await
+        });
+        started_rx.await.unwrap();
+        // 抓取在途时供应商被更新（缓存失效 + 代次自增）。
+        cache.invalidate(11).await;
+        let _ = release_tx.send(());
+        assert!(
+            handle.await.unwrap().is_none(),
+            "失效期间完成的抓取结果应作废（11-02 护栏）"
+        );
+        assert!(cache.read(11).await.is_none(), "作废结果不得回填缓存");
     }
 
     #[tokio::test]

@@ -4,7 +4,7 @@ use crate::i18n::Lang;
 
 /// 用量查询失败原因。HTTP 映射见 `crate::routes::providers::get_provider_usage`：
 /// 前四类为 400（用户可修正），后三类为 502（上游/网络问题）。
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum UsageError {
     #[error("该供应商未开启用量查询")]
     NotEnabled,
@@ -22,6 +22,9 @@ pub enum UsageError {
     Parse(String),
     #[error("用量缓存写入失败：{0}")]
     Database(String),
+    /// 抓取期间供应商凭据被更新（缓存已失效）：结果作废，请重试（11-02 护栏）。
+    #[error("供应商凭据已变更，本次用量抓取结果作废")]
+    Stale,
 }
 
 impl UsageError {
@@ -34,6 +37,11 @@ impl UsageError {
                 | UsageError::MissingCredential(_)
                 | UsageError::Auth
         )
+    }
+
+    /// 是否为「期间发生变更、结果作废」类（调用方可重试，非故障）。
+    pub fn is_stale(&self) -> bool {
+        matches!(self, UsageError::Stale)
     }
 
     /// 按管理后台语言生成用户可见消息（默认 zh 输出与 Display 一致）。
@@ -92,6 +100,12 @@ impl UsageError {
                     format!("用量缓存写入失败：{detail}")
                 }
             }
+            UsageError::Stale => lang
+                .tr(
+                    "供应商凭据已变更，本次用量抓取结果已作废，请重试",
+                    "provider credentials changed; this usage fetch result was discarded, please retry",
+                )
+                .to_string(),
         }
     }
 }

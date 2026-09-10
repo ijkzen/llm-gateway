@@ -6,9 +6,9 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 11-01 | P2 | 逻辑/时序 | 时区变更时 `reload_all_jobs` 在 `settings.update` 之前调用，调度器用旧时区重建——代码与自身注释矛盾；当前全部种子任务时区不敏感故零可见影响，一旦出现 tz 敏感 cron 行即升 P1 |
-| 11-02 | P2 | 竞态 | 更新/删除供应商失效用量缓存与「在途真实抓取」无版本护栏：在途抓取可在失效后回写旧凭据用量，脏缓存最长存活一个 TTL（10 分钟） |
-| 11-03 | P2 | 逻辑/健壮 | request_logs 分页 offset 用 u32 相乘：超大 page 溢出（dev panic→CatchPanic 500 / release 静默回绕返回错页） |
+| 11-01 | P2【已修复 2026-09-10】 | 逻辑/时序 | 时区变更时 `reload_all_jobs` 在 `settings.update` 之前调用，调度器用旧时区重建——代码与自身注释矛盾；当前全部种子任务时区不敏感故零可见影响，一旦出现 tz 敏感 cron 行即升 P1 |
+| 11-02 | P2【已修复 2026-09-10】 | 竞态 | 更新/删除供应商失效用量缓存与「在途真实抓取」无版本护栏：在途抓取可在失效后回写旧凭据用量，脏缓存最长存活一个 TTL（10 分钟） |
+| 11-03 | P2【已修复 2026-09-10】 | 逻辑/健壮 | request_logs 分页 offset 用 u32 相乘：超大 page 溢出（dev panic→CatchPanic 500 / release 静默回绕返回错页） |
 | 11-04 | P3 | 事务完整性 | `update_provider` 先提交字段更新再调可用性动作，动作失败返回 500 但字段已落库（部分成功却报失败） |
 | 11-05 | P3 | 逻辑/i18n | `update_provider` 两处错误消息硬编码中文绕过 lang（英文环境收中文） |
 | 11-06 | P3 | 逻辑/一致性 | cron `update_job` 先落库后改内存，内存更新失败不回滚 DB——DB 新值而列表展示旧值，重启才收敛 |
@@ -40,17 +40,17 @@
 
 ## 各条证据
 
-### 11-01 时区变更重载用旧时区（P2，逻辑/时序）
+### 11-01 时区变更重载用旧时区（P2，逻辑/时序）【已修复 2026-09-10】
 
 `routes/settings.rs:190-213`：`reload_all_jobs`（:193）在 `active.update`（:209）与 `state.settings.update(&key, &req.value)`（:213）**之前**执行；而 `reload_all_jobs` 重建 job 与重算 next_run_at 读的时区来自进程内缓存 `self.settings.timezone()`（cron/scheduler.rs:321、:582；AppSettings::timezone 读 `inner.read()`，app_settings.rs:207-209），此刻缓存仍是旧值。代码注释（settings.rs:188-189）自称「先在内存里用新时区重建并重算 next_run_at，再落库」——实现与注释矛盾。对照组：备份导入路径顺序正确（routes/backup.rs:73-84 先逐行 `settings.update` 再 `reload_all_jobs`）。
 
 **当前零可见影响**：全部内置任务 `@every 5m`/`@every 1h`/`@hourly`（cron/seed.rs:88-98）均时区不敏感（间隔制或每小时整点，任何时区同一刻），且无创建任务 API，tz 敏感 cron 行进不了库。一旦出现 `0 0 8 * * *` 类定点任务即升 P1（静默按旧时区触发，重启才自愈）。默认解：把 `reload_all_jobs` 移到 `settings.update` 之后（对齐 backup.rs 顺序），一行顺序调整；测试缺口正对【测试覆盖盘点】T1。
 
-### 11-02 用量缓存失效与在途抓取竞态（P2，竞态）
+### 11-02 用量缓存失效与在途抓取竞态（P2，竞态）【已修复 2026-09-10】
 
 失效点成对无误（providers.rs:534-537 更新后、:685-688 删除后，`invalidate_usage_cache` + `usage_mem.invalidate`）。写点无护栏：`fetch_and_store`（usage/persist.rs:127-137）先抓后写，`write_usage_cache`（:83-108）按 provider_id 无条件 upsert，无代次/`fetched_at` 比较。交错序列：GET /usage 或 LB 抓取在途（读的是旧凭据）→ PUT 更新提交并失效缓存 → 在途抓取返回回写旧数据 → 展示/选路/边界探活用旧账号用量直至下个 TTL 或 cron 刷新。窗口窄、自愈（≤10 分钟）、无数据损坏，故 P2。默认解（实施批）：写前比对 provider.updated_at 快照不一致则丢弃，或把失效与在途取消挂钩。
 
-### 11-03 request_logs 分页 offset 溢出（P2，逻辑/健壮）
+### 11-03 request_logs 分页 offset 溢出（P2，逻辑/健壮）【已修复 2026-09-10】
 
 `request_logs.rs:131-136`：`page`/`page_size` 均 u32（:43-44），`let offset = ((page - 1) * page_size) as i64;`。page_size 上限 100，page > ~42,949,672 即 u32 乘法溢出。Cargo.toml 无 profile 覆盖：dev/test 默认 overflow-checks → panic（CatchPanic 转 500）；release 静默回绕 → offset 错、返回错误页数据（非报错）。默认解：先转 i64 再乘（一行）。测试缺口 T11 正对。
 
@@ -138,7 +138,7 @@ providers.rs:326-342 list_providers 全表 + 逐行 api_key/extra 双解密；pr
 
 virtual_models.rs:464-476：`for id in provider_ids { read_usage_cache(db, *id) }` 每供应商一次 DB 往返，列表端点（:532）对所有虚拟模型涉及的去重供应商逐个查。persist 层已有批读 `read_usage_cache_many`（persist.rs:45-65）全仓仅 lb.rs:426 消费且零测试（07-04 已记）。默认解：改用批读，一行替换 + 顺带消 07-04 的「零消费方」死角。
 
-### 11-25 用量读端点抓取无单飞（P3，性能/竞态）
+### 11-25 用量读端点抓取无单飞（P3，性能/竞态）【已修复 2026-09-10】
 
 providers.rs:808-812（/usage）、:876-883（/usage/estimate）缓存未命中即直调 `fetch_and_store`；`mem_cache.fetch_shared_with`（mem_cache.rs:66-138）单飞只服务 LB（lb.rs:445）。并发 GET 同供应商重复真实抓取。默认解=07-01 同一方案：四路抓取收敛 mem.fetch_shared 单飞入口。
 
@@ -199,3 +199,10 @@ providers.rs:46-65 响应无 `disabled_reason`（实体有，entity/provider.rs 
 ## 性能/内存轮结论
 
 无 P1/P2 性能项。正向：列表域无经典 N+1（除 11-24）；request_logs count+list 固定双查询、page_size≤100、无无界导出；SSE 每连接一个 broadcast 订阅+15s KeepAlive 断开即 drop（容量 8192、Lagged 转 reset）；cron 列表内存 map+一次 list_by_names；settings/backup/api_keys 均为配置量级。P3 级集中四点：11-23（无分页列表+逐行解密）、11-24（usage map N+1，有现成批读可换）、11-25（用量抓取无单飞，默认解=07-01 收敛单飞）、11-26（modelId 过滤与 requestTime/totalTokens 排序无索引）。备份导入整 JSON 读入内存+设置逐条 upsert（N+1）为配置量级可接受。结论：形态适合当前规模，唯一值得实施批优先的是 11-24（一行替换顺带消死角）与 11-25（与 07-01 合并实施）。
+
+## 实施进度
+
+- **11-01 已修复**：`settings.rs::update_setting` 的 `reload_all_jobs` 从「落库前」移到「落库 + 缓存刷新后」——重算 next_run_at 读进程内时区缓存，顺序反了会按旧时区重建（对齐 backup 导入路径的正确顺序）。
+- **11-02 已修复**：`UsageMemCache` 增加 provider 失效代次（`invalidate` 自增、`generation()` 读取），单飞抓取在开始前记录代次、写库与回填内存前比对，期间发生失效即作废结果（新增 `UsageError::Stale`，502 类可重试）；单测 `mem_cache_fetch_discards_result_when_invalidated_midflight`（先红后绿已验）。ADR-0009 Decision 5。
+- **11-03 已修复**：`request_logs.rs` offset 改 `(i64::from(page) - 1) * i64::from(page_size)`，u32 乘法溢出（dev panic / release 静默回绕）消除。
+- **11-25 已修复**：`/usage` 与 `/usage/estimate` 两个读端点改用 `usage_mem.fetch_shared_stored`（含新鲜度短路 + 单飞 + 代次护栏），与 LB 兜底共用同一入口，并发 GET 不再重复打上游。

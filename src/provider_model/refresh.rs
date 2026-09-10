@@ -14,6 +14,16 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// 远端错误消息透传给前端时的截断长度。
 const ERROR_BODY_LIMIT: usize = 200;
 
+/// 末段是否为版本段：`v1`/`v1beta`/`v1alpha`，或 `v` + 纯数字
+/// （OpenAI 兼容服务自定义的 `v2`/`v3`/`v4` 等）。刷新与转发两侧共用同一判定
+/// （14-01：刷新侧曾只认前三者，vN 供应商刷新 404）。
+pub fn is_version_segment(last: &str) -> bool {
+    matches!(last, "v1" | "v1beta" | "v1alpha")
+        || (last.starts_with('v')
+            && last.len() > 1
+            && last[1..].chars().all(|c| c.is_ascii_digit()))
+}
+
 /// 拼接 Models 接口 URL：去掉尾部 `/` 后，若末段不是版本段则按协议补默认版本段。
 ///
 /// 种子模板的 base_url 普遍已带 `/v1`（Anthropic 兼容端点亦然），
@@ -26,7 +36,7 @@ pub fn build_models_url(base_url: &str, protocol_type: i32) -> String {
     } else {
         "v1"
     };
-    if matches!(last, "v1" | "v1beta" | "v1alpha") {
+    if is_version_segment(last) {
         format!("{trimmed}/models")
     } else {
         format!("{trimmed}/{default_version}/models")
@@ -148,6 +158,44 @@ mod tests {
                 PROTOCOL_GEMINI
             ),
             "https://generativelanguage.googleapis.com/v1beta/models"
+        );
+    }
+
+    #[test]
+    fn test_build_models_url_recognizes_vn_version_segments() {
+        // 14-01：火山/腾讯/Z.AI/智谱/Eden 等 v3/v4 末端此前被当普通路径段再补 /v1。
+        assert_eq!(
+            build_models_url(
+                "https://ark.cn-beijing.volces.com/api/v3",
+                PROTOCOL_OPENAI_COMPATIBLE
+            ),
+            "https://ark.cn-beijing.volces.com/api/v3/models"
+        );
+        assert_eq!(
+            build_models_url(
+                "https://ark.cn-beijing.volces.com/api/coding/v3",
+                PROTOCOL_OPENAI_COMPATIBLE
+            ),
+            "https://ark.cn-beijing.volces.com/api/coding/v3/models"
+        );
+        assert_eq!(
+            build_models_url(
+                "https://open.bigmodel.cn/api/paas/v4",
+                PROTOCOL_OPENAI_COMPATIBLE
+            ),
+            "https://open.bigmodel.cn/api/paas/v4/models"
+        );
+        assert_eq!(
+            build_models_url("https://api.example.com/v2/", PROTOCOL_OPENAI_COMPATIBLE),
+            "https://api.example.com/v2/models"
+        );
+        // 非版本段（v1 后跟普通段）仍补默认版本。
+        assert_eq!(
+            build_models_url(
+                "https://api.upstage.ai/v1/solar",
+                PROTOCOL_OPENAI_COMPATIBLE
+            ),
+            "https://api.upstage.ai/v1/solar/v1/models"
         );
     }
 

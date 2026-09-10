@@ -6,7 +6,7 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 14-01 | P2 | 逻辑/F8 | `build_models_url` 版本段白名单（仅 v1/v1beta/v1alpha）窄于 `build_upstream_url`（v+纯数字）：9 个 v3/v4 种子供应商（火山×2/腾讯×2/Z.AI×2/智谱×2/Eden）的「刷新模型」拼出 `.../v3/v1/models` 必 404——火山 v3 修复只修了推理侧，刷新侧漏改 |
+| 14-01 | P2【已修复 2026-09-10】 | 逻辑/F8 | `build_models_url` 版本段白名单（仅 v1/v1beta/v1alpha）窄于 `build_upstream_url`（v+纯数字）：9 个 v3/v4 种子供应商（火山×2/腾讯×2/Z.AI×2/智谱×2/Eden）的「刷新模型」拼出 `.../v3/v1/models` 必 404——火山 v3 修复只修了推理侧，刷新侧漏改 |
 | 14-02 | P3 | 逻辑/时区 | 首启空库时区分叉：种子行在解析之后才插入，运行期 `inner.timezone=None`（cron 走 chrono::Local）与 `timezone_sync()`（回退 Asia/Shanghai，stats/usage 用）分叉；重启自愈，生产容器 TZ=Asia/Shanghai 掩盖；叠加「同值 PUT 不触发 reload」无法自助修正 |
 | 14-03 | P3 | 逻辑/校验 | `max_consecutive_failures` 校验按 i64≥1 无上限（settings.rs:112-121），缓存/加载按 u32 解析（app_settings.rs:131/240）——越界值落库后被静默忽略，库与运行期不一致 |
 | 14-04 | P3 | 测试基建 | 测试 harness 给 scheduler 与 app 各建一个 `AppSettings::default()`（tests/common/mod.rs:60/63/77/176）——时区类行为在测试里对调度器不可见（11-01 未被抓到的根因）；i18n 时区测试只断言 `next_run_at !=` 旧值（变错方向也算过） |
@@ -27,7 +27,7 @@
 
 ## 各条证据
 
-### 14-01 build_models_url 版本段判定窄于 build_upstream_url（P2，F8 升级）
+### 14-01 build_models_url 版本段判定窄于 build_upstream_url（P2，F8 升级）【已修复 2026-09-10】
 
 refresh.rs:29 `matches!(last, "v1" | "v1beta" | "v1alpha")`，否则一律补 `{default_version}/models`；convert/mod.rs:252-266 的 `is_version_segment` 额外认 `v`+纯数字（注释自带火山 v3 教训）。后果链：provider_models.rs:681 → refresh.rs:48 → 末段 v3/v4 的 base_url 拼出 `.../v3/v1/models` → 404，管理端刷新模型对该供应商**必失败**。受影响种子 9 条（磁盘 grep 实证）：Eden AI（chunk_1.rs:322 `/v3`）、腾讯 Coding/Token Plan（chunk_4.rs:69/76 `/coding|plan/v3`）、火山 Ark ×2（chunk_4.rs:182/189 `/api/v3`、`/api/coding/v3`）、Z.AI ×2 与智谱 ×2（chunk_4.rs:252/259/287/294 `/paas/v4` 系）。推理链路走 build_upstream_url 正常，只有刷新坏；火山 v3 修复（build_upstream_url 认 vN）未回填刷新侧。默认解：版本段判定抽共享 helper，refresh 复用 convert 侧判定，9 家随批修复+补测试（14-12）。附带观察：末段为普通路径段的种子（Upstage `/v1/solar`、Opper `/v3/compat` 等）两个函数都会再叠一层 `/v1`，属种子数据与判定规则的共同错位，图后单独评估。
 
@@ -43,7 +43,7 @@ settings.rs:112-121 校验 `i64 ≥ 1` 无上限；app_settings.rs:131（加载�
 
 tests/common/mod.rs:60（JobWorker::new_with_settings 一个 default）:63（SchedulerRuntime::new_with_settings 另一个）:77/176（build_*_with_settings 又一个）——scheduler 与 HTTP 应用各持独立 AppSettings。生产是同 Arc clone（lib.rs:145/154）。后果：设置 PUT 只更新 app 侧实例，调度器侧永远 default（timezone=None→Local）——时区 reload 类行为测试不可见，11-01 因此未被抓到；i18n_integration.rs:137-184 的时区测试只断言 `next_run_at != before`（方向错误也算变）。默认解：harness 收成一个共享实例（与生产同形），时区测试补「按新时区重建」断言。
 
-### 14-05 convert 注释方向说反（P3，注释）
+### 14-05 convert 注释方向说反（P3，注释）【已随 14-01 修复】
 
 convert/mod.rs:246「沿用 `build_models_url` 的版本段规则」——实际 build_upstream_url 是超集、refresh.rs:21-32 是子集。注释会误导以后者为准删 vN 分支。默认解：14-01 收敛单实现后删注释，或改述为「版本段判定基准」。
 
@@ -116,3 +116,8 @@ availability.rs:182-211 recover_quota 不接收 FailureCounter；enable_manual�
 ## 性能/内存轮结论
 
 无 P1/P2。AppSettings 读锁短路径（lang/timezone/allowlist 每请求级频率可接受）；FailureCounter 无热点；模板匹配 186 行全扫+逐行 host_of 仅限管理端 /match；models.json 编译期内嵌懒解析不进 /v1 热路径（14-09 双份常驻量微）；启动 upsert 186 模板约 372 次查询+五回填各一次全表扫为一次性成本可接受。唯一动作项=14-14 的 set_items_enabled 批量化（可选）。
+
+## 实施进度
+
+- **14-01 已修复**：版本段判定收敛为单实现 `provider_model::refresh::is_version_segment`（`v1`/`v1beta`/`v1alpha` 或 `v`+纯数字），`build_models_url` 与 `convert::build_upstream_url` 共用；9 个 v3/v4 种子供应商（火山×2/腾讯×2/Z.AI×2/智谱×2/Eden）刷新模型不再拼出 `.../v3/v1/models`。测试 `test_build_models_url_recognizes_vn_version_segments`（火山 `/api/v3`、`/api/coding/v3`、智谱 `/paas/v4`、`/v2/`、非版本段 `/v1/solar` 反向用例）。
+- **14-05 已随批修复**：`convert/mod.rs` 的注释改为指向共享判定（不再自称「沿用 build_models_url 的规则」，方向反了的问题消除）。

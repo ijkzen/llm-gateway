@@ -14,6 +14,7 @@ LB 选路、额度门控与详情展示都需要供应商用量数据。真实�
 2. 数据库缓存（`provider_usage_cache`，迁移 9）：真实抓取经 `fetch_and_store` 落库；10 分钟内 `read_usage_cache` 直出，过期/缺失才真实抓取；`?refresh=1` 强制重取；更新/删除供应商时 `invalidate_usage_cache` 失效对应行。
 3. 内置定时任务 `usage_refresh`（`@every 5m` 种子行）枚举全部「已开启用量展示」的供应商（**不过滤 enable**，停用的也持续监测，供额度恢复判定与人工查看）并发刷新落库，并顺带执行额度门控（见 ADR-0010）。
 4. 展示与排序侧只读缓存不触发抓取（避免浏览即打外部接口）；无时区厂商的重置时间字符串按设置表 `timezone` 解释（`timezone_sync` 进程内同步副本随设置热更新，见 ADR-0015）。
+5. **抓取单飞 + 失效代次护栏**（2026-09-10 修复 11-02/11-25）：管理端用量接口与 LB 兜底共用内存缓存的按 provider 单飞入口（`UsageMemCache::fetch_shared_stored` / `fetch_shared`），同一瞬间并发请求只打一次上游；`invalidate` 自增该 provider 的代次，抓取在开始前记录代次、写库与回填前比对——期间发生过失效（凭据已变）则结果作废（`UsageError::Stale`，502 类可重试），旧凭据数据不会写回刚失效的缓存。
 
 ## Consequences
 
