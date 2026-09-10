@@ -2,8 +2,12 @@
 //!
 //! 「供应商能不能用」的唯一 owner：停用原因四值（NULL=正常启用 / failure=连续
 //! 失败禁用 / quota=额度耗尽 / manual=手动停用）与 enable 列的镜像不变式
-//! （启用 ⇔ NULL）由本模块统一写入保证；失败连击计数器的复位规则
-//! （「禁用不碰、恢复与手动启用必须清零」）也收拢在此。
+//! （启用 ⇔ NULL）由本模块统一写入保证；失败连击计数器的复位规则也收拢在此。
+//!
+//! 计数器复位口径（14-13 明确）：`enable_manual` 与 `recover_probe` **清零**，
+//! `recover_quota` **不清零**——额度停用期间没有真实流量，计数反映的是停用前
+//! 的真实累积（保留 = 不掩盖供应商质量问题），且额度恢复后若立刻再次失败，
+//! 更快触发熔断是期望行为。
 //!
 //! 动作式入口：
 //! - [`disable_for_quota`] / [`recover_quota`]：额度门控（usage_refresh 与失败复查共用）
@@ -43,6 +47,22 @@ impl DisabledReason {
             DisabledReason::Quota => "quota",
             DisabledReason::Manual => "manual",
         }
+    }
+
+    /// 从存储值解析（14-15 反向接口）：消费方不再手写字符串字面量。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "failure" => Some(DisabledReason::Failure),
+            "quota" => Some(DisabledReason::Quota),
+            "manual" => Some(DisabledReason::Manual),
+            _ => None,
+        }
+    }
+}
+
+impl PartialEq<str> for DisabledReason {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
     }
 }
 
@@ -179,6 +199,8 @@ pub async fn disable_for_quota(
 /// 额度/余额恢复自动启用：仅解除 `quota` 态。`manual` 态不被额度刷新触碰
 /// （修复：手动停用的供应商曾被额度恢复自动重新启用），`failure` 态只允许
 /// 手动启用或恢复探测解除。`label` 为日志用语（"订阅额度"/"余额"）。
+///
+/// 14-13：本路径**不清零**失败连击计数（基数继续累积）——口径见模块头注释。
 pub async fn recover_quota(
     db: &DatabaseConnection,
     provider_id: i32,
@@ -799,5 +821,44 @@ mod tests {
             "恢复日志未点名供应商: {messages:?}"
         );
         drop(keep_alive);
+    }
+    /// 14-13：额度恢复不清失败连击计数（与 enable_manual / recover_probe 的清零
+    /// 口径相对）——额度停用期间无流量，计数反映停用前的真实累积。
+    #[tokio::test]
+    async fn recover_quota_keeps_failure_counter() {
+        let db = setup().await;
+        let counters = FailureCounter::default();
+        let (pid, _mid) = seed(&db, "p-quota", false, Some("quota")).await;
+
+        counters.record_failure(pid);
+        counters.record_failure(pid);
+        counters.record_failure(pid);
+
+        assert!(
+            recover_quota(&db, pid, "p-quota", "订阅额度")
+                .await
+                .unwrap()
+        );
+        let r = row(&db, pid).await;
+        assert!(r.enable);
+        assert_eq!(r.disabled_reason, None);
+        assert_eq!(
+            counters.record_failure(pid),
+            4,
+            "额度恢复不得清零失败计数（保留停用前累积）"
+        );
+    }
+
+    /// 对照：手动启用清零（口径对照钉死）。
+    #[tokio::test]
+    async fn enable_manual_clears_failure_counter() {
+        let db = setup().await;
+        let counters = FailureCounter::default();
+        let (pid, _mid) = seed(&db, "p-manual2", false, Some("manual")).await;
+        counters.record_failure(pid);
+        counters.record_failure(pid);
+
+        assert!(enable_manual(&db, &counters, pid).await.unwrap());
+        assert_eq!(counters.record_failure(pid), 1, "手动启用应清零计数");
     }
 }

@@ -18,6 +18,7 @@ use crate::entity::provider;
 use crate::entity::provider_model::{self, ActiveModel, Entity};
 use crate::entity::virtual_model_item;
 use crate::i18n::Lang;
+use crate::provider_model::refresh::{PROTOCOL_GEMINI, PROTOCOL_OPENAI_COMPATIBLE};
 use crate::provider_model::{catalog, refresh};
 use crate::proxy;
 use crate::response::{self, Response};
@@ -183,7 +184,10 @@ fn validate_fields(req: &UpsertProviderModelRequest, lang: Lang) -> Option<Strin
         return Some(msg);
     }
     // 模型级协议：非空时须落在合法枚举范围（0=OpenAI Compatible … 3=Gemini）。
-    if req.protocol_type.is_some_and(|v| !(0..=3).contains(&v)) {
+    if req
+        .protocol_type
+        .is_some_and(|v| !(PROTOCOL_OPENAI_COMPATIBLE..=PROTOCOL_GEMINI).contains(&v))
+    {
         return Some(
             lang.tr("协议类型不合法", "invalid protocol type")
                 .to_string(),
@@ -225,10 +229,12 @@ async fn list_provider_models(
     State(state): State<AppState>,
     Path(provider_id): Path<i32>,
 ) -> impl IntoResponse {
-    // 供应商不存在时按空列表返回（与既有语义一致：级联删除后列表为空而非 404）。
+    // 11-11：供应商不存在返回 404（与同组 create/batch/refresh 一致）——原先
+    // 返回空列表会让前端把「供应商已删」误判为「存在但没有模型」。
+    let lang = state.settings.lang().await;
     let provider_name = match load_provider_name(&state.db, provider_id).await {
-        Ok(Some(name)) => Some(name),
-        Ok(None) => None,
+        Ok(Some(name)) => name,
+        Ok(None) => return not_found_provider(lang, provider_id),
         Err(e) => return response::db_error(e.to_string()),
     };
     match Entity::find()
@@ -240,10 +246,7 @@ async fn list_provider_models(
         Ok(models) => {
             let response: Vec<ProviderModelResponse> = models
                 .into_iter()
-                .map(|m| {
-                    let name = provider_name.as_deref().unwrap_or("");
-                    ProviderModelResponse::from_model(m, name)
-                })
+                .map(|m| ProviderModelResponse::from_model(m, &provider_name))
                 .collect();
             (StatusCode::OK, Json(Response::success(response)))
         }
@@ -688,7 +691,8 @@ async fn refresh_provider_models(
     .await
     {
         Ok(ids) => ids,
-        Err(msg) => return response::scheduler_error(StatusCode::BAD_GATEWAY, msg),
+        // 11-10：上游失败统一 UPSTREAM_ERROR 错误码（与用量端点一致）。
+        Err(msg) => return response::bad_gateway::<Vec<RefreshCandidate>>(msg),
     };
 
     // 已导入的模型按尾段忽略大小写排除，不再出现在候选中。
@@ -843,7 +847,7 @@ async fn test_provider_model(
                 json!({ "ok": true, "duration_ms": duration_ms }),
             )),
         ),
-        Err(message) => response::scheduler_error(StatusCode::BAD_GATEWAY, message),
+        Err(message) => response::bad_gateway::<serde_json::Value>(message),
     }
 }
 

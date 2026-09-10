@@ -27,7 +27,7 @@ pub fn now_ms() -> i64 {
 #[derive(Debug, Default)]
 pub struct StreamMetrics {
     /// TTFT 起点（wall-clock）：新建连接=建连开始，复用连接=请求发出。
-    connect_done_at: Option<i64>,
+    ttft_start_at: Option<i64>,
     first_token_at: Option<i64>,
     last_token_at: Option<i64>,
 }
@@ -35,7 +35,7 @@ pub struct StreamMetrics {
 impl StreamMetrics {
     pub fn new(start_at_ms: i64) -> Self {
         Self {
-            connect_done_at: Some(start_at_ms),
+            ttft_start_at: Some(start_at_ms),
             ..Default::default()
         }
     }
@@ -53,7 +53,7 @@ impl StreamMetrics {
     /// 覆盖建连（新建连接）或请求发出（复用连接）到首个内容块的全程。
     /// 未收到内容 token 时为 None。
     pub fn ttft_ms(&self) -> Option<i64> {
-        match (self.connect_done_at, self.first_token_at) {
+        match (self.ttft_start_at, self.first_token_at) {
             (Some(start), Some(first)) => Some((first - start).max(0)),
             _ => None,
         }

@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 /// - `output_tokens_time`：输出阶段耗时（毫秒）；流式为末 token − 首 token，
 ///   非流式为响应体接收完成 − 请求发出时刻（含建连与上游处理）。
 /// - `tps`：output_tokens / 网络阶段总耗时（秒）。流式分母 = ttft + 输出耗时；
-///   非流式分母 = end_time − 请求发出时刻。均不含网关路由/LB/构造/DNS。
+///   非流式分母 = end_time − ttft_start_ms（新连接时为建连开始、复用连接时为
+///   请求发出）。均不含网关路由/LB/DNS。
 /// - `request_time`：end_time − start_time（start_time 为成员尝试开始时刻，
 ///   含网关前置）。
 ///

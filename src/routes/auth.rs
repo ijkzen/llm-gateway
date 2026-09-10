@@ -221,7 +221,7 @@ fn login_response(
 ) -> AxumResponse {
     let max_age = (expires_at - chrono::Utc::now())
         .num_seconds()
-        .clamp(0, 7 * 24 * 3600);
+        .clamp(0, crate::auth::SESSION_TTL_SECS);
     let cookie =
         format!("{SESSION_COOKIE}={token}; HttpOnly; SameSite=Lax; Path=/; Max-Age={max_age}");
     (

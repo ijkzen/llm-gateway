@@ -109,8 +109,19 @@ pub fn decrypt(ciphertext: &str) -> anyhow::Result<String> {
 
 /// 解密存储值；无法解密时（密钥缺失/变更、非 UTF-8）原样返回，不报错。
 /// 用于「读展示类」路径：解不开就把原文透传给上层，由上层按明文处理。
+///
+/// 例外（12-04）：带 `enc:v1:` 前缀但解不开的值**不**透传（返回空串）——
+/// 那是密钥轮换/损坏，把密文当明文交给上层会成「拿密文去鉴权」的 fail-open；
+/// 仅无前缀的历史明文走透传（设计本意）。
 pub fn decrypt_or_passthrough(stored: &str) -> String {
-    decrypt(stored).unwrap_or_else(|_| stored.to_string())
+    match decrypt(stored) {
+        Ok(plain) => plain,
+        Err(e) if is_encrypted(stored) => {
+            tracing::warn!("存储值带加密前缀但解密失败，按不可用处理：{e}");
+            String::new()
+        }
+        Err(_) => stored.to_string(),
+    }
 }
 
 /// 对明文密钥做掩码:保留前 3 位与后 4 位,中间用星号填充;
@@ -119,9 +130,11 @@ pub fn mask(plain: &str) -> String {
     if plain.is_empty() {
         return String::new();
     }
-    let bytes = plain.as_bytes();
-    if bytes.len() <= 7 {
-        return "*".repeat(bytes.len());
+    // 按字符计数（12-03）：原先用字节数判长、字符数切片，多字节内容（如 4 个
+    // 汉字 = 12 字节）会通过长度检查从而完整回显。
+    let len = plain.chars().count();
+    if len <= 7 {
+        return "*".repeat(len);
     }
     let head: String = plain.chars().take(3).collect();
     let tail: String = plain
@@ -249,12 +262,26 @@ mod tests {
         with_key(Some(KEY), || {
             assert_eq!(decrypt_or_passthrough(&ciphertext), "sk-secret");
         });
-        // 无密钥/破损密文时原样透传，不报错。
+        // 12-04：带加密前缀但解不开（密钥缺失/轮换）不再透传密文，按不可用返回空串。
         with_key(None, || {
-            assert_eq!(decrypt_or_passthrough(&ciphertext), ciphertext);
+            assert_eq!(
+                decrypt_or_passthrough(&ciphertext),
+                "",
+                "密文解不开不得当明文透传"
+            );
         });
+        // 无前缀的历史明文仍透传（设计本意）。
         assert_eq!(decrypt_or_passthrough("plain-json"), "plain-json");
         assert_eq!(decrypt_or_passthrough(""), "");
+    }
+
+    /// 12-03：长度判定与切片都按字符数——多字节内容不因字节数足够而被完整回显。
+    #[test]
+    fn mask_counts_chars_not_bytes() {
+        // 4 个汉字 = 12 字节；按字符数应整体打码。
+        assert_eq!(mask("甲乙丙丁"), "****");
+        // 8 个汉字（24 字节）> 7 字符：保留首 3 尾 4，中间打码。
+        assert_eq!(mask("密码密码密码密码"), "密码密****密码密码");
     }
 
     #[test]

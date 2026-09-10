@@ -378,15 +378,16 @@ async fn test_delete_provider_cascades_models() {
         .unwrap();
     assert!(remaining.is_empty(), "供应商删除后模型应级联硬删");
 
-    let (status, body) = send_json(
+    // 11-11：供应商不存在时的模型列表改返 404（与同组 create/batch/refresh 一致），
+    // 不再用「空列表」让前端把「已删」误判为「存在但无模型」。
+    let (status, _body) = send_json(
         app,
         "GET",
         &format!("/api/providers/{p1}/models"),
         Value::Null,
     )
     .await;
-    assert_eq!(status, 200);
-    assert_eq!(body["data"].as_array().unwrap().len(), 0);
+    assert_eq!(status, 404, "已删供应商的模型列表应 404");
 }
 
 #[tokio::test]

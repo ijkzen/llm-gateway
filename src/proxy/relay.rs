@@ -288,6 +288,10 @@ pub(crate) struct RecordCtx {
 
 /// 统一流式泵：逐帧读上游 → 事件源处理 → 发送 → 收尾 → 按统一口径落库，
 /// 返回客户端 SSE 响应。
+///
+/// 泵内联循环与 `dispatch.rs::collect_stream_events` 是同构的两份实现（那份
+/// 整流收集给非流式客户端）：两份必须同步演化——03-01 的假成功 bug 正是
+/// 「整流侧已处理 converter.error()、泵侧漏了」的分叉产物；改动对照另一份。
 pub(crate) fn relay_stream(
     db: DatabaseConnection,
     reply: UpstreamReply,
@@ -486,4 +490,79 @@ pub(crate) fn relay_stream(
         .insert(&db);
     });
     sse_response(ReceiverStream::new(rx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StreamOutcome;
+
+    fn outcome(u: Option<&str>, c: Option<&str>, s: Option<&str>, d: bool) -> StreamOutcome {
+        StreamOutcome::from_parts(
+            u.map(str::to_string),
+            c.map(str::to_string),
+            s.map(str::to_string),
+            d,
+        )
+    }
+
+    /// 无错误源、无断开：成功且无原因。
+    #[test]
+    fn outcome_clean_stream_is_success_without_reason() {
+        let outcome = outcome(None, None, None, false);
+        assert!(outcome.success());
+        assert_eq!(outcome.fail_reason(), None);
+    }
+
+    /// 三个错误源各自单独出现时都判失败，且原因取自身。
+    #[test]
+    fn outcome_each_error_source_fails_with_own_reason() {
+        for (u, c, s) in [
+            (Some("读上游失败"), None, None),
+            (None, Some("转换失败"), None),
+            (None, None, Some("带内错误")),
+        ] {
+            let outcome = outcome(u, c, s, false);
+            assert!(!outcome.success(), "任一错误源都应判失败");
+            assert!(outcome.fail_reason().is_some());
+        }
+    }
+
+    /// 多源并存时原因优先级稳定：上游读错 > 转换失败 > 带内错误 > 客户端断开。
+    #[test]
+    fn outcome_reason_priority_is_stable() {
+        assert_eq!(
+            outcome(Some("读上游失败"), Some("转换失败"), Some("带内错误"), true)
+                .fail_reason()
+                .as_deref(),
+            Some("读上游失败")
+        );
+        assert_eq!(
+            outcome(None, Some("转换失败"), Some("带内错误"), true)
+                .fail_reason()
+                .as_deref(),
+            Some("转换失败")
+        );
+        assert_eq!(
+            outcome(None, None, Some("带内错误"), true)
+                .fail_reason()
+                .as_deref(),
+            Some("带内错误")
+        );
+    }
+
+    /// 客户端断开不影响成功判定，仅补记原因（entity/request.rs 文档口径）。
+    #[test]
+    fn outcome_disconnect_keeps_success_and_records_reason() {
+        let outcome = outcome(None, None, None, true);
+        assert!(outcome.success(), "客户端取消不算上游失败");
+        assert_eq!(outcome.fail_reason().as_deref(), Some("客户端提前断开"));
+    }
+
+    /// 断开与上游错误并存时：判失败，原因是上游侧（断开只是附加信息）。
+    #[test]
+    fn outcome_disconnect_with_error_reports_error_reason() {
+        let outcome = outcome(Some("读上游失败"), None, None, true);
+        assert!(!outcome.success());
+        assert_eq!(outcome.fail_reason().as_deref(), Some("读上游失败"));
+    }
 }

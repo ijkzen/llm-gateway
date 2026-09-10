@@ -10,7 +10,7 @@ use crate::backup::{self, BackupFile};
 use crate::i18n::Lang;
 use crate::response::{self, Response};
 use crate::routes::providers::{
-    validate_extra, validate_json_field, validate_protocol_billing, validate_proxy,
+    validate_custom_header, validate_extra, validate_protocol_billing, validate_proxy,
 };
 use crate::routes::settings::validate_setting_value;
 use crate::state::AppState;
@@ -24,7 +24,17 @@ pub fn routes() -> Router<AppState> {
 /// GET /api/backup/export：全量配置备份（含明文密钥），由前端触发下载。
 async fn export_backup(State(state): State<AppState>) -> impl IntoResponse {
     match backup::build_export(&state.db).await {
-        Ok(file) => (StatusCode::OK, Json(Response::success(file))),
+        Ok(file) => {
+            // 15-04：解密失败的凭据在文件里已退化为空串，除响应字段外再记日志，
+            // 避免「结构完整、校验全过、凭据全空」静默通过。
+            if file.decrypt_failures > 0 {
+                tracing::warn!(
+                    count = file.decrypt_failures,
+                    "备份导出：部分凭据解密失败已置空，请检查加密密钥是否与写入时一致"
+                );
+            }
+            (StatusCode::OK, Json(Response::success(file)))
+        }
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -53,6 +63,9 @@ async fn import_backup(State(state): State<AppState>, body: String) -> impl Into
         Ok(summary) => summary,
         Err(msg) => return response::bad_request(msg),
     };
+    // 11-21：导入重建了全部供应商（新 id 不复用旧行），内存用量缓存需整体失效
+    // 以免残留指向旧供应商的条目（库缓存已在事务内清空）。
+    state.usage_mem.invalidate_all().await;
 
     // 导入成功后同步进程内设置缓存（语言/时区等核心键热生效；
     // AppSettings::update 内部只认它关心的键）。
@@ -107,11 +120,25 @@ fn validate_import_values(file: &BackupFile, lang: Lang) -> Option<String> {
         if let Some(msg) = validate_proxy(p.proxy_enabled, &p.proxy_addr, lang) {
             return Some(format!("{loc}：{msg}"));
         }
-        if let Some(msg) = validate_json_field(
-            lang.tr("自定义请求头", "custom headers"),
-            &p.custom_header,
-            lang,
-        ) {
+        if let Some(msg) = validate_custom_header(&p.custom_header, lang) {
+            return Some(format!("{loc}：{msg}"));
+        }
+        // 11-13：导入路径补齐「apiKey 非空」校验（创建路径已校验）。
+        if p.api_key.trim().is_empty() {
+            let msg = lang
+                .tr("API Key 不能为空", "API Key cannot be empty")
+                .to_string();
+            return Some(format!("{loc}：{msg}"));
+        }
+        // 11-14：可用性镜像不变式（ADR-0003：enable ⇔ disabled_reason 为空），
+        // 防篡改备份造出「显示启用、实际不可选路」的供应商。
+        if p.enable != p.disabled_reason.is_none() {
+            let msg = lang
+                .tr(
+                    "enable 与 disabledReason 不自洽（启用态不得带停用原因）",
+                    "enable and disabledReason are inconsistent (an enabled provider must not have a disable reason)",
+                )
+                .to_string();
             return Some(format!("{loc}：{msg}"));
         }
         if let Some(msg) = validate_extra(&p.extra, lang) {

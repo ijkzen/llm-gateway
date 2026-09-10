@@ -1,29 +1,14 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Provider 接入协议类型。
-#[derive(Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "i32", db_type = "Integer")]
-pub enum ProtocolType {
-    /// OpenAI Compatible（/chat/completions 等）
-    OpenAiCompatible = 0,
-    /// OpenAI Response API
-    OpenAiResponse = 1,
-    /// Anthropic Messages API
-    AnthropicMessage = 2,
-    /// Gemini（Generative Language API）
-    Gemini = 3,
-}
+// 14-06：原 ProtocolType / BillingMode 两个 DeriveActiveEnum 全仓零消费（校验点
+// 都用裸数字或 provider_model::refresh 的 PROTOCOL_* 常量），删除以免误导为单源。
+// 协议编号的事实源：`provider_model::refresh::PROTOCOL_*`；付费模式见本模块常量。
 
-/// Provider 付费模式。
-#[derive(Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "i32", db_type = "Integer")]
-pub enum BillingMode {
-    /// 按量付费
-    PayAsYouGo = 0,
-    /// 订阅制
-    Subscription = 1,
-}
+/// 付费模式编号（按量付费）。
+pub const BILLING_MODE_PAY_AS_YOU_GO: i32 = 0;
+/// 付费模式编号（订阅制）。
+pub const BILLING_MODE_SUBSCRIPTION: i32 = 1;
 
 /// Provider 模板：一个模型提供商的接入信息与展示所需额外字段。
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel, Serialize, Deserialize)]

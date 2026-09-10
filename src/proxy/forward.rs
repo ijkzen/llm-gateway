@@ -68,10 +68,30 @@ pub async fn forward_chat(
                 "internal_error",
             );
         }
-        Err(RouteError::NoMembers) => {
+        Err(RouteError::NoMembers { virtual_model_id }) => {
+            let message = format!("虚拟模型 '{requested_model}' 没有可用的成员");
+            tracing::warn!(
+                request_id,
+                virtual_model_id,
+                requested_model = %requested_model,
+                api_key_name = %api_key.name,
+                "虚拟模型没有任何可用成员，拒绝转发",
+            );
+            record_failure_for(
+                &state.db,
+                &request_id,
+                virtual_model_id,
+                0,
+                "",
+                &api_key.name,
+                now_ms(),
+                client_stream,
+                &message,
+                now_ms(),
+            );
             return openai_error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                format!("虚拟模型 '{requested_model}' 没有可用的成员"),
+                message,
                 "server_error",
                 "no_available_members",
             );
@@ -144,7 +164,9 @@ pub(crate) fn build_member(provider: &provider::Model, model: &provider_model::M
 
 /// 管理后台聊天直连：按供应商 + 模型单成员转发（复用协议转换与连接池），
 /// 强制流式返回 OpenAI chunk 风格 SSE。无 failover；失败不触碰可用性
-/// 状态机（后台试用不该累积生产供应商的连续失败计数）。
+/// 状态机（后台试用不该累积生产供应商的连续失败计数）；成功则经
+/// `dispatch_success` 清零该供应商的连续失败计数——视作一次健康探测（02-08
+/// 拍板：成功=健康信号，保留该不对称行为）。
 pub async fn forward_chat_direct(
     state: &AppState,
     provider_id: i32,

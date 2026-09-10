@@ -408,3 +408,55 @@ fn passthrough_scanner_without_usage_yields_none() {
     assert!(!scanner.take_content_seen());
     assert!(scanner.usage().is_none());
 }
+
+/// C4：max_output_tokens 低于 16 时钳到 16（推理模型最小值要求）。
+#[test]
+fn clamps_max_output_tokens_to_minimum_16() {
+    let chat = from_str::<Value>(
+        r#"{"model":"m","messages":[{"role":"user","content":"x"}],"max_tokens":4}"#,
+    )
+    .unwrap();
+    let body = build_request_body(&chat, "gpt-x").unwrap();
+    assert_eq!(body["max_output_tokens"], 16, "低于 16 应钳制");
+
+    let chat = from_str::<Value>(
+        r#"{"model":"m","messages":[{"role":"user","content":"x"}],"max_tokens":100}"#,
+    )
+    .unwrap();
+    let body = build_request_body(&chat, "gpt-x").unwrap();
+    assert_eq!(body["max_output_tokens"], 100, "高于 16 原样透传");
+}
+
+/// C5：tools 的 strict 字段透传（严格函数语义不丢失）。
+#[test]
+fn passes_through_tool_strict_flag() {
+    let chat = from_str::<Value>(
+        r#"{"model":"m","messages":[{"role":"user","content":"x"}],
+            "tools":[{"type":"function","function":{"name":"f","description":"d","strict":true,"parameters":{"type":"object"}}}]}"#,
+    )
+    .unwrap();
+    let body = build_request_body(&chat, "gpt-x").unwrap();
+    assert_eq!(body["tools"][0]["strict"], true);
+
+    // 未提供 strict 时不凭空添加。
+    let chat = from_str::<Value>(
+        r#"{"model":"m","messages":[{"role":"user","content":"x"}],
+            "tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}]}"#,
+    )
+    .unwrap();
+    let body = build_request_body(&chat, "gpt-x").unwrap();
+    assert!(body["tools"][0].get("strict").is_none());
+}
+
+/// C5：response_format 的 strict 字段透传。
+#[test]
+fn passes_through_json_schema_strict_flag() {
+    let chat = from_str::<Value>(
+        r#"{"model":"m","messages":[{"role":"user","content":"x"}],
+            "response_format":{"type":"json_schema","json_schema":{"name":"r","strict":true,"schema":{"type":"object"}}}}"#,
+    )
+    .unwrap();
+    let body = build_request_body(&chat, "gpt-x").unwrap();
+    assert_eq!(body["text"]["format"]["strict"], true);
+    assert_eq!(body["text"]["format"]["name"], "r");
+}

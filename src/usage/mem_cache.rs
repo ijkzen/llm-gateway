@@ -32,7 +32,13 @@ pub struct UsageMemCache {
     generations: Arc<tokio::sync::Mutex<HashMap<i32, u64>>>,
     /// 全局代次计数器（为每个 provider 分配单调递增的代次）。
     generation_seq: Arc<AtomicU64>,
+    /// provider_id → 最近一次真实抓取尝试时刻（含失败）。失败负缓存：
+    /// 负缓存窗口内不再发起真实厂商调用（持续故障期避免每请求重抓，07-01）。
+    last_attempt: Arc<tokio::sync::Mutex<HashMap<i32, chrono::DateTime<chrono::Utc>>>>,
 }
+
+/// 抓取失败后的负缓存窗口（窗口内读侧按「无数据」处理，不再真抓）。
+const NEGATIVE_CACHE_TTL: chrono::TimeDelta = chrono::TimeDelta::minutes(1);
 
 impl UsageMemCache {
     /// 读内存缓存（新鲜才返回）。
@@ -68,13 +74,50 @@ impl UsageMemCache {
         self.entries.lock().await.insert(data.provider_id, data);
     }
 
+    /// 负缓存窗口内是否应跳过真实抓取（最近一次尝试失败且未超窗）。
+    async fn in_negative_cache(&self, provider_id: i32) -> bool {
+        let attempts = self.last_attempt.lock().await;
+        attempts
+            .get(&provider_id)
+            .is_some_and(|at| chrono::Utc::now().signed_duration_since(*at) < NEGATIVE_CACHE_TTL)
+    }
+
+    /// 记录一次真实抓取尝试（成功或失败）。失败进入负缓存窗口。
+    async fn note_attempt(&self, provider_id: i32) {
+        self.last_attempt
+            .lock()
+            .await
+            .insert(provider_id, chrono::Utc::now());
+    }
+
+    /// 清掉负缓存（成功后调用：下次 miss 立即允许重抓）。
+    async fn clear_attempt(&self, provider_id: i32) {
+        self.last_attempt.lock().await.remove(&provider_id);
+    }
+
     /// 失效单家（Provider 更新/删除后调用，避免旧凭据用量残留）。
     /// 同时自增失效代次：在途抓取写回前比对不一致即丢弃（11-02）。
     pub async fn invalidate(&self, provider_id: i32) {
         self.entries.lock().await.remove(&provider_id);
         self.in_flight.lock().await.remove(&provider_id);
+        self.last_attempt.lock().await.remove(&provider_id);
         let seq = self.generation_seq.fetch_add(1, Ordering::SeqCst) + 1;
         self.generations.lock().await.insert(provider_id, seq);
+    }
+
+    /// 全量失效（备份导入整体替换供应商后调用，11-21）：清空条目与在途表，
+    /// 并对所有已知 provider 自增代次（在途抓取写回前比对不一致即丢弃）。
+    pub async fn invalidate_all(&self) {
+        self.entries.lock().await.clear();
+        self.last_attempt.lock().await.clear();
+        self.in_flight.lock().await.clear();
+        let mut generations = self.generations.lock().await;
+        let mut seq = self.generation_seq.load(Ordering::SeqCst);
+        for generation in generations.values_mut() {
+            seq += 1;
+            *generation = seq;
+        }
+        self.generation_seq.store(seq, Ordering::SeqCst);
     }
 
     /// 当前失效代次（抓取开始前记录，写回前比对）。
@@ -111,6 +154,27 @@ impl UsageMemCache {
         F: FnOnce() -> Fut,
         Fut: std::future::Future<Output = FetchResult>,
     {
+        self.fetch_shared_result_inner(provider_id, false, fetch)
+            .await
+    }
+
+    /// 内部实现：`bypass_negative_cache` 用于手动强制刷新（`?refresh=1`）——
+    /// 用户显式要求重取时必须真抓，不被自动负缓存挡住。
+    async fn fetch_shared_result_inner<F, Fut>(
+        &self,
+        provider_id: i32,
+        bypass_negative_cache: bool,
+        fetch: F,
+    ) -> FetchResult
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = FetchResult>,
+    {
+        // 失败负缓存：窗口内直接按失败返回，不再发真实厂商调用（07-01）。
+        // in-flight 表在下方重新判定，故并发窗口内仍靠单飞去重。
+        if !bypass_negative_cache && self.in_negative_cache(provider_id).await {
+            return Err(UsageError::Auth);
+        }
         let generation = self.generation(provider_id).await;
         let mut waiter: Option<tokio::sync::watch::Receiver<FetchResult>> = None;
         let creator_tx = {
@@ -166,6 +230,12 @@ impl UsageMemCache {
         } else if let Ok(data) = &result {
             self.store(data.clone()).await;
         }
+        // 成功清负缓存（下次 miss 立即允许重抓）；失败记时刻进负缓存窗口。
+        if result.is_ok() {
+            self.clear_attempt(provider_id).await;
+        } else {
+            self.note_attempt(provider_id).await;
+        }
         cleanup.sent = true;
         let _ = cleanup.tx.send(result.clone());
         result
@@ -197,7 +267,7 @@ impl UsageMemCache {
         }
         // 闭包内先抓取、写库前再比对代次：抓取期间凭据被更新则连库缓存也不写。
         let cache = self.clone();
-        self.fetch_shared_result(provider_id, move || {
+        self.fetch_shared_result_inner(provider_id, force, move || {
             let db = db.clone();
             let cache = cache.clone();
             async move {
@@ -330,5 +400,118 @@ mod tests {
         );
         // 成功结果已回填内存缓存。
         assert!(cache.read(42).await.is_some());
+    }
+
+    /// 07-04：抓取失败时等待者收到错误而非悬挂，且失败进入负缓存窗口。
+    #[tokio::test]
+    async fn mem_cache_failure_reaches_waiters_and_opens_negative_cache() {
+        let cache = UsageMemCache::default();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let creator = cache.clone();
+        let handle = tokio::spawn(async move {
+            creator
+                .fetch_shared_result(21, move || async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    Err(UsageError::Upstream(500, "boom".to_string()))
+                })
+                .await
+        });
+        started_rx.await.unwrap();
+        // 第二个调用者在创建者完成前进入 → 走 waiter 分支。
+        let waiter = cache.clone();
+        let waiting = tokio::spawn(async move {
+            waiter
+                .fetch_shared_result(21, || async { Ok(balance_data(21, &[1.0])) })
+                .await
+        });
+        tokio::task::yield_now().await;
+        let _ = release_tx.send(());
+        let creator_result = handle.await.unwrap();
+        let waiter_result = waiting.await.unwrap();
+        assert!(creator_result.is_err(), "创建者应拿到失败");
+        assert!(
+            waiter_result.is_err(),
+            "等待者应拿到同一失败（不悬挂 Nor 误用自身闭包）"
+        );
+
+        // 失败后进入负缓存：后续调用直接失败，不再执行闭包。
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls2 = calls.clone();
+        let after = cache
+            .fetch_shared_result(21, move || {
+                let c = calls2.clone();
+                async move {
+                    c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(balance_data(21, &[2.0]))
+                }
+            })
+            .await;
+        assert!(after.is_err(), "负缓存窗口内应直接失败");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "负缓存窗口内不得执行真实抓取闭包"
+        );
+    }
+
+    /// 07-04：创建者成功后清负缓存，下一次调用立即允许真抓。
+    #[tokio::test]
+    async fn mem_cache_success_clears_negative_cache() {
+        let cache = UsageMemCache::default();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        // 第一次失败（进负缓存）。
+        let _ = cache
+            .fetch_shared_result(31, || async { Err(UsageError::Auth) })
+            .await;
+        // 手动失效（清除负缓存）后应立即允许重抓。
+        cache.invalidate(31).await;
+        let calls2 = calls.clone();
+        let result = cache
+            .fetch_shared_result(31, move || {
+                let c = calls2.clone();
+                async move {
+                    c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(balance_data(31, &[3.0]))
+                }
+            })
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(cache.read(31).await.is_some(), "成功结果应回填");
+    }
+
+    /// 07-01：创建者 future 被取消时 in-flight 清理且等待者不悬挂。
+    #[tokio::test]
+    async fn mem_cache_creator_cancel_notifies_waiters() {
+        let cache = UsageMemCache::default();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let creator = cache.clone();
+        let handle = tokio::spawn(async move {
+            creator
+                .fetch_shared_result(51, move || async move {
+                    let _ = started_tx.send(());
+                    // 永不完成：等待被 abort。
+                    std::future::pending::<FetchResult>().await
+                })
+                .await
+        });
+        started_rx.await.unwrap();
+        let waiter = cache.clone();
+        let waiting = tokio::spawn(async move {
+            waiter
+                .fetch_shared_result(51, || async { Ok(balance_data(51, &[9.0])) })
+                .await
+        });
+        tokio::task::yield_now().await;
+        // 取消创建者：Cleanup guard 应通知等待者并清理 in-flight。
+        handle.abort();
+        let _ = handle.await;
+        let waiter_result = tokio::time::timeout(std::time::Duration::from_secs(2), waiting)
+            .await
+            .expect("等待者不得悬挂（Cleanup guard 应通知）")
+            .unwrap();
+        assert!(waiter_result.is_err(), "创建者被取消时等待者应收到失败");
     }
 }

@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::{Credentials, num, reset_ts, snippet};
 use crate::usage::cookiecloud;
 use crate::usage::error::UsageError;
-use crate::usage::http::{HttpReply, UsageHttp, parse_json};
+use crate::usage::http::{HttpReply, UsageHttp, is_session_invalid_status, parse_json};
 use crate::usage::types::{FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window};
 
 const API_BASE: &str = "https://platform.stepfun.com/api/step.openapi.devcenter.Dashboard";
@@ -56,7 +56,7 @@ pub async fn fetch_stepfun(
 }
 
 fn ensure_ok(reply: &HttpReply) -> Result<(), UsageError> {
-    if reply.status == 401 || reply.status == 403 || (300..400).contains(&reply.status) {
+    if is_session_invalid_status(reply.status) {
         return Err(UsageError::Auth);
     }
     if reply.status != 200 {

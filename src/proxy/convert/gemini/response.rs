@@ -214,7 +214,6 @@ pub fn convert_response(
 #[derive(Debug)]
 pub struct GeminiStreamConverter {
     id: String,
-    model: String,
     requested_model: String,
     started: bool,
     finish_reason: Option<&'static str>,
@@ -230,7 +229,6 @@ impl GeminiStreamConverter {
     pub fn new(_request_id: &str, requested_model: &str) -> Self {
         Self {
             id: format!("chatcmpl-{}", Uuid::new_v4()),
-            model: requested_model.to_string(),
             requested_model: requested_model.to_string(),
             started: false,
             finish_reason: None,
@@ -270,9 +268,6 @@ impl GeminiStreamConverter {
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
-        if let Some(model_version) = value.get("modelVersion").and_then(Value::as_str) {
-            self.model = model_version.to_string();
-        }
 
         if let Some(usage) = value.get("usageMetadata") {
             let extracted = extract_usage(usage);

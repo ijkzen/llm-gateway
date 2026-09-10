@@ -368,11 +368,13 @@ async fn sensenova_history_backfill_is_idempotent_and_preserves_user_values() {
             assert_eq!(extra["usage"], true);
             assert_eq!(extra["custom"], "keep", "未知键保留");
 
+            // 14-08 后行为：该 provider 落在 DeepSeek 模板 host 上，其 extra 会按
+            // 模板补缺（既有键 own 保留）；SenseNova 专属键不会串入。
             let other = provider_extra(&db, "SenseNova-其他host").await;
-            assert_eq!(
-                other,
-                serde_json::json!({ "own": 1 }),
-                "非 SenseNova host 不动"
+            assert_eq!(other["own"], 1, "用户已有键保留");
+            assert!(
+                other.get("username").is_none(),
+                "非 SenseNova host 不得补入 SenseNova 专属键：{other}"
             );
         },
     )

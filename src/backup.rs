@@ -15,9 +15,14 @@ use serde_json::Value as JsonValue;
 
 use crate::auth::hash_token;
 use crate::crypto;
+use crate::entity::provider_template::{BILLING_MODE_PAY_AS_YOU_GO, BILLING_MODE_SUBSCRIPTION};
+use crate::entity::virtual_model::{
+    INTERFACE_FULL_COMPATIBLE, INTERFACE_OPENAI_COMPAT, LB_RANDOM, LB_SUBSCRIPTION_FIRST,
+};
 use crate::entity::{
     api_key, provider, provider_model, setting, virtual_model, virtual_model_item,
 };
+use crate::provider_model::refresh::{PROTOCOL_GEMINI, PROTOCOL_OPENAI_COMPATIBLE};
 
 /// 当前备份格式版本；`parse_backup` 只接受与该值一致的版本。
 pub const BACKUP_VERSION: i32 = 1;
@@ -33,6 +38,14 @@ pub struct BackupFile {
     pub virtual_models: Vec<BackupVirtualModel>,
     pub api_keys: Vec<BackupApiKey>,
     pub settings: Vec<BackupSetting>,
+    /// 15-04：导出时解密失败的凭据条数（密钥轮换/异机导出等）。非 0 表示文件里
+    /// 这些凭据已退化为空串——原本静默（校验全过、凭据全空），现由调用方回带提示。
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub decrypt_failures: usize,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +135,15 @@ pub struct ImportSummary {
 
 /// 读全量配置组装为备份结构；供应商 api_key/extra 与 API Key 的 key 解密为明文。
 pub async fn build_export(db: &DatabaseConnection) -> Result<BackupFile, DbErr> {
+    // 15-04：统计解密失败（含 provider.api_key/extra 与 api_key.key）。
+    let mut decrypt_failures = 0usize;
+    let mut decrypt_or_count = |stored: &str| match crypto::decrypt(stored) {
+        Ok(plain) => plain,
+        Err(_) => {
+            decrypt_failures += 1;
+            String::new()
+        }
+    };
     let providers = provider::Entity::find()
         .order_by_asc(provider::Column::Id)
         .all(db)
@@ -142,7 +164,12 @@ pub async fn build_export(db: &DatabaseConnection) -> Result<BackupFile, DbErr> 
         .order_by_asc(api_key::Column::Id)
         .all(db)
         .await?;
-    let settings = setting::Entity::find().all(db).await?;
+    // 15-05：与其余五表一致加排序——否则 settings 序不稳定，导出→再导出
+    // 无法逐字节比对（该表原先漏了 order_by）。
+    let settings = setting::Entity::find()
+        .order_by_asc(setting::Column::Key)
+        .all(db)
+        .await?;
 
     let model_by_id: std::collections::HashMap<i32, &provider_model::Model> =
         models.iter().map(|m| (m.model_id, m)).collect();
@@ -171,11 +198,11 @@ pub async fn build_export(db: &DatabaseConnection) -> Result<BackupFile, DbErr> 
             name: p.name.clone(),
             enable: p.enable,
             base_url: p.base_url.clone(),
-            api_key: crypto::decrypt(&p.api_key).unwrap_or_default(),
+            api_key: decrypt_or_count(&p.api_key),
             custom_header: p.custom_header.clone(),
             protocol_type: p.protocol_type,
             billing_mode: p.billing_mode,
-            extra: crypto::decrypt(&p.extra).unwrap_or_default(),
+            extra: decrypt_or_count(&p.extra),
             sort_order: p.sort_order,
             proxy_enabled: p.proxy_enabled,
             proxy_addr: p.proxy_addr.clone(),
@@ -216,7 +243,7 @@ pub async fn build_export(db: &DatabaseConnection) -> Result<BackupFile, DbErr> 
         .into_iter()
         .map(|k| BackupApiKey {
             name: k.name,
-            key: crypto::decrypt(&k.key).unwrap_or_default(),
+            key: decrypt_or_count(&k.key),
             enable: k.enable,
         })
         .collect();
@@ -237,16 +264,20 @@ pub async fn build_export(db: &DatabaseConnection) -> Result<BackupFile, DbErr> 
         virtual_models: virtual_models_out,
         api_keys: api_keys_out,
         settings: settings_out,
+        decrypt_failures,
     })
 }
 
 // ─── 设置类型字符串 ↔ 枚举 ───
 
 /// i32 → 设置类型名；未知类型按 String 处理（与前端展示口径一致）。
+/// 设置类型编号 → 名称。15-06：未知编号不再静默降级为 String（那会让再导入
+/// 时把原类型改写成 String），改为原样回带数字串，导入侧 `setting_type_from_name`
+/// 会明确报「类型非法」——保真且失败可见。
 fn setting_type_name(t: i32) -> String {
     setting::SettingType::try_from(t)
         .map(|v| v.to_string())
-        .unwrap_or_else(|_| setting::SettingType::String.to_string())
+        .unwrap_or_else(|_| t.to_string())
 }
 
 /// 设置类型名 → i32。非法名返回错误消息。
@@ -291,6 +322,9 @@ pub fn parse_backup(input: &str) -> Result<BackupFile, String> {
 pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
     let mut provider_names = std::collections::HashSet::new();
     let mut model_keys = std::collections::HashSet::new();
+    // 15-03：同次导入内的成员唯一性（跨虚拟模型也不允许同一 (供应商,模型) 重复）。
+    let mut seen_members: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
     let mut model_protocols: std::collections::HashMap<(String, String), i32> =
         std::collections::HashMap::new();
     let mut vm_display_ids = std::collections::HashSet::new();
@@ -307,10 +341,11 @@ pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
         if p.base_url.trim().is_empty() {
             return Err(format!("{loc}.baseUrl 不能为空"));
         }
-        if !(0..=3).contains(&p.protocol_type) {
+        // 14-07：协议编号区间由常量收敛（新增编号时不会静默误拒）。
+        if !(PROTOCOL_OPENAI_COMPATIBLE..=PROTOCOL_GEMINI).contains(&p.protocol_type) {
             return Err(format!("{loc}.protocolType 取值非法：{}", p.protocol_type));
         }
-        if !(0..=1).contains(&p.billing_mode) {
+        if !(BILLING_MODE_PAY_AS_YOU_GO..=BILLING_MODE_SUBSCRIPTION).contains(&p.billing_mode) {
             return Err(format!("{loc}.billingMode 取值非法：{}", p.billing_mode));
         }
         for (mi, m) in p.models.iter().enumerate() {
@@ -334,7 +369,9 @@ pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
             if m.max_output_tokens <= 0 {
                 return Err(format!("{m_loc}.maxOutputTokens 必须为正整数"));
             }
-            if m.protocol_type.is_some_and(|v| !(0..=3).contains(&v)) {
+            if m.protocol_type
+                .is_some_and(|v| !(PROTOCOL_OPENAI_COMPATIBLE..=PROTOCOL_GEMINI).contains(&v))
+            {
                 return Err(format!("{m_loc}.protocolType 取值非法"));
             }
             // 生效协议 = 模型级覆盖 ?? 供应商协议（与选路口径一致）。
@@ -350,7 +387,7 @@ pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
         if !vm_display_ids.insert(vm.display_id.trim().to_string()) {
             return Err(format!("{loc}.displayId 重复：{}", vm.display_id));
         }
-        if !(0..=3).contains(&vm.load_balancing_strategy) {
+        if !(LB_SUBSCRIPTION_FIRST..=LB_RANDOM).contains(&vm.load_balancing_strategy) {
             return Err(format!(
                 "{loc}.loadBalancingStrategy 取值非法：{}",
                 vm.load_balancing_strategy
@@ -362,7 +399,7 @@ pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
                 vm.fallback_strategy
             ));
         }
-        if !(0..=4).contains(&vm.interface_type) {
+        if !(INTERFACE_OPENAI_COMPAT..=INTERFACE_FULL_COMPATIBLE).contains(&vm.interface_type) {
             return Err(format!(
                 "{loc}.interfaceType 取值非法：{}",
                 vm.interface_type
@@ -385,9 +422,17 @@ pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
                     it.provider_name, it.provider_model_id
                 ));
             }
+            // 15-03：同次导入内 (providerName, providerModelId) 不得重复——数据库
+            // 唯一索引会把重复撞成裸 SQL 错误文案。
+            if !seen_members.insert(key.clone()) {
+                return Err(format!(
+                    "{i_loc} 成员重复：{}/{}（同一次导入内同一供应商模型不可重复）",
+                    it.provider_name, it.provider_model_id
+                ));
+            }
             // 非 Full Compatible 时成员生效协议必须与虚拟模型接口类型一致
             // （接口类型编号与协议编号对齐，见 virtual_model 常量）。
-            if vm.interface_type != 4 {
+            if vm.interface_type != INTERFACE_FULL_COMPATIBLE {
                 let effective = model_protocols.get(&key).copied().unwrap_or_default();
                 if effective != vm.interface_type {
                     return Err(format!(
@@ -444,6 +489,12 @@ pub async fn apply_import(
         .exec(&txn)
         .await
         .map_err(|e| format!("清空供应商失败：{e}"))?;
+    // 11-21：用量缓存随供应商一并清空（与删除供应商路径成对失效；不清会留下
+    // 指向已消失供应商的孤儿缓存行）。
+    crate::entity::usage_cache::Entity::delete_many()
+        .exec(&txn)
+        .await
+        .map_err(|e| format!("清空用量缓存失败：{e}"))?;
     api_key::Entity::delete_many()
         .exec(&txn)
         .await
@@ -671,6 +722,7 @@ mod tests {
     fn sample_file() -> BackupFile {
         BackupFile {
             version: BACKUP_VERSION,
+            decrypt_failures: 0,
             exported_at: "2026-09-07T00:00:00Z".to_string(),
             providers: vec![sample_provider("openai")],
             virtual_models: vec![BackupVirtualModel {
@@ -833,5 +885,79 @@ mod tests {
         f.virtual_models[0].interface_type = 4;
         f.providers[0].protocol_type = 3; // Gemini 成员
         assert!(validate_backup(&f).is_ok());
+    }
+    /// 15-03：同次导入内的成员重复在校验阶段被拒（不再撞数据库唯一索引报裸 SQL）。
+    #[test]
+    fn validate_backup_rejects_duplicate_member() {
+        let mut file = sample_file();
+        let first = file.virtual_models[0].items[0].clone();
+        file.virtual_models[0].items.push(first);
+        let err = validate_backup(&file).unwrap_err();
+        assert!(err.contains("成员重复"), "{err}");
+    }
+
+    /// 15-06：未知设置类型编号导出时不再降级为 String（保真）。
+    #[test]
+    fn setting_type_name_keeps_unknown_number() {
+        assert_eq!(setting_type_name(0), "String");
+        assert_eq!(
+            setting_type_name(99),
+            "99",
+            "未知编号应原样回带，不再降级 String"
+        );
+    }
+
+    /// 15-05：settings 导出按 key 排序（与其余五表一致，保证导出可逐字节比对）。
+    #[tokio::test]
+    async fn export_sorts_settings_by_key() {
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        let now = chrono::Utc::now();
+        for (key, value) in [("zz_last", "1"), ("aa_first", "2"), ("mm_middle", "3")] {
+            setting::ActiveModel {
+                key: sea_orm::Set(key.to_string()),
+                value: sea_orm::Set(value.to_string()),
+                r#type: sea_orm::Set(0),
+                updated_at: sea_orm::Set(now),
+            }
+            .insert(&db)
+            .await
+            .unwrap();
+        }
+        let file = build_export(&db).await.unwrap();
+        let keys: Vec<&str> = file.settings.iter().map(|s| s.key.as_str()).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted, "settings 应按 key 排序导出");
+    }
+
+    /// 15-04：导出解密失败计数（密钥不匹配时凭据置空并计数）。
+    #[tokio::test]
+    async fn export_counts_decrypt_failures() {
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        let now = chrono::Utc::now();
+        // 直接用「带前缀但非法」的密文模拟密钥轮换后的不可解凭据。
+        provider::ActiveModel {
+            name: sea_orm::Set("p-broken".to_string()),
+            enable: sea_orm::Set(true),
+            base_url: sea_orm::Set("https://a.example".to_string()),
+            api_key: sea_orm::Set("enc:v1:broken-not-decryptable".to_string()),
+            custom_header: sea_orm::Set("{}".to_string()),
+            protocol_type: sea_orm::Set(0),
+            billing_mode: sea_orm::Set(0),
+            extra: sea_orm::Set("enc:v1:broken-not-decryptable".to_string()),
+            sort_order: sea_orm::Set(0),
+            proxy_enabled: sea_orm::Set(false),
+            proxy_addr: sea_orm::Set(String::new()),
+            created_at: sea_orm::Set(now),
+            updated_at: sea_orm::Set(now),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let file = build_export(&db).await.unwrap();
+        assert_eq!(file.decrypt_failures, 2, "api_key + extra 两处失败应计数");
+        assert!(file.providers[0].api_key.is_empty(), "不可解凭据应置空");
     }
 }

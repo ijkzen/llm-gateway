@@ -14,8 +14,8 @@ pub(crate) enum RouteError {
     NotFound,
     /// 数据库查询失败（虚拟模型/成员）。
     QueryFailed(String),
-    /// 成员列表为空（无任何可用成员）。
-    NoMembers,
+    /// 成员列表为空（无任何可用成员）；携带虚拟模型 id 供调用方落失败行。
+    NoMembers { virtual_model_id: i32 },
 }
 
 /// 路由解析前半段（forward_chat/forward_native 共用）：display_id 精确
@@ -46,7 +46,9 @@ pub(crate) async fn resolve_and_order(
         .map_err(|e| RouteError::QueryFailed(format!("查询模型成员失败：{e}")))?;
     let members: Vec<_> = members.into_iter().filter(|m| member_keep(m)).collect();
     if members.is_empty() {
-        return Err(RouteError::NoMembers);
+        return Err(RouteError::NoMembers {
+            virtual_model_id: virtual_model.virtual_model_id,
+        });
     }
 
     let ordered = order_members(
@@ -58,7 +60,8 @@ pub(crate) async fn resolve_and_order(
         request_id,
     )
     .await;
-    let retry_enabled = virtual_model.fallback_strategy == 1;
+    let retry_enabled = virtual_model.fallback_strategy
+        == virtual_model::FallbackStrategy::RetryEnabledMembers as i32;
 
     // 负载均衡决策日志：选路结果每请求 1 条 info；完整排序明细 debug
     //（默认 RUST_LOG=info 不输出，深排时临时调 debug）。

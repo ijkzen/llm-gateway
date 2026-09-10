@@ -545,3 +545,33 @@ fn passthrough_scanner_handles_split_feeds_and_no_usage() {
     assert!(scanner.take_content_seen());
     assert!(scanner.usage().is_none());
 }
+
+/// A7：tool_choice=none 时不附带 disable_parallel_tool_use（官方 schema 拒绝该组合）。
+#[test]
+fn none_tool_choice_omits_disable_parallel_tool_use() {
+    let chat = from_str::<Value>(
+        r#"{"model":"m","messages":[{"role":"user","content":"x"}],"tool_choice":"none","parallel_tool_calls":false}"#,
+    )
+    .unwrap();
+    let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+    assert_eq!(body["tool_choice"]["type"], "none");
+    assert!(
+        body["tool_choice"]
+            .get("disable_parallel_tool_use")
+            .is_none(),
+        "none + disable_parallel_tool_use 组合应省略：{}",
+        body["tool_choice"]
+    );
+}
+
+/// A7 对照：非 none 的 tool_choice 仍带 disable_parallel_tool_use（原行为不变）。
+#[test]
+fn auto_tool_choice_keeps_disable_parallel_tool_use() {
+    let chat = from_str::<Value>(
+        r#"{"model":"m","messages":[{"role":"user","content":"x"}],"parallel_tool_calls":false}"#,
+    )
+    .unwrap();
+    let (body, _) = build_request_body(&chat, "claude-x").unwrap();
+    assert_eq!(body["tool_choice"]["type"], "auto");
+    assert_eq!(body["tool_choice"]["disable_parallel_tool_use"], true);
+}

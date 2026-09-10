@@ -37,19 +37,8 @@ impl CatalogEntry {
     }
 }
 
-#[derive(Deserialize)]
-struct RawModel {
-    #[serde(default)]
-    reasoning: bool,
-    #[serde(default)]
-    tool_call: bool,
-    #[serde(default)]
-    modalities: Option<RawModalities>,
-    #[serde(default)]
-    limit: Option<RawLimit>,
-}
-
-/// 原始目录条目（含关键词搜索所需的展示字段）。
+/// 原始目录条目（含关键词搜索所需的展示字段）。14-09：唯一的反序列化目标
+/// （`catalog` 的尾段索引与 `raw` 的搜索列表都由它派生）。
 #[derive(Deserialize)]
 struct RawModelFull {
     #[serde(default)]
@@ -102,11 +91,15 @@ fn entry_from(
 
 fn catalog() -> &'static HashMap<String, CatalogEntry> {
     CATALOG.get_or_init(|| {
-        let raw: BTreeMap<String, RawModel> =
-            serde_json::from_str(MODELS_JSON).expect("embedded models.json must be valid JSON");
-        let mut index = HashMap::with_capacity(raw.len());
-        for (key, model) in raw {
-            let modalities = model.modalities.map(|m| m.input).unwrap_or_default();
+        // 14-09：复用 raw() 的解析结果（RawModelFull 是 RawModel 的超集），
+        // 不再第二次解析 293KB 的嵌入 JSON。
+        let mut index = HashMap::with_capacity(raw().len());
+        for (key, model) in raw() {
+            let modalities = model
+                .modalities
+                .as_ref()
+                .map(|m| m.input.clone())
+                .unwrap_or_default();
             let entry = entry_from(
                 model.limit.as_ref(),
                 &modalities,
@@ -114,7 +107,7 @@ fn catalog() -> &'static HashMap<String, CatalogEntry> {
                 model.tool_call,
             );
             index
-                .entry(last_segment(&key).to_lowercase())
+                .entry(last_segment(key).to_lowercase())
                 .or_insert(entry);
         }
         index

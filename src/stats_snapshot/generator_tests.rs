@@ -116,6 +116,18 @@ async fn snap_or(
     snap(db, level, start, et, e, m).await.unwrap_or(0.0)
 }
 
+/// 行数统计（09-05 测试用；按 where 条件）。
+async fn count_rows(db: &DatabaseConnection, where_sql: &str) -> i64 {
+    db.query_one_raw(Statement::from_string(
+        DbBackend::Sqlite,
+        format!("SELECT COUNT(*) AS v FROM request_log_snapshot WHERE {where_sql}"),
+    ))
+    .await
+    .unwrap()
+    .and_then(|row| row.try_get("", "v").ok())
+    .unwrap_or(0)
+}
+
 /// 种子主体：两个供应商/模型（p1-gpt-x、p2-gpt-y）+ 两个 API Key。
 async fn seed_subjects(db: &DatabaseConnection) -> (i32, i32, i32, i32, i32, i32) {
     let ts = "2024-01-01T00:00:00Z";
@@ -135,8 +147,10 @@ async fn seed_subjects(db: &DatabaseConnection) -> (i32, i32, i32, i32, i32, i32
             ),
         )
         .await;
-    let p1 = scalar_i64(db, "SELECT last_insert_rowid() AS v").await as i32;
-    let p2 = scalar_i64(db, "SELECT last_insert_rowid() AS v").await as i32;
+    // 按 name 反查（09-01）：last_insert_rowid 是连接局部的，池路由变化会取到
+    // 错位值；同函数内 api_key/model 主体都已用反查，provider 与之对齐。
+    let p1 = scalar_i64(db, "SELECT id AS v FROM provider WHERE name = 'p1'").await as i32;
+    let p2 = scalar_i64(db, "SELECT id AS v FROM provider WHERE name = 'p2'").await as i32;
     for (pid, mid) in [(p1, "gpt-x"), (p2, "gpt-y")] {
         exec(
                 db,
@@ -548,7 +562,7 @@ async fn finalize_is_idempotent_and_sentinel_covers_empty_bucket() {
 }
 
 #[tokio::test]
-async fn day_level_bucket_skips_percentiles_and_crosses_hours() {
+async fn day_level_bucket_stores_percentiles_and_crosses_hours() {
     let db = setup_db().await;
     let (p1, _p2, _pm_x, _pm_y, _ak_a, _ak_b) = seed_subjects(&db).await;
     let s = now_ts().div_euclid(3_600_000) * 3_600_000 - 3_600_000; // 前一天整点
@@ -712,4 +726,123 @@ async fn month_level_bucket_skips_percentiles() {
         )
         .await;
     assert_eq!(rows, 16);
+}
+
+/// 09-05：Year 级独立直测——年帧走与 month 同分支（16 行哨兵、不写分位）。
+#[tokio::test]
+async fn year_level_writes_sentinels_without_percentiles() {
+    let db = setup_db().await;
+    let (p1, ..) = seed_subjects(&db).await;
+    let s = 1_700_000_000_000i64;
+    // 对齐到年帧（用 core 的帧计算取包含该时刻的年帧）。
+    let year = super::super::frames_covering(Level::Year, 480, s, s + 1)
+        .into_iter()
+        .next()
+        .expect("应找到年帧");
+    insert_request(
+        &db,
+        "y1",
+        10,
+        p1,
+        "gpt-x",
+        true,
+        Some(200),
+        Some(100),
+        0,
+        Some(10),
+        Some(400),
+        20.0,
+        900,
+        true,
+        Some(110),
+        "key-a",
+        s,
+    )
+    .await;
+    finalize_bucket(&db, year).await.unwrap();
+
+    let calls = snap_or(&db, "year", year.start, "whole", "", metrics::CALLS).await;
+    assert_close(calls, 1.0);
+    // 年帧不写分位标量（percentile_level_ok 只 hour/day）。
+    assert_eq!(
+        snap(&db, "year", year.start, "whole", "", metrics::TTFT_P50).await,
+        None,
+        "年帧不应写分位标量"
+    );
+    // 哨兵齐全：whole 主体固定 16 个加和指标行。
+    let sentinel_count = count_rows(
+        &db,
+        &format!(
+            "duration_type = 'year' AND start_time = {} AND entity_type = 'whole' AND entity = ''",
+            year.start
+        ),
+    )
+    .await;
+    assert_eq!(sentinel_count, 16, "年帧 whole 哨兵应为 16 行");
+}
+
+/// 09-05：分位侧 NULL-entity 排除——模型行已删（pm 缺失）时该主体不产分位行，
+/// 防止「主体已删」在分位口径下被高估（09-09 高估族同源）。
+#[tokio::test]
+async fn percentile_rows_exclude_unresolved_subjects() {
+    let db = setup_db().await;
+    let (p1, _p2, pm_x, _pm_y, ak_a, _ak_b) = seed_subjects(&db).await;
+    let s = now_ts().div_euclid(3_600_000) * 3_600_000;
+    let frame = Frame {
+        level: Level::Hour,
+        start: s,
+        end: s + 3_600_000,
+    };
+    // 请求引用的 provider_model_id 不在 provider_model 表（pm 已删）→ pm_id 为 NULL。
+    insert_request(
+        &db,
+        "d1",
+        10,
+        p1,
+        "gpt-deleted",
+        true,
+        Some(200),
+        Some(100),
+        0,
+        Some(10),
+        Some(400),
+        20.0,
+        900,
+        true,
+        Some(110),
+        "key-a",
+        s,
+    )
+    .await;
+    finalize_bucket(&db, frame).await.unwrap();
+
+    // 聚合侧仍有 provider/vm/api_key 主体行（id 可直接解析）。
+    let provider_rows = count_rows(
+        &db,
+        &format!("duration_type = 'hour' AND start_time = {s} AND entity_type = 'model'"),
+    )
+    .await;
+    assert_eq!(provider_rows, 0, "pm 已删不应产 model 主体行");
+    // 分位侧同样不产 model/vm_member/api_key_model 行。
+    let percentile_model_rows = count_rows(
+        &db,
+        &format!(
+            "duration_type = 'hour' AND start_time = {s} AND metric_type = '{}' AND entity_type IN ('model','vm_member','api_key_model')",
+            metrics::TTFT_P50
+        ),
+    )
+    .await;
+    assert_eq!(percentile_model_rows, 0, "分位侧应排除未解析主体");
+    // 但 whole/provider/api_key 分位应存在（这些主体可解析）。
+    let percentile_scope = count_rows(
+        &db,
+        &format!(
+            "duration_type = 'hour' AND start_time = {s} AND metric_type = '{}' AND entity_type = 'whole'",
+            metrics::TTFT_P50
+        ),
+    )
+    .await;
+    assert!(percentile_scope > 0, "可解析主体的分位应产出");
+    // 顺带确认种子主体存在（避免误删测试前提）。
+    assert!(pm_x > 0 && ak_a > 0);
 }

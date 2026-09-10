@@ -132,7 +132,14 @@ pub fn convert_response(
 
     let usage = extract_usage(upstream.get("usage").unwrap_or(&Value::Null));
     let message = if let Some(json_output) = json_tool_output {
-        json!({"role": "assistant", "content": json_output})
+        // 模型违规先输出 preamble 文本再调 json 工具时不丢弃那段文本：
+        // 拼在 json 前（客户端仍可解析 json 前缀之后的整体，或按需忽略）。
+        let content = if text.is_empty() {
+            json_output
+        } else {
+            format!("{text}{json_output}")
+        };
+        json!({"role": "assistant", "content": content})
     } else {
         let mut message = Map::new();
         message.insert("role".to_string(), json!("assistant"));
@@ -421,12 +428,19 @@ impl AnthropicStreamConverter {
                     .unwrap_or("end_turn");
                 self.ensure_started(&mut out);
                 // 输出缓冲的 json 模式内容（解包 parameters 包装）。
-                let buffers: Vec<String> = self
+                // 按 block_index 升序 flush：HashMap 迭代序不定，多 json 工具块
+                // 时输出顺序会错乱（单工具是常态，多调用时顺序应与上游块序一致）。
+                let mut buffer_entries: Vec<(i64, String)> = self
                     .json_mode_buffers
-                    .values()
-                    .map(|buffer| {
+                    .iter()
+                    .map(|(index, buffer)| (*index, buffer.clone()))
+                    .collect();
+                buffer_entries.sort_by_key(|(index, _)| *index);
+                let buffers: Vec<String> = buffer_entries
+                    .into_iter()
+                    .map(|(_, buffer)| {
                         let parsed: Value =
-                            serde_json::from_str(buffer).unwrap_or_else(|_| json!({}));
+                            serde_json::from_str(&buffer).unwrap_or_else(|_| json!({}));
                         unwrap_json_tool_output(parsed).to_string()
                     })
                     .collect();

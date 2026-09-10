@@ -11,8 +11,7 @@ use uuid::Uuid;
 use crate::proxy::sse::SseSplitter;
 
 use super::{
-    ChatReasoning, chat_max_tokens, chat_messages, chat_reasoning, collect_tool_call_names,
-    inline_defs, message_text,
+    ChatReasoning, chat_max_tokens, chat_messages, chat_reasoning, inline_defs, message_text,
 };
 
 mod request;

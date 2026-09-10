@@ -137,7 +137,9 @@ fn validate_strategies(
     fallback_strategy: i32,
     lang: Lang,
 ) -> Option<String> {
-    if !(0..=3).contains(&load_balancing_strategy) {
+    if !(virtual_model::LB_SUBSCRIPTION_FIRST..=virtual_model::LB_RANDOM)
+        .contains(&load_balancing_strategy)
+    {
         return Some(
             lang.tr("负载均衡策略不合法", "invalid load balancing strategy")
                 .to_string(),
@@ -465,12 +467,20 @@ async fn load_usage_map(
     db: &DatabaseConnection,
     provider_ids: &[i32],
 ) -> HashMap<i32, Option<crate::usage::types::UsageData>> {
-    let mut usage = HashMap::with_capacity(provider_ids.len());
-    for id in provider_ids {
-        let data = crate::usage::persist::read_usage_cache(db, *id)
-            .await
-            .unwrap_or(None);
-        usage.insert(*id, data);
+    // 11-24：一次批量读（原先逐供应商单查是 N+1）；缺失/过期/读失败按无数据处理。
+    let mut usage: HashMap<i32, Option<crate::usage::types::UsageData>> =
+        HashMap::with_capacity(provider_ids.len());
+    match crate::usage::persist::read_usage_cache_many(db, provider_ids).await {
+        Ok(rows) => {
+            for id in provider_ids {
+                usage.insert(*id, rows.get(id).cloned());
+            }
+        }
+        Err(_) => {
+            for id in provider_ids {
+                usage.insert(*id, None);
+            }
+        }
     }
     usage
 }

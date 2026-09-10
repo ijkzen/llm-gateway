@@ -6,8 +6,7 @@
 //!
 //! 指标语义：`UpstreamReply::start_at_ms` 是本次请求的网络阶段起点（新建连接
 //! = TCP 建连开始时刻，复用连接 = 请求发出时刻），作为 TTFT 与新 tps 的计时
-//! 起点；`connect_done_at_ms` 保留为复用连接时 TTFT 起点的近似（旧连接建连完成
-//! 时刻）。
+//! 起点（复用连接时即请求发出时刻，不做额外的建连完成近似）。
 
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -47,6 +46,28 @@ pub const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const HEADER_TIMEOUT: Duration = Duration::from_secs(120);
 /// 非流式响应体读取超时。
 pub const NON_STREAM_BODY_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// 四组超时的可注入集合：生产用 `Default`（即上面的常量），测试经
+/// `UpstreamPool::with_timeouts` 传毫秒级值缩短超时路径（silent upstream /
+/// 体悬挂等零覆盖分支）。
+#[derive(Debug, Clone, Copy)]
+pub struct Timeouts {
+    pub connect: Duration,
+    pub tls_handshake: Duration,
+    pub header: Duration,
+    pub non_stream_body: Duration,
+}
+
+impl Default for Timeouts {
+    fn default() -> Self {
+        Self {
+            connect: CONNECT_TIMEOUT,
+            tls_handshake: TLS_HANDSHAKE_TIMEOUT,
+            header: HEADER_TIMEOUT,
+            non_stream_body: NON_STREAM_BODY_TIMEOUT,
+        }
+    }
+}
 
 /// 上游调用错误。
 #[derive(Debug, thiserror::Error)]
@@ -139,6 +160,14 @@ pub fn parse_url(url: &str) -> Result<(String, String, u16, String), UpstreamErr
         .host()
         .ok_or_else(|| UpstreamError::Connect(format!("上游 URL 缺少主机名（{url}）")))?
         .to_string();
+    // IPv6 字面量（Uri::host() 返回带方括号形态）：无任何可用路径——带括号串
+    // 交给 getaddrinfo 会报「DNS 解析失败」、TLS 侧报「主机名无效」都指向错误
+    // 原因。显式拒绝并说明（真支持需去括号 + rustls ServerName::IpAddress）。
+    if host.starts_with('[') {
+        return Err(UpstreamError::Connect(format!(
+            "暂不支持 IPv6 字面量上游地址（{host}），请使用 IPv4 或域名"
+        )));
+    }
     let port = uri
         .port_u16()
         .unwrap_or(if scheme == "https" { 443 } else { 80 });
@@ -163,12 +192,21 @@ async fn connect_stream(
     host: &str,
     port: u16,
     proxy: Option<&str>,
+    timeouts: Timeouts,
 ) -> Result<(TimedStream, ConnectTiming, i64), UpstreamError> {
     let connect_start_at_ms = now_ms();
 
     // 代理模式：连接代理服务器 → CONNECT host:port 建立隧道 → https 时隧道内 TLS。
     if let Some(proxy_addr) = proxy {
-        return connect_via_proxy(proxy_addr, scheme, host, port, connect_start_at_ms).await;
+        return connect_via_proxy(
+            proxy_addr,
+            scheme,
+            host,
+            port,
+            connect_start_at_ms,
+            timeouts,
+        )
+        .await;
     }
 
     let addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
@@ -184,7 +222,7 @@ async fn connect_stream(
     let mut last_err: Option<UpstreamError> = None;
     for addr in addrs {
         let tcp_started = Instant::now();
-        let stream = match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
+        let stream = match tokio::time::timeout(timeouts.connect, TcpStream::connect(addr)).await {
             Ok(Ok(stream)) => stream,
             Ok(Err(e)) => {
                 last_err = Some(UpstreamError::Connect(format!("连接 {addr} 失败：{e}")));
@@ -212,7 +250,7 @@ async fn connect_stream(
                 .map_err(|e| UpstreamError::Connect(format!("TLS 主机名无效（{host}）：{e}")))?;
         let connector = tokio_rustls::TlsConnector::from(tls_config().clone());
         let tls = match tokio::time::timeout(
-            TLS_HANDSHAKE_TIMEOUT,
+            timeouts.tls_handshake,
             connector.connect(server_name, stream),
         )
         .await
@@ -247,6 +285,7 @@ async fn connect_via_proxy(
     host: &str,
     port: u16,
     connect_start_at_ms: i64,
+    timeouts: Timeouts,
 ) -> Result<(TimedStream, ConnectTiming, i64), UpstreamError> {
     // 解析代理地址（http://host:port）。
     let proxy_url = proxy_addr.trim().strip_prefix("http://").ok_or_else(|| {
@@ -277,7 +316,7 @@ async fn connect_via_proxy(
     let mut last_err = None;
     let mut stream = None;
     for addr in proxy_addrs {
-        match tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
+        match tokio::time::timeout(timeouts.connect, TcpStream::connect(addr)).await {
             Ok(Ok(s)) => {
                 stream = Some(s);
                 break;
@@ -304,14 +343,14 @@ async fn connect_via_proxy(
 
     // 发送 CONNECT 建立隧道。
     let connect_req = format!("CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n");
-    tokio::time::timeout(CONNECT_TIMEOUT, stream.write_all(connect_req.as_bytes()))
+    tokio::time::timeout(timeouts.connect, stream.write_all(connect_req.as_bytes()))
         .await
         .map_err(|_| UpstreamError::Connect("代理 CONNECT 写入超时".to_string()))?
         .map_err(|e| UpstreamError::Connect(format!("代理 CONNECT 写入失败：{e}")))?;
     stream.flush().await.ok();
 
     // 读 CONNECT 响应头（直到 \r\n\r\n），校验 200。
-    let status = read_proxy_connect_response(&mut stream)
+    let status = read_proxy_connect_response(&mut stream, timeouts.connect)
         .await
         .map_err(|e| UpstreamError::Connect(format!("代理 CONNECT 响应解析失败：{e}")))?;
     if status != 200 {
@@ -333,7 +372,7 @@ async fn connect_via_proxy(
         .map_err(|e| UpstreamError::Connect(format!("TLS 主机名无效（{host}）：{e}")))?;
     let connector = tokio_rustls::TlsConnector::from(tls_config().clone());
     let tls = match tokio::time::timeout(
-        TLS_HANDSHAKE_TIMEOUT,
+        timeouts.tls_handshake,
         connector.connect(server_name, stream),
     )
     .await
@@ -360,6 +399,7 @@ async fn connect_via_proxy(
 /// 返回状态码。响应头读到 `\r\n\r\n` 为止（剩余字节留在流中给后续握手）。
 async fn read_proxy_connect_response<S: tokio::io::AsyncRead + Unpin>(
     stream: &mut S,
+    connect_timeout: Duration,
 ) -> Result<u16, std::io::Error> {
     let mut buf = [0u8; 4096];
     let mut len = 0usize;
@@ -370,7 +410,7 @@ async fn read_proxy_connect_response<S: tokio::io::AsyncRead + Unpin>(
                 "proxy CONNECT response too large",
             ));
         }
-        let n = tokio::time::timeout(CONNECT_TIMEOUT, stream.read(&mut buf[len..]))
+        let n = tokio::time::timeout(connect_timeout, stream.read(&mut buf[len..]))
             .await
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "read timeout"))??;
         if n == 0 {
@@ -413,8 +453,6 @@ pub struct UpstreamCall {
     pub url: String,
     pub headers: Vec<(hyper::header::HeaderName, hyper::header::HeaderValue)>,
     pub body: Bytes,
-    /// 是否为流式请求（响应体不设总超时）。
-    pub stream: bool,
 }
 
 /// 上游响应。
@@ -424,9 +462,6 @@ pub struct UpstreamReply {
     /// 本次请求网络阶段起点（wall-clock 毫秒时间戳）：新建连接为 TCP 建连开始
     /// 时刻，复用连接为请求发出时刻。作为 TTFT 与新 tps 分母的计时起点。
     pub start_at_ms: i64,
-    /// 建连完成（或复用连接最初建连完成）时刻。复用连接时作为 TTFT 起点的
-    /// 近似（比建连开始晚建连时长）。
-    pub connect_done_at_ms: i64,
 }
 
 /// 发起上游调用：优先复用池内连接，未命中才独立建连（计时）→ HTTP/1.1 请求 →
@@ -444,25 +479,27 @@ pub async fn call(
         None => format!("{}://{}:{}", scheme, host, port),
     };
 
-    let mut timing = ConnectTiming::default();
-    let mut sender = pool.checkout(&key);
-    let (mut start_at_ms, mut connect_done_at_ms) = if sender.is_none() {
-        let (stream, measured, connect_start) = connect_stream(&scheme, &host, port, proxy).await?;
-        timing = measured;
-        let (send, conn) = http1::handshake(TokioIo::new(stream))
-            .await
-            .map_err(|e| UpstreamError::Request(format!("HTTP 握手失败：{e}")))?;
-        tokio::spawn(async move {
-            if let Err(e) = conn.await {
-                tracing::debug!("upstream connection closed: {e}");
-            }
-        });
-        sender = Some(send);
-        (connect_start, now_ms())
-    } else {
-        // 复用连接：起点=请求发出时刻；TTFT 起点近似=连接最初建连完成时刻。
-        let now = now_ms();
-        (now, now)
+    let timeouts = pool.timeouts();
+    let sender = pool.checkout(&key);
+    // 是否复用池内连接：仅复用连接可重试一次（见下方重试注释）。显式布尔而非
+    // 「建连计时 == 0」——后者在回环/本地上游（建连总耗时整毫秒截断为 0）会把
+    // 新连接首发失败也误判成可重试，造成重复请求（LLM 请求有重复计费风险）。
+    let was_reused = sender.is_some();
+    let (mut start_at_ms, mut sender) = match sender {
+        Some(sender) => (now_ms(), Some(sender)),
+        None => {
+            let (stream, _measured, connect_start) =
+                connect_stream(&scheme, &host, port, proxy, timeouts).await?;
+            let (send, conn) = http1::handshake(TokioIo::new(stream))
+                .await
+                .map_err(|e| UpstreamError::Request(format!("HTTP 握手失败：{e}")))?;
+            tokio::spawn(async move {
+                if let Err(e) = conn.await {
+                    tracing::debug!("upstream connection closed: {e}");
+                }
+            });
+            (connect_start, Some(send))
+        }
     };
 
     let mut attempt = 0;
@@ -473,6 +510,7 @@ pub async fn call(
             &path_query,
             &call,
             &authority(&scheme, &host, port),
+            timeouts.header,
         )
         .await;
         match reply {
@@ -482,17 +520,17 @@ pub async fn call(
                     status,
                     body,
                     start_at_ms,
-                    connect_done_at_ms,
                 });
             }
-            Err(UpstreamError::Request(_)) if attempt == 0 && timing.total_ms() == 0 => {
-                // 复用连接可能已被对端静默关闭：丢弃并新建连接重试一次。
+            // 仅复用连接重试一次：连接可能已被对端静默关闭，重发是正确自愈。
+            // 注意这是内在权衡——上游「已受理请求、响应前断连」时无法区分于
+            // 「发送前断」，重发会让上游可能已开始的生成计费两次（hyper 错误
+            // 类型不区分发送阶段，本层无法更细）。新建连接的首发失败不重试。
+            Err(UpstreamError::Request(_)) if attempt == 0 && was_reused => {
                 attempt += 1;
-                let (stream, measured, connect_start) =
-                    connect_stream(&scheme, &host, port, proxy).await?;
-                timing = measured;
+                let (stream, _measured, connect_start) =
+                    connect_stream(&scheme, &host, port, proxy, timeouts).await?;
                 start_at_ms = connect_start;
-                connect_done_at_ms = now_ms();
                 let (send, conn) = http1::handshake(TokioIo::new(stream))
                     .await
                     .map_err(|e| UpstreamError::Request(format!("HTTP 握手失败：{e}")))?;
@@ -513,6 +551,7 @@ async fn send_upstream_request(
     path_query: &str,
     call: &UpstreamCall,
     authority: &str,
+    header_timeout: Duration,
 ) -> Result<(StatusCode, Incoming), UpstreamError> {
     let mut builder = Builder::new().method(Method::POST).uri(path_query);
     for (name, value) in &call.headers {
@@ -529,7 +568,7 @@ async fn send_upstream_request(
         .body(Full::new(call.body.clone()))
         .map_err(|e| UpstreamError::Request(format!("构造上游请求失败：{e}")))?;
 
-    let reply = tokio::time::timeout(HEADER_TIMEOUT, sender.send_request(request))
+    let reply = tokio::time::timeout(header_timeout, sender.send_request(request))
         .await
         .map_err(|_| UpstreamError::Timeout)?
         .map_err(|e| UpstreamError::Request(format!("发送上游请求失败：{e}")))?;
@@ -538,10 +577,85 @@ async fn send_upstream_request(
 }
 
 /// 读取整个响应体（非流式路径）。读完连接自动归还池。
+/// 超时取自响应体携带的池配置（生产即 `NON_STREAM_BODY_TIMEOUT`）。
 pub async fn read_body(body: PooledBody) -> Result<Bytes, UpstreamError> {
-    let collected = tokio::time::timeout(NON_STREAM_BODY_TIMEOUT, body.collect())
+    let timeout = body.body_timeout();
+    let collected = tokio::time::timeout(timeout, body.collect())
         .await
         .map_err(|_| UpstreamError::Timeout)?
         .map_err(|e| UpstreamError::Request(format!("读取上游响应失败：{e}")))?;
     Ok(collected.to_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 默认端口推断：https→443、http→80（显式端口优先）。
+    #[test]
+    fn parse_url_infers_default_ports() {
+        let (scheme, host, port, path) = parse_url("https://api.example.com/v1/chat").unwrap();
+        assert_eq!(
+            (scheme.as_str(), host.as_str(), port),
+            ("https", "api.example.com", 443)
+        );
+        assert_eq!(path, "/v1/chat");
+
+        let (scheme, host, port, path) = parse_url("http://api.example.com").unwrap();
+        assert_eq!(
+            (scheme.as_str(), host.as_str(), port),
+            ("http", "api.example.com", 80)
+        );
+        assert_eq!(path, "/", "空 path 归一为 /");
+
+        let (_, _, port, _) = parse_url("https://api.example.com:8443/x").unwrap();
+        assert_eq!(port, 8443, "显式端口优先于默认推断");
+    }
+
+    /// 空 path 与 query：query 保留、空 path 补 `/`。
+    #[test]
+    fn parse_url_keeps_query_and_normalizes_empty_path() {
+        let (_, _, _, path) = parse_url("https://h.example?x=1&y=2").unwrap();
+        assert_eq!(path, "/?x=1&y=2");
+        let (_, _, _, path) = parse_url("https://h.example/v1/messages?a=b").unwrap();
+        assert_eq!(path, "/v1/messages?a=b");
+    }
+
+    /// 缺主机名报错（错误文案指向 URL 本身，不落到 DNS）。
+    #[test]
+    fn parse_url_rejects_missing_host() {
+        // 相对路径可被 Uri 解析，但无 authority/host。
+        let err = parse_url("/v1/chat").unwrap_err();
+        assert!(
+            err.fail_reason().contains("缺少主机名"),
+            "{}",
+            err.fail_reason()
+        );
+        // authority 为空的绝对 URL 由 Uri 解析阶段直接拒绝。
+        let err = parse_url("https:///v1").unwrap_err();
+        assert!(
+            err.fail_reason().contains("URL 无效"),
+            "{}",
+            err.fail_reason()
+        );
+    }
+
+    /// IPv6 字面量显式拒绝（04-02）：报错说明不支持，而非误导性的 DNS/TLS 失败。
+    #[test]
+    fn parse_url_rejects_ipv6_literal_with_clear_reason() {
+        let err = parse_url("http://[::1]:8080/v1").unwrap_err();
+        let reason = err.fail_reason();
+        assert!(reason.contains("IPv6"), "{reason}");
+        assert!(!reason.contains("DNS"), "不得报成 DNS 失败：{reason}");
+    }
+
+    /// 四组超时默认值即常量（生产口径不变）。
+    #[test]
+    fn timeouts_default_matches_constants() {
+        let t = Timeouts::default();
+        assert_eq!(t.connect, CONNECT_TIMEOUT);
+        assert_eq!(t.tls_handshake, TLS_HANDSHAKE_TIMEOUT);
+        assert_eq!(t.header, HEADER_TIMEOUT);
+        assert_eq!(t.non_stream_body, NON_STREAM_BODY_TIMEOUT);
+    }
 }

@@ -26,16 +26,20 @@ const SUBSCRIPTION_PATH: &str = "/api/subscription";
 const LOGIN_PATH: &str = "/api/auth/login";
 
 /// 一次 HTTP 调用是否需要触发登录。仅在「明确认证失败」时返回 true：
-/// HTTP 401/403，或 HTTP 200 且能解析出业务 code=401。网络/5xx/解析失败不算。
+/// HTTP 401/403，或 HTTP 200 且能解析出业务 code=401（数字或字符串 "401"，
+/// 上游两种形态都出现过），或 HTTP 200 且响应体不是 JSON（登录页/挑战页 HTML
+/// ——jwt 过期的另一种典型形态，此前会一路落 Parse 使自愈链断掉）。
+/// 网络/5xx 不算。
 fn login_reason(reply: &HttpReply) -> bool {
-    reply.status == 401 || reply.status == 403 || {
-        if reply.status != 200 {
-            return false;
-        }
-        serde_json::from_str::<Value>(&reply.body)
-            .ok()
-            .and_then(|v| v.get("code").and_then(Value::as_i64))
-            == Some(401)
+    if reply.status == 401 || reply.status == 403 {
+        return true;
+    }
+    if reply.status != 200 {
+        return false;
+    }
+    match serde_json::from_str::<Value>(&reply.body) {
+        Ok(value) => value.get("code").and_then(num) == Some(401.0),
+        Err(_) => true,
     }
 }
 
@@ -330,6 +334,7 @@ mod tests {
 
     #[test]
     fn login_reason_only_for_auth_failures() {
+        // ── 归位一治理：新增字符串 code 与非 JSON（HTML）两形态 ──
         // HTTP 401/403 → 需要登录。
         assert!(login_reason(&reply(401, "{}")));
         assert!(login_reason(&reply(403, "{}")));
@@ -338,14 +343,25 @@ mod tests {
             200,
             r#"{"success":false,"code":401,"message":"invalid credentials"}"#
         )));
-        // 网络/5xx/非认证业务错/解析失败 → 不登录。
+        // 字符串形态的 "401" 同样命中（上游两种形态都出现过）。
+        assert!(login_reason(&reply(
+            200,
+            r#"{"success":false,"code":"401","message":"unauthorized"}"#
+        )));
+        // HTTP 200 + 非 JSON（登录页/挑战页 HTML）：jwt 过期的另一典型形态，
+        // 此前落 Parse 使自愈链断掉，现按认证失败处理。
+        assert!(login_reason(&reply(200, "not json")));
+        assert!(login_reason(&reply(
+            200,
+            "<html><body>login page</body></html>"
+        )));
+        // 5xx 与其余非认证业务错 → 不登录。
         assert!(!login_reason(&reply(500, "{}")));
         assert!(!login_reason(&reply(200, "{}")));
         assert!(!login_reason(&reply(
             200,
             r#"{"success":false,"code":403,"message":"no permission"}"#
         )));
-        assert!(!login_reason(&reply(200, "not json")));
     }
 
     #[test]

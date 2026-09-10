@@ -15,7 +15,6 @@
 
 pub mod convert;
 pub mod failure_recheck;
-pub mod failure_recovery;
 pub mod metrics;
 pub mod pool;
 pub mod sse;
@@ -72,7 +71,9 @@ use crate::usage::persist::{fetch_and_store, read_usage_cache};
 use crate::usage::types::{UsageData, UsageKind, WindowKind};
 
 pub(crate) use calls::{build_native_upstream_call, build_upstream_call};
-pub(crate) use dispatch::{collect_stream_events, dispatch_success, record_failure, sse_response};
+pub(crate) use dispatch::{
+    collect_stream_events, dispatch_success, record_failure, record_failure_for, sse_response,
+};
 pub(crate) use failover::{
     ForwardFlavor, MemberLoopOutcome, SuccessContext, forward_through_members,
 };
@@ -87,7 +88,7 @@ pub(crate) use lb::{
     rank_by_quota_with, resolve_proxy, resolve_usage_map,
 };
 pub(crate) use native::{NativeUsageScanner, dispatch_native_success};
-pub(crate) use probe::{TEST_API_KEY_NAME, TEST_PROMPT, TEST_VIRTUAL_MODEL_ID};
+pub(crate) use probe::{TEST_API_KEY_NAME, TEST_PROMPT, TEST_VIRTUAL_MODEL_ID, probe_preamble};
 pub(crate) use relay::{Converter, PumpSource, RecordCtx, StreamOutcome, TailSpec, relay_stream};
 pub(crate) use route::{RouteError, resolve_and_order};
 

@@ -7,6 +7,7 @@ pub mod cron;
 pub mod crypto;
 pub mod db;
 pub mod entity;
+pub mod failure_recovery;
 pub mod i18n;
 pub mod logs_cleanup;
 pub mod middleware;
@@ -177,7 +178,9 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
                         tracing::warn!("用量刷新上次仍在运行，本次跳过");
                         return Ok(());
                     };
-                    match crate::usage::persist::refresh_all_usage(&state.db).await {
+                    match crate::usage::persist::refresh_all_usage(&state.db, &state.usage_mem)
+                        .await
+                    {
                         Ok(n) => {
                             tracing::info!("用量刷新完成，成功刷新 {n} 家供应商");
                         }
@@ -209,7 +212,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
                         tracing::warn!("连续失败供应商恢复上次仍在运行，本次跳过");
                         return Ok(());
                     };
-                    match crate::proxy::failure_recovery::recover_failure_disabled(&state).await {
+                    match crate::failure_recovery::recover_failure_disabled(&state).await {
                         Ok(n) => tracing::info!("连续失败供应商恢复完成，成功恢复 {n} 家供应商"),
                         Err(e) => tracing::error!("连续失败供应商恢复失败：{e}"),
                     }

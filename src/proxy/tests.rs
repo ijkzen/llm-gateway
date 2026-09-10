@@ -540,3 +540,120 @@ fn never_outbound_headers_never_reach_upstream_call_headers() {
     assert!(joined.contains("x-custom"), "x-custom 应保留：{joined}");
     assert!(!has_duplicate_names(&call));
 }
+
+// ─── 原生透传（build_native_upstream_call）头组装单测 ───
+
+/// 原生透传臂：改写 model、URL 取端点子路径，头组装走同一四层。
+fn build_native_sync(
+    endpoint: NativeEndpoint,
+    member: &Member,
+    body: &Value,
+    forwarded: &[(HeaderName, HeaderValue)],
+    session: &str,
+) -> UpstreamCall {
+    build_native_upstream_call(
+        endpoint,
+        member,
+        body,
+        "sk-provider",
+        forwarded,
+        "test",
+        session,
+    )
+    .unwrap()
+}
+
+#[test]
+fn native_call_rewrites_model_and_uses_endpoint_sub_path() {
+    let m = member_with_base_url(Protocol::Anthropic, "{}", "https://api.anthropic.com/v1");
+    let body = json!({"model":"vm-name","messages":[{"role":"user","content":"hi"}]});
+    let call = build_native_sync(NativeEndpoint::AnthropicMessages, &m, &body, &[], "fb-sess");
+    assert_eq!(call.url, "https://api.anthropic.com/v1/messages");
+    let sent: Value = serde_json::from_slice(&call.body).unwrap();
+    assert_eq!(sent["model"], "m", "model 应改写为成员真实模型 ID");
+    assert_eq!(sent["messages"][0]["role"], "user", "其余字段原样透传");
+
+    let call = build_native_sync(
+        NativeEndpoint::OpenAiResponses,
+        &member_with_base_url(Protocol::OpenAiResponses, "{}", "https://api.openai.com/v1"),
+        &body,
+        &[],
+        "fb-sess",
+    );
+    assert_eq!(call.url, "https://api.openai.com/v1/responses");
+}
+
+#[test]
+fn native_call_assembles_headers_with_same_four_layers() {
+    // 下游透传 + custom_header + 协议鉴权：同名以下游为准，鉴权头覆盖两者。
+    let m = member(
+        Protocol::Anthropic,
+        r#"{"x-api-key":"custom","anthropic-version":"2099-01-01","X-A":"b"}"#,
+    );
+    let body = json!({"model":"vm-name","messages":[]});
+    let forwarded = vec![
+        (
+            HeaderName::from_static("traceparent"),
+            hv("00-downstream-tp"),
+        ),
+        (HeaderName::from_static("x-api-key"), hv("downstream-key")),
+    ];
+    let call = build_native_sync(
+        NativeEndpoint::AnthropicMessages,
+        &m,
+        &body,
+        &forwarded,
+        "fb-sess",
+    );
+    let map: std::collections::HashMap<&str, &str> = call
+        .headers
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+        .collect();
+    assert_eq!(map.get("traceparent").copied(), Some("00-downstream-tp"));
+    assert_eq!(map.get("x-a").copied(), Some("b"), "自定义头补缺");
+    assert_eq!(
+        map.get("x-api-key").copied(),
+        Some("sk-provider"),
+        "协议鉴权头覆盖下游与自定义值"
+    );
+    assert_eq!(map.get("anthropic-version").copied(), Some("2023-06-01"));
+    assert!(!has_duplicate_names(&call));
+}
+
+#[test]
+fn native_call_injects_opencode_session_for_opencode_host() {
+    let m = member_with_base_url(Protocol::OpenAiCompat, "{}", "https://opencode.ai/api/v1");
+    let body = json!({"model":"vm-name","messages":[]});
+    let call = build_native_sync(NativeEndpoint::OpenAiResponses, &m, &body, &[], "fb-sess");
+    let map: std::collections::HashMap<&str, &str> = call
+        .headers
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+        .collect();
+    assert_eq!(
+        map.get("x-opencode-session").copied(),
+        Some("fb-sess"),
+        "opencode host 缺省注入会话头"
+    );
+
+    // 下游已带同名头时不覆盖。
+    let forwarded = vec![(
+        HeaderName::from_static("x-opencode-session"),
+        hv("client-sess"),
+    )];
+    let call2 = build_native_sync(
+        NativeEndpoint::OpenAiResponses,
+        &m,
+        &body,
+        &forwarded,
+        "fb-sess",
+    );
+    let map2: std::collections::HashMap<&str, &str> = call2
+        .headers
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+        .collect();
+    assert_eq!(map2.get("x-opencode-session").copied(), Some("client-sess"));
+    assert!(!has_duplicate_names(&call2));
+}

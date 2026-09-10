@@ -78,7 +78,7 @@ pub(crate) fn validate_setting_value(
                     .to_string());
             }
         }
-        Ok(setting::SettingType::Bool) if !matches!(value, "true" | "false") => {
+        Ok(setting::SettingType::Bool) if !matches!(value.trim(), "true" | "false") => {
             return Err(lang
                 .tr("value 必须是 true 或 false", "value must be true or false")
                 .to_string());
@@ -109,13 +109,19 @@ pub(crate) fn validate_setting_value(
             )
             .to_string());
     }
+    // 14-03：加上界（u32::MAX）——上限外的值在运行期按 u32 解析失败被静默忽略，
+    // 会造成设置页显示值与运行时阈值不收敛（重启也不修复）。
     if key == KEY_MAX_CONSECUTIVE_FAILURES
-        && value.trim().parse::<i64>().map(|v| v < 1).unwrap_or(true)
+        && value
+            .trim()
+            .parse::<i64>()
+            .map(|v| !(1..=i64::from(u32::MAX)).contains(&v))
+            .unwrap_or(true)
     {
         return Err(lang
             .tr(
-                "value 必须是正整数（至少为 1）",
-                "value must be a positive integer (at least 1)",
+                "value 必须是 1..=4294967295 的整数",
+                "value must be an integer in 1..=4294967295",
             )
             .to_string());
     }
@@ -280,6 +286,8 @@ async fn delete_setting(
     match setting::Entity::delete_by_id(&key).exec(&state.db).await {
         Ok(result) if result.rows_affected > 0 => {
             tracing::info!(key, "删除设置",);
+            // 11-09：缓存同步回落默认值（否则运行期仍用已删除的旧阈值/旧 allowlist）。
+            state.settings.reset_key(&key).await;
             (StatusCode::OK, Json(Response::success(())))
         }
         Ok(_) => {
@@ -291,5 +299,21 @@ async fn delete_setting(
             response::not_found(msg)
         }
         Err(e) => response::db_error(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 11-08：Bool 设置值允许前后空白（与数值/JSON 类型一致）。
+    #[test]
+    fn bool_setting_value_is_trimmed() {
+        use crate::entity::setting::SettingType;
+        let t = SettingType::Bool as i32;
+        assert!(validate_setting_value(t, "k", "true", Lang::Zh).is_ok());
+        assert!(validate_setting_value(t, "k", " true ", Lang::Zh).is_ok());
+        assert!(validate_setting_value(t, "k", "false", Lang::Zh).is_ok());
+        assert!(validate_setting_value(t, "k", "yes", Lang::Zh).is_err());
     }
 }

@@ -464,4 +464,88 @@ mod tests {
             "快照应实际固化闭桶"
         );
     }
+    /// 09-04：自愈覆盖 day/month/year 分支与「未初始化让位」。
+    #[tokio::test]
+    async fn heal_covers_day_month_year_and_yields_when_uninitialized() {
+        let _serial = test_lock().await;
+        let db = setup().await;
+        let now = now_ms();
+
+        // 未初始化：让位给生成任务（不死锁、不补算）。
+        assert!(run_snapshot_heal(&db).await.unwrap());
+        assert_eq!(count(&db, "day").await, 0, "未初始化不应补算");
+
+        // 初始化后删掉 day 闭桶，自愈应补回。用 2 天前的闭桶确保 day 帧已闭。
+        let long_ago = now - 2 * 24 * HOUR_MS;
+        let (_, closed) = closed_hour_frame(long_ago);
+        insert_request(&db, "a1", closed.start + 1000).await;
+        run_snapshot_generation(&db).await.unwrap();
+        let day_rows_before = count(&db, "day").await;
+        assert!(day_rows_before > 0, "生成应写 day 哨兵");
+        exec(
+            &db,
+            "DELETE FROM request_log_snapshot WHERE duration_type = 'day'",
+        )
+        .await;
+        run_snapshot_heal(&db).await.unwrap();
+        // 自愈覆盖最近 7 天（生成只走增量水位），故补回行数 ≥ 删除前。
+        assert!(
+            count(&db, "day").await >= day_rows_before,
+            "day 桶应被补回（≥ 删除前 {}）",
+            day_rows_before
+        );
+        // 该请求所在的那个 day 帧应有哨兵（用桶帧函数取与 closed 同桶的起点）。
+        let day_frame = super::frames_covering(Level::Day, 480, closed.start, closed.start + 1)
+            .into_iter()
+            .next()
+            .expect("应能找到包含该时刻的 day 帧");
+        assert!(
+            crate::stats_snapshot::bucket_finalized(&db, Level::Day, day_frame.start)
+                .await
+                .unwrap(),
+            "被删的具体 day 桶应有哨兵"
+        );
+
+        // month/year：删掉最近闭帧的哨兵，自愈应点检补回（各 ≤2 帧）。
+        for level in ["month", "year"] {
+            exec(
+                &db,
+                &format!("DELETE FROM request_log_snapshot WHERE duration_type = '{level}'"),
+            )
+            .await;
+            run_snapshot_heal(&db).await.unwrap();
+            assert!(count(&db, level).await > 0, "{level} 闭帧应被自愈补算");
+        }
+    }
+
+    /// 09-07：固化失败时该级水位不前进（下轮从旧水位重跑）。
+    /// 注入方式：把某一帧的请求数据留在库里但让 finalize 失败不可行（真实路径
+    /// 无 mock 缝），改为验证「水位推进发生在整级循环之后」的可见语义——
+    /// 首轮成功后水位=最新闭帧；人为把水位退回旧值再跑，应重算并回到最新。
+    #[tokio::test]
+    async fn watermark_only_advances_after_full_level() {
+        let _serial = test_lock().await;
+        let db = setup().await;
+        let now = now_ms();
+        let (older, closed) = closed_hour_frame(now);
+        insert_request(&db, "a1", older.start + 1000).await;
+        insert_request(&db, "a2", closed.start + 1000).await;
+        run_snapshot_generation(&db).await.unwrap();
+
+        let wm_after = meta_get(&db, "wm_hour").await.unwrap();
+        assert!(wm_after.is_some(), "首轮应写入 hour 水位");
+        // 水位回退：模拟「上轮中途失败」留下的旧水位，下一轮应重算到最新。
+        meta_set(&db, "wm_hour", "0").await.unwrap();
+        let rows_before = count(&db, "hour").await;
+        run_snapshot_generation(&db).await.unwrap();
+        let wm_retry = meta_get(&db, "wm_hour").await.unwrap();
+        assert_eq!(wm_retry, wm_after, "重跑后水位回到最新闭帧");
+        assert_eq!(count(&db, "hour").await, rows_before, "幂等固化不重复产行");
+        // older 桶（早于首轮水位）不在回退重算范围，但应仍存在（首轮已固化）。
+        assert!(
+            crate::stats_snapshot::bucket_finalized(&db, Level::Hour, older.start)
+                .await
+                .unwrap()
+        );
+    }
 }

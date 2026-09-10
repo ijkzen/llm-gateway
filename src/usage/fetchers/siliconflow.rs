@@ -14,7 +14,7 @@ use serde_json::Value;
 use super::{Credentials, num, snippet};
 use crate::usage::cookiecloud;
 use crate::usage::error::UsageError;
-use crate::usage::http::UsageHttp;
+use crate::usage::http::{UsageHttp, is_session_invalid_status};
 use crate::usage::types::{BalanceItem, FetchOutput};
 const WALLETS_URL: &str =
     "https://cloud.siliconflow.cn/walletd-server/api/v1/subject/wallets?pageSize=50&visible=1";
@@ -38,7 +38,7 @@ pub async fn fetch_siliconflow_wallets(
         )
         .await?;
     // 登录态失效/被重定向到登录页（401/403/3xx）→ Auth，提示重新同步 CookieCloud。
-    if reply.status == 401 || reply.status == 403 || (300..400).contains(&reply.status) {
+    if is_session_invalid_status(reply.status) {
         return Err(UsageError::Auth);
     }
     if reply.status != 200 {
@@ -50,7 +50,12 @@ pub async fn fetch_siliconflow_wallets(
 fn parse_siliconflow_wallets(body: &str) -> Result<FetchOutput, UsageError> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
-    if v.get("code").and_then(Value::as_i64).unwrap_or(-1) != 20000 {
+    let code = v.get("code").and_then(num).unwrap_or(-1.0);
+    // 业务包络失效码：40100 为登录态失效（归位一）。
+    if code == 40100.0 {
+        return Err(UsageError::Auth);
+    }
+    if code != 20000.0 {
         return Err(UsageError::Upstream(200, snippet(body)));
     }
     let wallets = v
@@ -174,9 +179,20 @@ mod tests {
         ));
     }
 
+    /// 归位一治理：40100 是登录态失效的业务码，判 Auth（400 提示重新同步）而非 Upstream。
     #[test]
-    fn parse_non_20000_code_is_upstream_error() {
+    fn parse_40100_code_is_auth_error() {
         let body = r#"{"code":40100,"msg":"unauthorized","data":{}}"#;
+        assert!(matches!(
+            parse_siliconflow_wallets(body),
+            Err(UsageError::Auth)
+        ));
+    }
+
+    /// 其余非 20000 业务码仍是 Upstream（200 包络上游错误）。
+    #[test]
+    fn parse_other_non_20000_code_is_upstream_error() {
+        let body = r#"{"code":50001,"msg":"internal","data":{}}"#;
         assert!(matches!(
             parse_siliconflow_wallets(body),
             Err(UsageError::Upstream(_, _))

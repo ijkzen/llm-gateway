@@ -121,6 +121,10 @@ const SUMMARY_METRICS: [&str; 5] = [
     snap::metrics::CACHE_TOKENS_ALL,
 ];
 
+/// charts 快照读的指标名单（10-06：原为手写字面量，指标改名会静默漏行）。
+/// 键序即快照读列序，与下文取值下标一一对应。
+const CHARTS_SNAP_METRICS: [&str; 2] = [snap::metrics::CALLS, snap::metrics::TOKENS_ALL];
+
 /// 全量历史累计（可选时间窗口过滤）：累计请求数、成功率、总计 token、加权缓存命中率。
 /// 闭桶（day 帧）读快照，其余兑底；数字与实时口径一致（快照只是加速层）。
 pub(crate) async fn summary(
@@ -429,7 +433,7 @@ async fn charts_merge(
             entity_type,
             exact_entity.as_deref(),
             None,
-            &["calls", "tokens_all"],
+            &CHARTS_SNAP_METRICS,
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -578,7 +582,7 @@ async fn model_distribution(
             entity_type,
             exact_entity.as_deref(),
             None,
-            &["calls", "tokens_all"],
+            &CHARTS_SNAP_METRICS,
         )
         .await
         .map_err(|e| e.to_string())?;

@@ -169,7 +169,7 @@ async fn refresh_all_usage_only_writes_usage_enabled_providers() {
         .await
         .unwrap();
 
-        let ok = llm_gateway::usage::persist::refresh_all_usage(&db)
+        let ok = llm_gateway::usage::persist::refresh_all_usage(&db, &Default::default())
             .await
             .unwrap();
         assert_eq!(ok, 1);

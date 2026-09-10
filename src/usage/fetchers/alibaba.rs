@@ -158,9 +158,13 @@ pub async fn fetch_alibaba_coding(
     let site = if intl { &INTL } else { &CHINA };
     let (cookie, xsrf, sec_token) = console_auth(http, creds, site).await?;
 
+    // sec_token 走 percent-encode（与 Token Plan 的 form 路径同规则）：token 可能
+    // 含 + / = 等保留字符，裸拼 query 会被曲解（+ → 空格、= 截断参数）。
     let url = format!(
         "{}/data/api.json?action=zeldaEasy.broadscope-bailian.codingPlan.queryCodingPlanInstanceInfoV2&product=broadscope-bailian&api=queryCodingPlanInstanceInfoV2&currentRegionId={}&sec_token={}",
-        site.console, site.region, sec_token
+        site.console,
+        site.region,
+        form_encode_value(&sec_token)
     );
     let body = format!(
         r#"{{"queryCodingPlanInstanceInfoRequest": {{"commodityCode": "{}"}}}}"#,

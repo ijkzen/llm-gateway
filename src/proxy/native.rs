@@ -120,12 +120,28 @@ pub async fn forward_native(
         Err(RouteError::QueryFailed(message)) => {
             return endpoint.error(StatusCode::INTERNAL_SERVER_ERROR, "api_error", message);
         }
-        Err(RouteError::NoMembers) => {
-            return endpoint.error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "api_error",
-                format!("虚拟模型 '{requested_model}' 没有可用的成员"),
+        Err(RouteError::NoMembers { virtual_model_id }) => {
+            let message = format!("虚拟模型 '{requested_model}' 没有可用的成员");
+            tracing::warn!(
+                request_id,
+                virtual_model_id,
+                requested_model = %requested_model,
+                api_key_name = %api_key.name,
+                "虚拟模型没有任何可用成员，拒绝转发",
             );
+            record_failure_for(
+                &state.db,
+                &request_id,
+                virtual_model_id,
+                0,
+                "",
+                &api_key.name,
+                now_ms(),
+                client_stream,
+                &message,
+                now_ms(),
+            );
+            return endpoint.error(StatusCode::SERVICE_UNAVAILABLE, "api_error", message);
         }
     };
     let virtual_model = route.virtual_model;

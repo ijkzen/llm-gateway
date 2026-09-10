@@ -19,7 +19,6 @@ fn clamp_responses_effort(effort: &str) -> &str {
 
 /// 编码发往 Responses API 的请求体。
 pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, String> {
-    let tool_names = collect_tool_call_names(chat);
     let mut instructions: Vec<String> = Vec::new();
     let mut input: Vec<Value> = Vec::new();
 
@@ -79,8 +78,6 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
             _ => {}
         }
     }
-    let _ = tool_names;
-
     let mut body = json!({
         "model": actual_model,
         "input": Value::Array(input),
@@ -97,7 +94,9 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
     }
 
     if let Some(max_tokens) = chat_max_tokens(chat) {
-        object.insert("max_output_tokens".to_string(), json!(max_tokens));
+        // 推理模型对 max_output_tokens 有最小值要求（官方 16）；低于则钳到 16，
+        // 否则上游直接 400（C4）。
+        object.insert("max_output_tokens".to_string(), json!(max_tokens.max(16)));
     }
     if let Some(temperature) = chat.get("temperature") {
         object.insert("temperature".to_string(), temperature.clone());
@@ -126,12 +125,20 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
                 let function = tool.get("function")?;
                 let mut parameters = function.get("parameters").cloned().unwrap_or_else(|| json!({"type": "object"}));
                 inline_defs(&mut parameters);
-                Some(json!({
+                let mut converted = json!({
                     "type": "function",
                     "name": function.get("name").cloned()?,
                     "description": function.get("description").cloned().unwrap_or_else(|| json!("")),
                     "parameters": parameters,
-                }))
+                });
+                // strict 透传（C5）：OpenAI 严格函数语义（schema 必须完全匹配）
+                // 丢失会让上游按宽松模式校验，与客户端预期不符。
+                if let Some(strict) = function.get("strict")
+                    && let Some(object) = converted.as_object_mut()
+                {
+                    object.insert("strict".to_string(), strict.clone());
+                }
+                Some(converted)
             })
             .collect();
         if !converted.is_empty() {
@@ -164,16 +171,24 @@ pub fn build_request_body(chat: &Value, actual_model: &str) -> Result<Value, Str
         let format = match format_type {
             "json_object" => Some(json!({"type": "json_object"})),
             "json_schema" => {
-                let mut schema = response_format
-                    .pointer("/json_schema/schema")
+                let json_schema = response_format.get("json_schema");
+                let mut schema = json_schema
+                    .and_then(|value| value.get("schema"))
                     .cloned()
                     .unwrap_or_else(|| json!({"type": "object"}));
                 inline_defs(&mut schema);
-                Some(json!({
+                let mut format = json!({
                     "type": "json_schema",
-                    "name": response_format.pointer("/json_schema/name").and_then(Value::as_str).unwrap_or("response"),
+                    "name": json_schema.and_then(|value| value.get("name")).and_then(Value::as_str).unwrap_or("response"),
                     "schema": schema,
-                }))
+                });
+                // strict 透传（C5）：与 tools 同理由，结构化输出同样要求严格校验。
+                if let Some(strict) = json_schema.and_then(|value| value.get("strict"))
+                    && let Some(object) = format.as_object_mut()
+                {
+                    object.insert("strict".to_string(), strict.clone());
+                }
+                Some(format)
             }
             _ => None,
         };

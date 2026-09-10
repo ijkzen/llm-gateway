@@ -27,6 +27,8 @@ pub struct PooledBody {
     pool: UpstreamPool,
     /// 是否已归还/已丢弃，避免 EOF 后再次触发。
     settled: bool,
+    /// 非流式整流读取的超时（来自池上的可注入超时组）。
+    body_timeout: Duration,
 }
 
 impl PooledBody {
@@ -36,13 +38,20 @@ impl PooledBody {
         sender: http1::SendRequest<Full<Bytes>>,
         pool: UpstreamPool,
     ) -> Self {
+        let body_timeout = pool.timeouts().non_stream_body;
         Self {
             inner,
             key,
             sender: Some(sender),
             pool,
             settled: false,
+            body_timeout,
         }
+    }
+
+    /// 整流读取本响应体的超时（`upstream::read_body` 使用）。
+    pub fn body_timeout(&self) -> Duration {
+        self.body_timeout
     }
 
     /// 把连接归还池或丢弃。仅在流自然结束（EOF）或流错误时调用一次；
@@ -94,15 +103,26 @@ pub struct UpstreamPool {
 pub struct UpstreamPoolInner {
     idle: Mutex<HashMap<String, Vec<PooledConn>>>,
     idle_timeout: Duration,
+    timeouts: crate::proxy::upstream::Timeouts,
 }
 
 impl UpstreamPool {
     /// 创建一个空闲超时（默认建议 600s）的连接池，并启动后台空闲清理任务。
+    /// 超时组用生产默认值（见 `upstream::Timeouts`）。
     pub fn new(idle_timeout: Duration) -> Self {
+        Self::with_timeouts(idle_timeout, crate::proxy::upstream::Timeouts::default())
+    }
+
+    /// 同 `new`，但可注入四组请求超时（测试用毫秒级值覆盖面路径）。
+    pub fn with_timeouts(
+        idle_timeout: Duration,
+        timeouts: crate::proxy::upstream::Timeouts,
+    ) -> Self {
         let pool = Self {
             inner: Arc::new(UpstreamPoolInner {
                 idle: Mutex::new(HashMap::new()),
                 idle_timeout,
+                timeouts,
             }),
         };
         UpstreamPoolInner::spawn_cleaner(Arc::clone(&pool.inner));
@@ -113,6 +133,11 @@ impl UpstreamPool {
     /// 顺带惰性丢弃该 key 下过期/已死的陈旧连接。
     pub fn checkout(&self, key: &str) -> Option<http1::SendRequest<Full<Bytes>>> {
         self.inner.checkout(key)
+    }
+
+    /// 本池生效的四组请求超时。
+    pub fn timeouts(&self) -> crate::proxy::upstream::Timeouts {
+        self.inner.timeouts
     }
 }
 

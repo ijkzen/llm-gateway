@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::{Credentials, num, reset_ts, snippet};
 use crate::usage::cookiecloud;
 use crate::usage::error::UsageError;
-use crate::usage::http::{HttpReply, UsageHttp, parse_json};
+use crate::usage::http::{HttpReply, UsageHttp, is_session_invalid_status, parse_json};
 use crate::usage::types::{
     BalanceItem, FetchOutput, QuotaWindow, WindowKind, empty_windows, set_window,
 };
@@ -28,7 +28,7 @@ fn headers(cookie: &str) -> [(&'static str, String); 2] {
 }
 
 fn ensure_ok(reply: &HttpReply) -> Result<(), UsageError> {
-    if reply.status == 401 || reply.status == 403 || (300..400).contains(&reply.status) {
+    if is_session_invalid_status(reply.status) {
         return Err(UsageError::Auth);
     }
     if reply.status != 200 {
@@ -55,7 +55,12 @@ pub async fn fetch_xiaomi_balance(
 fn parse_xiaomi_balance(body: &str) -> Result<FetchOutput, UsageError> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
-    if v.get("code").and_then(Value::as_i64).unwrap_or(-1) != 0 {
+    let code = v.get("code").and_then(num).unwrap_or(-1.0);
+    // 业务包络失效码：code=401 为登录态失效（归位一：提示重新同步 CookieCloud）。
+    if code == 401.0 {
+        return Err(UsageError::Auth);
+    }
+    if code != 0.0 {
         return Err(UsageError::Upstream(200, snippet(body)));
     }
     let data = v

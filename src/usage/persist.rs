@@ -139,7 +139,14 @@ pub async fn fetch_and_store(
 /// 刷新全部「已开启用量展示」（extra.usage=true，不看 enable）的供应商用量并落库，
 /// 订阅制供应商成功抓取后执行额度自动停用/恢复。返回成功落库的供应商数；
 /// 单家失败仅记录日志，不中断整体。
-pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> {
+///
+/// 抓取经 `UsageMemCache` 单飞入口（07-01 收敛）：与 LB 选路、手动刷新、失败复查
+/// 同刻命中同一家时只发一次厂商调用；成功后顺带回填 mem 缓存（07-02：避免刷新
+/// 完 DB 却有内存旧值被优先命中）。失败进入 60s 负缓存窗口。
+pub async fn refresh_all_usage(
+    db: &DatabaseConnection,
+    mem: &crate::usage::mem_cache::UsageMemCache,
+) -> Result<usize, DbErr> {
     let providers = provider::Entity::find().all(db).await?;
     let mut targets = Vec::new();
     for p in providers {
@@ -158,9 +165,16 @@ pub async fn refresh_all_usage(db: &DatabaseConnection) -> Result<usize, DbErr> 
         let provider_id = p.id;
         let db = db.clone();
         let semaphore = semaphore.clone();
+        let mem = mem.clone();
         set.spawn(async move {
             let _permit = semaphore.acquire().await.expect("用量刷新信号量未关闭");
-            (p, fetch_and_store(&db, provider_id).await)
+            // force=true：定时刷新是真实重取（不复用新鲜缓存），否则「刷新」
+            // 会退化成读旧值；单飞与代次护栏仍在。
+            let result = mem
+                .fetch_shared_stored(&db, provider_id, true)
+                .await
+                .map_err(|e| e.to_string());
+            (p, result)
         });
     }
 
@@ -225,6 +239,25 @@ pub async fn apply_usage_gate(
     Ok(())
 }
 
+/// 边界探活的候选过滤（纯判定，无序读 DB）：订阅制 + 可探活态（可用或 quota
+/// 停用；manual/failure 停用无权解除）+ 已开启用量展示。
+pub(crate) fn boundary_probe_eligible(p: &provider::Model) -> bool {
+    p.billing_mode == 1
+        && matches!(
+            p.disabled_reason
+                .as_deref()
+                .and_then(crate::availability::DisabledReason::parse),
+            None | Some(crate::availability::DisabledReason::Quota)
+        )
+        && crate::usage::usage_enabled(&p.extra)
+}
+
+/// 边界探活是否适用（纯判定）：订阅额度可用（非耗尽）且任一已提供窗口剩余
+/// 落在 (0,1) 边界区。
+pub(crate) fn boundary_probe_applicable(data: &UsageData) -> bool {
+    data.subscription_usable() == Some(true) && data.has_low_remaining_window()
+}
+
 /// 订阅制边界探活：读取新鲜的用量数据库缓存，对处于边界区（任一已提供窗口
 /// 剩余百分比落在 (0, 1)）的订阅制供应商发最小测试请求（`proxy::probe_provider`，
 /// 同模型弹窗/失败恢复探测入口）——
@@ -237,76 +270,95 @@ pub async fn apply_usage_gate(
 /// 10 分钟内的旧缓存仍可判定，与 LB 排序/门控同新鲜度口径。
 pub async fn probe_boundary_providers(state: &crate::state::AppState) -> Result<usize, DbErr> {
     let providers = provider::Entity::find().all(&state.db).await?;
-    let mut probed = 0;
+    // 候选过滤（纯判定）：订阅制 + 可探活态（可用或 quota 停用）+ 用量开启
+    // + 缓存新鲜且处边界区（任一已提供窗口剩余落在 (0,1)）。
+    let mut candidates = Vec::new();
     for p in providers {
-        if p.billing_mode != 1 {
-            continue;
-        }
-        // 只探活当前可用或 quota 停用的供应商（恢复双通道之一）。
-        if !matches!(p.disabled_reason.as_deref(), None | Some("quota")) {
-            continue;
-        }
-        if !crate::usage::usage_enabled(&p.extra) {
+        if !boundary_probe_eligible(&p) {
             continue;
         }
         let Some(data) = read_usage_cache(&state.db, p.id).await? else {
             continue; // 无缓存（抓取从未成功落库）→ 无从判定，本轮跳过
         };
-        if data.subscription_usable() != Some(true) || !data.has_low_remaining_window() {
+        if !boundary_probe_applicable(&data) {
             continue;
         }
-        match crate::proxy::probe_provider(state, &p).await {
-            Ok(duration_ms) => {
-                probed += 1;
-                tracing::info!(
-                    provider_id = p.id,
-                    provider_name = &p.name,
-                    "供应商「{}」边界探活成功（{}ms），额度可用",
-                    p.name,
-                    duration_ms
-                );
-                if let Err(e) =
-                    crate::availability::recover_quota(&state.db, p.id, &p.name, "订阅额度").await
-                {
-                    tracing::warn!(
-                        provider_id = p.id,
-                        provider_name = &p.name,
-                        "供应商「{}」边界探活恢复执行失败：{e}",
-                        p.name
-                    );
-                }
-            }
-            Err(crate::proxy::ProbeFailure::Failed(reason)) => {
-                probed += 1;
-                tracing::warn!(
-                    provider_id = p.id,
-                    provider_name = &p.name,
-                    "供应商「{}」边界探活失败（{reason}），按订阅额度耗尽自动停用",
-                    p.name
-                );
-                if let Err(e) =
-                    crate::availability::disable_for_quota(&state.db, p.id, &p.name, "订阅额度")
-                        .await
-                {
-                    tracing::warn!(
-                        provider_id = p.id,
-                        provider_name = &p.name,
-                        "供应商「{}」边界探活停用执行失败：{e}",
-                        p.name
-                    );
-                }
-            }
-            Err(crate::proxy::ProbeFailure::Skipped(reason)) => {
-                tracing::debug!(
-                    provider_id = p.id,
-                    provider_name = &p.name,
-                    "供应商「{}」边界探活跳过：{reason}",
-                    p.name
-                );
-            }
+        candidates.push(p);
+    }
+    // 并发探活（信号量上限，同 refresh_all_usage 形态）：逐家顺序执行时多家
+    // 同时处边界会把整轮拖过 5 分钟周期（单家最坏 ~260s，04 票超时形态）。
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
+    let mut set = tokio::task::JoinSet::new();
+    for p in candidates {
+        let state = state.clone();
+        let semaphore = semaphore.clone();
+        set.spawn(async move {
+            let _permit = semaphore.acquire().await.expect("边界探活信号量未关闭");
+            probe_one_boundary(&state, &p).await
+        });
+    }
+    let mut probed = 0;
+    while let Some(outcome) = set.join_next().await {
+        match outcome {
+            Ok(counted) => probed += counted,
+            Err(e) => tracing::warn!("边界探活任务异常：{e}"),
         }
     }
     Ok(probed)
+}
+
+/// 单家边界探活：成功恢复 / 失败按额度耗尽停用 / 跳过仅记日志。
+/// 返回 1 表示真实发起了探活（成功或失败），0 表示跳过。
+async fn probe_one_boundary(state: &crate::state::AppState, p: &provider::Model) -> usize {
+    match crate::proxy::probe_provider(state, p).await {
+        Ok(duration_ms) => {
+            tracing::info!(
+                provider_id = p.id,
+                provider_name = &p.name,
+                "供应商「{}」边界探活成功（{}ms），额度可用",
+                p.name,
+                duration_ms
+            );
+            if let Err(e) =
+                crate::availability::recover_quota(&state.db, p.id, &p.name, "订阅额度").await
+            {
+                tracing::warn!(
+                    provider_id = p.id,
+                    provider_name = &p.name,
+                    "供应商「{}」边界探活恢复执行失败：{e}",
+                    p.name
+                );
+            }
+        }
+        Err(crate::proxy::ProbeFailure::Failed(reason)) => {
+            tracing::warn!(
+                provider_id = p.id,
+                provider_name = &p.name,
+                "供应商「{}」边界探活失败（{reason}），按订阅额度耗尽自动停用",
+                p.name
+            );
+            if let Err(e) =
+                crate::availability::disable_for_quota(&state.db, p.id, &p.name, "订阅额度").await
+            {
+                tracing::warn!(
+                    provider_id = p.id,
+                    provider_name = &p.name,
+                    "供应商「{}」边界探活停用执行失败：{e}",
+                    p.name
+                );
+            }
+        }
+        Err(crate::proxy::ProbeFailure::Skipped(reason)) => {
+            tracing::debug!(
+                provider_id = p.id,
+                provider_name = &p.name,
+                "供应商「{}」边界探活跳过：{reason}",
+                p.name
+            );
+            return 0;
+        }
+    }
+    1
 }
 
 // 用量内存缓存（LB 选路热路径，P3）已拆至 `usage::mem_cache`（UsageMemCache：
@@ -341,6 +393,103 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    /// 07-05：边界探活候选过滤矩阵（纯判定，不看 DB）。
+    #[test]
+    fn boundary_probe_eligibility_matrix() {
+        let mk = |billing_mode: i32, reason: Option<&str>, extra: &str| provider::Model {
+            id: 1,
+            name: "p".to_string(),
+            enable: true,
+            base_url: "https://a.example".to_string(),
+            api_key: "enc".to_string(),
+            custom_header: "{}".to_string(),
+            protocol_type: 0,
+            billing_mode,
+            extra: extra.to_string(),
+            sort_order: 0,
+            proxy_enabled: false,
+            proxy_addr: String::new(),
+            disabled_reason: reason.map(str::to_string),
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let usage_on = r#"{"usage": true}"#;
+        let usage_off = r#"{"usage": false}"#;
+
+        // 订阅制 + 可用/停用 quota + 用量开启 → 可探活。
+        assert!(boundary_probe_eligible(&mk(1, None, usage_on)));
+        assert!(boundary_probe_eligible(&mk(1, Some("quota"), usage_on)));
+        // 其余组合全部排除。
+        assert!(
+            !boundary_probe_eligible(&mk(0, None, usage_on)),
+            "按量不探活"
+        );
+        assert!(
+            !boundary_probe_eligible(&mk(1, Some("manual"), usage_on)),
+            "manual 停用不探活"
+        );
+        assert!(
+            !boundary_probe_eligible(&mk(1, Some("failure"), usage_on)),
+            "failure 停用不探活"
+        );
+        assert!(
+            !boundary_probe_eligible(&mk(1, None, usage_off)),
+            "用量未开启"
+        );
+        assert!(
+            !boundary_probe_eligible(&mk(1, None, "{}")),
+            "usage 键缺失按未开启"
+        );
+    }
+
+    /// 07-05：边界探活适用性——额度可用且处边界区才探活。
+    #[test]
+    fn boundary_probe_applicability_matrix() {
+        let with_pct = |pct: f64| {
+            let mut data = balance_data(1, &[]);
+            data.kind = UsageKind::Quota;
+            data.windows = vec![QuotaWindow::from_remaining_percent(
+                WindowKind::FiveHour,
+                pct,
+                None,
+            )];
+            data
+        };
+        assert!(boundary_probe_applicable(&with_pct(0.5)), "边界区应探活");
+        assert!(!boundary_probe_applicable(&with_pct(0.0)), "耗尽不可用");
+        assert!(
+            !boundary_probe_applicable(&with_pct(50.0)),
+            "远离边界不探活"
+        );
+        // 无窗口数据（无法判定）不探活。
+        let no_windows = balance_data(1, &[]);
+        assert!(!boundary_probe_applicable(&no_windows));
+    }
+
+    /// 07-04：批量读数据库缓存——新鲜命中、过期与其他家缺失都不计入。
+    #[tokio::test]
+    async fn read_usage_cache_many_filters_stale_and_missing() {
+        let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+        crate::db::migrate(&db).await.unwrap();
+
+        // 新鲜、过期、未写三种形态。
+        write_usage_cache(&db, &balance_data(1, &[10.0]))
+            .await
+            .unwrap();
+        let mut stale = balance_data(2, &[20.0]);
+        stale.fetched_at = Utc::now() - chrono::TimeDelta::minutes(11);
+        write_usage_cache(&db, &stale).await.unwrap();
+
+        let map = read_usage_cache_many(&db, &[1, 2, 3]).await.unwrap();
+        assert!(map.contains_key(&1), "新鲜缓存应返回");
+        assert!(!map.contains_key(&2), "过期缓存不计入");
+        assert!(!map.contains_key(&3), "未写缓存不计入");
+        assert_eq!(map.len(), 1);
+
+        let empty = read_usage_cache_many(&db, &[]).await.unwrap();
+        assert!(empty.is_empty(), "空入参短路");
     }
 
     async fn seed_balance_provider(db: &DatabaseConnection) -> (i32, i32) {
@@ -631,7 +780,10 @@ mod tests {
             job_name = "usage_refresh",
             run_id = "run-1",
         );
-        let refreshed = refresh_all_usage(&db).instrument(span).await.unwrap();
+        let refreshed = refresh_all_usage(&db, &Default::default())
+            .instrument(span)
+            .await
+            .unwrap();
         assert_eq!(refreshed, 0, "唯一目标供应商抓取失败，成功数应为 0");
 
         let mut messages = Vec::new();

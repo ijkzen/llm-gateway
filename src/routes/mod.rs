@@ -16,6 +16,7 @@ use axum::Json;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
+use axum::response::IntoResponse;
 use axum::routing::get;
 use serde_json::json;
 
@@ -39,7 +40,7 @@ pub fn create_app(state: &AppState) -> Router {
         .nest("/api/chat", chat::routes())
         .nest("/api/request-logs", request_logs::routes())
         .nest("/v1", openai_compat::routes())
-        .fallback(crate::static_assets::serve_asset)
+        .fallback(api_aware_fallback)
         .layer(DefaultBodyLimit::max(5 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -48,6 +49,22 @@ pub fn create_app(state: &AppState) -> Router {
         .with_state(state.clone());
 
     http_middleware::apply(router)
+}
+
+/// 静态资源回退，但 `/api/`、`/v1/` 前缀的不存在路径返回 JSON 404（11-18）：
+/// 拼错的 API 路径此前会拿到 index.html（200 text/html），误导客户端与排障。
+async fn api_aware_fallback(
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    let path = uri.path();
+    if path.starts_with("/api/") || path.starts_with("/v1/") {
+        return crate::response::not_found::<()>(format!("接口不存在：{path}")).into_response();
+    }
+    match crate::static_assets::serve_asset(uri, headers).await {
+        Ok(response) => response,
+        Err(status) => status.into_response(),
+    }
 }
 
 async fn healthz() -> Json<serde_json::Value> {

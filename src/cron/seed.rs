@@ -113,6 +113,9 @@ async fn ensure_job(db: &DatabaseConnection, name: &str, expression: &str) -> an
     }
     let now = chrono::Utc::now();
     let lang = crate::i18n::Lang::default();
+    // next_run_at 按表达式计算（08-07）：写成 now 会让 @hourly 任务在首跑前
+    // 展示「下次运行=过去的时刻」数小时。计算失败兜底 now（展示偏差不阻塞种子）。
+    let next_run_at = super::parser::compute_next_run_tz(expression, None).unwrap_or(now);
     cron_job::ActiveModel {
         name: Set(name.to_string()),
         title: Set(default_title(name, lang)),
@@ -121,7 +124,7 @@ async fn ensure_job(db: &DatabaseConnection, name: &str, expression: &str) -> an
         enabled: Set(true),
         group: Set("system".to_string()),
         last_run_at: Set(now),
-        next_run_at: Set(now),
+        next_run_at: Set(next_run_at),
         created_at: Set(now),
         updated_at: Set(now),
         is_deleted: Set(false),

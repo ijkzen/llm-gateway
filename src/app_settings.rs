@@ -107,6 +107,10 @@ impl AppSettings {
     /// 从 setting 表加载设置行（缺失时用默认值），并幂等写入种子行，保证
     /// 「空表起步」的库也有这些行可被 `PUT` 更新。
     pub async fn load_from_db(db: &DatabaseConnection) -> anyhow::Result<Self> {
+        // 14-02：种子行先于解析插入——否则首启进程内 timezone 解析到 None（种子行
+        // 尚未写入），cron 链路回退服务器本地时区而统计链路回退默认时区，两口径
+        // 分叉一个启动周期。种子幂等，重复调用无副作用。
+        Self::seed_rows(db).await?;
         let mut language = Lang::default();
         let mut timezone: Option<chrono_tz::Tz> = None;
         let mut max_consecutive_failures = DEFAULT_MAX_CONSECUTIVE_FAILURES;
@@ -151,12 +155,11 @@ impl AppSettings {
                 downstream_header_allow_list,
             })),
         };
-        settings.ensure_seed_rows(db).await?;
         Ok(settings)
     }
 
     /// 幂等插入种子行（已存在则跳过）。
-    async fn ensure_seed_rows(&self, db: &DatabaseConnection) -> anyhow::Result<()> {
+    async fn seed_rows(db: &DatabaseConnection) -> anyhow::Result<()> {
         for (key, value, setting_type) in [
             (
                 KEY_LANGUAGE,
@@ -216,6 +219,24 @@ impl AppSettings {
     /// 当前 `/v1` 下游请求头透传 allowlist。
     pub async fn downstream_header_allow_list(&self) -> Vec<HeaderName> {
         self.inner.read().await.downstream_header_allow_list.clone()
+    }
+
+    /// 删除设置键后恢复该键的默认值（由 `DELETE /api/settings/{key}` 调用，11-09）。
+    /// 设置表已无该行，若缓存仍持旧值会与界面/重启后的种子默认值不一致。
+    pub async fn reset_key(&self, key: &str) {
+        match key {
+            KEY_MAX_CONSECUTIVE_FAILURES => {
+                self.inner.write().await.max_consecutive_failures =
+                    DEFAULT_MAX_CONSECUTIVE_FAILURES;
+            }
+            KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST => {
+                self.inner.write().await.downstream_header_allow_list =
+                    parse_header_allow_list(DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST)
+                        .unwrap_or_default();
+            }
+            // language/timezone 是受保护键（删除被上层拒绝），其余键不参与缓存。
+            _ => {}
+        }
     }
 
     /// 更新设置（由 `PUT /api/settings/{key}` 调用）。`timezone` 值非法时

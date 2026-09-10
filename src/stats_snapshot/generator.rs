@@ -121,9 +121,29 @@ pub async fn finalize_bucket(db: &DatabaseConnection, frame: Frame) -> anyhow::R
 /// 分位标量（与 insight 分位同谓词）：ttft = 成功行且 ttft 非空；
 /// request_time = 全部成功行。无样本桶不写行（读侧按 0 补）。
 async fn write_percentiles<C: ConnectionTrait>(txn: &C, frame: Frame) -> anyhow::Result<()> {
-    for (value_expr, extra_cond, base_metric) in [
-        ("r.ttft", "r.ttft IS NOT NULL", metrics::TTFT_P50),
-        ("r.request_time", "1 = 1", metrics::REQUEST_TIME_P50),
+    // 四档分位的指标名由 registry 常量单源给出（10-05 同族：不再用字符串
+    // replace 推导，避免改名时静默漏改）。
+    for (value_expr, extra_cond, keys) in [
+        (
+            "r.ttft",
+            "r.ttft IS NOT NULL",
+            (
+                metrics::TTFT_P50,
+                metrics::TTFT_P90,
+                metrics::TTFT_P95,
+                metrics::TTFT_P99,
+            ),
+        ),
+        (
+            "r.request_time",
+            "1 = 1",
+            (
+                metrics::REQUEST_TIME_P50,
+                metrics::REQUEST_TIME_P90,
+                metrics::REQUEST_TIME_P95,
+                metrics::REQUEST_TIME_P99,
+            ),
+        ),
     ] {
         let mut buckets: std::collections::BTreeMap<(String, String), Vec<f64>> =
             std::collections::BTreeMap::new();
@@ -161,15 +181,11 @@ async fn write_percentiles<C: ConnectionTrait>(txn: &C, frame: Frame) -> anyhow:
         }
         for ((entity_type, entity), mut values) in buckets {
             values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            let p50_key = base_metric;
-            let p90_key = base_metric.replace("_p50", "_p90");
-            let p95_key = base_metric.replace("_p50", "_p95");
-            let p99_key = base_metric.replace("_p50", "_p99");
             for (p, key) in [
-                (percentile(&values, 0.5), p50_key),
-                (percentile(&values, 0.9), p90_key.as_str()),
-                (percentile(&values, 0.95), p95_key.as_str()),
-                (percentile(&values, 0.99), p99_key.as_str()),
+                (percentile(&values, 0.5), keys.0),
+                (percentile(&values, 0.9), keys.1),
+                (percentile(&values, 0.95), keys.2),
+                (percentile(&values, 0.99), keys.3),
             ] {
                 upsert_row(txn, frame, &entity_type, &entity, key, p).await?;
             }

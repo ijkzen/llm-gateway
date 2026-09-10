@@ -745,10 +745,13 @@ pub(crate) async fn api_key_rank(
         if request_count == 0 {
             continue;
         }
+        // 参数绑定（10-04）：名称来自本仓 api_key.name（仅 trim 校验、无字符集
+        // 限制），内联拼接会被含单引号的名称破坏。
         let api_key_id: Option<i32> = db
-            .query_one_raw(Statement::from_string(
+            .query_one_raw(Statement::from_sql_and_values(
                 DbBackend::Sqlite,
-                format!("SELECT id AS v FROM api_key WHERE name = '{name}'"),
+                "SELECT id AS v FROM api_key WHERE name = ?",
+                [name.clone().into()],
             ))
             .await
             .map_err(|e| response::db_error(e.to_string()))?

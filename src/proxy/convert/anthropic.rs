@@ -13,8 +13,7 @@ use crate::proxy::sse::SseSplitter;
 
 use super::{
     ANTHROPIC_DEFAULT_MAX_TOKENS, cached_client_usage_json, chat_max_tokens, chat_messages,
-    chat_reasoning, collect_tool_call_names, inline_defs, message_text, reasoning_budget,
-    truncate_chars,
+    chat_reasoning, inline_defs, message_text, reasoning_budget, truncate_chars,
 };
 use crate::proxy::metrics::Usage;
 

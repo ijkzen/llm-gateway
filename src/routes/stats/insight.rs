@@ -448,9 +448,9 @@ pub(crate) async fn insight(
                                    p_base: &str,
                                    value_sql: &str,
                                    extra_cond: &str|
-           -> Vec<PercentilePoint> {
+           -> Result<Vec<PercentilePoint>, String> {
         if month_mode {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let mut p_rows: std::collections::BTreeMap<i64, [f64; 4]> = Default::default();
         // 同层帧（与查询粒度同层）的 p 标量落桶；跨层细帧（day 查询下今日拆出
@@ -477,10 +477,12 @@ pub(crate) async fn insight(
             if !matches!(*level, snap::Level::Hour | snap::Level::Day) {
                 continue;
             }
+            // 10-09：读错误不再静默吞成「无标量」（那会触发整窗逐桶实时扫描
+            // 并掩盖故障）——与同文件其余分支一致如实上报。
             let rows =
                 snap::snapshot_rows(db, *level, frames, entity_type, exact, None, &prim_refs)
                     .await
-                    .unwrap_or_default();
+                    .map_err(|e| e.to_string())?;
             if Some(*level) == same_level {
                 for (start, _, _, metric, value) in rows {
                     let idx = (start + off_ms).div_euclid(window.bucket_ms);
@@ -592,7 +594,7 @@ pub(crate) async fn insight(
             p_rows.insert(*idx, p);
         }
         // 按桶补零输出（旧实现：无样本桶 0）。
-        window
+        let out: Vec<PercentilePoint> = window
             .bucket_range()
             .map(|bucket| {
                 let p = p_rows.get(&bucket).copied().unwrap_or([0.0; 4]);
@@ -604,25 +606,34 @@ pub(crate) async fn insight(
                     p99: p[3],
                 }
             })
-            .collect()
+            .collect();
+        Ok(out)
     };
     let (entity_type, exact_entity) = (entity_type, exact_entity);
-    let ttft_percentiles = group_percentiles(
+    let ttft_percentiles = match group_percentiles(
         entity_type,
         exact_entity.as_deref(),
         "ttft",
         "r.ttft",
         " AND r.ttft IS NOT NULL",
     )
-    .await;
-    let latency_percentiles = group_percentiles(
+    .await
+    {
+        Ok(points) => points,
+        Err(e) => return response::db_error(e),
+    };
+    let latency_percentiles = match group_percentiles(
         entity_type,
         exact_entity.as_deref(),
         "request_time",
         "r.request_time",
         "",
     )
-    .await;
+    .await
+    {
+        Ok(points) => points,
+        Err(e) => return response::db_error(e),
+    };
 
     // API Key 排行（窗口内调用数降序）：无过滤时闭桶走快照（api_key 行，
     // 按 id→名称归并），有过滤时整窗实时（无交叉行形态）。

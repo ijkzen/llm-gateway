@@ -18,6 +18,7 @@ use crate::entity::provider::{self, ActiveModel, Entity};
 use crate::entity::provider_model;
 use crate::entity::virtual_model_item;
 use crate::i18n::Lang;
+use crate::provider_model::refresh::{PROTOCOL_GEMINI, PROTOCOL_OPENAI_COMPATIBLE};
 use crate::response::{self, Response};
 use crate::state::AppState;
 use crate::usage::types::UsageData;
@@ -137,7 +138,7 @@ pub(crate) fn validate_protocol_billing(
     billing_mode: i32,
     lang: Lang,
 ) -> Option<String> {
-    if !(0..=3).contains(&protocol_type) {
+    if !(PROTOCOL_OPENAI_COMPATIBLE..=PROTOCOL_GEMINI).contains(&protocol_type) {
         return Some(
             lang.tr("协议类型不合法", "invalid protocol type")
                 .to_string(),
@@ -179,11 +180,7 @@ fn validate_fields(
                 .to_string(),
         );
     }
-    if let Some(err) = validate_json_field(
-        lang.tr("自定义请求头", "custom headers"),
-        custom_header,
-        lang,
-    ) {
+    if let Some(err) = validate_custom_header(custom_header, lang) {
         return Some(err);
     }
     if let Some(err) = validate_json_field(lang.tr("额外字段", "extra fields"), extra, lang) {
@@ -306,6 +303,37 @@ pub(crate) fn validate_json_field(label: &str, value: &str, lang: Lang) -> Optio
     }
 }
 
+/// 校验自定义请求头：必须是 JSON 对象且值为字符串（11-12）。
+/// 转发层的消费形状即 `{name: value}` 字符串映射；存进标量/数组/非字符串值
+/// 会被静默跳过、请求头完全不生效且无提示，故在写入侧拒绝。
+pub(crate) fn validate_custom_header(value: &str, lang: Lang) -> Option<String> {
+    let parsed: Value = match serde_json::from_str(value) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            return Some(if lang == Lang::En {
+                "customHeader is not valid JSON".to_string()
+            } else {
+                "customHeader 不是合法的 JSON".to_string()
+            });
+        }
+    };
+    let Some(map) = parsed.as_object() else {
+        return Some(if lang == Lang::En {
+            "customHeader must be a JSON object of header name to string value".to_string()
+        } else {
+            "customHeader 必须是「请求头名 → 字符串值」的 JSON 对象".to_string()
+        });
+    };
+    if map.values().any(|v| !v.is_string()) {
+        return Some(if lang == Lang::En {
+            "customHeader values must all be strings".to_string()
+        } else {
+            "customHeader 的值必须全部是字符串".to_string()
+        });
+    }
+    None
+}
+
 /// 对 api_key 做掩码：保留前 3 位与后 4 位，中间用星号填充；
 /// 解密失败（密钥变更等原因）时返回空字符串。
 fn mask_api_key(stored: &str) -> String {
@@ -414,14 +442,7 @@ async fn update_provider(
     let lang = state.settings.lang().await;
     let model = match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(model)) => model,
-        Ok(None) => {
-            let msg = if lang == Lang::En {
-                format!("provider {id} does not exist")
-            } else {
-                format!("Provider {id} 不存在")
-            };
-            return response::not_found(msg);
-        }
+        Ok(None) => return not_found_provider(lang, id),
         Err(e) => return response::db_error(e.to_string()),
     };
 
@@ -440,7 +461,6 @@ async fn update_provider(
         .api_key
         .filter(|k| !k.trim().is_empty())
         .map(|k| k.trim().to_string());
-    let _api_key = new_api_key.clone().unwrap_or_else(|| model.api_key.clone());
 
     if let Some(msg) = validate_fields(
         &name,
@@ -489,21 +509,24 @@ async fn update_provider(
     active.proxy_addr = Set(proxy_addr.trim().to_string());
     active.updated_at = Set(chrono::Utc::now());
 
+    // 启用状态切换走可用性状态机：手动启用解除任意停用并清零失败计数，手动停用
+    // 标记 manual；两者都级联同步名下虚拟模型条目。放在字段落库**之前**（11-04）：
+    // 动作失败时字段尚未写入，不会出现「报失败但部分生效」；动作本身就是独立
+    // 事务提交，无法与字段更新合并成单一事务。
+    if enable_changed {
+        let result = if enable_new {
+            crate::availability::enable_manual(&state.db, &state.failure_counter, id).await
+        } else {
+            crate::availability::disable_manual(&state.db, id).await
+        };
+        if let Err(e) = result {
+            tracing::warn!(provider_id = id, "手动启停供应商失败：{e}");
+            return response::db_error(e.to_string());
+        }
+    }
+
     match crate::provider_repo::update_provider(&state.db, active).await {
         Ok(_) => {
-            // 启用状态切换走可用性状态机：手动启用解除任意停用并清零失败计数，
-            // 手动停用标记 manual；两者都级联同步名下虚拟模型条目。
-            if enable_changed {
-                let result = if enable_new {
-                    crate::availability::enable_manual(&state.db, &state.failure_counter, id).await
-                } else {
-                    crate::availability::disable_manual(&state.db, id).await
-                };
-                if let Err(e) = result {
-                    tracing::warn!(provider_id = id, "手动启停供应商失败：{e}");
-                    return response::db_error(e.to_string());
-                }
-            }
             // 供应商协议变更：名下未做模型级覆盖的成员生效协议随之变化，
             // 级联硬删不再匹配所属受限类型虚拟模型的成员（失败不阻断，记 warn）。
             if protocol_changed {
@@ -539,18 +562,29 @@ async fn update_provider(
             let model = match Entity::find_by_id(id).one(&state.db).await {
                 Ok(Some(model)) => model,
                 Ok(None) => {
-                    return response::not_found(format!("Provider {id} 不存在"));
+                    return not_found_provider(lang, id);
                 }
                 Err(e) => return response::db_error(e.to_string()),
             };
             let response = ProviderResponse::from_model(model);
             (StatusCode::OK, Json(Response::success(response)))
         }
-        Err(e) if crate::db::is_unique_violation(&e) => {
-            response::bad_request("同名 Provider 已存在，名称需要唯一")
-        }
+        Err(e) if crate::db::is_unique_violation(&e) => response::bad_request(lang.tr(
+            "同名 Provider 已存在，名称需要唯一",
+            "a provider with the same name already exists; names must be unique",
+        )),
         Err(e) => response::db_error(e.to_string()),
     }
+}
+
+/// 供应商不存在的统一 404 响应（11-20：七处同构样板收敛；文案按语言分支）。
+fn not_found_provider<T>(lang: Lang, provider_id: i32) -> crate::response::ErrorResponse<T> {
+    let msg = if lang == Lang::En {
+        format!("provider {provider_id} does not exist")
+    } else {
+        format!("Provider {provider_id} 不存在")
+    };
+    response::not_found(msg)
 }
 
 #[derive(Deserialize)]
@@ -630,14 +664,7 @@ async fn delete_provider(State(state): State<AppState>, Path(id): Path<i32>) -> 
     // 先查原记录（日志需要 name），不存在直接 404。
     let provider = match provider::Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(model)) => model,
-        Ok(None) => {
-            let msg = if lang == Lang::En {
-                format!("provider {id} does not exist")
-            } else {
-                format!("Provider {id} 不存在")
-            };
-            return response::not_found(msg);
-        }
+        Ok(None) => return not_found_provider(lang, id),
         Err(e) => return response::db_error(e.to_string()),
     };
     // 级联硬删：同一事务内先删引用该供应商模型的虚拟模型成员（释放成员），
@@ -701,14 +728,7 @@ async fn get_provider_detail(
     let lang = state.settings.lang().await;
     match load_detail(&state.db, id).await {
         Ok(Some(detail)) => (StatusCode::OK, Json(Response::success(detail))),
-        Ok(None) => {
-            let msg = if lang == Lang::En {
-                format!("provider {id} does not exist")
-            } else {
-                format!("Provider {id} 不存在")
-            };
-            response::not_found(msg)
-        }
+        Ok(None) => not_found_provider(lang, id),
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -730,14 +750,7 @@ async fn get_provider_api_key(
                 Json(Response::success(ProviderApiKeyResponse { api_key: plain })),
             )
         }
-        Ok(None) => {
-            let msg = if lang == Lang::En {
-                format!("provider {id} does not exist")
-            } else {
-                format!("Provider {id} 不存在")
-            };
-            response::not_found(msg)
-        }
+        Ok(None) => not_found_provider(lang, id),
         Err(e) => response::db_error(e.to_string()),
     }
 }
@@ -770,14 +783,7 @@ async fn get_provider_usage(
     let lang = state.settings.lang().await;
     let model = match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(m)) => m,
-        Ok(None) => {
-            let msg = if lang == Lang::En {
-                format!("provider {id} does not exist")
-            } else {
-                format!("Provider {id} 不存在")
-            };
-            return response::not_found(msg);
-        }
+        Ok(None) => return not_found_provider(lang, id),
         Err(e) => return response::db_error(e.to_string()),
     };
     if !crate::usage::usage_enabled(&model.extra) {
@@ -850,14 +856,7 @@ async fn get_provider_usage_estimate(
     let lang = state.settings.lang().await;
     let model = match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(m)) => m,
-        Ok(None) => {
-            let msg = if lang == Lang::En {
-                format!("provider {id} does not exist")
-            } else {
-                format!("Provider {id} 不存在")
-            };
-            return response::not_found(msg);
-        }
+        Ok(None) => return not_found_provider(lang, id),
         Err(e) => return response::db_error(e.to_string()),
     };
     // 仅订阅制可预估。
@@ -972,4 +971,46 @@ async fn get_provider_usage_estimate(
             estimatable,
         })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 11-12：custom_header 必须是「请求头名 → 字符串值」的 JSON 对象。
+    #[test]
+    fn custom_header_validation_rejects_non_object_and_non_string_values() {
+        assert!(
+            validate_custom_header("{}", Lang::Zh).is_none(),
+            "空对象合法"
+        );
+        assert!(
+            validate_custom_header(r#"{"X-A":"b"}"#, Lang::Zh).is_none(),
+            "字符串值对象合法"
+        );
+        // 非对象（转发层会静默跳过、请求头完全不生效）。
+        assert!(validate_custom_header(r#""32122""#, Lang::Zh).is_some());
+        assert!(validate_custom_header("[1,2]", Lang::Zh).is_some());
+        assert!(validate_custom_header("123", Lang::Zh).is_some());
+        // 对象但值非字符串。
+        assert!(validate_custom_header(r#"{"X-A":1}"#, Lang::Zh).is_some());
+        assert!(validate_custom_header(r#"{"X-A":{"b":1}}"#, Lang::Zh).is_some());
+        // 非法 JSON。
+        assert!(validate_custom_header("not json", Lang::Zh).is_some());
+        // 英文文案分支可用。
+        assert!(
+            validate_custom_header("123", Lang::En)
+                .unwrap()
+                .contains("JSON object")
+        );
+    }
+
+    /// 11-05：not_found_provider 按语言分支（原两处硬编码中文）。
+    #[test]
+    fn not_found_provider_is_localized() {
+        let zh = not_found_provider::<()>(Lang::Zh, 7);
+        assert!(zh.1.0.error_message.contains("不存在"));
+        let en = not_found_provider::<()>(Lang::En, 7);
+        assert!(en.1.0.error_message.contains("does not exist"));
+    }
 }

@@ -1,19 +1,17 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// 虚拟模型负载均衡策略。
-#[derive(Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "i32", db_type = "Integer")]
-pub enum LoadBalancingStrategy {
-    /// 订阅制优先
-    SubscriptionFirst = 0,
-    /// 按量付费优先
-    PayAsYouGoFirst = 1,
-    /// 轮转
-    RoundRobin = 2,
-    /// 随机
-    Random = 3,
-}
+// 14-06：原 LoadBalancingStrategy 枚举全仓零消费（策略编号在 route/lb 与校验侧
+// 用裸数字或区间常量），删除。降级策略保留（route.rs 消费 RetryEnabledMembers）。
+
+/// 负载均衡策略编号（订阅制优先）。
+pub const LB_SUBSCRIPTION_FIRST: i32 = 0;
+/// 负载均衡策略编号（按量付费优先）。
+pub const LB_PAY_AS_YOU_GO_FIRST: i32 = 1;
+/// 负载均衡策略编号（轮转）。
+pub const LB_ROUND_ROBIN: i32 = 2;
+/// 负载均衡策略编号（随机）。
+pub const LB_RANDOM: i32 = 3;
 
 /// 虚拟模型降级策略。
 #[derive(Clone, Debug, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]

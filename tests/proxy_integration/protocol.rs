@@ -254,6 +254,74 @@ async fn anthropic_stream_inband_error_sends_error_frame_and_records_failure() {
 }
 
 #[tokio::test]
+async fn responses_stream_inband_error_sends_error_frame_and_records_failure() {
+    // 03-07 回归（03-01 伴生）：Responses 协议带内错误事件 `response.failed`
+    // 也必须补发 error 帧 + [DONE] 并记失败——三协议共享同一泵，逐协议锁定
+    // 防止双份循环再次分叉（整流侧与泵侧）。
+    let base = spawn_mock(capture()).await;
+    let (app, db) = common_setup_with_member(&base, 1, 0, 0).await;
+
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "stream": true,
+            "messages": [{"role": "user", "content": "inband-error"}],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert!(
+        text.contains("api_error"),
+        "带内错误必须补发 error 帧（不得只发 [DONE]）: {text}"
+    );
+    assert!(
+        text.contains("上游过载"),
+        "error 帧应带上游错误信息: {text}"
+    );
+    assert!(text.contains("data: [DONE]"), "{text}");
+
+    let rows = wait_for_records(&db, 1).await;
+    let record = &rows[0];
+    assert_eq!(record.stream, true);
+    assert!(!record.success, "带内错误必须记失败，不得假成功");
+}
+
+#[tokio::test]
+async fn gemini_stream_inband_error_sends_error_frame_and_records_failure() {
+    // 03-07 回归（03-01 伴生）：Gemini 协议带内错误事件 `{"error":…}` 同形，
+    // 且该形态在错误前已有内容增量（走 FramesThenFailed 分支）。
+    let base = spawn_mock(capture()).await;
+    let (app, db) = common_setup_with_member(&base, 3, 0, 0).await;
+
+    let (status, text) = send_chat(
+        &app,
+        json!({
+            "model": "vm-x",
+            "stream": true,
+            "messages": [{"role": "user", "content": "inband-error"}],
+        }),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    assert!(
+        text.contains("api_error"),
+        "带内错误必须补发 error 帧（不得只发 [DONE]）: {text}"
+    );
+    assert!(
+        text.contains("上游过载"),
+        "error 帧应带上游错误信息: {text}"
+    );
+    assert!(text.contains("部分"), "错误前的内容增量不得丢失: {text}");
+    assert!(text.contains("data: [DONE]"), "{text}");
+
+    let rows = wait_for_records(&db, 1).await;
+    let record = &rows[0];
+    assert_eq!(record.stream, true);
+    assert!(!record.success, "带内错误必须记失败，不得假成功");
+}
+
+#[tokio::test]
 async fn anthropic_stream_converts_to_openai_chunks() {
     let base = spawn_mock(capture()).await;
     let (app, db) = common_setup_with_member(&base, 2, 0, 0).await;

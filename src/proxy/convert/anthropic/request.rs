@@ -10,7 +10,6 @@ pub fn build_request_body(
 ) -> Result<(Value, crate::proxy::convert::RequestFlags), String> {
     let stream = chat.get("stream").and_then(Value::as_bool).unwrap_or(false);
     let max_tokens = chat_max_tokens(chat).unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS);
-    let tool_names = collect_tool_call_names(chat);
     // 先于消息循环计算：assistant 历史的 thinking 块注入以 thinking 启用为前提
     // （官方约束：input 携带 thinking 块时必须开启 thinking）。
     let thinking = map_thinking(chat, max_tokens);
@@ -90,8 +89,7 @@ pub fn build_request_body(
                     .get("tool_call_id")
                     .and_then(Value::as_str)
                     .unwrap_or("tool_result");
-                // tool_result 仅需 tool_use_id；工具名反查保留映射能力（Anthropic 以 id 关联）。
-                let _ = tool_names;
+                // tool_result 仅需 tool_use_id（Anthropic 以 id 关联，无需工具名反查）。
                 // 空内容兜底：Anthropic 拒绝空 text 内容，工具无输出时填占位符（同 user 空消息规则）。
                 let text = message_text(content);
                 let block = json!({
@@ -274,9 +272,16 @@ fn map_tool_choice(chat: &Value) -> Option<Value> {
         .unwrap_or(true);
     if !parallel {
         let base = choice.take().unwrap_or_else(|| json!({"type": "auto"}));
-        let mut object = base.as_object().cloned().unwrap_or_default();
-        object.insert("disable_parallel_tool_use".to_string(), json!(true));
-        choice = Some(Value::Object(object));
+        // 官方 schema 不接受 none + disable_parallel_tool_use 组合（A7）：
+        // tool_choice=none 本身已禁止任何调用，并行开关对该形态无意义，
+        // 原样保留 none（不得因跳过改写而丢失整个 tool_choice）。
+        if base.get("type").and_then(Value::as_str) == Some("none") {
+            choice = Some(base);
+        } else {
+            let mut object = base.as_object().cloned().unwrap_or_default();
+            object.insert("disable_parallel_tool_use".to_string(), json!(true));
+            choice = Some(Value::Object(object));
+        }
     }
     choice
 }

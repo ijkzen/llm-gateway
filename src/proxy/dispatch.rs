@@ -329,7 +329,32 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
         // Anthropic / Gemini：非流式直接转换；流式逐事件转换后转发。
         (protocol, client_stream) => {
             if !client_stream {
-                let body = upstream::read_body(reply.body).await.unwrap_or_default();
+                // 读体失败与解析失败分开（与 OpenAI 直通臂同形）：吞成空体只会
+                // 把真实原因（超时/截断）伪装成「解析失败：EOF」。
+                let body = match upstream::read_body(reply.body).await {
+                    Ok(body) => body,
+                    Err(e) => {
+                        let message = format!("读取上游响应失败：{e}");
+                        log_dispatch_failure(&request_id, &member, &message);
+                        record_failure(
+                            &state.db,
+                            &request_id,
+                            virtual_model_id,
+                            &member,
+                            &api_key_name,
+                            start_time,
+                            false,
+                            &message,
+                            reply.start_at_ms,
+                        );
+                        return openai_error(
+                            StatusCode::BAD_GATEWAY,
+                            message,
+                            "api_error",
+                            "upstream_error",
+                        );
+                    }
+                };
                 let text = String::from_utf8_lossy(&body).to_string();
                 let parsed: Value = match serde_json::from_str(&text) {
                     Ok(value) => value,
@@ -458,6 +483,11 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
 }
 
 /// 上游流式事件收集（Responses 聚合路径，仅非流式客户端使用）。
+///
+/// 与 `relay.rs::relay_stream` 的泵内联循环是同构的两份实现（读帧 → 拆分 →
+/// 转换 → 终结判定）：那份把结果发帧给客户端，这份整流收集后一次性聚合。
+/// 两份必须同步演化——03-01 的假成功 bug 正是「整流侧已正确处理
+/// converter.error() 而泵侧漏了」的分叉产物；改动任一份时对照另一份。
 pub(crate) struct CollectedEvents {
     chunks: Vec<Value>,
     stream_metrics: StreamMetrics,
@@ -540,11 +570,41 @@ pub(crate) fn record_failure(
     message: &str,
     ttft_start_ms: i64,
 ) {
+    record_failure_for(
+        db,
+        request_id,
+        virtual_model_id,
+        member.provider_id,
+        &member.model_id,
+        api_key_name,
+        start_time,
+        stream,
+        message,
+        ttft_start_ms,
+    );
+}
+
+/// 无成员可指的失败落库（候选为空/成员全被额度剔除）：主体键取 0 与空模型
+/// 占位——快照主体映射不到即不产行，不给排行制造幽灵供应商；原样落库只为
+/// 让数据面板能看到被额度门控拒绝的请求量（02-07 拍板）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_failure_for(
+    db: &DatabaseConnection,
+    request_id: &str,
+    virtual_model_id: i32,
+    provider_id: i32,
+    model_id: &str,
+    api_key_name: &str,
+    start_time: i64,
+    stream: bool,
+    message: &str,
+    ttft_start_ms: i64,
+) {
     RequestRecord {
         request_id: request_id.to_string(),
         virtual_model_id,
-        provider_id: member.provider_id,
-        model_id: member.model_id.clone(),
+        provider_id,
+        model_id: model_id.to_string(),
         stream,
         ttft: None,
         output_tokens_time: None,

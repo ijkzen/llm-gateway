@@ -73,6 +73,9 @@ fn cmp_deadline(x: &UsageData, y: &UsageData, kind: WindowKind) -> Ordering {
 }
 
 /// 剩余百分比兜底（截止链全平时）：5h→日→周→月 逐层比较，即旧版订阅制口径。
+/// 与层循环的语义差异须知：层循环对「该层无额度（剩余 0）」判平进入下一层，
+/// 此处按数值比较会让 0% 判负。真实数据路径中 0% 供应商已被 order_members 的
+/// `subscription_usable` 预剔除，比较器内不可达，故保持纯函数层简单实现。
 fn cmp_remaining_percent(x: &UsageData, y: &UsageData) -> Ordering {
     for kind in QUOTA_LAYERS {
         match cmp_window(x, y, kind) {

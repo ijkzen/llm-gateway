@@ -241,6 +241,14 @@ async fn spawn_mock_with_headers(captured: Captured, captured_headers: CapturedH
                             json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"最终内容"},{"type":"reasoning","summary":[{"type":"summary_text","text":"最终推理"}]}]}],"usage":{"input_tokens":12,"output_tokens":6,"input_tokens_details":{"cached_tokens":5}}}}).to_string(),
                         ]);
                     }
+                    // 回归触发器：200 SSE 流内 response.failed 事件（带内错误）——
+                    // 客户端必须收到 error 帧 + [DONE]，不得假成功（03-07）。
+                    if parsed.pointer("/input/0/content/0/text") == Some(&json!("inband-error")) {
+                        return sse(&[
+                            json!({"type":"response.created","response":{"id":"resp_err","model":"gpt-x"}}).to_string(),
+                            json!({"type":"response.failed","response":{"status":"failed","error":{"message":"上游过载"}}}).to_string(),
+                        ]);
+                    }
                     sse(&[
                         json!({"type":"response.created","response":{"id":"resp_1","model":"gpt-x"}}).to_string(),
                         json!({"type":"response.output_text.delta","delta":"你好"}).to_string(),
@@ -289,9 +297,18 @@ async fn spawn_mock_with_headers(captured: Captured, captured_headers: CapturedH
                 async move {
                     let headers = request.headers().clone();
                     captured_headers.lock().unwrap().push(headers);
-                    let _body = axum::body::to_bytes(request.into_body(), usize::MAX)
+                    let body = axum::body::to_bytes(request.into_body(), usize::MAX)
                         .await
                         .unwrap();
+                    let parsed: Value = serde_json::from_slice(&body).unwrap();
+                    // 回归触发器：200 SSE 流内 {"error":…} 事件（带内错误）——
+                    // 客户端必须收到 error 帧 + [DONE]，不得假成功（03-07）。
+                    if parsed.pointer("/contents/0/parts/0/text") == Some(&json!("inband-error")) {
+                        return sse(&[
+                            json!({"candidates":[{"content":{"parts":[{"text":"部分"}],"role":"model"}}],"modelVersion":"gemini-x"}).to_string(),
+                            json!({"error":{"code":503,"message":"上游过载","status":"UNAVAILABLE"}}).to_string(),
+                        ]);
+                    }
                     sse(&[
                         json!({"candidates":[{"content":{"parts":[{"text":"你好"}],"role":"model"}}],"modelVersion":"gemini-x"}).to_string(),
                         json!({"candidates":[{"content":{"parts":[],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":4,"thoughtsTokenCount":2,"cachedContentTokenCount":6}}).to_string(),

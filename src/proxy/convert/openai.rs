@@ -110,6 +110,11 @@ pub fn error_message(body: &str) -> String {
 
 /// 判定是否为 usage-only 尾块（include_usage 注入产生：choices 为空数组 +
 /// usage 对象）。客户端未请求 include_usage 时应从直通流中过滤。
+///
+/// 已知边界（03-09 拍板：文档化接受差异）：部分兼容厂商（DeepSeek 类）把
+/// usage 并入**非空 choices 的终块**，本判定不命中，客户端会在未请求
+/// include_usage 时多收一个带 usage 的内容块——浅泄漏，不影响正确性；扩展
+/// 判定需先确证该类上游的终块形态。
 pub fn is_usage_only_chunk(event: &str) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(event) else {
         return false;

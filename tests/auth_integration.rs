@@ -402,3 +402,127 @@ async fn v1_requires_bearer_api_key() {
     .await;
     assert_eq!(status, 401);
 }
+
+/// 12-09（T2）：过期会话请求 401，且该会话行被顺带删除。
+#[tokio::test]
+async fn expired_session_is_rejected_and_row_purged() {
+    use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+    let (app, db) = setup_app().await;
+    init_admin(&app).await;
+
+    // 直接种一条已过期会话（token 明文；表存 SHA-256 摘要）。
+    let token = "expired-token-abc";
+    let user = llm_gateway::entity::user::Entity::find()
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("init 应已建用户");
+    llm_gateway::entity::session::ActiveModel {
+        id: Set(llm_gateway::auth::hash_token(token)),
+        user_id: Set(user.id),
+        expires_at: Set(chrono::Utc::now() - chrono::TimeDelta::hours(1)),
+        created_at: Set(chrono::Utc::now()),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    let (status, _, _) = send_with_headers(
+        app.clone(),
+        "GET",
+        "/api/settings",
+        None,
+        &[("cookie", &format!("lg_session={token}"))],
+    )
+    .await;
+    assert_eq!(status, 401, "过期会话应 401");
+
+    // 过期行被顺带清理（session_user 的 purge 分支）。
+    let remaining = llm_gateway::entity::session::Entity::find()
+        .all(&db)
+        .await
+        .unwrap();
+    assert!(
+        remaining
+            .iter()
+            .all(|s| s.id != llm_gateway::auth::hash_token(token)),
+        "过期会话行应被删除"
+    );
+}
+
+/// 12-09（T4/12-06）：Set-Cookie 属性完整，且 logout 在无会话时也公开可用。
+#[tokio::test]
+async fn cookie_attributes_and_public_logout() {
+    let (app, _db) = setup_app().await;
+    init_admin(&app).await;
+    let (status, headers, _) = send_json(
+        app.clone(),
+        "POST",
+        "/api/auth/login",
+        json!({ "username": ADMIN, "password": PASSWORD }),
+    )
+    .await;
+    assert_eq!(status, 200);
+    let set_cookie = headers
+        .iter()
+        .find(|(n, _)| n == "set-cookie")
+        .map(|(_, v)| v.clone())
+        .expect("应设置会话 Cookie");
+    for needle in ["HttpOnly", "SameSite=Lax", "Path=/", "Max-Age="] {
+        assert!(set_cookie.contains(needle), "缺少 {needle}：{set_cookie}");
+    }
+    // 12-07：Max-Age 取自 SESSION_TTL_SECS 常量（不再字面量漂移）。
+    // 剩余秒由 expires_at − now 取整得出，允许 1 秒内舍入。
+    let ttl = llm_gateway::auth::SESSION_TTL_SECS;
+    let max_age: i64 = set_cookie
+        .split("Max-Age=")
+        .nth(1)
+        .and_then(|rest| rest.split(';').next())
+        .and_then(|v| v.trim().parse().ok())
+        .expect("应带 Max-Age 值");
+    assert!(
+        (ttl - max_age).abs() <= 1,
+        "Max-Age 应等于会话 TTL 常量（±1s 舍入）：ttl={ttl} max_age={max_age}"
+    );
+
+    // 12-05：无会话也能 logout（公开路径，幂等清 cookie）。
+    let (status, headers, body) =
+        send_json(app.clone(), "POST", "/api/auth/logout", json!({})).await;
+    assert_eq!(status, 200, "无会话 logout 应成功：{body}");
+    assert!(
+        headers
+            .iter()
+            .any(|(n, v)| n == "set-cookie" && v.contains("Max-Age=0")),
+        "logout 应下发清 cookie 指令"
+    );
+}
+
+/// 12-06：`/v1/messages` 前缀有边界——`/v1/messages-foo` 不按 messages 处理
+/// （用 x-api-key 头判断：仅 messages 端点接受该头放行）。
+#[tokio::test]
+async fn v1_messages_prefix_requires_boundary() {
+    let (app, db) = setup_app().await;
+    seed_api_key(&db, "k1", "lg-test-key-1", true).await;
+
+    // 精确 messages 路径 + x-api-key：通过鉴权（后续 404/业务错误与鉴权无关）。
+    let (status, _, _) = send_with_headers(
+        app.clone(),
+        "POST",
+        "/v1/messages",
+        Some(json!({})),
+        &[("x-api-key", "lg-test-key-1")],
+    )
+    .await;
+    assert_ne!(status, 401, "messages 端点应接受 x-api-key");
+
+    // 带后缀的同前缀路径：不应把 x-api-key 当作有效凭证。
+    let (status, _, _) = send_with_headers(
+        app.clone(),
+        "POST",
+        "/v1/messages-foo",
+        Some(json!({})),
+        &[("x-api-key", "lg-test-key-1")],
+    )
+    .await;
+    assert_eq!(status, 401, "带后缀路径不应按 messages 接受 x-api-key");
+}

@@ -48,6 +48,12 @@ pub async fn fetch_cookies(
         cfg.uuid.trim()
     );
     let reply = http.get(&url, &[]).await?;
+    if reply.status == 404 {
+        // uuid 不存在/写错（用户可修正配置）：归 400 类并给出对症文案。
+        return Err(UsageError::MissingCredential(
+            "CookieCloud 服务器返回 404：请检查 UUID 是否填写正确".to_string(),
+        ));
+    }
     if reply.status != 200 {
         return Err(UsageError::Upstream(
             reply.status,

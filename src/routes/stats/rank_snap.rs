@@ -14,7 +14,16 @@ pub(crate) const PRIM_COUNT: usize = 9;
 
 /// 快照/兑底共用 SELECT 列（原语别名列表；顺序与 success_prims() 严格一致，
 /// Prims 按下标访问即以此顺序为契约——增删指标两处同步）。
+///
+/// 10-05 守卫：PRIM_COUNT 与注册表枚举数失配会导致越界 panic / 口径错位，
+/// 且等价测试两侧同源照旧全绿；此处用 debug 断言把「加指标忘同步」暴露在
+/// 首次取值路径（release 下无开销）。
 pub(crate) fn prim_select_list() -> String {
+    debug_assert_eq!(
+        PRIM_COUNT,
+        snap::success_prims().count(),
+        "PRIM_COUNT 与 registry::success_prims() 枚举数不一致：请同步两者"
+    );
     snap::success_prims()
         .map(|(m, e)| format!("{e} AS {m}"))
         .collect::<Vec<_>>()

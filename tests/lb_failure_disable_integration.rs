@@ -441,7 +441,7 @@ async fn recheck_exhausted_disables_and_auto_restores() {
 
         // 余额恢复 + usage_refresh → 自动重新启用（与 failure_disabled 路径区分）。
         *payload.lock().unwrap() = sufficient_balance();
-        llm_gateway::usage::persist::refresh_all_usage(&db)
+        llm_gateway::usage::persist::refresh_all_usage(&db, &Default::default())
             .await
             .unwrap();
         let row = provider_row(&db, pid).await;

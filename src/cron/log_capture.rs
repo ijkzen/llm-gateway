@@ -252,7 +252,9 @@ impl Visit for MessageRecorder {
     }
 }
 
-fn trim_and_limit(message: &str) -> String {
+/// 单条日志消息的字符上限（4096）截断，捕获侧与 worker 合成消息共用
+/// （08-03：合成消息此前绕过截断，超长 handler 错误串可直接落库超长行）。
+pub(crate) fn trim_and_limit(message: &str) -> String {
     let trimmed = message.trim();
     let mut chars = trimmed.chars();
     let limited: String = chars.by_ref().take(MAX_LOG_MESSAGE_CHARS).collect();

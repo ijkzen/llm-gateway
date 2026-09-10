@@ -774,4 +774,52 @@ mod tests {
                 .is_none()
         );
     }
+    /// 05-08：128 项上限——超出部分静默丢弃，前 128 项保持原顺序。
+    #[test]
+    fn valid_reasoning_details_caps_item_count() {
+        let items: Vec<Value> = (0..200)
+            .map(|i| json!({"type": "reasoning.text", "text": format!("t{i}"), "format": "anthropic-claude-v1"}))
+            .collect();
+        let message = json!({"role": "assistant", "reasoning_details": items});
+        let details = valid_reasoning_details(&message);
+        assert_eq!(details.len(), 128, "超出 128 项应被截断");
+        assert_eq!(details[0]["text"], "t0", "顺序从首项开始");
+        assert_eq!(details[127]["text"], "t127", "第 128 项保留");
+    }
+
+    /// 05-08：512KB 上限——超字节后 break，剩余项丢弃；顺序仍为原序。
+    #[test]
+    fn valid_reasoning_details_caps_total_bytes() {
+        // 每项约 10KB，100 项 ≈ 1MB > 512KB（项数在 128 上限内，专测字节上限）。
+        let big = "x".repeat(10_000);
+        let items: Vec<Value> = (0..100)
+            .map(|_| json!({"type": "reasoning.encrypted", "data": big, "format": "openai-responses-v1"}))
+            .collect();
+        let message = json!({"role": "assistant", "reasoning_details": items});
+        let details = valid_reasoning_details(&message);
+        assert!(
+            details.len() < 100,
+            "超 512KB 应截断（实际 {}）",
+            details.len()
+        );
+        assert!(details.len() > 40, "接近上限前应尽量保留");
+    }
+
+    /// 05-08：顺序保持（签名链不允许重排）——输出与输入顺序逐项一致。
+    #[test]
+    fn valid_reasoning_details_preserves_order() {
+        let message = json!({
+            "role": "assistant",
+            "reasoning_details": [
+                {"type": "reasoning.text", "text": "first", "format": "anthropic-claude-v1"},
+                {"type": "reasoning.encrypted", "data": "second", "format": "openai-responses-v1"},
+                {"type": "reasoning.text", "text": "third", "format": "google-gemini-v1"},
+            ],
+        });
+        let details = valid_reasoning_details(&message);
+        assert_eq!(details.len(), 3);
+        assert_eq!(details[0]["text"], "first");
+        assert_eq!(details[1]["data"], "second");
+        assert_eq!(details[2]["text"], "third");
+    }
 }

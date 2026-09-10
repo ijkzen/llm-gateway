@@ -14,8 +14,9 @@ pub(crate) const TEST_PROMPT: &str = "你好";
 /// 复用 `build_upstream_call`（四协议转换 + Responses 强制流式）与连接池
 /// （含代理）；成功/失败均写入 request 表（与正式流量同口径，计入数据面板）。
 /// 成功不要求模型产出文本：上游返回 2xx 即视为有效；失败返回人类可读原因。
-/// 成功返回 `duration_ms`：本次请求耗时（上游响应开始到读完，与 request 表
-/// `output_tokens_time` 同口径，排除 TTFT）。
+/// 成功返回 `duration_ms`：本次请求耗时（`end − reply.start_at_ms`，与 request
+/// 表 `output_tokens_time` 同口径）——起点为建连开始（新连接）/请求发出（复用），
+/// 因此含建连与首字节等待（即 TTFT），不含网关前置。
 pub async fn test_model(
     state: &AppState,
     provider_row: &crate::entity::provider::Model,
@@ -130,7 +131,9 @@ pub async fn test_model(
     let end_time = now_ms();
     let duration_ms = (end_time - reply.start_at_ms).max(0);
     RequestRecord {
-        request_id: format!("test-{}", Uuid::new_v4()),
+        // 复用调用期 request_id：成功行与入口日志、上游调用链同一身份
+        //（正式流量同口径；失败路径一直如此，成功侧此前重新生成导致断链）。
+        request_id,
         virtual_model_id: TEST_VIRTUAL_MODEL_ID,
         provider_id: member.provider_id,
         model_id: member.model_id.clone(),
@@ -157,6 +160,52 @@ pub enum ProbeFailure {
     Failed(String),
 }
 
+/// 探活前奏的失败原因（阶段化，供各调用层按自己的日志形态呈现）。
+pub enum ProbePreambleFailure {
+    /// 查询模型失败（DB 错误原文）。
+    QueryModel(String),
+    /// 该供应商没有模型。
+    NoModel,
+    /// 未配置 API Key。
+    NoApiKey,
+    /// API Key 解密失败（错误原文）。
+    DecryptKey(String),
+}
+
+impl ProbePreambleFailure {
+    /// 人类可读原因（探活 Skipped 文案与恢复日志共用同一措辞源）。
+    pub fn message(&self) -> String {
+        match self {
+            Self::QueryModel(e) => format!("查询模型失败：{e}"),
+            Self::NoModel => "没有模型".to_string(),
+            Self::NoApiKey => "未配置 API Key".to_string(),
+            Self::DecryptKey(e) => format!("API Key 解密失败：{e}"),
+        }
+    }
+}
+
+/// 探活前奏（probe_provider / failure_recovery 共用同一实现）：取该供应商
+/// `model_id` 最小的模型并解密 API Key。调用方负责日志（failure_recovery
+/// 每阶段点名供应商）与后续 `test_model`。
+pub async fn probe_preamble(
+    state: &AppState,
+    provider_row: &provider::Model,
+) -> Result<(provider_model::Model, String), ProbePreambleFailure> {
+    let model = provider_model::Entity::find()
+        .filter(provider_model::Column::ProviderId.eq(provider_row.id))
+        .order_by_asc(provider_model::Column::ModelId)
+        .one(&state.db)
+        .await
+        .map_err(|e| ProbePreambleFailure::QueryModel(e.to_string()))?
+        .ok_or(ProbePreambleFailure::NoModel)?;
+    let api_key = match crypto::decrypt(&provider_row.api_key) {
+        Ok(key) if !key.is_empty() => key,
+        Ok(_) => return Err(ProbePreambleFailure::NoApiKey),
+        Err(e) => return Err(ProbePreambleFailure::DecryptKey(e.to_string())),
+    };
+    Ok((model, api_key))
+}
+
 /// 自动探活：取该供应商 model_id 最小的模型发最小测试请求（与模型弹窗测速、
 /// 失败恢复探测同一 `test_model` 入口）。用于用量刷新的订阅制边界探活：
 /// 成功返回耗时；无法探活返回 `Skipped`；请求失败返回 `Failed` 与人类可读原因。
@@ -164,26 +213,9 @@ pub async fn probe_provider(
     state: &AppState,
     provider_row: &provider::Model,
 ) -> Result<i64, ProbeFailure> {
-    let model = provider_model::Entity::find()
-        .filter(provider_model::Column::ProviderId.eq(provider_row.id))
-        .order_by_asc(provider_model::Column::ModelId)
-        .one(&state.db)
+    let (model, api_key) = probe_preamble(state, provider_row)
         .await
-        .map_err(|e| ProbeFailure::Skipped(format!("查询模型失败：{e}")))?;
-    let Some(model) = model else {
-        return Err(ProbeFailure::Skipped(
-            "该供应商没有模型，无法探活".to_string(),
-        ));
-    };
-    let api_key = match crypto::decrypt(&provider_row.api_key) {
-        Ok(key) if !key.is_empty() => key,
-        Ok(_) => {
-            return Err(ProbeFailure::Skipped(
-                "未配置 API Key，无法探活".to_string(),
-            ));
-        }
-        Err(e) => return Err(ProbeFailure::Skipped(format!("API Key 解密失败：{e}"))),
-    };
+        .map_err(|e| ProbeFailure::Skipped(e.message()))?;
     test_model(state, provider_row, &model, &api_key)
         .await
         .map_err(ProbeFailure::Failed)

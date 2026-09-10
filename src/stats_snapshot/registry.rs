@@ -12,16 +12,6 @@ pub(crate) const ENTITY_VM_MEMBER: &str = "virtual_model_member";
 /// 交叉主体：API Key × 供应商模型（entity = "apiKeyId,providerModelId"）。
 pub(crate) const ENTITY_API_KEY_MODEL: &str = "api_key_model";
 
-pub(crate) const ALL_ENTITY_TYPES: [&str; 7] = [
-    ENTITY_WHOLE,
-    ENTITY_PROVIDER,
-    ENTITY_MODEL,
-    ENTITY_VIRTUAL_MODEL,
-    ENTITY_API_KEY,
-    ENTITY_VM_MEMBER,
-    ENTITY_API_KEY_MODEL,
-];
-
 // 指标种类说明：METRICS 表为可加和原语（跨桶加总后再算比率/均值；整数列以
 // REAL 存储，2^53 内无损）；分位标量（metrics::*_P50/90/95/99）为闭桶时对
 // 该桶原始值精确计算的标量，仅 hour/day 行，逐桶使用不跨桶加总。

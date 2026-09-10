@@ -838,3 +838,130 @@ async fn provider_model_rank_single_sided_filter_equality_with_snapshot() {
     assert_eq!(items.len(), 1, "仅 providerId 过滤应只返回该供应商: {rank}");
     assert_eq!(items[0]["modelId"].as_str(), Some("gpt-y"));
 }
+
+/// 10-08：api_key_model 快照分支（rank_impl 唯一手写 fold）的等价——
+/// 同一窗口在「全实时」与「闭桶快照 + 实时尾」两种状态下响应逐字节一致。
+/// 该分支由 api-key-rank 端点带 providerId+modelId 参数触发（非独立路由）。
+#[tokio::test]
+async fn api_key_model_rank_equality_snapshot_vs_live() {
+    let (app, db) = setup_app().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let off = 480 * 60_000i64;
+    let cur = (now + off).div_euclid(HOUR_MS) * HOUR_MS - off;
+    let closed_a = cur - 3 * HOUR_MS;
+    let closed_b = cur - 2 * HOUR_MS;
+    // 两个闭小时帧各两条成功请求（不同模型），当前小时一条实时尾部。
+    for (rid, start, model) in [
+        ("ak1", closed_a + 60_000, "gpt-x"),
+        ("ak2", closed_a + 120_000, "gpt-y"),
+        ("ak3", closed_b + 60_000, "gpt-x"),
+        ("ak4", now - 5 * 60_000, "gpt-y"),
+    ] {
+        insert_request(
+            &db,
+            rid,
+            10,
+            model,
+            "k1",
+            true,
+            true,
+            Some(200),
+            Some(100),
+            20,
+            Some(10),
+            Some(400),
+            20.0,
+            900,
+            Some(110),
+            start,
+        )
+        .await;
+    }
+    // api_key_model 形态：api-key-rank + providerId + modelId（触发 use_key_model 分支）。
+    let url = format!(
+        "/api/stats/api-key-rank?startTime={}&endTime={now}&providerId=1&modelId=gpt-x",
+        cur - 3 * HOUR_MS
+    );
+    let live = get_json(&app, &url).await;
+    for frame in [closed_a, closed_b] {
+        snap::finalize_bucket(
+            &db,
+            snap::Frame {
+                level: snap::Level::Hour,
+                start: frame,
+                end: frame + HOUR_MS,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let snapped = get_json(&app, &url).await;
+    assert_eq!(snapped, live, "api_key_model 快照分支应与实时逐字节一致");
+}
+
+/// 10-08：rank/metrics 在「闭桶 + 今日未闭尾部」混合窗口下的等价
+///（10-01/10-02 两张 P1 的回归形态：尾桶与跨层细帧是主要出错面）。
+#[tokio::test]
+async fn rank_and_metrics_equality_with_today_tail() {
+    let (app, db) = setup_app().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let off = 480 * 60_000i64;
+    let cur = (now + off).div_euclid(HOUR_MS) * HOUR_MS - off;
+    let closed_a = cur - 3 * HOUR_MS;
+    let closed_b = cur - 2 * HOUR_MS;
+    for (rid, start, ok) in [
+        ("rq1", closed_a + 60_000, true),
+        ("rq2", closed_b + 60_000, false),
+        ("rq3", now - 10 * 60_000, true),
+    ] {
+        insert_request(
+            &db,
+            rid,
+            10,
+            "gpt-x",
+            "k1",
+            true,
+            ok,
+            Some(150),
+            Some(80),
+            10,
+            Some(5),
+            Some(300),
+            15.0,
+            600,
+            Some(85),
+            start,
+        )
+        .await;
+    }
+    let start = cur - 3 * HOUR_MS;
+    let urls = [
+        format!("/api/stats/provider-model-rank?startTime={start}&endTime={now}"),
+        format!("/api/stats/virtual-model-rank?startTime={start}&endTime={now}"),
+        format!("/api/stats/api-key-rank?startTime={start}&endTime={now}"),
+        format!(
+            "/api/stats/provider-metrics?startTime={start}&endTime={now}&granularity=hour&providerId=1"
+        ),
+        format!("/api/stats/insight?startTime={start}&endTime={now}&granularity=hour"),
+    ];
+    let mut live = Vec::new();
+    for url in &urls {
+        live.push(get_json(&app, url).await);
+    }
+    for frame in [closed_a, closed_b] {
+        snap::finalize_bucket(
+            &db,
+            snap::Frame {
+                level: snap::Level::Hour,
+                start: frame,
+                end: frame + HOUR_MS,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    for (url, live_body) in urls.iter().zip(live) {
+        let snapped = get_json(&app, url).await;
+        assert_eq!(snapped, live_body, "{url} 快照态应与实时态逐字节一致");
+    }
+}

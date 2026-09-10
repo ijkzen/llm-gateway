@@ -14,7 +14,7 @@ use serde_json::Value;
 use super::{Credentials, num, snippet};
 use crate::usage::cookiecloud;
 use crate::usage::error::UsageError;
-use crate::usage::http::UsageHttp;
+use crate::usage::http::{UsageHttp, is_session_invalid_status};
 use crate::usage::types::{BalanceItem, FetchOutput};
 
 const WALLET_URL: &str = "https://tokenrhythm.studio/api/wallet/summary";
@@ -41,7 +41,7 @@ pub async fn fetch_tokenrhythm_wallet(
         )
         .await?;
     // 登录态失效 / 被重定向到登录页（401/403/3xx）→ Auth，提示重新同步 CookieCloud。
-    if reply.status == 401 || reply.status == 403 || (300..400).contains(&reply.status) {
+    if is_session_invalid_status(reply.status) {
         return Err(UsageError::Auth);
     }
     if reply.status != 200 {
@@ -53,7 +53,12 @@ pub async fn fetch_tokenrhythm_wallet(
 fn parse_tokenrhythm_wallet(body: &str) -> Result<FetchOutput, UsageError> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
-    if v.get("code").and_then(Value::as_i64).unwrap_or(-1) != 0 {
+    let code = v.get("code").and_then(num).unwrap_or(-1.0);
+    // 业务包络失效码：401 为登录态失效（归位一）。
+    if code == 401.0 {
+        return Err(UsageError::Auth);
+    }
+    if code != 0.0 {
         return Err(UsageError::Upstream(200, snippet(body)));
     }
     let available = v
@@ -132,9 +137,20 @@ mod tests {
         ));
     }
 
+    /// 归位一治理：code=401 为登录态失效 → Auth（原判 Upstream，随批改）。
     #[test]
-    fn parse_nonzero_code_is_upstream_error() {
+    fn parse_401_code_is_auth_error() {
         let body = r#"{"code":401,"message":"登录状态已失效","data":null}"#;
+        assert!(matches!(
+            parse_tokenrhythm_wallet(body),
+            Err(UsageError::Auth)
+        ));
+    }
+
+    /// 其余非零码仍是 Upstream。
+    #[test]
+    fn parse_other_nonzero_code_is_upstream_error() {
+        let body = r#"{"code":500,"message":"服务器错误","data":null}"#;
         assert!(matches!(
             parse_tokenrhythm_wallet(body),
             Err(UsageError::Upstream(_, _))

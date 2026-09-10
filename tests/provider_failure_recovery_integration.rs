@@ -313,7 +313,7 @@ async fn usage_must_be_available_before_probe() {
 
             *usage_payload.lock().unwrap() = "not-json".to_string();
             assert_eq!(
-                llm_gateway::proxy::failure_recovery::recover_failure_disabled(&state)
+                llm_gateway::failure_recovery::recover_failure_disabled(&state)
                     .await
                     .unwrap(),
                 0
@@ -322,7 +322,7 @@ async fn usage_must_be_available_before_probe() {
 
             *usage_payload.lock().unwrap() = balance_payload(0.0);
             assert_eq!(
-                llm_gateway::proxy::failure_recovery::recover_failure_disabled(&state)
+                llm_gateway::failure_recovery::recover_failure_disabled(&state)
                     .await
                     .unwrap(),
                 0
@@ -331,7 +331,7 @@ async fn usage_must_be_available_before_probe() {
 
             *usage_payload.lock().unwrap() = balance_payload(100.0);
             assert_eq!(
-                llm_gateway::proxy::failure_recovery::recover_failure_disabled(&state)
+                llm_gateway::failure_recovery::recover_failure_disabled(&state)
                     .await
                     .unwrap(),
                 1
@@ -353,7 +353,7 @@ async fn provider_without_model_stays_disabled_without_request() {
         .unwrap();
 
     assert_eq!(
-        llm_gateway::proxy::failure_recovery::recover_failure_disabled(&state)
+        llm_gateway::failure_recovery::recover_failure_disabled(&state)
             .await
             .unwrap(),
         0
@@ -377,7 +377,7 @@ async fn failed_provider_does_not_stop_later_recovery() {
     let (recovered_id, _) = seed_failure_disabled_provider(&state, &success_url).await;
 
     assert_eq!(
-        llm_gateway::proxy::failure_recovery::recover_failure_disabled(&state)
+        llm_gateway::failure_recovery::recover_failure_disabled(&state)
             .await
             .unwrap(),
         1
@@ -404,7 +404,7 @@ async fn redirect_probe_keeps_provider_disabled_and_records_failure() {
     let base_url = spawn_redirect_upstream().await;
     let (provider_id, _) = seed_failure_disabled_provider(&state, &base_url).await;
 
-    let recovered = llm_gateway::proxy::failure_recovery::recover_failure_disabled(&state)
+    let recovered = llm_gateway::failure_recovery::recover_failure_disabled(&state)
         .await
         .unwrap();
 
@@ -428,7 +428,7 @@ async fn stale_probe_does_not_overwrite_provider_changed_during_request() {
     let (provider_id, _) = seed_failure_disabled_provider(&state, &base_url).await;
     let task_state = state.clone();
     let recovery = tokio::spawn(async move {
-        llm_gateway::proxy::failure_recovery::recover_failure_disabled(&task_state).await
+        llm_gateway::failure_recovery::recover_failure_disabled(&task_state).await
     });
 
     received.notified().await;
@@ -494,7 +494,7 @@ async fn successful_probe_recovers_provider_and_cascade_disabled_item() {
     .unwrap();
     state.failure_counter.record_failure(provider_id);
 
-    let recovered = llm_gateway::proxy::failure_recovery::recover_failure_disabled(&state)
+    let recovered = llm_gateway::failure_recovery::recover_failure_disabled(&state)
         .await
         .unwrap();
 

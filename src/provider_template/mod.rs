@@ -50,9 +50,23 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
             }
             .insert(db)
             .await?;
-            backfill_provider_extra(db, tmpl).await?;
             inserted += 1;
         }
+        // 14-08：回填与插入/更新分支解耦——存量 provider 也要拿到模板新增的
+        // extra 键（原先只在首次插入分支回填）。
+        backfill_provider_extra(db, tmpl).await?;
+    }
+
+    // 14-10：清理不在种子名单内的残留行（种子改名/删除后旧行永不消失，
+    // /match 会按 host 返回重复模板）。
+    let seed_names: Vec<&str> = seed::all().map(|t| t.name).collect();
+    let removed = Entity::delete_many()
+        .filter(provider_template::Column::Name.is_not_in(seed_names))
+        .exec(db)
+        .await?
+        .rows_affected;
+    if removed > 0 {
+        tracing::info!("Provider templates: removed {removed} stale rows");
     }
 
     backfill_krill_provider_extra(db).await?;
@@ -65,18 +79,23 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
 }
 
 pub(crate) fn is_krill_host(host: &str) -> bool {
-    matches!(
-        host,
-        // krill-code.net 与 krill-code.com 控制台同后端（生产在用）；krill-ai.net 为早期接入域。
-        "api-slb.krill-ai.net"
-            | "api.krill-ai.net"
-            | "api.cdn-krill-ai.com"
-            | "api-slb.krill-code.net"
-    )
+    // 14-11：与其余 is_*_host 一致用大小写不敏感比较（调用方虽已 lowercase，
+    // 直接传原始 host 时不应静默漏判）。
+    // krill-code.net 与 krill-code.com 控制台同后端（生产在用）；krill-ai.net 为早期接入域。
+    [
+        "api-slb.krill-ai.net",
+        "api.krill-ai.net",
+        "api.cdn-krill-ai.com",
+        "api-slb.krill-code.net",
+    ]
+    .iter()
+    .any(|candidate| host.eq_ignore_ascii_case(candidate))
 }
 
 pub(crate) fn is_sensenova_host(host: &str) -> bool {
-    matches!(host, "token.sensenova.cn" | "platform.sensenova.cn")
+    ["token.sensenova.cn", "platform.sensenova.cn"]
+        .iter()
+        .any(|candidate| host.eq_ignore_ascii_case(candidate))
 }
 
 /// SiliconFlow 中国站 API host（用量查询仅支持 .cn，国际站 .com 不覆盖）。

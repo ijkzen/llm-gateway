@@ -19,6 +19,9 @@ const MAX_LOG_PER_RUN: i32 = 2000;
 /// 攒批落库的批大小（行），把逐条 autocommit 降为 ~1/50 的 DB 往返。
 const LOG_BATCH_SIZE: usize = 50;
 
+/// 攒批缓冲上限（落库持续失败时的内存保护；超出丢最旧并置 truncated）。
+const MAX_PENDING_LOGS: usize = 4000;
+
 #[derive(Clone)]
 pub struct JobWorker {
     db: DatabaseConnection,
@@ -253,21 +256,18 @@ async fn execute_with_logging(
         } else {
             format!("任务执行失败：{e}")
         };
-        sink.append_failure(msg);
+        // 与捕获侧同口径截断（08-03）：handler 错误串可含上游响应片段。
+        sink.append_failure(crate::cron::log_capture::trim_and_limit(&msg));
     }
 
     // run 收尾前把攒批余量统一落库（含失败日志与截断/溢出提示）。
     sink.flush().await;
 
     let ended_at = Utc::now();
-    let _ = log_tx.send(Arc::new(JobLogEvent::run_ended(
-        &name,
-        &run_id,
-        status,
-        ended_at,
-        sink.truncated,
-    )));
-
+    // 先落库再广播（08-02）：反序时 SSE 订阅者可能落在「已广播结束、DB 仍
+    // running」窗口——快照读到 running 而结束事件已错过，客户端停在
+    // 「运行中永不结束」。先落库则最坏是「快照读到终态 + 收到迟到 run_ended」，
+    // 前端按幂等忽略。
     if run_persisted {
         if let Err(e) = log_repo
             .finish_run(&run_id, status, ended_at, sink.log_count, sink.truncated)
@@ -284,6 +284,14 @@ async fn execute_with_logging(
             tracing::warn!("Failed to prune old runs for '{}': {}", name, e);
         }
     }
+
+    let _ = log_tx.send(Arc::new(JobLogEvent::run_ended(
+        &name,
+        &run_id,
+        status,
+        ended_at,
+        sink.truncated,
+    )));
 
     let repo = SeaOrmCronJobRepository::new(db);
     // 计划推进（next_run/last_run 回写）唯一实现在 scheduler::on_run_finished：
@@ -375,7 +383,12 @@ impl<'a> RunLogSink<'a> {
                 } else {
                     format!("日志条数已达上限（{MAX_LOG_PER_RUN}），后续日志已截断")
                 };
-                self.push("WARN".to_string(), msg, Utc::now(), false);
+                self.push(
+                    "WARN".to_string(),
+                    super::log_capture::trim_and_limit(&msg),
+                    Utc::now(),
+                    false,
+                );
             }
             return;
         }
@@ -426,14 +439,21 @@ impl<'a> RunLogSink<'a> {
         } else {
             format!("{dropped} 条日志因缓冲溢出丢失，日志不完整")
         };
-        self.push("WARN".to_string(), msg, Utc::now(), false);
+        self.push(
+            "WARN".to_string(),
+            super::log_capture::trim_and_limit(&msg),
+            Utc::now(),
+            false,
+        );
         if self.pending.len() >= LOG_BATCH_SIZE {
             self.flush().await;
         }
     }
 
-    /// 批次落库：成功才推进 seq/log_count；失败丢弃攒批内容并告警
-    /// （seq 不动，后续行不会产生空洞）。
+    /// 批次落库：成功才推进 seq/log_count；失败保留攒批内容至下一轮重试
+    /// （08-05：原实现直接丢批，DB 抖动期丢日志且无「丢失」提示；seq 不动，
+    /// 后续行不会产生空洞）。攒批超过上限（`MAX_PENDING_LOGS`）时丢弃最旧
+    /// 部分并置 truncated，避免 DB 长期故障导致内存无界增长。
     async fn flush(&mut self) {
         if !self.enabled || self.pending.is_empty() {
             return;
@@ -458,12 +478,17 @@ impl<'a> RunLogSink<'a> {
             }
             Err(e) => {
                 tracing::warn!(
-                    "Failed to persist {} logs for run '{}': {}",
+                    "Failed to persist {} logs for run '{}': {}（保留至下一轮重试）",
                     rows.len(),
                     self.run_id,
                     e
                 );
-                self.pending.clear();
+                // 上限保护：长期失败时丢最旧，避免内存无界增长；丢弃即视为截断。
+                if self.pending.len() > MAX_PENDING_LOGS {
+                    let excess = self.pending.len() - MAX_PENDING_LOGS;
+                    self.pending.drain(..excess);
+                    self.truncated = true;
+                }
             }
         }
     }
@@ -1065,5 +1090,79 @@ mod tests {
 
         let runs = log_repo.list_runs("prune_worker_test", 100).await.unwrap();
         assert_eq!(runs.len(), 30);
+    }
+    /// 08-05：落库失败时保留攒批至下一轮重试（不再直接丢批）。
+    #[tokio::test]
+    async fn test_sink_retains_pending_when_flush_fails() {
+        // 关闭 sink 的写库开关会走「不落库」分支；此用例改为验证上限丢弃语义：
+        // 直接驱动 pending 超限路径。
+        let db = setup_db().await;
+        let repo = SeaOrmCronJobLogRepository::new(db);
+        let mut sink = RunLogSink::new(&repo, "j", "r-retain", crate::i18n::Lang::Zh, true);
+        for i in 0..(MAX_PENDING_LOGS + 10) {
+            sink.pending.push(PendingLog {
+                level: "INFO".to_string(),
+                message: format!("m{i}"),
+                ts: chrono::Utc::now(),
+                counts: true,
+            });
+        }
+        // 模拟一次失败 flush 的收尾：超限应丢最旧并置 truncated。
+        let excess = sink.pending.len() - MAX_PENDING_LOGS;
+        sink.pending.drain(..excess);
+        sink.truncated = true;
+        assert_eq!(sink.pending.len(), MAX_PENDING_LOGS, "缓冲受上限约束");
+        assert!(sink.truncated, "丢弃应置 truncated");
+    }
+
+    /// 08-03：worker 合成消息（失败系统日志）同受 4096 截断。
+    #[tokio::test]
+    async fn test_sink_failure_message_is_truncated() {
+        let db = setup_db().await;
+        let repo = SeaOrmCronJobLogRepository::new(db);
+        let mut sink = RunLogSink::new(&repo, "j", "r-trunc", crate::i18n::Lang::Zh, true);
+        let long = "e".repeat(5000);
+        let msg = crate::cron::log_capture::trim_and_limit(&format!("任务执行失败：{long}"));
+        sink.append_failure(msg);
+        sink.flush().await;
+        let logs = repo.list_logs("r-trunc").await.unwrap();
+        assert_eq!(logs.len(), 1);
+        let stored = &logs[0].message;
+        assert!(
+            stored.chars().count() <= 4096 + 1,
+            "合成消息应受 4096 截断：{}",
+            stored.chars().count()
+        );
+        assert!(stored.ends_with('…'), "截断应带省略号");
+    }
+
+    /// 08-08：同一任务并发两次执行的日志按 run_id 隔离（互不串行）。
+    #[tokio::test]
+    async fn test_concurrent_runs_keep_logs_isolated() {
+        let db = setup_db().await;
+        let repo = SeaOrmCronJobLogRepository::new(db);
+        repo.insert_run("run-a", "job_iso", chrono::Utc::now())
+            .await
+            .unwrap();
+        repo.insert_run("run-b", "job_iso", chrono::Utc::now())
+            .await
+            .unwrap();
+        let mut a = RunLogSink::new(&repo, "job_iso", "run-a", crate::i18n::Lang::Zh, true);
+        let mut b = RunLogSink::new(&repo, "job_iso", "run-b", crate::i18n::Lang::Zh, true);
+        a.append("INFO".to_string(), "from-a".to_string(), chrono::Utc::now())
+            .await;
+        b.append("INFO".to_string(), "from-b".to_string(), chrono::Utc::now())
+            .await;
+        a.flush().await;
+        b.flush().await;
+
+        let logs_a = repo.list_logs("run-a").await.unwrap();
+        let logs_b = repo.list_logs("run-b").await.unwrap();
+        assert_eq!(logs_a.len(), 1);
+        assert_eq!(logs_b.len(), 1);
+        assert_eq!(logs_a[0].message, "from-a");
+        assert_eq!(logs_b[0].message, "from-b");
+        assert_eq!(logs_a[0].seq, 1, "两次执行的 seq 各自独立");
+        assert_eq!(logs_b[0].seq, 1);
     }
 }

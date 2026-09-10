@@ -545,6 +545,23 @@ async fn chat_quota_exhausted_returns_503() {
     assert_eq!(status, 503, "{text}");
     let parsed: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(parsed["error"]["code"], "no_available_members");
+
+    // 额度门控拒绝落一行失败（02-07 拍板）：数据面板可见门控拒绝量。
+    // 无成员可指，主体键取 0 与空 model（快照主体映射不到即不产行）。
+    let rows = wait_for_records(&db, 1).await;
+    assert_eq!(rows.len(), 1, "额度耗尽 503 应落一行 request：{rows:?}");
+    assert!(!rows[0].success);
+    assert_eq!(rows[0].provider_id, 0, "无成员可指时 provider_id 占位 0");
+    assert_eq!(rows[0].model_id, "", "无成员可指时 model_id 占位空串");
+    assert!(
+        rows[0]
+            .fail_reason
+            .as_deref()
+            .unwrap_or("")
+            .contains("没有可用的成员"),
+        "fail_reason 应标注额度耗尽语义：{:?}",
+        rows[0].fail_reason
+    );
 }
 
 /// 回归（成员尝试核心）：成员全部被额度剔除时 /v1/messages 返回 503

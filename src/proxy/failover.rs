@@ -81,7 +81,6 @@ impl ForwardFlavor {
                     *endpoint,
                     member,
                     body,
-                    client_stream,
                     decrypted_key,
                     forwarded,
                     request_id,
@@ -181,16 +180,31 @@ pub(crate) async fn forward_through_members(
     ordered: &[Member],
 ) -> MemberLoopOutcome {
     if ordered.is_empty() {
+        let message = format!("虚拟模型 '{requested_model}' 没有可用的成员（订阅制额度均已耗尽）");
         tracing::warn!(
             request_id,
             virtual_model_id,
             requested_model = %requested_model,
+            api_key_name,
             "虚拟模型成员全部因额度耗尽不可用，无可用候选",
+        );
+        // 额度门控拒绝同样落一行失败：数据面板可见门控拒绝量（02-07 拍板）。
+        // 主体键取 0 与空模型（无成员可指，快照主体映射不到即不产行）。
+        record_failure_for(
+            &state.db,
+            request_id,
+            virtual_model_id,
+            0,
+            "",
+            api_key_name,
+            now_ms(),
+            client_stream,
+            &message,
+            now_ms(),
         );
         return MemberLoopOutcome::Failed(flavor.empty_ordered_response(requested_model));
     }
 
-    let mut last_failure: Option<(Member, String, StatusCode)> = None;
     // 本次请求已记连续失败的 provider：同一请求内同供应商多个成员失败只计一次。
     let mut counted_failures: HashSet<i32> = HashSet::new();
     for (index, member) in ordered.iter().enumerate() {
@@ -227,7 +241,6 @@ pub(crate) async fn forward_through_members(
                         "上游成员失败，降级重试下一成员",
                     );
                     record_degraded(&message, start_time);
-                    last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
                 log_member_failed(
@@ -281,7 +294,6 @@ pub(crate) async fn forward_through_members(
                         "上游成员请求构造失败，降级重试下一成员",
                     );
                     record_degraded(&message, start_time);
-                    last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
                 log_member_failed(
@@ -328,7 +340,6 @@ pub(crate) async fn forward_through_members(
                         "上游成员调用失败，降级重试下一成员",
                     );
                     record_degraded(&message, start_time);
-                    last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
                 log_member_failed(
@@ -374,7 +385,6 @@ pub(crate) async fn forward_through_members(
                     "上游成员返回错误，降级重试下一成员",
                 );
                 record_degraded(&message, reply.start_at_ms);
-                last_failure = Some((member.clone(), message, status));
                 continue;
             }
             log_member_failed(
@@ -412,33 +422,8 @@ pub(crate) async fn forward_through_members(
         });
     }
 
-    // 理论上不可达：循环内要么返回要么 continue；兜底返回最后失败。
-    let (member, message, status) = last_failure.unwrap_or_else(|| {
-        (
-            ordered[0].clone(),
-            "上游全部成员失败".to_string(),
-            StatusCode::BAD_GATEWAY,
-        )
-    });
-    tracing::error!(
-        request_id,
-        virtual_model_id,
-        provider_id = member.provider_id,
-        model_id = %member.model_id,
-        http_status = status.as_u16(),
-        fail_reason = %message,
-        "虚拟模型全部成员失败",
-    );
-    record_failure(
-        &state.db,
-        request_id,
-        virtual_model_id,
-        &member,
-        api_key_name,
-        now_ms(),
-        client_stream,
-        &message,
-        now_ms(),
-    );
-    MemberLoopOutcome::Failed(flavor.fail_response(status, message))
+    // 循环内每个分支要么返回、要么在有下一成员时 continue（空候选已提前
+    // 返回），因此必然在循环内出终局；落入此处即契约被破坏，断言暴露而非
+    // 静默写出一行与降级行重复的记账。
+    unreachable!("成员尝试循环至少产出一次终局（空候选已提前返回）")
 }

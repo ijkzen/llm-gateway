@@ -1,13 +1,15 @@
-use sea_orm::{ColumnTrait, DbErr, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, DbErr, EntityTrait, QueryFilter};
 
-use crate::crypto;
-use crate::entity::{provider, provider_model};
+use crate::entity::provider;
 use crate::state::AppState;
 
 /// 执行一轮连续失败禁用供应商的自动恢复探测，返回成功恢复数量。
 pub async fn recover_failure_disabled(state: &AppState) -> Result<usize, DbErr> {
     let providers = provider::Entity::find()
-        .filter(provider::Column::DisabledReason.eq("failure"))
+        .filter(
+            provider::Column::DisabledReason
+                .eq(crate::availability::DisabledReason::Failure.as_str()),
+        )
         .all(&state.db)
         .await?;
     let mut recovered = 0;
@@ -30,7 +32,13 @@ pub async fn recover_failure_disabled(state: &AppState) -> Result<usize, DbErr> 
             .one(&state.db)
             .await
         {
-            Ok(Some(provider)) if provider.disabled_reason.as_deref() == Some("failure") => {
+            Ok(Some(provider))
+                if provider
+                    .disabled_reason
+                    .as_deref()
+                    .and_then(crate::availability::DisabledReason::parse)
+                    == Some(crate::availability::DisabledReason::Failure) =>
+            {
                 provider
             }
             Ok(_) => continue,
@@ -44,55 +52,22 @@ pub async fn recover_failure_disabled(state: &AppState) -> Result<usize, DbErr> 
                 continue;
             }
         };
-        let model = match provider_model::Entity::find()
-            .filter(provider_model::Column::ProviderId.eq(provider.id))
-            .order_by_asc(provider_model::Column::ModelId)
-            .one(&state.db)
-            .await
-        {
-            Ok(Some(model)) => model,
-            Ok(None) => {
+        // 探活前奏（与 probe_provider 同一实现）：失败原因逐阶段 warn 点名供应商。
+        let (model, api_key) = match crate::proxy::probe_preamble(state, &provider).await {
+            Ok(preamble) => preamble,
+            Err(reason) => {
                 tracing::warn!(
                     provider_id = provider.id,
                     provider_name = &provider.name,
-                    "供应商「{}」自动恢复跳过：没有模型",
-                    provider.name
-                );
-                continue;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    provider_id = provider.id,
-                    provider_name = &provider.name,
-                    "供应商「{}」自动恢复查询模型失败：{error}",
-                    provider.name
-                );
-                continue;
-            }
-        };
-        let api_key = match crypto::decrypt(&provider.api_key) {
-            Ok(api_key) if !api_key.is_empty() => api_key,
-            Ok(_) => {
-                tracing::warn!(
-                    provider_id = provider.id,
-                    provider_name = &provider.name,
-                    "供应商「{}」自动恢复跳过：未配置 API Key",
-                    provider.name
-                );
-                continue;
-            }
-            Err(error) => {
-                tracing::warn!(
-                    provider_id = provider.id,
-                    provider_name = &provider.name,
-                    "供应商「{}」自动恢复跳过：API Key 解密失败：{error}",
-                    provider.name
+                    "供应商「{}」自动恢复跳过：{}",
+                    provider.name,
+                    reason.message()
                 );
                 continue;
             }
         };
 
-        if let Err(error) = super::test_model(state, &provider, &model, &api_key).await {
+        if let Err(error) = crate::proxy::test_model(state, &provider, &model, &api_key).await {
             tracing::warn!(
                 provider_id = provider.id,
                 provider_name = &provider.name,

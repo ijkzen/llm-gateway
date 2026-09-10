@@ -1,5 +1,37 @@
 use super::*;
 
+/// 出站头四层组装（两种调用构建共用）：下游透传子集 → provider
+/// custom_header（同名不覆盖透传层，协议保留名跳过并告警）→ 模板默认头
+/// （按 host 查漏补缺）→ 协议鉴权/必需头（覆盖以上所有层，D3）→ OpenCode
+/// Go 会话亲和头（透传/custom_header 已带则不覆盖）。
+fn assemble_outbound_headers(
+    member: &Member,
+    forwarded: &[(HeaderName, HeaderValue)],
+    upstream_host: &str,
+    request_id: &str,
+    opencode_session: &str,
+    api_key: &str,
+) -> Vec<(HeaderName, HeaderValue)> {
+    let mut headers: Vec<(HeaderName, HeaderValue)> = forwarded.to_vec();
+    merge_custom_headers(
+        &member.custom_header,
+        member.protocol,
+        request_id,
+        &mut headers,
+    );
+    merge_template_default_headers(upstream_host, &mut headers);
+    apply_protocol_auth_headers(member.protocol, api_key, &mut headers);
+    if provider_template::is_opencode_host(upstream_host)
+        && !headers
+            .iter()
+            .any(|(n, _)| n.as_str().eq_ignore_ascii_case(OPENCODE_SESSION_HEADER))
+        && let Ok(value) = HeaderValue::from_str(opencode_session)
+    {
+        headers.push((HeaderName::from_static(OPENCODE_SESSION_HEADER), value));
+    }
+    headers
+}
+
 pub(crate) async fn build_upstream_call(
     member: &Member,
     chat: &Value,
@@ -52,36 +84,20 @@ pub(crate) async fn build_upstream_call(
     let url = build_upstream_url(&member.base_url, member.protocol_code(), &sub_path);
     let upstream_host = provider_template::host_of(&member.base_url).unwrap_or_default();
     let body_bytes = Bytes::from(body.to_string());
-    let mut headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
-    // 第 4 层：下游透传子集（调用方已过滤）。
-    headers.extend_from_slice(forwarded);
-    // 第 3 层：provider custom_header（同名不覆盖透传层；协议保留名跳过并告警）。
-    merge_custom_headers(
-        &member.custom_header,
-        member.protocol,
+    let headers = assemble_outbound_headers(
+        member,
+        forwarded,
+        &upstream_host,
         request_id,
-        &mut headers,
+        opencode_session,
+        api_key,
     );
-    // 模板默认头：按 host 查漏补缺（同名以下游透传/custom_header 为准）。
-    merge_template_default_headers(&upstream_host, &mut headers);
-    // 第 2 层：协议鉴权/必需头（insert 覆盖以上所有层，D3）。
-    apply_protocol_auth_headers(member.protocol, api_key, &mut headers);
-    // OpenCode Go 会话亲和头：透传/custom_header 已带则不覆盖。
-    if provider_template::is_opencode_host(&upstream_host)
-        && !headers
-            .iter()
-            .any(|(n, _)| n.as_str().eq_ignore_ascii_case(OPENCODE_SESSION_HEADER))
-        && let Ok(value) = HeaderValue::from_str(opencode_session)
-    {
-        headers.push((HeaderName::from_static(OPENCODE_SESSION_HEADER), value));
-    }
 
     Ok((
         UpstreamCall {
             url,
             headers,
             body: body_bytes,
-            stream: client_stream || member.protocol == Protocol::OpenAiResponses,
         },
         flags,
     ))
@@ -94,7 +110,6 @@ pub(crate) fn build_native_upstream_call(
     endpoint: NativeEndpoint,
     member: &Member,
     client_body: &Value,
-    client_stream: bool,
     api_key: &str,
     forwarded: &[(HeaderName, HeaderValue)],
     request_id: &str,
@@ -108,28 +123,17 @@ pub(crate) fn build_native_upstream_call(
         endpoint.sub_path(),
     );
     let upstream_host = provider_template::host_of(&member.base_url).unwrap_or_default();
-    let mut headers: Vec<(HeaderName, HeaderValue)> = Vec::new();
-    headers.extend_from_slice(forwarded);
-    merge_custom_headers(
-        &member.custom_header,
-        member.protocol,
+    let headers = assemble_outbound_headers(
+        member,
+        forwarded,
+        &upstream_host,
         request_id,
-        &mut headers,
+        opencode_session,
+        api_key,
     );
-    merge_template_default_headers(&upstream_host, &mut headers);
-    apply_protocol_auth_headers(member.protocol, api_key, &mut headers);
-    if provider_template::is_opencode_host(&upstream_host)
-        && !headers
-            .iter()
-            .any(|(n, _)| n.as_str().eq_ignore_ascii_case(OPENCODE_SESSION_HEADER))
-        && let Ok(value) = HeaderValue::from_str(opencode_session)
-    {
-        headers.push((HeaderName::from_static(OPENCODE_SESSION_HEADER), value));
-    }
     Ok(UpstreamCall {
         url,
         headers,
         body: Bytes::from(body.to_string()),
-        stream: client_stream,
     })
 }

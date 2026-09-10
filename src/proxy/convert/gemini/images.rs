@@ -16,13 +16,30 @@ fn is_native_file_uri(uri: &str) -> bool {
         || uri.starts_with("http://generativelanguage.googleapis.com/")
 }
 
-fn build_image_client(proxy: Option<&str>) -> Result<reqwest::Client, String> {
+/// 按代理维度缓存的 reqwest 客户端（key：代理地址，空串=直连）。
+/// 进程级单例：TCP/TLS 会话跨请求复用（与 usage/http.rs 同款），
+/// 连接池内部自行回收空闲连接。
+fn image_client(proxy: Option<&str>) -> Result<reqwest::Client, String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CLIENTS: OnceLock<Mutex<HashMap<String, reqwest::Client>>> = OnceLock::new();
+    let key = proxy.unwrap_or("").trim().to_string();
+    let mut map = CLIENTS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .map_err(|_| "图片下载客户端缓存锁失败".to_string())?;
+    if let Some(client) = map.get(&key) {
+        return Ok(client.clone());
+    }
     let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15));
-    if let Some(proxy_addr) = proxy {
+    if let Some(proxy_addr) = proxy.filter(|addr| !addr.trim().is_empty()) {
         let proxy = reqwest::Proxy::all(proxy_addr).map_err(|e| e.to_string())?;
         builder = builder.proxy(proxy);
     }
-    builder.build().map_err(|e| e.to_string())
+    let client = builder.build().map_err(|e| e.to_string())?;
+    map.insert(key, client.clone());
+    Ok(client)
 }
 
 async fn fetch_image_inline(
@@ -79,7 +96,7 @@ pub async fn inline_remote_images(body: &mut Value, proxy: Option<&str>, request
         return;
     }
 
-    let client = match build_image_client(proxy) {
+    let client = match image_client(proxy) {
         Ok(client) => client,
         Err(e) => {
             tracing::warn!(request_id, "图片下载客户端构建失败，移除全部远程图片：{e}");

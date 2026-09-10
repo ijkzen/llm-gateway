@@ -14,29 +14,6 @@ pub(crate) struct Coverage {
     pub(crate) live: Vec<(i64, i64)>,
 }
 
-impl Coverage {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.snapshots.is_empty() && self.live.is_empty()
-    }
-}
-
-/// 窗口哨兵缺失 → 该闭桶降级为实时兑底段。
-async fn demote_missing(db: &DatabaseConnection, level: Level, start: i64) -> anyhow::Result<bool> {
-    let row = db
-        .query_one_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            format!(
-                "SELECT 1 AS v FROM request_log_snapshot \
-                 WHERE duration_type = '{}' AND start_time = {start} \
-                   AND entity_type = 'whole' AND metric_type = 'calls' \
-                 LIMIT 1",
-                level.key()
-            ),
-        ))
-        .await?;
-    Ok(row.is_none())
-}
-
 /// 计算窗口 [start, end) 在 level 粒度下的覆盖计划：
 /// 闭桶且哨兵行存在的整帧 → 快照；其余（边缘部分帧、未闭帧、缺哨兵闭帧）→ 兑底。
 /// 哨兵存在性按帧集合一次查询（帧级逐查会把全历史窗口退化成上万次查询）。

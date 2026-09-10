@@ -234,6 +234,8 @@ pub(crate) async fn order_members(
             }
             // 决策过程日志：先打印订阅制与按量两组所有成员的用量明细，
             // 再打印排序后的顺序，便于事后还原「为什么选它」。
+            // 两条均为 debug（每请求 2 条在高频调用下噪音明显），info 只保留
+            // route.rs 的选路结果；深排时临时调 RUST_LOG=debug 还原完整决策链。
             // 用量一次解析全部成员（10 分钟缓存/抓取），两组共用同一份。
             let usage_map = resolve_usage_map(
                 state,
@@ -253,7 +255,7 @@ pub(crate) async fn order_members(
                 subs.iter().map(|m| member_detail(m, &usage_map)).collect();
             let payg_desc: Vec<String> =
                 payg.iter().map(|m| member_detail(m, &usage_map)).collect();
-            tracing::info!(
+            tracing::debug!(
                 request_id,
                 virtual_model_id,
                 strategy,
@@ -310,7 +312,7 @@ pub(crate) async fn order_members(
                 .chain(second_group)
                 .map(|m| member_detail(m, &usage_map))
                 .collect();
-            tracing::info!(
+            tracing::debug!(
                 request_id,
                 virtual_model_id,
                 strategy,
@@ -423,9 +425,20 @@ pub(crate) async fn resolve_usage_map(
     }
 
     // 第二层：一次 `WHERE provider_id IN (...)` 批量读数据库缓存，直出回填内存。
-    let from_db = read_usage_cache_many(&state.db, &missing)
-        .await
-        .unwrap_or_default();
+    // 读库失败不视为「无缓存」——那会把全部供应商推给第三层真实抓取（DB 瞬时
+    // 故障放大成 N 家厂商调用）；改为保留第一层内存结果直接返回，缺失的按
+    // 「无用量数据」参与排序，真实抓取留待下一请求。
+    let from_db = match read_usage_cache_many(&state.db, &missing).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(
+                provider_ids = ?missing,
+                error = %e,
+                "读取用量数据库缓存失败，本次选路跳过真实抓取（缺失项按无用量数据处理）",
+            );
+            return map;
+        }
+    };
     for (id, data) in &from_db {
         map.insert(*id, Some(data.clone()));
         state.usage_mem.store(data.clone()).await;

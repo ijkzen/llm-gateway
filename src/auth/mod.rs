@@ -258,12 +258,16 @@ pub async fn auth_middleware(
     req: Request,
     next: Next,
 ) -> AxumResponse {
-    let path = req.uri().path();
+    // 尾斜杠归一（11-17）：`/api/auth/status/` 不应落入「需登录」分支。
+    let path = req.uri().path().trim_end_matches('/');
 
     let auth_public = path == "/api/healthz"
         || path == "/api/auth/status"
         || path == "/api/auth/login"
-        || path == "/api/auth/init";
+        || path == "/api/auth/init"
+        // 12-05：logout 幂等公开——会话已过期时也应能清 cookie（handler 自行
+        // 容忍无 cookie/无效会话），否则先被 401 拦在门外。
+        || path == "/api/auth/logout";
     if auth_public {
         return next.run(req).await;
     }
@@ -272,7 +276,8 @@ pub async fn auth_middleware(
     }
 
     if path.starts_with("/v1/") {
-        let allow_x_api_key = path.starts_with("/v1/messages");
+        // 12-06：加路径边界——`/v1/messages-foo` 不应被当作 messages 端点。
+        let allow_x_api_key = path == "/v1/messages" || path.starts_with("/v1/messages/");
         return match authorize_api_key(&state.db, req.headers(), allow_x_api_key).await {
             Ok(key) => {
                 let mut req = req;
@@ -340,7 +345,8 @@ fn openai_error_response(status: StatusCode, message: &str, code: &str) -> AxumR
 /// 按路径选择 /v1 错误格式：/v1/messages 用 Anthropic 原生结构，
 /// 其余（/v1/models、/v1/chat/completions、/v1/responses）用 OpenAI 结构。
 fn v1_error_response(path: &str, status: StatusCode, message: &str, code: &str) -> AxumResponse {
-    if path.starts_with("/v1/messages") {
+    // 12-06：同上加边界（错误信封形状选择）。
+    if path == "/v1/messages" || path.starts_with("/v1/messages/") {
         anthropic_error(status, "authentication_error", message)
     } else {
         openai_error_response(status, message, code)

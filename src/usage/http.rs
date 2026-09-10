@@ -34,7 +34,11 @@ fn cached_client(proxy_addr: Option<&str>) -> reqwest::Client {
 fn build_client(proxy_addr: Option<&str>) -> reqwest::Client {
     let mut builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-        .user_agent(USER_AGENT);
+        .user_agent(USER_AGENT)
+        // 禁自动重定向（归位一治理）：302/303 到登录页被跟随会变 200，
+        // 使各家 fetcher 的「3xx = 会话失效」守卫形同虚设。让 3xx 真实
+        // 到达判定层；CookieCloud 服务器若做 http→https 跳转需显式处理。
+        .redirect(reqwest::redirect::Policy::none());
     if let Some(addr) = proxy_addr.map(str::trim).filter(|a| !a.is_empty()) {
         // 地址已由 provider 校验过（http:// 开头、无认证）；解析失败按无代理降级。
         // 用 Proxy::all：Proxy::http 只拦截 http:// URL，https 供应商会直连。
@@ -173,9 +177,16 @@ pub fn parse_json(reply: &HttpReply) -> Result<serde_json::Value, UsageError> {
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))
 }
 
-/// 常见鉴权失败判定：401/403 一律视为凭据失效。
+/// 会话失效统一判定谓词（归位一治理单源）：401/403 与 3xx 一律视为凭据失效。
+/// 3xx 只有在客户端禁自动重定向下才可达（见 `build_client`）；重定向到登录页
+/// 是 cookie 族最典型的失效信号。
+pub fn is_session_invalid_status(status: u16) -> bool {
+    status == 401 || status == 403 || (300..400).contains(&status)
+}
+
+/// 常见鉴权失败判定：会话失效状态码一律视为凭据失效（401/403/3xx）。
 pub fn ensure_not_auth_error(reply: &HttpReply) -> Result<(), UsageError> {
-    if reply.status == 401 || reply.status == 403 {
+    if is_session_invalid_status(reply.status) {
         return Err(UsageError::Auth);
     }
     Ok(())
@@ -184,6 +195,67 @@ pub fn ensure_not_auth_error(reply: &HttpReply) -> Result<(), UsageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 归位一治理：统一会话失效判定谓词（401/403/3xx 三形态，其余不判）。
+    #[test]
+    fn session_invalid_status_covers_401_403_3xx_only() {
+        for status in [401, 403, 300, 301, 302, 303, 307, 308, 399] {
+            assert!(is_session_invalid_status(status), "{status} 应判失效");
+        }
+        for status in [200, 204, 400, 402, 404, 429, 500, 502] {
+            assert!(!is_session_invalid_status(status), "{status} 不应判失效");
+        }
+    }
+
+    /// ensure_not_auth_error 与谓词同源：3xx 也归 Auth（客户端已禁自动重定向）。
+    #[test]
+    fn ensure_not_auth_error_treats_3xx_as_auth() {
+        for status in [401, 403, 302] {
+            let reply = HttpReply {
+                status,
+                body: String::new(),
+            };
+            assert!(matches!(
+                ensure_not_auth_error(&reply),
+                Err(UsageError::Auth)
+            ));
+        }
+        let ok = HttpReply {
+            status: 200,
+            body: String::new(),
+        };
+        assert!(ensure_not_auth_error(&ok).is_ok());
+    }
+
+    /// 禁自动重定向：302 不能被跟随成 200（3xx 守卫可达性的前提）。
+    #[tokio::test]
+    async fn client_does_not_follow_redirects() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            // 302 到 /login（若客户端跟随会在同一连接上收到第二个请求）。
+            let _ = sock
+                .write_all(b"HTTP/1.1 302 Found\r\nLocation: /login\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await;
+            // 保持连接短暂打开，若被跟随则会再读到请求。
+            let _ =
+                tokio::time::timeout(std::time::Duration::from_millis(150), sock.read(&mut buf))
+                    .await;
+        });
+        let http = UsageHttp {
+            client: build_client(None),
+            base_override: None,
+        };
+        let reply = http
+            .get(&format!("http://{addr}/api/me"), &[])
+            .await
+            .unwrap();
+        assert_eq!(reply.status, 302, "重定向应原样返回而非被跟随");
+    }
 
     #[test]
     fn rewrite_url_replaces_scheme_and_host() {

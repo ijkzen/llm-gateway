@@ -3,7 +3,7 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
-use serde_json::Value;
+use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use llm_gateway::crypto::ENCRYPTION_KEY_ENV;
@@ -446,7 +446,79 @@ async fn import_rejects_zero_max_consecutive_failures() {
         });
         let (status, body) = send_json(&app, "POST", "/api/backup/import", &bad.to_string()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        assert!(body["msg"].as_str().unwrap().contains("正整数"), "{}", body);
+        // 14-03 后文案含上下界说明（语义不变：0 仍被拒）。
+        assert!(
+            body["msg"].as_str().unwrap().contains("1..=4294967295"),
+            "{}",
+            body
+        );
     })
     .await;
+}
+
+/// 15-12：导入回滚——中途失败时库保持原样（配置表在事务内整体替换）。
+#[tokio::test]
+async fn import_rolls_back_on_midway_failure() {
+    let (app, _db) = setup_app().await;
+
+    // 先取一份导入前状态（导出响应 data 即备份内容）。
+    let before = export_backup(&app).await;
+
+    // 导入一份「成员引用不存在」的备份：validate_backup 层即拒，库不动。
+    let bad = json!({
+        "version": 1,
+        "exportedAt": "2026-09-07T00:00:00Z",
+        "providers": [],
+        "virtualModels": [{
+            "displayId": "vm-x",
+            "enable": true,
+            "loadBalancingStrategy": 0,
+            "fallbackStrategy": 0,
+            "interfaceType": 0,
+            "items": [{"providerName": "nope", "providerModelId": "m-1", "enable": true, "cascadeDisabled": false}]
+        }],
+        "apiKeys": [],
+        "settings": []
+    });
+    let (status, body) = send_json(&app, "POST", "/api/backup/import", &bad.to_string()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // 库仍是导入前状态（导出结果与之前一致，除 exportedAt 时间戳）。
+    let after = export_backup(&app).await;
+    assert_eq!(
+        after["providers"], before["providers"],
+        "失败导入不得改动配置"
+    );
+
+    // 15-03：重复成员在值校验前就被结构校验拦下（文案含「成员重复」，非裸 SQL）。
+    let dup = json!({
+        "version": 1,
+        "exportedAt": "2026-09-07T00:00:00Z",
+        "providers": [{"name": "p1", "enable": true, "baseUrl": "https://a.example", "apiKey": "k",
+            "customHeader": "{}", "protocolType": 0, "billingMode": 0, "extra": "{}",
+            "sortOrder": 0, "proxyEnabled": false, "proxyAddr": "",
+            "models": [{"providerModelId": "m-1", "contextLength": 100, "maxOutputTokens": 100,
+                "reasoning": false, "toolUse": false, "imageUnderstand": false,
+                "videoUnderstand": false, "proxyEnabled": false, "proxyAddr": ""}]}],
+        "virtualModels": [{
+            "displayId": "vm-dup", "enable": true, "loadBalancingStrategy": 0,
+            "fallbackStrategy": 0, "interfaceType": 0,
+            "items": [
+                {"providerName": "p1", "providerModelId": "m-1", "enable": true, "cascadeDisabled": false},
+                {"providerName": "p1", "providerModelId": "m-1", "enable": true, "cascadeDisabled": false}
+            ]
+        }],
+        "apiKeys": [], "settings": []
+    });
+    let (status, body) = send_json(&app, "POST", "/api/backup/import", &dup.to_string()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["msg"].as_str().unwrap_or("").contains("成员重复"),
+        "重复成员应在校验阶段给出明确文案：{body}"
+    );
+    // 顺带断言未泄露 SQL 片段。
+    assert!(
+        !body["msg"].as_str().unwrap_or("").contains("UNIQUE"),
+        "不该暴露唯一索引错误原文：{body}"
+    );
 }

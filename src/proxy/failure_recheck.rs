@@ -50,14 +50,22 @@ pub fn trigger(state: &AppState, provider_id: i32, request_id: &str) {
         return;
     }
     let db = state.db.clone();
+    let mem = state.usage_mem.clone();
     let request_id = request_id.to_string();
     tokio::spawn(async move {
-        handle_failure(&db, provider_id, &request_id).await;
+        handle_failure(&db, &mem, provider_id, &request_id).await;
     });
 }
 
 /// 执行一次核验：强制实时抓取用量并落库缓存，再按额度门控判定。
-async fn handle_failure(db: &DatabaseConnection, provider_id: i32, request_id: &str) {
+/// 抓取经 mem 单飞入口（07-01 收敛，与定时刷新/LB 选路同刻命中同一家只发一次
+/// 厂商调用）；失败进入 mem 的 60s 负缓存窗口。
+async fn handle_failure(
+    db: &DatabaseConnection,
+    mem: &crate::usage::mem_cache::UsageMemCache,
+    provider_id: i32,
+    request_id: &str,
+) {
     let p = match provider::Entity::find_by_id(provider_id).one(db).await {
         Ok(Some(p)) => p,
         Ok(None) => return,
@@ -69,7 +77,7 @@ async fn handle_failure(db: &DatabaseConnection, provider_id: i32, request_id: &
     if !crate::usage::usage_enabled(&p.extra) {
         return;
     }
-    match persist::fetch_and_store(db, provider_id).await {
+    match mem.fetch_shared_stored(db, provider_id, true).await {
         Ok(data) => {
             if let Err(e) = persist::apply_usage_gate(db, &p, &data).await {
                 tracing::warn!(provider_id, request_id, "失败复查额度门控执行失败：{e}");

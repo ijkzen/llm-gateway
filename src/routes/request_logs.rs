@@ -58,10 +58,19 @@ struct ListQuery {
     sort_order: Option<String>,
 }
 
-fn parse_csv_i32(raw: Option<&String>) -> Vec<i32> {
-    raw.into_iter()
-        .flat_map(|s| s.split(','))
-        .filter_map(|part| part.trim().parse().ok())
+/// 解析逗号分隔的 id 列表（11-16）：非法分段返错而非静默丢弃——静默丢弃会让
+/// `vmId=abc` 等同「不过滤」返回全量，客户端拿到看似成功的错误结果。
+fn parse_csv_i32(raw: Option<&String>) -> Result<Vec<i32>, String> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    raw.split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part.parse::<i32>()
+                .map_err(|_| format!("非法 id 参数：{part}"))
+        })
         .collect()
 }
 
@@ -139,22 +148,24 @@ async fn list_request_logs(
     // 拼接 WHERE 条件与绑定参数。
     let mut where_sql = String::from("WHERE 1=1");
     let mut params: Vec<sea_orm::Value> = Vec::new();
+    let vm_ids = match parse_csv_i32(query.vm_id.as_ref()) {
+        Ok(ids) => ids,
+        Err(msg) => return response::bad_request(msg),
+    };
     push_in_clause(
         &mut where_sql,
         "r.virtual_model_id",
-        parse_csv_i32(query.vm_id.as_ref())
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        vm_ids.into_iter().map(Into::into).collect(),
         &mut params,
     );
+    let provider_ids = match parse_csv_i32(query.provider_id.as_ref()) {
+        Ok(ids) => ids,
+        Err(msg) => return response::bad_request(msg),
+    };
     push_in_clause(
         &mut where_sql,
         "r.provider_id",
-        parse_csv_i32(query.provider_id.as_ref())
-            .into_iter()
-            .map(Into::into)
-            .collect(),
+        provider_ids.into_iter().map(Into::into).collect(),
         &mut params,
     );
     push_in_clause(
@@ -244,10 +255,17 @@ async fn list_request_logs(
         Err(e) => return response::db_error(e.to_string()),
     };
 
-    let items = rows
-        .iter()
-        .filter_map(|row| row_to_entry(row).ok())
-        .collect();
+    // 11-15：行转换失败不再静默丢行（items.len() 与 total 会不一致且无日志）。
+    let mut items = Vec::with_capacity(rows.len());
+    for row in &rows {
+        match row_to_entry(row) {
+            Ok(entry) => items.push(entry),
+            Err(e) => {
+                tracing::warn!(error = ?e, "请求日志行转换失败");
+                return response::db_error(format!("请求日志行解析失败：{e:?}"));
+            }
+        }
+    }
     (
         StatusCode::OK,
         Json(Response::success(PageResponse {

@@ -34,8 +34,6 @@ const USAGE_URL: &str = "https://platform.sensenova.cn/lite/console/v1/tokenplan
 /// （forbidLoginForMoment，约 10 分钟），冷却期内不再尝试登录，避免
 /// usage_refresh 每 5 分钟撞锁把锁定窗口无限刷新。
 const LOGIN_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(15 * 60);
-/// 冷却期内的错误文案（不再打登录接口，直接返回该语义）。
-const LOGIN_COOLDOWN_MSG: &str = "商汤账号登录失败次数过多，已临时冷却，请稍后重试";
 
 /// 每家 provider 最近一次登录失败时间（内存态；单实例部署足够，
 /// 重启后最多多撞一次锁）。
@@ -118,12 +116,20 @@ pub async fn fetch_sensenova(
             < chrono::Duration::from_std(LOGIN_COOLDOWN).unwrap()
     {
         let since_secs = Utc::now().signed_duration_since(failed_at).num_seconds();
+        let remaining_secs = (LOGIN_COOLDOWN.as_secs() as i64 - since_secs).max(0);
         tracing::warn!(
             provider_id,
             failed_secs_ago = since_secs,
+            remaining_secs,
             "登录处于冷却期（上次失败后 15 分钟内），跳过登录",
         );
-        return Err(UsageError::Upstream(429, LOGIN_COOLDOWN_MSG.to_string()));
+        // 文案带剩余时间（归位二拍板）：把「密码错 → 被锁 → 冷却中」的因果
+        // 连起来，否则用户只看到 429 无法判断还要等多久。
+        let minutes = (remaining_secs + 59) / 60;
+        return Err(UsageError::Upstream(
+            429,
+            format!("商汤账号已被临时锁定，约 {minutes} 分钟后自动重试（请检查账号密码）"),
+        ));
     }
 
     tracing::info!(provider_id, "开始账号密码登录（换取新 refresh_token）");
@@ -140,8 +146,6 @@ pub async fn fetch_sensenova(
         }
         e
     })?;
-    // 登录成功 → 清除冷却记录。
-    login_failures().lock().unwrap().remove(&provider_id);
     tracing::info!(provider_id, "登录成功，写回新 refresh_token");
     // 新 refresh_token 必须先回写（重读最新行、严格解密、只合并该键），失败不继续重试。
     super::super::write_back_extra_key(
@@ -151,6 +155,9 @@ pub async fn fetch_sensenova(
         &tokens.refresh_token,
     )
     .await?;
+    // 冷却清除放在写回成功之后：写回失败时保留冷却保护，避免下一轮
+    // （5 分钟后）无冷却直撞商汤锁窗（10 分钟）刷新锁定。
+    login_failures().lock().unwrap().remove(&provider_id);
     tracing::info!(provider_id, "refresh_token 已写回，用新 token 重试续期查询");
     let (output, _) = renew_and_query(http, &tokens.refresh_token).await?;
     Ok(output)

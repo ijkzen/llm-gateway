@@ -478,12 +478,16 @@ impl SchedulerRuntime {
         repo: &R,
         name: &str,
     ) -> Result<(), SchedulerError> {
-        let original_enabled = {
+        // 未加载进调度器的任务（handler 未注册被跳过）也应可删除（11-07）：
+        // 内存 miss 退化为纯 DB 软删——否则这类行在 API 里不可见、不可更新
+        // 也不可删除，永远残留在库里。
+        let loaded_enabled = {
             let jobs = self.jobs.read().await;
-            let entry = jobs
-                .get(name)
-                .ok_or_else(|| SchedulerError::JobNotFound(name.to_string()))?;
-            entry.enabled
+            jobs.get(name).map(|entry| entry.enabled)
+        };
+        let Some(original_enabled) = loaded_enabled else {
+            repo.soft_delete(name).await?;
+            return Ok(());
         };
 
         repo.soft_delete(name).await?;

@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::{Credentials, num, snippet};
 use crate::usage::cookiecloud;
 use crate::usage::error::UsageError;
-use crate::usage::http::UsageHttp;
+use crate::usage::http::{UsageHttp, is_session_invalid_status};
 use crate::usage::types::{BalanceItem, FetchOutput};
 
 const SELF_URL: &str = "https://agentrouter.org/api/user/self";
@@ -47,7 +47,7 @@ pub async fn fetch_agentrouter(
         )
         .await?;
     // 登录态失效 / 被重定向到登录页（401/403/3xx）→ Auth，提示重新同步 CookieCloud。
-    if reply.status == 401 || reply.status == 403 || (300..400).contains(&reply.status) {
+    if is_session_invalid_status(reply.status) {
         return Err(UsageError::Auth);
     }
     if reply.status != 200 {
@@ -60,6 +60,12 @@ fn parse_agentrouter_self(body: &str) -> Result<FetchOutput, UsageError> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
     if v.get("success").and_then(Value::as_bool) != Some(true) {
+        // 业务包络失效特征：success=false 且 message 指明登录态失效（归位一）。
+        let message = v.get("message").and_then(Value::as_str).unwrap_or("");
+        if message.contains("登录") && (message.contains("失效") || message.contains("过期"))
+        {
+            return Err(UsageError::Auth);
+        }
         return Err(UsageError::Upstream(200, snippet(body)));
     }
     let quota = v
@@ -129,9 +135,20 @@ mod tests {
         ));
     }
 
+    /// 归位一治理：success=false 且文案为登录态失效 → Auth（原判 Upstream，随批改）。
     #[test]
-    fn parse_success_false_is_upstream_error() {
+    fn parse_login_expired_message_is_auth_error() {
         let body = r#"{"data":null,"message":"登录状态已失效","success":false}"#;
+        assert!(matches!(
+            parse_agentrouter_self(body),
+            Err(UsageError::Auth)
+        ));
+    }
+
+    /// 其余业务失败（文本不含登录失效特征）仍是 Upstream。
+    #[test]
+    fn parse_success_false_other_message_is_upstream_error() {
+        let body = r#"{"data":null,"message":"请求过于频繁","success":false}"#;
         assert!(matches!(
             parse_agentrouter_self(body),
             Err(UsageError::Upstream(_, _))
