@@ -26,10 +26,10 @@ Status: ready-for-agent
 
 ## 模型目录
 
-- 数据：models.dev `models.json`，2026-08-29 抓取，363 条，minified 后 vendor 在 `src/provider_model/data/models.json`（293KB）。
+- 数据：models.dev `models.json`，2026-09-10 抓取，379 条，minified 后 vendor 在 `src/provider_model/data/models.json`（304KB）。
 - 内嵌：`include_str!` 编译期打包 + `OnceLock` 惰性解析一次。不做运行时更新；过期时手动重新下载 minify 替换该文件。
 - 决策记录：`docs/adr/0001-embed-model-catalog-as-vendored-asset.md`。
-- 字段映射：`limit.context`→context_length、`limit.output`→max_output_tokens、`reasoning`→reasoning、`tool_call`→tool_use、`modalities.input` 含 `image`/`video`→image/video_understand。363 条中 8 条缺 `limit`（影响智能填充三态，见下）。
+- 字段映射：`limit.context`→context_length、`limit.output`→max_output_tokens、`reasoning`→reasoning、`tool_call`→tool_use、`modalities.input` 含 `image`/`video`→image/video_understand。379 条中 8 条缺 `limit.output`（影响智能填充三态，见下）。
 
 ## 后端 API
 

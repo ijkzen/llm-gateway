@@ -27,7 +27,7 @@ provider 或 provider_model 的可选出口代理（`proxy_enabled`+`proxy_addr`
 _Avoid_: 出口代理（裸称）
 
 **模型目录 (Model Catalog)**:
-内嵌于二进制的 models.dev 全量模型元数据（363 条），是智能填充的唯一数据源。
+内嵌于二进制的 models.dev 全量模型元数据（379 条），是智能填充的唯一数据源。
 _Avoid_: models.json（实现指代）、知识库
 
 **远端模型刷新 (Model Refresh)**:
