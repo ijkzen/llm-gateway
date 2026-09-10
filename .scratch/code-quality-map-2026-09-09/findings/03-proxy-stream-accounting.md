@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | 03-01 | P2 | 逻辑正确性/客户端契约 | 带内错误事件（转换器 error 态）客户端仅收 [DONE] 无 error 帧——空/截断内容呈现「完整成功」假成功（已拍板修复） |
 | 03-02 | P3 | 逻辑正确性/记账边界 | OpenAI 直通已转发 [DONE] 后的 teardown 读错误整单翻失败 + 补发 error 帧与二次 [DONE]——[DONE] 后字节属连接噪音 |
-| 03-03 | P3 | 可观测性/错误分支 | 02-01 同族续点：dispatch.rs 四处 502 失败路径与 relay 流失败路径零 tracing（两文件 0 调用）——仅落 request 表 |
+| 03-03 | P3【已修复 2026-09-10】 | 可观测性/错误分支 | 02-01 同族续点：dispatch.rs 四处 502 失败路径与 relay 流失败路径零 tracing（两文件 0 调用）——仅落 request 表 |
 | 03-04 | P3 | 简洁/残余分叉 | 事件驱动循环双份：relay 泵内联循环 vs collect_stream_events 同语义独立实现，带内错误处理已在两份分叉（03-01 根因之一） |
 | 03-05 | P3 | 健壮/诊断质量 | Anthropic/Gemini 非流式读体失败被 unwrap_or_default 吞成「解析上游响应失败：EOF」——真实原因丢失，文案误导排障 |
 | 03-06 | P3 | 测试覆盖 | relay.rs/dispatch.rs 无内联单测：StreamOutcome 组合判定、accumulate_chunks 聚合行为、断开分支均无直接锁定 |
@@ -35,7 +35,7 @@
 
 OpenAI 直通（TailSpec::Plain）把上游 [DONE] 帧原样转发后循环继续 `body.frame().await`——若此刻读侧报 Err（上游发完数据后 RST/超时，而非干净 FIN），relay.rs:289-297 置 upstream_err → 发 error 帧 → relay.rs:389-392 `send_done = upstream_err.is_some()` 为真 → **客户端在 [DONE] 之后又收到 error 帧 + 第二个 [DONE]**（若连接尚在），且整单记失败。`[DONE]` 是客户端可见流终结符，其后字节属连接 teardown 噪音，内容实际已完整交付。正常路径（hyper 对自定界 chunked 体无需再读即可 Ok(None)）不受影响，风险窗=close-delimited 或 RST 竞态。建议：Plain 源在已转发 [DONE] 后忽略后续读错误（记成功、不再发帧）；修复成本低，可与 03-01 同批评估。
 
-### 03-03 dispatch/relay 失败路径零日志（P3，可观测性，02-01 同族续点）
+### 03-03 dispatch/relay 失败路径零日志（P3，可观测性，02-01 同族续点）【已修复 2026-09-10】
 
 relay.rs 与 dispatch.rs 全文件 **0 处 tracing 调用**（metrics.rs 写者失败 3 处 warn 除外）。02-01 锚定的零日志终态在 failover.rs 预 200 分支；本域是其续点：dispatch.rs 四处 502 失败路径（OpenAI 非流式读体失败 :142-163 / JSON 解析失败 :168-189、AG 非流式解析失败 :318-341、转换失败 :383-401）与 relay 泵内流失败（读上游 Err/转换 Err 分支）均只 `record_failure` + 回错误响应，无任何日志。一次「200 后读体失败」的请求在全链路日志里不可见（入口 LB info 之外）。建议并入 02-01 修复批（同形状 error/warn + request_id + fail_reason），02-01 批注中显式含本域 4 处 + relay 2 分支。
 
@@ -86,3 +86,7 @@ sse.rs:18-62：`feed` 把输入 append 进 buffer，只有遇到 `\n` 才消费�
 ## 性能/内存轮结论
 
 无 P1/P2 级问题。正向确认：mpsc(32) 有界背压（发送端 await，客户端慢/断开不放大上游读取内存）；单写者批写（50 行/200ms 空闲冲刷）避免高 RPS 落库风暴；流式路径峰值内存=单帧（不缓冲整流，Responses 曾整条缓冲已改 live 转发）；转换臂 per-event 2-3 次分配（Bytes→String→sse_frame）量级可接受。P3 级：03-08（splitter 无上限）、03-04（非流式聚合整流缓冲属客户端形态固有，非回归）。
+
+## 实施进度
+
+- **03-03 已修复**（随 02-01 同批）：`dispatch.rs` 新增 `log_dispatch_failure` 并在四处 502 失败路径（OpenAI 读体/解析、AG 非流式解析、转换失败）调用；`relay.rs` 三处（上游读流失败、事件转换失败、`StreamOutcome` 终态失败）补 warn，均带 request_id/provider/model/fail_reason。

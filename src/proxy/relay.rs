@@ -291,6 +291,13 @@ pub(crate) fn relay_stream(
                 Ok(frame) => frame.into_data().unwrap_or_default(),
                 Err(e) => {
                     let message = format!("读取上游流失败：{e}");
+                    tracing::warn!(
+                        request_id = %record.request_id,
+                        provider_id = record.member.provider_id,
+                        model_id = %record.member.model_id,
+                        fail_reason = %message,
+                        "流式转运中断，向客户端补发错误帧",
+                    );
                     upstream_err = Some(message.clone());
                     let _ = tx.send(Ok(error_frame(&message))).await;
                     break 'outer;
@@ -308,6 +315,13 @@ pub(crate) fn relay_stream(
                         }
                     }
                     PumpStep::Failed(message) => {
+                        tracing::warn!(
+                            request_id = %record.request_id,
+                            provider_id = record.member.provider_id,
+                            model_id = %record.member.model_id,
+                            fail_reason = %message,
+                            "流式事件转换失败，向客户端补发错误帧",
+                        );
                         convert_err = Some(message.clone());
                         let _ = tx.send(Ok(error_frame(&message))).await;
                         break 'outer;
@@ -396,6 +410,15 @@ pub(crate) fn relay_stream(
 
         let outcome =
             StreamOutcome::from_parts(upstream_err, convert_err, source.error(), disconnect);
+        if !outcome.success() {
+            tracing::warn!(
+                request_id = %record.request_id,
+                provider_id = record.member.provider_id,
+                model_id = %record.member.model_id,
+                fail_reason = outcome.fail_reason().unwrap_or_default(),
+                "流式请求终态失败，落库并结束",
+            );
+        }
         let end_time = now_ms();
         RequestRecord {
             request_id: record.request_id,

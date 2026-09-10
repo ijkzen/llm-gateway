@@ -133,6 +133,18 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
         reasoning_exclude,
     } = ctx;
 
+    /// 200 后失败路径的日志（03-03）：上游已接收请求、内容未成功交付，属排障盲区，
+    /// 与 failover 降级/终态日志同字段形状（request_id/provider/model/fail_reason）。
+    fn log_dispatch_failure(request_id: &str, member: &Member, message: &str) {
+        tracing::warn!(
+            request_id,
+            provider_id = member.provider_id,
+            model_id = %member.model_id,
+            fail_reason = %message,
+            "上游响应处理失败，返回错误响应",
+        );
+    }
+
     // 成功即清零该供应商的连续失败计数（偶发失败不累积）。
     state.failure_counter.reset(member.provider_id);
 
@@ -143,6 +155,7 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                 Ok(body) => body,
                 Err(e) => {
                     let message = format!("读取上游响应失败：{e}");
+                    log_dispatch_failure(&request_id, &member, &message);
                     record_failure(
                         &state.db,
                         &request_id,
@@ -169,6 +182,7 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                 Ok(value) => value,
                 Err(e) => {
                     let message = format!("解析上游响应失败：{e}");
+                    log_dispatch_failure(&request_id, &member, &message);
                     record_failure(
                         &state.db,
                         &request_id,
@@ -321,6 +335,7 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                     Ok(value) => value,
                     Err(e) => {
                         let message = format!("解析上游响应失败：{e}");
+                        log_dispatch_failure(&request_id, &member, &message);
                         record_failure(
                             &state.db,
                             &request_id,
@@ -381,6 +396,7 @@ pub(crate) async fn dispatch_success(state: &AppState, ctx: SuccessContext) -> R
                         )
                     }
                     Err(message) => {
+                        log_dispatch_failure(&request_id, &member, &message);
                         record_failure(
                             &state.db,
                             &request_id,

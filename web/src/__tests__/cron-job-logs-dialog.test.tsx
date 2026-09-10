@@ -204,6 +204,21 @@ describe("CronJobLogsDialog", () => {
 		expect(screen.getByText("出错了")).toBeInTheDocument();
 	});
 
+	it("快照回放与实时事件重叠时按 seq 去重，新事件正常追加", () => {
+		renderDialog();
+		// E6「先订阅后快照」：快照已含 seq 1/2，订阅后同两条又经广播送达。
+		emitSnapshot("run-dup", [makeLog(1, "INFO", "第一步"), makeLog(2, "INFO", "第二步")]);
+		emitLog("run-dup", makeLog(1, "INFO", "第一步"));
+		emitLog("run-dup", makeLog(2, "INFO", "第二步"));
+		// 重叠事件被丢弃：各只渲染一条。
+		expect(screen.getAllByText("第一步")).toHaveLength(1);
+		expect(screen.getAllByText("第二步")).toHaveLength(1);
+
+		// seq 更大的新事件正常追加。
+		emitLog("run-dup", makeLog(3, "ERROR", "第三步出错"));
+		expect(screen.getByText("第三步出错")).toBeInTheDocument();
+	});
+
 	it("执行结束后显示状态与截断提示，并刷新历史列表", () => {
 		mocks.runs = [makeRun("run-1", { status: "failed", truncated: true })];
 		renderDialog();

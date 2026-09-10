@@ -96,10 +96,14 @@ impl JobLogEvent {
 /// 最旧事件、无订阅者返回 Err），可直接调用；worker 与 SSE 按 `job_name`
 /// （+ `run_id`）过滤订阅。直连 broadcast 保证事件在 `tracing::info!`
 /// 返回前已入队，handler 结束后 worker 的 drain 不会漏收。
+///
+/// 每条 log 事件在捕获侧分配 per-span 单调 `seq`（与 worker 落库序同源：
+/// 广播 FIFO 保序），SSE 客户端据此对「先订阅后快照」的重叠窗口去重
+///（前端 `data.seq <= 尾 seq` 丢弃）。
 pub struct JobLogLayer {
     sender: Sender<Arc<JobLogEvent>>,
-    /// span id -> (job_name, run_id)，只登记带归属字段的任务 span。
-    job_spans: Mutex<HashMap<Id, (String, String)>>,
+    /// span id -> (job_name, run_id, 下一个待分配的 seq)，只登记带归属字段的任务 span。
+    job_spans: Mutex<HashMap<Id, (String, String, i32)>>,
 }
 
 impl JobLogLayer {
@@ -125,7 +129,7 @@ where
             self.job_spans
                 .lock()
                 .unwrap()
-                .insert(id.clone(), (job_name, run_id));
+                .insert(id.clone(), (job_name, run_id, 1));
         }
     }
 
@@ -134,8 +138,9 @@ where
     }
 
     fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-        // 事件必须发生在一个带归属字段的任务 span 内才捕获。
-        let Some((job_name, run_id)) = self.lookup_owner(event, &ctx) else {
+        // 事件必须发生在一个带归属字段的任务 span 内才捕获；seq 在同一把锁内
+        // 自增（broadcast FIFO 保序，worker 落库 seq 与之一致）。
+        let Some((job_name, run_id, seq)) = self.owning_span_next_seq(event, &ctx) else {
             return;
         };
 
@@ -148,7 +153,7 @@ where
             kind: "log".to_string(),
             job_name,
             run_id,
-            seq: None,
+            seq: Some(seq),
             level: Some(event.metadata().level().to_string()),
             message: Some(message),
             status: None,
@@ -159,22 +164,25 @@ where
 }
 
 impl JobLogLayer {
-    /// 从事件的实际上下文 span 链（内向外）查找最近的任务 span 归属。
+    /// 从事件的实际上下文 span 链（内向外）查找最近的任务 span 归属并取下一个 seq。
     ///
     /// 注意：`event.parent()` 只返回显式指定的 parent，contextual 事件（宏
     /// 默认形式）返回 None，必须用 `ctx.event_scope` 解析当前 span 链。
-    fn lookup_owner<'a, S>(
+    fn owning_span_next_seq<S>(
         &self,
         event: &Event<'_>,
-        ctx: &Context<'a, S>,
-    ) -> Option<(String, String)>
+        ctx: &Context<'_, S>,
+    ) -> Option<(String, String, i32)>
     where
-        S: Subscriber + for<'b> LookupSpan<'b>,
+        S: Subscriber + for<'a> LookupSpan<'a>,
     {
         let scope = ctx.event_scope(event)?;
+        let mut spans = self.job_spans.lock().unwrap();
         for span in scope {
-            if let Some(owner) = self.job_spans.lock().unwrap().get(&span.id()) {
-                return Some(owner.clone());
+            if let Some((job_name, run_id, next_seq)) = spans.get_mut(&span.id()) {
+                let seq = *next_seq;
+                *next_seq += 1;
+                return Some((job_name.clone(), run_id.clone(), seq));
             }
         }
         None
@@ -307,13 +315,44 @@ mod tests {
         assert_eq!(first.run_id, "run_1");
         assert_eq!(first.level.as_deref(), Some("INFO"));
         assert_eq!(first.message.as_deref(), Some("step one"));
+        // 08-01：捕获侧按 span 分配单调 seq（SSE 去重契约）。
+        assert_eq!(first.seq, Some(1));
 
         let second = rx.blocking_recv().unwrap();
         assert_eq!(second.message.as_deref(), Some("step two with 42"));
         assert_eq!(second.level.as_deref(), Some("WARN"));
+        assert_eq!(second.seq, Some(2));
 
         // 没有第三条事件。
         assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
+    }
+
+    #[test]
+    fn test_seq_is_per_span_monotonic_and_restarts_per_run() {
+        let _guard = SUBSCRIBER_LOCK.lock().unwrap();
+        let (tx, mut rx) = tokio::sync::broadcast::channel(16);
+        let keep_alive = tx.clone();
+        let subscriber = Registry::default().with(JobLogLayer::new(tx));
+        tracing::subscriber::with_default(subscriber, || {
+            for run_id in ["run_1", "run_2"] {
+                let span = tracing::info_span!(
+                    target: "cron_job_log",
+                    "cron_job_run",
+                    job_name = "job_a",
+                    run_id = run_id,
+                );
+                span.in_scope(|| {
+                    tracing::info!("first");
+                    tracing::info!("second");
+                    tracing::info!("third");
+                });
+            }
+        });
+        let seqs: Vec<i32> = (0..6)
+            .map(|_| rx.blocking_recv().unwrap().seq.unwrap())
+            .collect();
+        assert_eq!(seqs, vec![1, 2, 3, 1, 2, 3], "每次执行独立从 1 起编");
+        drop(keep_alive);
     }
 
     #[test]

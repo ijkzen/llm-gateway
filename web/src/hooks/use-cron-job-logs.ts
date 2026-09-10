@@ -81,7 +81,8 @@ export function useCronJobRunLogs(name: string, runId: string | null) {
  * 事件契约（后端 /api/cron-jobs/{name}/logs/stream）：
  * - `snapshot`：连接建立时存在执行中的 run，回放其已落库日志
  * - `idle`：连接建立时没有执行中的 run
- * - `log`：执行中的一条新日志（携带 run_id，按 seq 去重）
+ * - `log`：执行中的一条新日志（携带 run_id 与捕获侧分配的 per-run 单调 seq，
+ *   与 snapshot 回放的重叠部分按 seq 去重）
  * - `run_started` / `run_ended`：执行生命周期事件
  * - `reset`：接收端积压丢事件，需重新拉取当前 run 全量日志
  */

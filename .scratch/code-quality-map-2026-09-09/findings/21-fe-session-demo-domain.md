@@ -6,7 +6,7 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 21-01 | P2 | 逻辑/竞态 | 初始化流程的时区/语言保存与 init 提交赛跑：`saveInitSettings` 在 mutation 启动即同步发 PUT，而 init 端点要 argon2 哈希（数百 ms）后才建会话种 cookie——PUT 必然先到、401 被拒，用户首启选的时区静默丢失（落回种子默认），成功路径上还弹「保存失败」toast |
+| 21-01 | P2【已修复 2026-09-10】 | 逻辑/竞态 | 初始化流程的时区/语言保存与 init 提交赛跑：`saveInitSettings` 在 mutation 启动即同步发 PUT，而 init 端点要 argon2 哈希（数百 ms）后才建会话种 cookie——PUT 必然先到、401 被拒，用户首启选的时区静默丢失（落回种子默认），成功路径上还弹「保存失败」toast |
 | 21-02 | P3 | 逻辑/契约 | chat.tsx 静默吞 03-01 的流内 error 帧：`{"error":...}` 无 choices → `deltaOf` 返回 {} 忽略 → 流中错误表现为内容戛然而止，无错误标记（03 票后端已发 error 帧+[DONE]） |
 | 21-03 | P3 | 健壮/契约 | `eventData` 只取事件内首个 `data:` 行（SSE 规范允许多行 data 拼块；网关当前单行输出故不可达，契约脆弱记观察） |
 | 21-04 | P3 | 测试覆盖 | 缺口族：21-01 无回归网（saveInitSettings 时序）、use-auth 三 mutation 零直测、chat 流内 error 帧/畸形 chunk 分支未测、use-init-settings 失败聚合零直测 |
@@ -15,7 +15,7 @@
 
 ## 各条证据
 
-### 21-01 初始化保存与 init 提交赛跑（P2，竞态）
+### 21-01 初始化保存与 init 提交赛跑（P2，竞态）【已修复 2026-09-10】
 
 login.tsx:178-187（InitForm.handleSubmit）：`onSubmit(values)`（启动 init mutation）后**同步** `void saveInitSettings(locale, timezone)`——两个 PUT 立即发出。而 init 端点要 `hash_password`（argon2，数百 ms）成功后才建会话、Set-Cookie（routes/auth.rs:114-138）。settings PUT 在会话 cookie 存在之前到达 → 中间件 401（401 不跳转靠 onLoginPage 白名单兜底=正确）→ saveInitSettings 记入 failed → login.tsx:182-186 弹「保存失败」toast。净效果：**每次首启初始化，语言与时区两个 PUT 几乎必然失败**（argon2 延迟保证 PUT 先败），用户选的时区静默丢失落回种子默认 Asia/Shanghai，成功初始化还伴随一条错误 toast。注释（:180-181）只意识到「init 失败时 PUT 被拒」的半面，没意识到成功路径同样必败。默认解：saveInitSettings 移到 mutation onSuccess（会话已建立）；顺带把「语言已在顶部切换入口同步」的注释改为真实时序。回归测试归 21-04。
 
@@ -45,3 +45,7 @@ chat.tsx:26-29 `event.split("\n").find(l => l.startsWith("data: "))` 只取首�
 ## 性能/内存轮结论
 
 无性能项。chat 流式为单连接逐事件 setState（patchLast 浅拷贝尾元素），消息量演示级；timezoneOptions 全量 IANA 列表一次性 useMemo；login 页无重查询。结论：本域无性能负债。
+
+## 实施进度
+
+- **21-01 已修复**：`login.tsx` 的 `submitCredentials` 增加可选 `afterSuccess` 回调，在 `action.mutate` 的 `onSuccess`（会话 Cookie 已建立）里 `void` 触发；`saveInitSettings` 从 `InitForm.handleSubmit` 移入该回调（`InitForm.onSubmit` 签名改为 `(values, timezone)`），写入失败仍走 `toastError(common.saveFailed)` 但不阻塞跳转。回归测试新增于 `login-page.test.tsx`「初始化成功后（会话已建立）才写入引导时区与语言」：断言提交瞬间不调用 `saveInitSettings`、`onSuccess` 后才调用一次。

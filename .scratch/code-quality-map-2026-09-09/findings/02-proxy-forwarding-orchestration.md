@@ -6,7 +6,7 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 02-01 | P2 | 错误分支/可观测性 | 成员终态失败零 tracing 日志：降级分支每条 warn、终态（末成员/重试关闭）分支只有落库没有日志 |
+| 02-01 | P2【已修复 2026-09-10】 | 错误分支/可观测性 | 成员终态失败零 tracing 日志：降级分支每条 warn、终态（末成员/重试关闭）分支只有落库没有日志 |
 | 02-02 | P3 | 错误分支 | failover 尾部「理论不可达」兜底是死代码，且若被触发会对已落 degraded 行的请求重复落一行失败 |
 | 02-03 | P3 | 简洁 | calls.rs 两函数尾段（第 2-4 层头组装 + opencode 注入 + host_of）逐字重复 ~20 行 |
 | 02-04 | P3 | 性能 | Gemini 成员构建时 inline_remote_images 网络下载图片，failover 每成员重下（无跨尝试缓存） |
@@ -21,7 +21,7 @@
 
 ## 各条证据
 
-### 02-01 终态失败零日志（P2，错误分支/可观测性）
+### 02-01 终态失败零日志（P2，错误分支/可观测性）【已修复 2026-09-10】
 
 `failover.rs` 中四个失败终态分支（解密失败 :190-223、请求构造失败 :236-268、上游调用失败 :273-306、HTTP >=400 :309-341）在 `retry_enabled && has_more` 为假时，都只 `record_failure` 后直接 `return MemberLoopOutcome::Failed(...)`——**没有任何 tracing 日志**。对照降级分支（同文件 :196-207/:241-252/:279-291/:315-328）每条都带 request_id/attempt_index/fail_reason 的 warn。全文件唯一 error 级日志在 :363-371 的「理论上不可达」尾部。后果：一次全部成员失败的请求在日志里只有入口侧的 LB 选路 info，失败原因只能查 request 表或让客户端回传——与生产排障经验一致（此前已确认的终态零日志残余）。建议：终态 return 前补一条与降级同形状的 error 级日志（request_id/末成员/status/fail_reason/尝试数）。
 
@@ -84,3 +84,7 @@ usage_rank.rs:76-84 `cmp_remaining_percent` 从 QUOTA_LAYERS[0]（5h）全层重
 - **02-07（落库记失败行）**：额度耗尽/成员为空导致的 503 落 request 表失败行（success=false，fail_reason 标注额度耗尽语义；接受其对失败率口径的影响）。实施批：NoMembers 与空 ordered 两分支补 record_failure（NoMembers 分支顺带补 warn 日志——原零日志）。
 - **02-08（直连成功清零）**：保持现状不改行为——成功=健康信号，清零视为一次健康探测为有意设计；实施批仅在 forward_chat_direct 注释补全成功侧语义。
 - **02-06（决策日志级别）**：strategy 0/1 的「成员用量明细」「排序结果」两条降 debug（lb.rs:256/:313），info 只保留选路结果（route.rs:77）；深排时临时调 debug 可还原完整决策链。
+
+## 实施进度
+
+- **02-01 已修复**：`failover.rs` 四个终态分支（解密失败/请求构造失败/上游调用失败/HTTP>=400）在 `record_failure` 前统一补 `log_member_failed` error 日志（request_id/virtual_model_id/provider_id/model_id/attempt_index/attempt_total/http_status/fail_reason，与降级分支同字段形状）。03-03 同族续点一并修复：`dispatch.rs` 四处 502 失败路径经 `log_dispatch_failure` warn、`relay.rs` 上游读失败/转换失败/终态失败三处 warn。全量测试通过（849 passed）。

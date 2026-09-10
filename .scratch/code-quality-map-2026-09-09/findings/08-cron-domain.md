@@ -6,7 +6,7 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 08-01 | P2·契约【已拍板：全链路补 seq】 | 逻辑/跨栈契约 | 实时 SSE log 事件从不携带 seq（JobLogEvent.seq 全 None），而 E6「先订阅再快照」防重设计与前端去重（`data.seq <= last.seq`）都建立在 seq 上——重叠窗口日志重复追加且 React key 恒 undefined |
+| 08-01 | P2·契约【已修复 2026-09-10】 | 逻辑/跨栈契约 | 实时 SSE log 事件从不携带 seq（JobLogEvent.seq 全 None），而 E6「先订阅再快照」防重设计与前端去重（`data.seq <= last.seq`）都建立在 seq 上——重叠窗口日志重复追加且 React key 恒 undefined |
 | 08-02 | P3 | 逻辑/时序 | run_ended 广播先于 finish_run 落库（worker.rs:263 vs 271）——订阅窗口落在两者间的 SSE 连接看到「running 永不结束」；交换顺序可消除 |
 | 08-03 | P3 | 简洁/口径 | worker 侧失败日志与截断提示消息不经 4096 截断（:378/393/426），与 log_capture 捕获侧口径不一致——超长错误串落库超 4096 无约束 |
 | 08-04 | P3 | 简洁/死面 | log_repository trait 的 `insert_log` 单行方法生产零调用（trait 80-87 / 实现 192-211），仅测试用——worker 走 inherent `insert_logs`，双路径并存 |
@@ -20,7 +20,7 @@
 
 ## 各条证据
 
-### 08-01 实时 SSE log 事件无 seq：E6 防重契约坏（P2，跨栈契约）【已拍板：全链路补 seq】
+### 08-01 实时 SSE log 事件无 seq：E6 防重契约坏（P2，跨栈契约）【已修复 2026-09-10】
 
 全链路核验（三层亲验）：
 
@@ -94,3 +94,7 @@ log_repository.rs 8 例单测（insert/finish/list/prune×2/启动恢复/孤儿�
 ## 性能/内存轮结论
 
 无 P1/P2。正向：Arc<JobLogEvent> 广播避免逐订阅者深克隆（M2）；日志攒批 insert_many（P1）；有界队列 + 信号量并发池背压；prune 事务批删。P3 级：08-05（flush 失败丢批无重试——DB 故障期日志丢失面，观察级）、08-10-①（idle_flush sleep 重建微浪费）。结论：执行与日志链路形态适合当前规模（单用户网关、内置任务 ≤5 个、单次 ≤2000 条日志），无需结构性改动。
+
+## 实施进度
+
+- **08-01 已修复**：`log_capture.rs::JobLogLayer` 的 span 登记表由 `(job_name, run_id)` 扩为 `(job_name, run_id, next_seq)`，`on_event` 在同一把锁内自增分配 per-span 单调 `seq` 并写入 log 事件（run_started/run_ended 仍为 None）；`owning_span_next_seq` 替代原 `lookup_owner`。广播 FIFO 保序 ⇒ SSE seq 与 worker 落库 seq 同源，前端既有 `data.seq <= last.seq` 去重生效。单测：`test_captures_events_inside_job_span` 补 seq 断言、新增 `test_seq_is_per_span_monotonic_and_restarts_per_run`（每次执行独立从 1 起编）；前端新增 `cron-job-logs-dialog` 去重回归（快照 1/2 + 重叠实时事件各只渲染一条、seq 更大的新事件正常追加）。

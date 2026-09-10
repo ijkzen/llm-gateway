@@ -1,6 +1,6 @@
 import LoginPage from "@/pages/login";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -19,6 +19,12 @@ vi.mock("@/hooks/use-auth", () => ({
 
 vi.mock("@/hooks/use-toast", () => ({
 	useToastActions: () => ({ toastSuccess: vi.fn(), toastError }),
+}));
+
+const saveInitSettingsMock = vi.fn(async () => ({ ok: true, failed: [] as string[] }));
+vi.mock("@/hooks/use-init-settings", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@/hooks/use-init-settings")>()),
+	saveInitSettings: (...args: unknown[]) => saveInitSettingsMock(...(args as [])),
 }));
 
 function renderPage(state?: { from?: string }) {
@@ -41,6 +47,7 @@ function renderPage(state?: { from?: string }) {
 describe("LoginPage", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		saveInitSettingsMock.mockResolvedValue({ ok: true, failed: [] });
 		useMeMock.mockReturnValue({ data: undefined, isLoading: false, isError: true });
 	});
 
@@ -95,6 +102,32 @@ describe("LoginPage", () => {
 		await waitFor(() => {
 			expect(screen.getByText("供应商页")).toBeInTheDocument();
 		});
+	});
+
+	it("初始化成功后（会话已建立）才写入引导时区与语言", async () => {
+		useAuthStatusMock.mockReturnValue({
+			data: { initialized: false },
+			isLoading: false,
+			isError: false,
+		});
+		// 模拟后端：init 请求在途期间会话尚未建立，设置写入必须等 onSuccess。
+		let resolveInit: (() => void) | undefined;
+		initMutateMock.mockImplementation((_values, options) => {
+			resolveInit = () => options.onSuccess();
+		});
+
+		renderPage();
+		fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "Admin" } });
+		fireEvent.change(screen.getByLabelText("密码"), { target: { value: "Password" } });
+		fireEvent.change(screen.getByLabelText("确认密码"), { target: { value: "Password" } });
+		fireEvent.click(screen.getByRole("button", { name: "创建管理员" }));
+		await waitFor(() => expect(initMutateMock).toHaveBeenCalled());
+		// 提交瞬间不得发设置写入（21-01：PUT 早于会话建立会 401 丢时区）。
+		await Promise.resolve();
+		expect(saveInitSettingsMock).not.toHaveBeenCalled();
+
+		act(() => resolveInit?.());
+		await waitFor(() => expect(saveInitSettingsMock).toHaveBeenCalledTimes(1));
 	});
 
 	it("登录提交失败时提示错误", async () => {

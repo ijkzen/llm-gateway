@@ -138,6 +138,30 @@ impl ForwardFlavor {
     }
 }
 
+/// 成员尝试循环的终态失败日志：与降级分支同字段形状，另带尝试序号与总成员数，
+/// 补齐此前「全部成员失败只有落库没有日志」的可观测缺口（02-01）。
+fn log_member_failed(
+    request_id: &str,
+    virtual_model_id: i32,
+    member: &Member,
+    index: usize,
+    total: usize,
+    status: StatusCode,
+    message: &str,
+) {
+    tracing::error!(
+        request_id,
+        virtual_model_id,
+        provider_id = member.provider_id,
+        model_id = %member.model_id,
+        attempt_index = index,
+        attempt_total = total,
+        http_status = status.as_u16(),
+        fail_reason = %message,
+        "上游成员失败且无更多候选，返回终态错误",
+    );
+}
+
 /// 在排序后的成员上执行统一尝试循环：逐个 解密 → 构建 → 调用 → 失败判定，
 /// 可降级则记录并重试下一成员，否则按端点协议整形终态错误；成功清零
 /// 连续失败计数并把成功上下文交给调用方分派。空候选（成员全被额度剔除）
@@ -206,6 +230,15 @@ pub(crate) async fn forward_through_members(
                     last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
+                log_member_failed(
+                    request_id,
+                    virtual_model_id,
+                    member,
+                    index,
+                    ordered.len(),
+                    StatusCode::BAD_GATEWAY,
+                    &message,
+                );
                 record_failure(
                     &state.db,
                     request_id,
@@ -251,6 +284,15 @@ pub(crate) async fn forward_through_members(
                     last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
+                log_member_failed(
+                    request_id,
+                    virtual_model_id,
+                    member,
+                    index,
+                    ordered.len(),
+                    StatusCode::BAD_GATEWAY,
+                    &message,
+                );
                 record_failure(
                     &state.db,
                     request_id,
@@ -289,6 +331,15 @@ pub(crate) async fn forward_through_members(
                     last_failure = Some((member.clone(), message, StatusCode::BAD_GATEWAY));
                     continue;
                 }
+                log_member_failed(
+                    request_id,
+                    virtual_model_id,
+                    member,
+                    index,
+                    ordered.len(),
+                    StatusCode::BAD_GATEWAY,
+                    &message,
+                );
                 record_failure(
                     &state.db,
                     request_id,
@@ -326,6 +377,15 @@ pub(crate) async fn forward_through_members(
                 last_failure = Some((member.clone(), message, status));
                 continue;
             }
+            log_member_failed(
+                request_id,
+                virtual_model_id,
+                member,
+                index,
+                ordered.len(),
+                status,
+                &message,
+            );
             record_failure(
                 &state.db,
                 request_id,

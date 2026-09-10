@@ -55,6 +55,7 @@ export default function LoginPage() {
 	const { data: status, isLoading: statusLoading } = useAuthStatus();
 	const login = useLogin();
 	const initAdmin = useInitAdmin();
+	const locale = useLocale((state) => state.locale);
 
 	// 已登录用户访问登录页时直接回跳。
 	if (me) {
@@ -67,9 +68,18 @@ export default function LoginPage() {
 	const submitCredentials = (
 		values: { username: string; password: string },
 		action: ReturnType<typeof useLogin> | ReturnType<typeof useInitAdmin>,
+		afterSuccess?: () => Promise<void>,
 	) => {
 		action.mutate(values, {
-			onSuccess: () => navigate(from, { replace: true }),
+			onSuccess: () => {
+				// 初始化引导选择的语言/时区需在会话建立后再写（init 提交即回，
+				// 此处 onSuccess 已拿到会话 Cookie；提前发 PUT 会 401 丢时区）。
+				// 写入不阻塞跳转（失败仅提示，登录后仍可改）。
+				if (afterSuccess) {
+					void afterSuccess();
+				}
+				navigate(from, { replace: true });
+			},
 			onError: (error) => toastError(t(initMode ? "login.initFailed" : "login.loginFailed"), error),
 		});
 	};
@@ -101,7 +111,14 @@ export default function LoginPage() {
 				) : initMode ? (
 					<InitForm
 						loading={initAdmin.isPending}
-						onSubmit={(values) => submitCredentials(values, initAdmin)}
+						onSubmit={(values, timezone) =>
+							submitCredentials(values, initAdmin, async () => {
+								const { ok, failed } = await saveInitSettings(locale, timezone);
+								if (!ok) {
+									toastError(t("common.saveFailed"), new Error(failed.join(", ")));
+								}
+							})
+						}
 					/>
 				) : (
 					<LoginForm
@@ -161,10 +178,9 @@ function InitForm({
 	onSubmit,
 }: {
 	loading: boolean;
-	onSubmit: (values: { username: string; password: string }) => void;
+	onSubmit: (values: { username: string; password: string }, timezone: string) => void;
 }) {
 	const { t } = useTranslation();
-	const { toastError } = useToastActions();
 	const locale = useLocale((state) => state.locale);
 	const [timezone, setTimezone] = useState(browserTimezone());
 	const zones = useMemo(() => timezoneOptions(), []);
@@ -176,14 +192,7 @@ function InitForm({
 	});
 
 	const handleSubmit = (values: InitValues) => {
-		onSubmit({ username: values.username, password: values.password });
-		// 语言已在顶部切换入口同步到后端；这里把时区写入设置表。
-		// init 失败时 PUT 会因未登录被拒，静默即可（登录后可再改）。
-		void saveInitSettings(locale, timezone).then(({ ok, failed }) => {
-			if (!ok) {
-				toastError(t("common.saveFailed"), new Error(failed.join(", ")));
-			}
-		});
+		onSubmit({ username: values.username, password: values.password }, timezone);
 	};
 
 	return (
