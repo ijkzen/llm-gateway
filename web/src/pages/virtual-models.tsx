@@ -18,7 +18,7 @@ import {
 	useVirtualModels,
 } from "@/hooks/use-virtual-models";
 import { VIRTUAL_MODELS_PAGE } from "@/lib/pages";
-import { ChevronDown, ChevronRight, Plus, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -203,10 +203,6 @@ export default function VirtualModelsPage() {
 						</div>
 					)}
 				</div>
-				<Button variant="outline" size="sm" onClick={() => refetch()}>
-					<RefreshCw className="mr-2 size-4" />
-					{t("common.refresh")}
-				</Button>
 				<Button
 					size="sm"
 					onClick={() => {

@@ -228,4 +228,11 @@ describe("ApiKeysPage", () => {
 		expect(mocks.navigate).not.toHaveBeenCalled();
 		expect(mocks.toggleMutate).toHaveBeenCalled();
 	});
+
+	it("页面不再提供自己的刷新按钮（刷新统一由顶栏承担）", () => {
+		mocks.apiKeys = [makeKey()];
+		renderPage();
+
+		expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
+	});
 });

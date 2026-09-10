@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { type ProviderModel, useProviderModels } from "@/hooks/use-provider-models";
 import { type Provider, useProviders } from "@/hooks/use-providers";
 import { PROVIDER_MODELS_PAGE } from "@/lib/pages";
-import { ChevronDown, ChevronRight, RefreshCw, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
@@ -212,17 +212,6 @@ export default function ProviderModelsPage() {
 						</div>
 					)}
 				</div>
-				<Button
-					variant="outline"
-					size="sm"
-					onClick={() => {
-						refetchProviders();
-						refetchModels();
-					}}
-				>
-					<RefreshCw className="mr-2 size-4" />
-					{t("common.refresh")}
-				</Button>
 			</PageHeader>
 
 			<div className="space-y-6 pb-6">

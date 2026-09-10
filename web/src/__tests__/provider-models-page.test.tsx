@@ -311,4 +311,12 @@ describe("ProviderModelsPage", () => {
 
 		expect(screen.queryByRole("dialog")).toBeNull();
 	});
+
+	it("页面不再提供自己的刷新按钮（刷新统一由顶栏承担）", () => {
+		mocks.providers = [makeProvider(1, "OpenAI")];
+		mocks.models = [makeModel(1, 11, "gpt-4o")];
+		renderPage();
+
+		expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
+	});
 });

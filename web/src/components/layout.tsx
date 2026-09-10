@@ -2,9 +2,9 @@ import { Breadcrumbs } from "@/components/breadcrumbs";
 import LocaleToggle from "@/components/locale-toggle";
 import { MidEllipsis } from "@/components/mid-ellipsis";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
+import { PageRefreshButton } from "@/components/page-refresh-button";
 import { SkipToMain } from "@/components/skip-to-main";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Button } from "@/components/ui/button";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -35,7 +35,7 @@ import { useSyncBackendLocale } from "@/hooks/use-locale";
 import { fetchHealth } from "@/lib/api";
 import { NAV_GROUPS } from "@/lib/pages";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronUp, LogOut, RefreshCw, Waypoints } from "lucide-react";
+import { ChevronUp, LogOut, Waypoints } from "lucide-react";
 import { Suspense } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
@@ -156,15 +156,7 @@ export default function AppLayout() {
 						{/* 数据面板详情页的结构归属面包屑（其它页不渲染，顶栏维持现状） */}
 						<Breadcrumbs className="min-w-0 flex-1" />
 						<div className="ml-auto flex shrink-0 items-center gap-2">
-							<Button
-								variant="outline"
-								size="icon"
-								title={t("common.refresh")}
-								aria-label={t("common.refresh")}
-								onClick={() => queryClient.invalidateQueries()}
-							>
-								<RefreshCw className="size-4" />
-							</Button>
+							<PageRefreshButton />
 							<LocaleToggle />
 							<ThemeToggle />
 						</div>

@@ -6,11 +6,9 @@ import { CronJobLogsDialog } from "@/components/cron-jobs/CronJobLogsDialog";
 import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { type CronJob, useCronJobs } from "@/hooks/use-cron-jobs";
 import { CRON_JOBS_PAGE } from "@/lib/pages";
-import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -57,12 +55,7 @@ export default function CronJobsPage() {
 
 	return (
 		<div className="flex h-full min-h-0 flex-col space-y-6">
-			<PageHeader icon={CRON_JOBS_PAGE.icon} title={t(CRON_JOBS_PAGE.titleKey)}>
-				<Button variant="outline" size="sm" onClick={() => refetch()}>
-					<RefreshCw className="mr-2 size-4" />
-					{t("common.refresh")}
-				</Button>
-			</PageHeader>
+			<PageHeader icon={CRON_JOBS_PAGE.icon} title={t(CRON_JOBS_PAGE.titleKey)} />
 
 			<div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-1 gap-6 lg:grid-cols-3">
 				<div className="h-full min-h-0 overflow-auto lg:col-span-1">

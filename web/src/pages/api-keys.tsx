@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import type { ApiKey } from "@/hooks/use-api-keys";
 import { useApiKeys } from "@/hooks/use-api-keys";
 import { API_KEYS_PAGE } from "@/lib/pages";
-import { Plus, RefreshCw } from "lucide-react";
+import { Plus } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -41,10 +41,6 @@ export default function ApiKeysPage() {
 	return (
 		<div className="space-y-6">
 			<PageHeader icon={API_KEYS_PAGE.icon} title={t(API_KEYS_PAGE.titleKey)}>
-				<Button variant="outline" size="sm" onClick={() => refetch()}>
-					<RefreshCw className="mr-2 size-4" />
-					{t("common.refresh")}
-				</Button>
 				<Button size="sm" onClick={() => setCreating(true)}>
 					<Plus className="mr-2 size-4" />
 					{t("apiKeys.create")}

@@ -145,4 +145,11 @@ describe("CronJobsPage selected job", () => {
 		expect(mocks.listProps).toHaveLength(0);
 		expect(mocks.detailProps).toHaveLength(0);
 	});
+
+	it("页面不再提供自己的刷新按钮（刷新统一由顶栏承担）", () => {
+		mocks.jobs = [makeJob("a")];
+		render(<CronJobsPage />);
+
+		expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
+	});
 });

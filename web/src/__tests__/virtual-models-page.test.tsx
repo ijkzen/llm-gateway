@@ -505,4 +505,11 @@ describe("VirtualModelsPage", () => {
 		fireEvent.pointerDown(screen.getByRole("heading", { name: "虚拟模型" }));
 		expect(screen.queryByTestId("virtual-model-search-results")).toBeNull();
 	});
+
+	it("页面不再提供自己的刷新按钮（刷新统一由顶栏承担）", () => {
+		mocks.virtualModels = [makeVm({ virtualModelId: 1, displayId: "gpt-4o" })];
+		renderPage();
+
+		expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
+	});
 });

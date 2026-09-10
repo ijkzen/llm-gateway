@@ -107,4 +107,10 @@ describe("ProvidersPage 选中态", () => {
 		// 右侧详情不应停留在空白态，而是回落展示剩余的首个供应商。
 		expect(screen.getByText("https://api.alpha.com")).toBeTruthy();
 	});
+
+	it("页面不再提供自己的刷新按钮（刷新统一由顶栏承担）", () => {
+		renderPage();
+
+		expect(screen.queryByRole("button", { name: "刷新" })).toBeNull();
+	});
 });
