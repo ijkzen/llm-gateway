@@ -6,13 +6,13 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 16-01 | P2 | 逻辑/健壮 | `initialWindowFromUrl` 不校验 URL `period`：非法值穿过无 default 的 switch 链 → `new Date(NaN)` → `formatToParts` RangeError → 整页 ErrorBoundary（任何含赛马卡的页面，`?period=foo` 可构造） |
-| 16-02 | P2 | 逻辑/分支 | virtual-model-overview 与 provider-overview 缺 detail 404/非法 id 错误态（api-key/model 两页有守卫）：已删 VM 继续发 stats 查询，NaN id 触发 400 散块而非明确错误页 |
-| 16-03 | P2 | 逻辑/联动 | 请求日志时间窗口变更不重置 `page`（其余 7 个变更点都重置）→ 收窄窗口后停在越界页显示「暂无请求日志」假死，只能逐页退回 |
-| 16-04 | P2 | 模块间/契约 | 请求日志 4 个列头（虚拟模型/供应商/输入/输出）可点排序但不在后端白名单，后端静默回退 start_time——表头箭头与实际排序不符 |
-| 16-05 | P2 | i18n | insight 五图图例 `config.label` 硬编码中文（成功/失败/输入/输出/缓存命中率/流式占比），EN 界面图例中文而同图 tooltip 已英文化——同组件语言不一 |
-| 16-06 | P2 | 逻辑/时区 | `formatBucketLabel` 用浏览器本地时区换算 X 轴标签；设置表时区 ≠ 浏览器时区时标签整体错位（默认同为上海时不可见） |
-| 16-07 | P2 | 可视化 | ThroughputChart 的 RPM（个位量级）与 TPM（万级）共用 `yAxisId="count"`——RPM 线贴底不可读，双折线名不副实 |
+| 16-01 | P2【已修复 2026-09-10】 | 逻辑/健壮 | `initialWindowFromUrl` 不校验 URL `period`：非法值穿过无 default 的 switch 链 → `new Date(NaN)` → `formatToParts` RangeError → 整页 ErrorBoundary（任何含赛马卡的页面，`?period=foo` 可构造） |
+| 16-02 | P2【已修复 2026-09-10】 | 逻辑/分支 | virtual-model-overview 与 provider-overview 缺 detail 404/非法 id 错误态（api-key/model 两页有守卫）：已删 VM 继续发 stats 查询，NaN id 触发 400 散块而非明确错误页 |
+| 16-03 | P2【已修复 2026-09-10】 | 逻辑/联动 | 请求日志时间窗口变更不重置 `page`（其余 7 个变更点都重置）→ 收窄窗口后停在越界页显示「暂无请求日志」假死，只能逐页退回 |
+| 16-04 | P2【已修复 2026-09-10】 | 模块间/契约 | 请求日志 4 个列头（虚拟模型/供应商/输入/输出）可点排序但不在后端白名单，后端静默回退 start_time——表头箭头与实际排序不符 |
+| 16-05 | P2【已修复 2026-09-10】 | i18n | insight 五图图例 `config.label` 硬编码中文（成功/失败/输入/输出/缓存命中率/流式占比），EN 界面图例中文而同图 tooltip 已英文化——同组件语言不一 |
+| 16-06 | P2【已修复 2026-09-10】 | 逻辑/时区 | `formatBucketLabel` 用浏览器本地时区换算 X 轴标签；设置表时区 ≠ 浏览器时区时标签整体错位（默认同为上海时不可见） |
+| 16-07 | P2【已修复 2026-09-10】 | 可视化 | ThroughputChart 的 RPM（个位量级）与 TPM（万级）共用 `yAxisId="count"`——RPM 线贴底不可读，双折线名不副实 |
 | 16-08 | P3 | 逻辑/时区 | 自定义窗口的默认值/输入/展示全走浏览器本地时区，与预设周期的设置表口径不齐（与 16-06 同族不同面） |
 | 16-09 | P3 | 逻辑 | `ApiKeyRaceCard` 不接 `initialWindow`（另三卡都接）→ model/virtual-model 概览页深链 `?period=week` 后该卡仍是「天」——四卡复制粘贴漂移实例 |
 | 16-10 | P3 | 简洁 | 四张赛马卡逐字同构（各 ~65 行）可抽泛型 `MetricRaceCard`；race-card-shell:87-100 重复了 stats-section 的 `useSectionSubtitle`；不触碰 hooks 冻结接口 |
@@ -112,3 +112,13 @@ sortable-metric-table.tsx:106-179 无上限全量 map；ProviderModelRaceCard �
 ## 性能/内存轮结论
 
 无 P1/P2 性能项。查询无轮询、staleTime 5min、keepPreviousData 防切窗闪骨架；桶数有界（≤31 点）动画开销可忽略；请求日志分页上限 100 与后端 MAX_PAGE_SIZE 一致+placeholderData；唯一动作项=16-16 赛马表全量渲染（大部署）。modelOptions 构建的 O(供应商×模型) 被 useMemo 缓存，非常数热路径。结论：本域性能形态健康。
+
+## 实施进度（2026-09-10）
+
+- **16-01 已修复**：`initialWindowFromUrl` 增加 period 白名单（day/week/month/year/custom），非法值回落 day——`?period=foo` 不再穿透 switch 链产生 `new Date(NaN)` 整页 ErrorBoundary。
+- **16-02 已修复**：`virtual-model-overview` 与 `provider-overview` 补齐 idValid/detail-isError 错误态（对齐 api-key/model 两页），并给 metrics/charts/insight 加 `enabled` 门控（已删主体不再发 stats 请求）；新增 `dashboardPage.overviewNotFound*`/`backToList` 双语词条。
+- **16-03 已修复**：请求日志的时间窗口变更补 `setPage(1)`（其余 7 个变更点原本就重置，属遗漏）。
+- **16-04 已修复**：`virtualModelDisplayId`/`providerName`/`inputTokens`/`outputTokens` 四列 `enableSorting: false`（不在后端排序白名单，点了会静默回退 start_time）。
+- **16-05 已修复**：insight 五图 `config.label` 改走 `i18n.t("dashboard.*")`（与同图 tooltip 同源）；并修正 20-02 的 `zh-CN` 里 `dashboard.success/failed` 值为中文。
+- **16-06 已修复**：`formatBucketLabel` 增加 `timeZone` 参数（Intl formatToParts 取设置表时区墙钟），`TrendLineChart` 与四个 insight 图接 `useStatsTimeZone()`；补跨时区回归（上海 08:00 / 纽约 20:00 前一日）。
+- **16-07 已修复**：ThroughputChart 的 TPM 拆到独立 `yAxisId="tpm"`（RPM 个位与 TPM 万级不再同轴，RPM 线不再贴底）。

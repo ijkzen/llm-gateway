@@ -37,6 +37,11 @@ use crate::state::AppState;
 
 const LOG_RETENTION_DAYS: u64 = 30;
 const SHUTDOWN_TIMEOUT_SECS: u64 = 10;
+/// HTTP 服务优雅关停的等待上限（15-01）：SSE 日志流与流式 /v1 长连接不会
+/// 自行结束，`with_graceful_shutdown` 无超时会把收尾（scheduler.stop +
+/// worker 收尾）无限期钉死。超时后直接进入收尾（在飞连接由进程退出断开
+/// 或 Docker 兜底，优先保证任务不被硬杀）。取值留出 worker 收尾窗口。
+const HTTP_DRAIN_TIMEOUT_SECS: u64 = 8;
 /// 任务日志事件广播容量（条）：单次执行日志上限 2000 条、并发执行数默认
 /// ≤10，理论最坏 ~20000 条/瞬时——本容量不追求吞下理论峰值（超出即
 /// Lagged → worker 记截断并补溢出提示，E3 已兜底），按「worker 每 ~50 条
@@ -278,9 +283,22 @@ pub async fn run(config: Config) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(&config.bind_address).await?;
     tracing::info!("Listening on {}", config.bind_address);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // 停止接收新连接并等既有连接收尾，但设上限（长连接不结束则超时进入收尾）。
+    let serve = axum::serve(listener, app).with_graceful_shutdown(shutdown_signal());
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(HTTP_DRAIN_TIMEOUT_SECS),
+        serve,
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            tracing::warn!(
+                "HTTP 服务在 {}s 内未完成收尾（长连接未结束），继续执行调度器与任务收尾",
+                HTTP_DRAIN_TIMEOUT_SECS
+            );
+        }
+    }
 
     // Stop scheduling new runs first, then wait for in-flight jobs to finish
     // (bounded by a timeout) so jobs are not aborted mid-write.

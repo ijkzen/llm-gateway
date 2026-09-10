@@ -678,8 +678,8 @@ const zhCN = {
 		callUnit: "次",
 		used: "使用",
 		share: "占比",
-		success: "success",
-		failed: "failed",
+		success: "成功",
+		failed: "失败",
 		failureRate: "失败率",
 		tokenInput: "输入",
 		tokenOutput: "输出",
@@ -776,6 +776,9 @@ const zhCN = {
 		providerLabel: "供应商 #{{id}}",
 		virtualModelLabel: "虚拟模型 #{{id}}",
 		modelOverviewTitle: "{{provider}}・{{model}} · {{suffix}}",
+		overviewNotFoundTitle: "数据面板不可用",
+		overviewNotFoundDesc: "该主体可能已被删除，或链接地址有误。",
+		backToList: "返回列表",
 	},
 };
 

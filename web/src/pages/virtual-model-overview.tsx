@@ -1,6 +1,7 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
 import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
+import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
 import {
@@ -17,6 +18,7 @@ import {
 	useSectionSubtitle,
 	useSectionWindows,
 } from "@/components/stats-section";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
@@ -98,49 +100,72 @@ function SkeletonFallback() {
 export default function VirtualModelOverviewPage() {
 	const { t } = useTranslation();
 	const { virtualModelId: virtualModelIdParam } = useParams();
+	const navigate = useNavigate();
 	const virtualModelId = Number.parseInt(virtualModelIdParam ?? "", 10);
 	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS);
 	const subtitle = useSectionSubtitle();
 	const tz = useStatsTimeZone();
 
-	const detail = useVirtualModelDetail(Number.isFinite(virtualModelId) ? virtualModelId : null);
+	// 16-02：与 api-key/model 两页对齐——id 非法或 detail 失败（已删除）走错误态。
+	const idValid = Number.isFinite(virtualModelId);
+	const detail = useVirtualModelDetail(idValid ? virtualModelId : null);
 	const displayId =
 		detail.data?.displayId ?? t("dashboardPage.virtualModelLabel", { id: virtualModelId });
+	const keyReady = idValid && !detail.isError;
 
 	const metricsWindow = sectionWindow(windows.metrics, now, tz);
 	const callWindow = sectionWindow(windows.call, now, tz);
 	const tokenWindow = sectionWindow(windows.token, now, tz);
 	const insightWindow = sectionWindow(windows.insight, now, tz);
 
-	const vmMetrics = useVirtualModelMetrics(
-		virtualModelId,
-		metricsWindow,
-		Number.isFinite(virtualModelId),
-	);
+	const vmMetrics = useVirtualModelMetrics(virtualModelId, metricsWindow, keyReady);
 
 	// 图表桶粒度由所选时间窗口推导（分桶时区由后端按设置表解释）。
 	const callGranularity = sectionGranularity(windows.call, callWindow);
 	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
 	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
 
-	const callCharts = useDashboardCharts({
-		startTime: callWindow.startTime,
-		endTime: callWindow.endTime,
-		virtualModelId,
-		granularity: callGranularity,
-	});
-	const tokenCharts = useDashboardCharts({
-		startTime: tokenWindow.startTime,
-		endTime: tokenWindow.endTime,
-		virtualModelId,
-		granularity: tokenGranularity,
-	});
-	const insightQuery = useDashboardInsight({
-		startTime: insightWindow.startTime,
-		endTime: insightWindow.endTime,
-		virtualModelId,
-		granularity: insightGranularity,
-	});
+	const callCharts = useDashboardCharts(
+		{
+			startTime: callWindow.startTime,
+			endTime: callWindow.endTime,
+			virtualModelId,
+			granularity: callGranularity,
+		},
+		keyReady,
+	);
+	const tokenCharts = useDashboardCharts(
+		{
+			startTime: tokenWindow.startTime,
+			endTime: tokenWindow.endTime,
+			virtualModelId,
+			granularity: tokenGranularity,
+		},
+		keyReady,
+	);
+	const insightQuery = useDashboardInsight(
+		{
+			startTime: insightWindow.startTime,
+			endTime: insightWindow.endTime,
+			virtualModelId,
+			granularity: insightGranularity,
+		},
+		keyReady,
+	);
+
+	if (!keyReady) {
+		return (
+			<div className="space-y-6">
+				<PageHeader icon={Boxes} title={t("dashboardPage.overviewNotFoundTitle")} />
+				<ErrorState description={t("dashboardPage.overviewNotFoundDesc")} />
+				<div className="flex justify-center">
+					<Button variant="outline" size="sm" onClick={() => navigate("/virtual-models")}>
+						{t("dashboardPage.backToList")}
+					</Button>
+				</div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="space-y-6">

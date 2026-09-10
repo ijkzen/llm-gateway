@@ -1,6 +1,7 @@
 import { CallAnalysisCard, TokenAnalysisCard } from "@/components/analysis-cards";
 import { ApiKeyRaceCard } from "@/components/api-key-race/ApiKeyRaceCard";
 import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card";
+import { ErrorState } from "@/components/error-state";
 import { InsightAnalysisCard } from "@/components/insight-analysis-card";
 import { PageHeader } from "@/components/page-header";
 import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
@@ -18,6 +19,7 @@ import {
 	useSectionSubtitle,
 	useSectionWindows,
 } from "@/components/stats-section";
+import { Button } from "@/components/ui/button";
 import { useDashboardInsight } from "@/hooks/use-dashboard-insight";
 import { useDashboardCharts } from "@/hooks/use-dashboard-stats";
 import { type ProviderModelRankItem, useProviderModelRace } from "@/hooks/use-provider-model-race";
@@ -73,14 +75,18 @@ function InternalModelRaceTable({
 export default function ProviderOverviewPage() {
 	const { t } = useTranslation();
 	const { providerId: providerIdParam } = useParams();
+	const navigate = useNavigate();
 	const providerId = Number.parseInt(providerIdParam ?? "", 10);
 	const { windows, now, setWindow } = useSectionWindows(SECTION_KEYS);
 	const subtitle = useSectionSubtitle();
 	const tz = useStatsTimeZone();
 
-	const providerDetail = useProviderDetail(Number.isFinite(providerId) ? providerId : null);
+	// 16-02：与 api-key/model 两页对齐——id 非法或 detail 失败（已删除）走错误态。
+	const idValid = Number.isFinite(providerId);
+	const providerDetail = useProviderDetail(idValid ? providerId : null);
 	const providerName =
 		providerDetail.data?.name ?? t("dashboardPage.providerLabel", { id: providerId });
+	const keyReady = idValid && !providerDetail.isError;
 
 	const metricsWindow = sectionWindow(windows.metrics, now, tz);
 	const callWindow = sectionWindow(windows.call, now, tz);
@@ -92,34 +98,53 @@ export default function ProviderOverviewPage() {
 	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
 	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
 
-	const providerMetrics = useProviderMetrics(
-		providerId,
-		metricsWindow,
-		Number.isFinite(providerId),
-	);
+	const providerMetrics = useProviderMetrics(providerId, metricsWindow, keyReady);
 	// 订阅制 + 开启用量时才有预估；非订阅制后端返回 400，此处直接禁用。
 	const showUsage =
 		providerDetail.data?.billingMode === 1 && usageEnabled(providerDetail.data.extra);
 	const usageEstimate = useUsageEstimate(showUsage ? providerId : null);
 
-	const callCharts = useDashboardCharts({
-		startTime: callWindow.startTime,
-		endTime: callWindow.endTime,
-		providerId,
-		granularity: callGranularity,
-	});
-	const tokenCharts = useDashboardCharts({
-		startTime: tokenWindow.startTime,
-		endTime: tokenWindow.endTime,
-		providerId,
-		granularity: tokenGranularity,
-	});
-	const insightQuery = useDashboardInsight({
-		startTime: insightWindow.startTime,
-		endTime: insightWindow.endTime,
-		providerId,
-		granularity: insightGranularity,
-	});
+	const callCharts = useDashboardCharts(
+		{
+			startTime: callWindow.startTime,
+			endTime: callWindow.endTime,
+			providerId,
+			granularity: callGranularity,
+		},
+		keyReady,
+	);
+	const tokenCharts = useDashboardCharts(
+		{
+			startTime: tokenWindow.startTime,
+			endTime: tokenWindow.endTime,
+			providerId,
+			granularity: tokenGranularity,
+		},
+		keyReady,
+	);
+	const insightQuery = useDashboardInsight(
+		{
+			startTime: insightWindow.startTime,
+			endTime: insightWindow.endTime,
+			providerId,
+			granularity: insightGranularity,
+		},
+		keyReady,
+	);
+
+	if (!keyReady) {
+		return (
+			<div className="space-y-6">
+				<PageHeader icon={Boxes} title={t("dashboardPage.overviewNotFoundTitle")} />
+				<ErrorState description={t("dashboardPage.overviewNotFoundDesc")} />
+				<div className="flex justify-center">
+					<Button variant="outline" size="sm" onClick={() => navigate("/providers")}>
+						{t("dashboardPage.backToList")}
+					</Button>
+				</div>
+			</div>
+		);
+	}
 
 	return (
 		<div className="space-y-6">

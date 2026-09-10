@@ -4,7 +4,8 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, header};
-use sea_orm::{ActiveModelTrait, Set};
+use llm_gateway::entity::user;
+use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -117,6 +118,49 @@ async fn init_flow_creates_first_user_and_session() {
     .await;
     assert_eq!(status, 400);
     assert_eq!(body["code"], "INVALID_INPUT");
+}
+
+/// 12-01 回归：并发双初始化（不同用户名）只能建一个用户——原子「表空才插入」
+/// 由数据库保证，单用户假设不被破坏。
+#[tokio::test]
+async fn concurrent_init_creates_exactly_one_user() {
+    let (app, db) = setup_app().await;
+    let a = app.clone();
+    let b = app.clone();
+    let h1 = tokio::spawn(async move {
+        send_json(
+            a,
+            "POST",
+            "/api/auth/init",
+            json!({ "username": "Admin", "password": PASSWORD }),
+        )
+        .await
+    });
+    let h2 = tokio::spawn(async move {
+        send_json(
+            b,
+            "POST",
+            "/api/auth/init",
+            json!({ "username": "Other", "password": PASSWORD }),
+        )
+        .await
+    });
+    let (r1, r2) = (h1.await.unwrap(), h2.await.unwrap());
+    // 两者恰好一个成功（200 + 会话），另一个 400（已初始化）。
+    let statuses = [r1.0, r2.0];
+    assert_eq!(
+        statuses.iter().filter(|s| **s == 200).count(),
+        1,
+        "并发 init 应恰好一个成功：{statuses:?}"
+    );
+    assert_eq!(
+        statuses.iter().filter(|s| **s == 400).count(),
+        1,
+        "另一个应被拒：{statuses:?}"
+    );
+    // 库里只有一个用户。
+    let count = user::Entity::find().count(&db).await.unwrap();
+    assert_eq!(count, 1, "并发初始化不得建出两个用户");
 }
 
 #[tokio::test]

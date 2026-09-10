@@ -787,6 +787,9 @@ const en: Translation = {
 		providerLabel: "Provider #{{id}}",
 		virtualModelLabel: "Virtual Model #{{id}}",
 		modelOverviewTitle: "{{provider}}·{{model}} · {{suffix}}",
+		overviewNotFoundTitle: "Overview Unavailable",
+		overviewNotFoundDesc: "This subject may have been deleted, or the link is incorrect.",
+		backToList: "Back to list",
 	},
 };
 

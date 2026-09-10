@@ -30,4 +30,13 @@ describe("formatBucketLabel X 轴标签", () => {
 		const jan = new Date(2025, 0, 1).getTime();
 		expect(formatBucketLabel(jan, "year", "zh")).toBe("2025年");
 	});
+
+	it("formatBucketLabel 按 IANA 时区取墙钟（16-06）", () => {
+		// 2026-08-31T00:00:00Z：上海为 08:00，纽约为 20:00（前一日）。
+		const utcMidnight = Date.UTC(2026, 7, 31, 0, 0, 0);
+		expect(formatBucketLabel(utcMidnight, "hour", "zh", "Asia/Shanghai")).toBe("08:00");
+		expect(formatBucketLabel(utcMidnight, "hour", "zh", "America/New_York")).toBe("20:00");
+		expect(formatBucketLabel(utcMidnight, "day", "zh", "Asia/Shanghai")).toBe("8月31日");
+		expect(formatBucketLabel(utcMidnight, "day", "zh", "America/New_York")).toBe("8月30日");
+	});
 });

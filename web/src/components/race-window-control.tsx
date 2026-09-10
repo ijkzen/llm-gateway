@@ -40,9 +40,16 @@ export interface RaceWindowState {
 	appliedCustom: { startTime: number; endTime: number } | null;
 }
 
+/** 合法的 period 取值（URL 参数白名单：非法值回落 day，16-01）。 */
+const PERIOD_WHITELIST = ["day", "week", "month", "year", "custom"] as const;
+
 /** 从 URL query 解析初始时间段（缺省当天）；列表页/赛马行跳转时携带。 */
 export function initialWindowFromUrl(searchParams: URLSearchParams): RaceWindowState {
-	const period = (searchParams.get("period") as RacePeriod | "custom" | null) ?? "day";
+	const raw = searchParams.get("period");
+	const period =
+		raw !== null && (PERIOD_WHITELIST as readonly string[]).includes(raw)
+			? (raw as RacePeriod | "custom")
+			: "day";
 	const offset = Number.parseInt(searchParams.get("offset") ?? "0", 10) || 0;
 	const now = Date.now();
 	const startTime = Number(searchParams.get("startTime")) || now - 3_600_000;

@@ -11,7 +11,7 @@
 | 17-03 | P2【已修复 2026-09-10】 | 逻辑 | `useMatchTemplate` 声称吞 404 但 `await` 在 try 外：未命中模板（输入 URL 的绝大多数情况）ky 抛错 → 每个键击 2 次请求+静默 error 态，且无防抖 |
 | 17-04 | P2【已修复 2026-09-10】 | i18n | 使用了不存在的 key `apiKeys.showKeyFailed`（两 locale 均无）——取明文失败时 toast 标题显示原始 key 字面量 |
 | 17-05 | P2【已修复 2026-09-10】 | 逻辑/健壮 | ProviderDetail 对 `extra`/`customHeader` 无保护 `JSON.parse`：密钥丢失时后端透传密文（非 JSON）→ 渲染抛错整页 ErrorBoundary |
-| 17-06 | P2 | 逻辑/交互 | Add 弹窗「手动/待确认」候选卡整卡可点，卡内数字输入无 stopPropagation——点击/回车冒泡触发跳转卸载输入框，这两个态的数字字段根本填不进去（现有测试全用 fireEvent.change 故未暴露） |
+| 17-06 | P2【已修复 2026-09-10】 | 逻辑/交互 | Add 弹窗「手动/待确认」候选卡整卡可点，卡内数字输入无 stopPropagation——点击/回车冒泡触发跳转卸载输入框，这两个态的数字字段根本填不进去（现有测试全用 fireEvent.change 故未暴露） |
 | 17-07 | P3 | 逻辑/校验 | 前端代理地址校验缺 `@` 拒绝规则，与后端 validate_proxy 口径不齐（只能吃服务端报错） |
 | 17-08 | P3 | 规范 | ProviderEditDialog:308 模板候选文案用 `truncate`，违反「单行截断一律 MidEllipsis」约定（全 scope 唯一一处） |
 | 17-09 | P3 | 简洁 | ApiKeyCell 详情拉取失败静默显示掩码无提示（与 ProviderDetail 的 toast 不一致） |
@@ -177,3 +177,5 @@ AddProviderModelsDialog.tsx:125-127 注释称防抖，:187-192 同步 setState�
 - **17-03 已修复**：`useMatchTemplate` 的 `await api.post(...)` 移入 try、queryKey/enabled 走 300ms 防抖值（`useDebouncedValue`）——未命中模板（404）不再逐键产生失败 query，也不再放大为双请求。
 - **17-04 已修复**：`ProviderDetail` 取明文失败的 toast 标题由不存在的 `apiKeys.showKeyFailed` 改为 `common.loadFailed`。
 - **17-05 已修复**：`ProviderDetail` 新增 `safeParseObject`，`extra`/`customHeader` 解析失败（密文透传）不再渲染该块、整页不再崩；空对象仍与旧行为一致不渲染；移除原来的双次 `JSON.parse`。
+
+- **17-06 已修复**：候选卡数字输入区容器补 `onClick`/`onKeyDown` stopPropagation——manual/pending 态的数字字段不再因点击/回车冒泡触发 jump 而被卸载。

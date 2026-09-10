@@ -259,6 +259,8 @@ export function RequestLogsTable() {
 			{
 				accessorKey: "virtualModelDisplayId",
 				meta: { title: t("requestLogs.virtualModel") },
+				// 后端排序白名单不含该列（16-04）：禁用表头排序，避免箭头与实际排序不符。
+				enableSorting: false,
 				header: ({ column }) => (
 					<DataTableColumnHeader
 						column={column}
@@ -276,6 +278,8 @@ export function RequestLogsTable() {
 				// 供应商名称由后端 LEFT JOIN provider 补出；缺失（供应商已删）时兜底 #id。
 				accessorKey: "providerName",
 				meta: { title: t("requestLogs.provider") },
+				// 后端排序白名单不含该列（16-04）：禁用表头排序，避免箭头与实际排序不符。
+				enableSorting: false,
 				header: ({ column }) => (
 					<DataTableColumnHeader
 						column={column}
@@ -335,6 +339,8 @@ export function RequestLogsTable() {
 			{
 				accessorKey: "inputTokens",
 				meta: { title: t("requestLogs.inputTokens") },
+				// 后端排序白名单不含该列（16-04）：禁用表头排序，避免箭头与实际排序不符。
+				enableSorting: false,
 				header: ({ column }) => (
 					<DataTableColumnHeader
 						column={column}
@@ -347,6 +353,8 @@ export function RequestLogsTable() {
 			{
 				accessorKey: "outputTokens",
 				meta: { title: t("requestLogs.outputTokens") },
+				// 后端排序白名单不含该列（16-04）：禁用表头排序，避免箭头与实际排序不符。
+				enableSorting: false,
 				header: ({ column }) => (
 					<DataTableColumnHeader
 						column={column}
@@ -489,7 +497,11 @@ export function RequestLogsTable() {
 					<RaceWindowControl
 						state={timeWindow}
 						now={now}
-						onChange={(patch) => setTimeWindow((prev) => ({ ...prev, ...patch }))}
+						onChange={(patch) => {
+							// 窗口变更同样重置分页（16-03：收窄窗口后停在越界页会假死）。
+							setTimeWindow((prev) => ({ ...prev, ...patch }));
+							setPage(1);
+						}}
 					/>
 					<div className="ml-auto">
 						<DataTableViewOptions table={table} />

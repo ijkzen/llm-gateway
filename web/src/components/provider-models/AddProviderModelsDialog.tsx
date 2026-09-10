@@ -592,7 +592,13 @@ export function AddProviderModelsDialog({
 															/>
 															<MatchStateLabel state={candidate.matchState} />
 														</div>
-														<div className="mt-2.5 grid grid-cols-2 gap-2">
+														{/* 17-06：数字输入区阻止冒泡——候选卡整卡可点（jump 切 Tab），
+														    不拦截时点击/回车会卸载输入框，字段根本填不进去。 */}
+														<div
+															className="mt-2.5 grid grid-cols-2 gap-2"
+															onClick={(event) => event.stopPropagation()}
+															onKeyDown={(event) => event.stopPropagation()}
+														>
 															<div className="space-y-1">
 																<Label className="text-xs text-muted-foreground">
 																	{t("providerModels.contextLength")}

@@ -6,7 +6,7 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 15-01 | P2 | 逻辑/关停 | 优雅关停无超时：SSE 日志流与流式 /v1 长连接钉死 `serve`，`scheduler.stop()`/worker 10s 收尾永不执行（Docker SIGKILL 兜底），与 AGENTS.md 关停承诺不符 |
+| 15-01 | P2【已修复 2026-09-10】 | 逻辑/关停 | 优雅关停无超时：SSE 日志流与流式 /v1 长连接钉死 `serve`，`scheduler.stop()`/worker 10s 收尾永不执行（Docker SIGKILL 兜底），与 AGENTS.md 关停承诺不符 |
 | 15-02 | P3 | 配置/观察 | APP_ENV 非法值静默回退 Dev → 生产容器内相对路径新建空库「数据消失」——**已拍板保持现状**（有测试固化；登记观察，用户知悉事故面） |
 | 15-03 | P3 | 校验 | `validate_backup` 不校验成员唯一性（同模型重复引用），导入撞 `uq_virtual_model_items_model_id` 返回裸 SQL 错误 |
 | 15-04 | P3 | 健壮 | 备份导出解密失败一律 `unwrap_or_default()` 空串（spec 认可的设计），但与 11-13（导入不校验空 apiKey）串联成「密钥全空的备份能无声导出并成功导入」链 |
@@ -21,7 +21,7 @@
 
 ## 各条证据
 
-### 15-01 优雅关停无超时，长连接钉死收尾（P2，关停时序）
+### 15-01 优雅关停无超时，长连接钉死收尾（P2，关停时序）【已修复 2026-09-10】
 
 lib.rs:281-290：`axum::serve(...).with_graceful_shutdown(shutdown_signal()).await?` ——该语义是「停止 accept + 等全部既有连接自然结束」，**无超时**；`scheduler.stop()` 与 `worker.shutdown(10s)` 排在 serve 返回之后。两条长连接面：①SSE 日志流（cron_jobs.rs:376-378，BroadcastStream 只在 log_tx 全 drop 后结束，而 AppState 持有 log_tx 到 run 返回——循环等待）；②流式 /v1 转发（单条流可达分钟级）。任一在飞即 SIGTERM 后 serve 不返回 → 10s 收尾永远不执行 → Docker stop 超时 SIGKILL 硬杀，in-flight 任务中断——恰是 lib.rs:285-286 注释自称要避免的。缓解面=SIGKILL 兜底不死进程，但「优雅关闭」名存实亡。默认解：`tokio::time::timeout` 包 serve（如 8s，留出 worker 收尾窗口），超时后不再等连接直接进收尾；或给 SSE/流式接 shutdown 通知（改动大，非首选）。
 
@@ -88,3 +88,7 @@ response.rs:68-70 `db_error(e.to_string())`——SeaORM DbErr 部分变体 Displ
 ## 性能/内存轮结论
 
 无 P1/P2。备份导出六表全量内存组装（O(P×M)/O(V×I) 内存 filter，配置表十~百量级无碍）；导入逐行 insert 同事务；config 纯 env 解析；启动序列主体串行、快照预热异步化（就绪优先）；setup_logging 双 JSON layer+非阻塞 appender 常量开销。结论：本域无性能负债。
+
+## 实施进度（2026-09-10）
+
+- **15-01 已修复**：`lib.rs::run` 用 `tokio::time::timeout(HTTP_DRAIN_TIMEOUT_SECS=8s)` 包住 `axum::serve(..).with_graceful_shutdown(..)`，超时记 warn 后继续执行 `scheduler.stop()` 与 worker 10s 收尾——SSE 日志流/流式 /v1 长连接不再把收尾无限期钉死（原先只能等 Docker SIGKILL）。

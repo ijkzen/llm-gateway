@@ -6,7 +6,7 @@
 
 | 编号 | 严重度 | 维度 | 一句话 |
 | --- | --- | --- | --- |
-| 12-01 | P3 | 逻辑/竞态 | init 为 check-then-act：并发双初始化（不同用户名）可建两个用户，单用户假设破坏（username UNIQUE 只挡同名） |
+| 12-01 | P3【已修复 2026-09-10】 | 逻辑/竞态 | init 为 check-then-act：并发双初始化（不同用户名）可建两个用户，单用户假设破坏（username UNIQUE 只挡同名） |
 | 12-02 | P3 | 安全观察 | 会话 Cookie 无 `Secure` 属性：HTTPS 部署下若经 http:// 访问会明文带 cookie（自部署内网 HTTP 是常态，记观察） |
 | 12-03 | P3 | 逻辑/边界 | `crypto::mask` 用 bytes 判长、chars 切片：多字节密钥（如 4 个 CJK 字符=12 bytes）head/tail 重叠，整体泄漏（实际 API key 均 ASCII，窄边界） |
 | 12-04 | P3 | 逻辑/口径 | `decrypt_or_passthrough` 对「带 enc:v1: 前缀但解不开」（密钥丢失/轮换）的密文也原样透传当明文用——只对无前缀历史明文正确；与写侧「解密失败必须 Err」教训不对称 |
@@ -18,7 +18,7 @@
 
 ## 各条证据
 
-### 12-01 init check-then-act 竞态（P3，竞态）
+### 12-01 init check-then-act 竞态（P3，竞态）【已修复 2026-09-10】
 
 routes/auth.rs:102-112 先 `Entity::find().count()` 判空，:128 再 insert。两个并发 init 请求（不同用户名）可同时通过 count==0 检查并各自插入成功——`user.username` 有 UNIQUE（entity/user.rs `#[sea_orm(unique)]`）只挡同名。后果：单用户系统出现两行用户，两个会话各自有效、change-password 各改各的。窗口=首次初始化瞬间，自部署场景一次初始化，P3。默认解：check-then-act 改为「直接 insert + 唯一约束兜底」（如 user 表加单行约束或以固定 id=1 upsert），或初始化接口加进程内 OnceLock 门。
 
@@ -77,3 +77,7 @@ session_user（auth/mod.rs:100-118）= session 主键点查 + user 主键点查�
 ## 性能/内存轮结论
 
 无 P1/P2。/v1 鉴权=单条索引查询（key_hash）；/api 鉴权=两次主键点查（12-08 微观察）；argon2 仅在登录/改密/init 触发（每次数百 ms，登录无限流但慢哈希天然限速，暴力破解 6+ 位密码不现实）；derive_key 为单次 SHA-256 廉价；delete_expired_sessions 仅在 login 触发且 session 表极小。结论：鉴权热路径开销可忽略，无需任何结构性改动；唯一可做的是 12-08 的 JOIN 合并（图后顺手项）。
+
+## 实施进度（2026-09-10）
+
+- **12-01 已修复**：`routes/auth.rs::init` 由「先 count 再 insert」改为单条原子语句 `INSERT INTO user (...) SELECT ... WHERE NOT EXISTS (SELECT 1 FROM user)`——条件在写入路径内求值，并发双初始化（不同用户名）由数据库保证恰好一个成功；插入被挡下时按实际状态给出「已初始化」或「同名用户已存在」文案。回归测试 `concurrent_init_creates_exactly_one_user`（并发两请求恰好一 200 一 400，库里 user 计数为 1）。

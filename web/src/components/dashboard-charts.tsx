@@ -6,6 +6,7 @@ import {
 } from "@/components/ui/chart";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ModelValue, TrendPoint } from "@/hooks/use-dashboard-stats";
+import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import type { ChartGranularity } from "@/lib/race-period";
 import { type Locale, cn, localeOf, middleEllipsis, topWithOther } from "@/lib/utils";
 import { useState } from "react";
@@ -31,6 +32,22 @@ export const CHART_COLORS = [
 	"hsl(var(--chart-3))",
 	"hsl(var(--chart-4))",
 	"hsl(var(--chart-5))",
+] as const;
+
+/** 英文月份缩写（Intl 传统格式的输出不随 timeZone 变，这里只用数字月份映射）。 */
+const MONTHS_EN = [
+	"Jan",
+	"Feb",
+	"Mar",
+	"Apr",
+	"May",
+	"Jun",
+	"Jul",
+	"Aug",
+	"Sep",
+	"Oct",
+	"Nov",
+	"Dec",
 ] as const;
 
 export const OTHER_LABEL = "其他";
@@ -68,27 +85,41 @@ export function toRankedModels(items: ModelValue[], other: string): ChartItem[] 
 	});
 }
 
-/** 按桶粒度格式化 X 轴标签：小时 → HH:00，天 → M月d日，月 → yyyy年M月，年 → yyyy年。 */
+/**
+ * 按桶粒度格式化 X 轴标签：小时 → HH:00，天 → M月d日，月 → yyyy年M月，年 → yyyy年。
+ * `timeZone`：设置表口径时区（16-06）——后端桶边界按设置表时区对齐，标签同为该
+ * 时区下的墙钟值；缺省用浏览器时区（无设置来源的调用场景）。
+ */
 export function formatBucketLabel(
 	bucketStart: number,
 	granularity: ChartGranularity,
 	locale: Locale,
+	timeZone?: string,
 ): string {
 	const date = new Date(bucketStart);
 	const zh = locale === "zh";
+	const parts = new Intl.DateTimeFormat("en-US", {
+		timeZone,
+		year: "numeric",
+		month: "numeric",
+		day: "numeric",
+		hour: "numeric",
+		hour12: false,
+	}).formatToParts(date);
+	const part = (type: Intl.DateTimeFormatPartTypes): number =>
+		Number(parts.find((p) => p.type === type)?.value ?? 0);
+	const [year, month, day] = [part("year"), part("month"), part("day")];
 	switch (granularity) {
-		case "hour":
-			return `${date.getHours().toString().padStart(2, "0")}:00`;
+		case "hour": {
+			const hour = part("hour") % 24;
+			return `${hour.toString().padStart(2, "0")}:00`;
+		}
 		case "day":
-			return zh
-				? `${date.getMonth() + 1}月${date.getDate()}日`
-				: date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+			return zh ? `${month}月${day}日` : `${MONTHS_EN[month - 1]} ${day}`;
 		case "month":
-			return zh
-				? `${date.getFullYear()}年${date.getMonth() + 1}月`
-				: date.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+			return zh ? `${year}年${month}月` : `${MONTHS_EN[month - 1]} ${year}`;
 		case "year":
-			return zh ? `${date.getFullYear()}年` : `${date.getFullYear()}`;
+			return zh ? `${year}年` : `${year}`;
 	}
 }
 
@@ -123,9 +154,10 @@ export function TrendLineChart({
 	granularity,
 }: TrendLineChartProps) {
 	const { t, i18n } = useTranslation();
+	const tz = useStatsTimeZone();
 	const resolvedGranularity = granularity ?? inferGranularity(data.map((p) => p.bucketStart));
 	const chartData = data.map((point) => ({
-		label: formatBucketLabel(point.bucketStart, resolvedGranularity, localeOf(i18n.language)),
+		label: formatBucketLabel(point.bucketStart, resolvedGranularity, localeOf(i18n.language), tz),
 		value: point.value,
 	}));
 	// 标签密度自适应：约每 6 个点显示一个标签，避免 24 点小时图过密 / 7 点周图过疏。
