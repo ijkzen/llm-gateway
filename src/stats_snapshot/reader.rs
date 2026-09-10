@@ -118,17 +118,21 @@ fn push_live(live: &mut Vec<(i64, i64)>, start: i64, end: i64) {
 /// 批量取快照行（按帧集合过滤）：
 /// 返回 (start_time, entity_type, entity, metric_type, metric_value) 行流，
 /// start_time 供调用方把行归属回自己的桶/段。
-/// entity 过滤可选：Some 时只取该主体键（trend 单主体过滤），None 取全量主体
-/// （distribution 需要逐主体）。
+/// 主体过滤：`entity`（单主体精确）与 `entities`（主体集合，赛马单侧过滤）
+/// 互斥传入，都为空时取全量主体（distribution 需要逐主体）。
 pub(crate) async fn snapshot_rows(
     db: &DatabaseConnection,
     level: Level,
     frames: &[Frame],
     entity_type: &str,
     entity: Option<&str>,
+    entities: Option<&[String]>,
     metrics: &[&str],
 ) -> anyhow::Result<Vec<(i64, String, String, String, f64)>> {
     if frames.is_empty() {
+        return Ok(Vec::new());
+    }
+    if entities.is_some_and(|e| e.is_empty()) {
         return Ok(Vec::new());
     }
     let starts = frames
@@ -150,6 +154,14 @@ pub(crate) async fn snapshot_rows(
     );
     if let Some(entity) = entity {
         sql.push_str(&format!(" AND entity = '{entity}'"));
+    }
+    if let Some(entities) = entities {
+        let in_list = entities
+            .iter()
+            .map(|e| format!("'{e}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&format!(" AND entity IN ({in_list})"));
     }
     let rows = db
         .query_all_raw(Statement::from_string(DbBackend::Sqlite, sql))

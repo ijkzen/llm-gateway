@@ -182,6 +182,7 @@ pub(crate) async fn summary(
             frames,
             snap::ENTITY_WHOLE,
             Some(""),
+            None,
             &SUMMARY_METRICS,
         )
         .await
@@ -427,6 +428,7 @@ async fn charts_merge(
             frames,
             entity_type,
             exact_entity.as_deref(),
+            None,
             &["calls", "tokens_all"],
         )
         .await
@@ -575,6 +577,7 @@ async fn model_distribution(
             frames,
             entity_type,
             exact_entity.as_deref(),
+            None,
             &["calls", "tokens_all"],
         )
         .await

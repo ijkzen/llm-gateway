@@ -65,9 +65,10 @@ pub(crate) async fn provider_rank(
         sql.push_str(" GROUP BY r.provider_id");
         (sql, params)
     };
-    let prims = super::rank_snap::merged_prims(db, &cov, snap_type, snap_exact.as_deref(), grouped)
-        .await
-        .map_err(response::db_error)?;
+    let prims =
+        super::rank_snap::merged_prims(db, &cov, snap_type, snap_exact.as_deref(), None, grouped)
+            .await
+            .map_err(response::db_error)?;
 
     // 展示名解析 + 组装 + 排序（平局序按 id 升序，近似旧 SQL 分组序）。
     let mut keys: Vec<String> = prims.keys().cloned().collect();
@@ -160,9 +161,10 @@ pub(crate) async fn virtual_model_rank(
         sql.push_str(" GROUP BY r.virtual_model_id");
         (sql, params)
     };
-    let prims = super::rank_snap::merged_prims(db, &cov, snap::ENTITY_VIRTUAL_MODEL, None, grouped)
-        .await
-        .map_err(response::db_error)?;
+    let prims =
+        super::rank_snap::merged_prims(db, &cov, snap::ENTITY_VIRTUAL_MODEL, None, None, grouped)
+            .await
+            .map_err(response::db_error)?;
 
     let mut keys: Vec<String> = prims.keys().cloned().collect();
     keys.sort_by_key(|k| k.parse::<i64>().unwrap_or(i64::MAX));
@@ -247,8 +249,9 @@ pub(crate) async fn provider_model_rank(
     let supported = query.virtual_model_id.is_none() && query.api_key.is_none();
     demote(&mut cov, start, end, supported);
 
-    // 精确形态（providerId + modelId）：model 行取该 pm；键解析失败（pm 已删）
-    // 快照按全量 model 行取数会把其它模型加进来 —— 整窗兑底（subject 不变量）。
+    // 过滤形态与快照主体集合：∅ 全量；providerId+modelId 精确取该 pm 键（键
+    // 解析失败整窗兑底）；单侧（仅 providerId 或仅 modelId）取该侧下全部 pm
+    // 键集合 —— 快照只读集合内主体行，避免全量 model 行混入其它供应商/模型。
     let exact_shape = matches!(
         (query.provider_id, query.model_id.as_deref()),
         (Some(_), Some(_))
@@ -260,6 +263,22 @@ pub(crate) async fn provider_model_rank(
     if exact_shape {
         snap::demote_if_unresolved(&mut cov, start, end, snap::ENTITY_MODEL, exact.as_deref());
     }
+    let entities: Option<Vec<String>> = if exact_shape {
+        None
+    } else {
+        match (query.provider_id, query.model_id.as_deref()) {
+            (Some(_), None) | (None, Some(_)) => {
+                let keys = snap::resolve_pm_keys_for_filter(
+                    db,
+                    query.provider_id,
+                    query.model_id.as_deref(),
+                )
+                .await;
+                Some(keys)
+            }
+            _ => None,
+        }
+    };
     let provider_filter = query.provider_id;
 
     let prim_list = rank_snap::prim_select_list();
@@ -282,10 +301,16 @@ pub(crate) async fn provider_model_rank(
         sql.push_str(" GROUP BY key");
         (sql, params)
     };
-    let prims =
-        super::rank_snap::merged_prims(db, &cov, snap::ENTITY_MODEL, exact.as_deref(), grouped)
-            .await
-            .map_err(response::db_error)?;
+    let prims = super::rank_snap::merged_prims(
+        db,
+        &cov,
+        snap::ENTITY_MODEL,
+        exact.as_deref(),
+        entities.as_deref(),
+        grouped,
+    )
+    .await
+    .map_err(response::db_error)?;
 
     // 展示解析：pm 键 → (供应商 id/名, 模型串, pk)；raw 键按孤儿行解析。
     let keys: Vec<String> = prims.keys().cloned().collect();
@@ -470,7 +495,7 @@ pub(crate) async fn virtual_model_member_rank(
     };
     // 快照侧先取全部 vm_member 行，再按 vm 前缀过滤（与兑底键同域 "vm,pm"）。
     let mut traffic =
-        super::rank_snap::merged_prims(db, &cov, snap::ENTITY_VM_MEMBER, None, grouped)
+        super::rank_snap::merged_prims(db, &cov, snap::ENTITY_VM_MEMBER, None, None, grouped)
             .await
             .map_err(response::db_error)?;
     traffic.retain(|key, _| key.starts_with(&member_key));
@@ -659,7 +684,7 @@ pub(crate) async fn api_key_rank(
     };
     let prim_names: Vec<&str> = snap::success_prims().map(|(m, _)| m).collect();
     for (level, frames) in &by_level {
-        let rows = snap::snapshot_rows(db, *level, frames, snap_type, None, &prim_names)
+        let rows = snap::snapshot_rows(db, *level, frames, snap_type, None, None, &prim_names)
             .await
             .map_err(|e| response::db_error(e.to_string()))?;
         for (_, _, entity, metric, value) in rows {

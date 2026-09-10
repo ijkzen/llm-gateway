@@ -254,6 +254,7 @@ pub(crate) async fn insight(
             frames,
             entity_type,
             exact_entity.as_deref(),
+            None,
             &SERIES_METRICS,
         )
         .await
@@ -452,7 +453,14 @@ pub(crate) async fn insight(
             return Vec::new();
         }
         let mut p_rows: std::collections::BTreeMap<i64, [f64; 4]> = Default::default();
-        // 整闭桶（与查询粒度同层）的 p 标量行读取；跨层（细帧）不叠加。
+        // 同层帧（与查询粒度同层）的 p 标量落桶；跨层细帧（day 查询下今日拆出
+        // 的小时帧）不覆盖写，改为按时长加权并入 p_rows（分位不可加，加权均值
+        // 是小帧→粗桶的合并口径）；未闭段（当前小时）由下方实时扫描补齐。
+        let same_level = match window.granularity {
+            Granularity::Hour => Some(snap::Level::Hour),
+            Granularity::Day => Some(snap::Level::Day),
+            _ => None,
+        };
         let prims = [
             format!("{p_base}_p50"),
             format!("{p_base}_p90"),
@@ -460,71 +468,128 @@ pub(crate) async fn insight(
             format!("{p_base}_p99"),
         ];
         let prim_refs: Vec<&str> = prims.iter().map(|s| s.as_str()).collect();
+        // 跨层细帧的加权累加器：idx → (Σ 分位×时长 ×4, 各指标时长和 ×4)。
+        let mut fine_merge: std::collections::BTreeMap<i64, ([f64; 4], [i64; 4])> =
+            Default::default();
+        // 细帧已覆盖时长（按桶）：用于求实时兜底的剩余权重。
+        let mut fine_covered: std::collections::BTreeMap<i64, i64> = Default::default();
         for (level, frames) in &by_level {
             if !matches!(*level, snap::Level::Hour | snap::Level::Day) {
                 continue;
             }
-            let rows = snap::snapshot_rows(db, *level, frames, entity_type, exact, &prim_refs)
-                .await
-                .unwrap_or_default();
-            for (start, _, _, metric, value) in rows {
-                let idx = (start + off_ms).div_euclid(window.bucket_ms);
-                if let Some(pos) = prim_refs.iter().position(|m| *m == metric) {
-                    let entry = p_rows.entry(idx).or_insert([0.0; 4]);
-                    entry[pos] = value;
+            let rows =
+                snap::snapshot_rows(db, *level, frames, entity_type, exact, None, &prim_refs)
+                    .await
+                    .unwrap_or_default();
+            if Some(*level) == same_level {
+                for (start, _, _, metric, value) in rows {
+                    let idx = (start + off_ms).div_euclid(window.bucket_ms);
+                    if let Some(pos) = prim_refs.iter().position(|m| *m == metric) {
+                        let entry = p_rows.entry(idx).or_insert([0.0; 4]);
+                        entry[pos] = value;
+                    }
                 }
-            }
-        }
-        // 未完全闭桶（缺 p 标量）的桶：实时取该桶∩窗口原始值算分位。
-        for bucket in window.bucket_range() {
-            if p_rows.contains_key(&bucket) {
                 continue;
             }
-            let b_start = window.bucket_start_ms(bucket);
-            let b_end = b_start + window.bucket_ms;
-            let s = b_start.max(window.start);
-            let e = b_end.min(window.end);
+            for (start, _, _, metric, value) in rows {
+                let Some(pos) = prim_refs.iter().position(|m| *m == metric) else {
+                    continue;
+                };
+                let Some(frame) = frames.iter().find(|f| f.start == start) else {
+                    continue;
+                };
+                let overlap = (frame.end.min(window.end) - frame.start.max(window.start)).max(0);
+                if overlap <= 0 {
+                    continue;
+                }
+                let idx = (start + off_ms).div_euclid(window.bucket_ms);
+                let entry = fine_merge.entry(idx).or_insert(([0.0; 4], [0; 4]));
+                entry.0[pos] += value * overlap as f64;
+                entry.1[pos] += overlap;
+                let covered = fine_covered.entry(idx).or_insert(0);
+                *covered += overlap;
+            }
+        }
+        // 细帧未覆盖的剩余部分（当前未闭小时等）：实时取原始值算分位，按剩余
+        // 时长与细帧加权合并（分位不可加，加权均值是小帧→粗桶的合并口径）。
+        // coverage.live 各段两两不相交，逐段并入所在桶。
+        for (s, e) in &coverage.live {
             if e <= s {
                 continue;
             }
-            let mut values: Vec<f64> = Vec::new();
-            let mut params: Vec<sea_orm::Value> = vec![s.into(), e.into()];
-            let mut where_sql =
-                String::from("r.start_time >= ? AND r.start_time < ? AND r.success = 1");
-            where_sql.push_str(extra_cond);
-            where_sql.push_str(&filter_sql);
-            for v in filter_params.iter() {
-                params.push(v.clone());
-            }
-            let sql = format!("SELECT {value_sql} AS value FROM request r WHERE {where_sql}");
-            if let Ok(rows) = db
-                .query_all_raw(Statement::from_sql_and_values(
-                    DbBackend::Sqlite,
-                    sql,
-                    params,
-                ))
-                .await
-            {
-                for row in rows {
-                    if let Some(v) = row
-                        .try_get::<f64>("", "value")
-                        .ok()
-                        .or_else(|| row.try_get::<i64>("", "value").ok().map(|v| v as f64))
-                    {
-                        values.push(v);
+            for bucket in window.bucket_range() {
+                if p_rows.contains_key(&bucket) {
+                    continue;
+                }
+                let b_start = window.bucket_start_ms(bucket);
+                let bs = b_start.max(*s);
+                let be = (b_start + window.bucket_ms).min(*e).min(window.end);
+                if be <= bs {
+                    continue;
+                }
+                let mut values: Vec<f64> = Vec::new();
+                let mut params: Vec<sea_orm::Value> = vec![bs.into(), be.into()];
+                let mut where_sql =
+                    String::from("r.start_time >= ? AND r.start_time < ? AND r.success = 1");
+                where_sql.push_str(extra_cond);
+                where_sql.push_str(&filter_sql);
+                for v in filter_params.iter() {
+                    params.push(v.clone());
+                }
+                let sql = format!("SELECT {value_sql} AS value FROM request r WHERE {where_sql}");
+                if let Ok(rows) = db
+                    .query_all_raw(Statement::from_sql_and_values(
+                        DbBackend::Sqlite,
+                        sql,
+                        params,
+                    ))
+                    .await
+                {
+                    for row in rows {
+                        if let Some(v) = row
+                            .try_get::<f64>("", "value")
+                            .ok()
+                            .or_else(|| row.try_get::<i64>("", "value").ok().map(|v| v as f64))
+                        {
+                            values.push(v);
+                        }
                     }
                 }
-            }
-            values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            p_rows.insert(
-                bucket,
-                [
+                values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                if values.is_empty() {
+                    // 无数据的实时段（如当日 0 点至首帧之间的空档）不参与合并，
+                    // 避免把「无流量」当作 0 分位拉低合并结果。
+                    continue;
+                }
+                let weight = (be - bs).max(0);
+                let entry = fine_merge.entry(bucket).or_insert(([0.0; 4], [0; 4]));
+                let p = [
                     percentile(&values, 0.5),
                     percentile(&values, 0.9),
                     percentile(&values, 0.95),
                     percentile(&values, 0.99),
-                ],
-            );
+                ];
+                for (pos, value) in p.iter().enumerate() {
+                    entry.0[pos] += value * weight as f64;
+                    entry.1[pos] += weight;
+                }
+            }
+        }
+        // 细帧/未闭段贡献按指标时长加权均值并入桶（同层帧桶优先，不覆盖）。
+        for (idx, (sum, weight)) in fine_merge.iter() {
+            if p_rows.contains_key(idx) {
+                continue;
+            }
+            let (sum, weight) = (*sum, *weight);
+            let mut p = [0.0; 4];
+            for pos in 0..4 {
+                p[pos] = if weight[pos] > 0 {
+                    sum[pos] / weight[pos] as f64
+                } else {
+                    0.0
+                };
+            }
+            p_rows.insert(*idx, p);
         }
         // 按桶补零输出（旧实现：无样本桶 0）。
         window
@@ -613,6 +678,7 @@ pub(crate) async fn insight(
                 *level,
                 frames,
                 snap::ENTITY_API_KEY,
+                None,
                 None,
                 &[snap::metrics::CALLS],
             )

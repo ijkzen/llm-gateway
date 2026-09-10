@@ -47,6 +47,38 @@ pub(crate) async fn resolve_api_key_id(db: &DatabaseConnection, name: &str) -> O
     .and_then(|row| row.try_get("", "v").ok())
 }
 
+/// 单侧过滤的 model 主体集合解析：按 (providerId | modelId) 取 provider_model
+/// 主键文本集合（快照 model 行 entity 文本）。无匹配返回空集合（快照贡献为空）。
+pub(crate) async fn resolve_pm_keys_for_filter(
+    db: &DatabaseConnection,
+    provider_id: Option<i32>,
+    provider_model_id: Option<&str>,
+) -> Vec<String> {
+    let (sql, params): (&str, Vec<sea_orm::Value>) = match (provider_id, provider_model_id) {
+        (Some(p), _) => (
+            "SELECT CAST(model_id AS TEXT) AS v FROM provider_model WHERE provider_id = ?",
+            vec![p.into()],
+        ),
+        (None, Some(m)) => (
+            "SELECT CAST(model_id AS TEXT) AS v FROM provider_model WHERE provider_model_id = ?",
+            vec![m.into()],
+        ),
+        (None, None) => return Vec::new(),
+    };
+    db.query_all_raw(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        sql.to_string(),
+        params,
+    ))
+    .await
+    .map(|rows| {
+        rows.iter()
+            .filter_map(|row| row.try_get::<String>("", "v").ok())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
 /// 单主体降级守卫：非 whole 主体而键缺失（解析失败/未解析）时整窗兑底。
 /// 返回 true = 已降级。赛马类「列举全部主体」的读取（exact 本就为 None）
 /// 不经过此守卫——它只服务「过滤形态指定了单一主体」的读取。

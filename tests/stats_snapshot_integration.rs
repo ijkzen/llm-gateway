@@ -677,3 +677,164 @@ async fn summary_and_charts_equality_with_today_tail() {
     );
     assert_eq!(snap_charts, live_charts, "charts 尾部窗口快照=实时");
 }
+
+/// 10-01 回归：day 粒度窗口含今日未闭天时，今日日桶由小时帧的日级分位合并
+///（各小时 p 值加权均值），不得被「最后一个小时帧」覆盖写。
+#[tokio::test]
+async fn insight_day_granularity_percentiles_merge_today_hours() {
+    let (app, db) = setup_app().await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let off = 480 * 60_000i64;
+    let today_start = (now + off).div_euclid(24 * HOUR_MS) * 24 * HOUR_MS - off;
+    let cur_hour = (now + off).div_euclid(HOUR_MS) * HOUR_MS - off;
+    // 今日 3 个闭小时，每桶两条请求的 ttft：100/300、300/500、500/700
+    //（桶内真分位 200/400/600，桶级 p50 各不同 → 合并后应等于三者均值 400）。
+    for (i, (t1, t2)) in [(100i64, 300i64), (300, 500), (500, 700)]
+        .into_iter()
+        .enumerate()
+    {
+        let start_hour = cur_hour - (3 - i as i64) * HOUR_MS;
+        for (j, ttft) in [t1, t2].into_iter().enumerate() {
+            insert_request(
+                &db,
+                &format!("tf{i}{j}"),
+                10,
+                "gpt-x",
+                "k1",
+                true,
+                true,
+                Some(ttft),
+                Some(10),
+                0,
+                Some(5),
+                Some(1),
+                10.0,
+                1000 + ttft,
+                Some(15),
+                start_hour + (10 + j as i64) * 60_000,
+            )
+            .await;
+        }
+        snap::finalize_bucket(
+            &db,
+            snap::Frame {
+                level: snap::Level::Hour,
+                start: start_hour,
+                end: start_hour + HOUR_MS,
+            },
+        )
+        .await
+        .unwrap();
+    }
+    // 窗口只覆盖今日这 3 个闭小时：day 粒度下今日桶 = 三个小时帧合并。
+    let window = format!("startTime={today_start}&endTime={cur_hour}");
+    let resp = get_json(
+        &app,
+        &format!("/api/stats/insight?{window}&granularity=day"),
+    )
+    .await;
+    let data = &resp["data"];
+    let pct = &data["ttftPercentiles"];
+    assert_eq!(
+        pct.as_array().map(|a| a.len()),
+        Some(1),
+        "今日未闭日桶应只有一个"
+    );
+    let got = pct[0]["p50"].as_f64().unwrap();
+    // 三个小时帧的桶内 p50 分别是 200/400/600；合并（等权均值）= 400。
+    // 覆盖写旧行为会得到 600（最后一个小时帧的值）。
+    assert_eq!(got, 400.0, "今日桶 p50 应为小时帧合并均值而非末小时覆盖");
+}
+
+/// 10-02 回归：provider-model-rank 单侧过滤（仅 modelId / 仅 providerId）时，
+/// 快照侧只读过滤侧主体集合，不把其它供应商/模型的闭桶行混入结果。
+#[tokio::test]
+async fn provider_model_rank_single_sided_filter_equality_with_snapshot() {
+    let (app, db) = setup_app().await;
+    // 第二供应商 + 同名模型：不加过滤时会与供应商一混算。
+    let ts = "2024-01-01T00:00:00Z";
+    exec(
+        &db,
+        &format!(
+            "INSERT INTO provider (name, enable, base_url, api_key, custom_header, protocol_type, billing_mode, extra, sort_order, proxy_enabled, proxy_addr, created_at, updated_at) \
+             VALUES ('供应商二', 1, 'https://b.example', 'k', '{{}}', 0, 1, '{{}}', 1, 0, '', '{ts}', '{ts}')"
+        ),
+    )
+    .await;
+    exec(
+        &db,
+        &format!(
+            "INSERT INTO provider_model (provider_id, provider_model_id, context_length, max_output_tokens, reasoning, tool_use, image_understand, video_understand, proxy_enabled, proxy_addr, created_at, updated_at) \
+             VALUES (2, 'gpt-y', 8000, 2000, 0, 0, 0, 0, 0, '', '{ts}', '{ts}')"
+        ),
+    )
+    .await;
+    let now = chrono::Utc::now().timestamp_millis();
+    let off = 480 * 60_000i64;
+    let yesterday = ((now + off).div_euclid(24 * HOUR_MS) - 1) * 24 * HOUR_MS - off;
+    // 昨天的闭桶：供应商一 gpt-x 两条、供应商二 gpt-y 两条（快照按 model 主体行）。
+    for (i, (_pid, model, base)) in [(1, "gpt-x", 100i64), (2, "gpt-y", 900i64)]
+        .into_iter()
+        .enumerate()
+    {
+        for j in 0..2 {
+            insert_request(
+                &db,
+                &format!("f{i}{j}"),
+                10,
+                model,
+                "k1",
+                true,
+                true,
+                Some(base + j * 10),
+                Some(10),
+                0,
+                Some(5),
+                Some(1),
+                10.0,
+                base + j * 10,
+                Some(15),
+                yesterday + (i as i64 * 2 + j) * HOUR_MS + 10 * 60_000,
+            )
+            .await;
+        }
+    }
+    // 写回 provider_id（insert_request 固定 provider_id=1）。
+    exec(
+        &db,
+        "UPDATE request SET provider_id = 2 WHERE model_id = 'gpt-y'",
+    )
+    .await;
+    snap::finalize_bucket(
+        &db,
+        snap::Frame {
+            level: snap::Level::Day,
+            start: yesterday,
+            end: yesterday + 24 * HOUR_MS,
+        },
+    )
+    .await
+    .unwrap();
+    let window = format!("startTime={yesterday}&endTime={}", yesterday + 24 * HOUR_MS);
+
+    // 仅 modelId：不应混入供应商二的 gpt-y（判别回归）。
+    let rank = get_json(
+        &app,
+        &format!("/api/stats/provider-model-rank?{window}&modelId=gpt-x"),
+    )
+    .await;
+    let items = rank["data"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "仅 modelId 过滤应只返回该模型: {rank}");
+    assert_eq!(items[0]["providerId"].as_i64(), Some(1));
+    assert_eq!(items[0]["modelId"].as_str(), Some("gpt-x"));
+
+    // 仅 providerId：只返回该供应商的模型，且不混入 gpt-y。
+    let rank = get_json(
+        &app,
+        &format!("/api/stats/provider-model-rank?{window}&providerId=2"),
+    )
+    .await;
+    let items = rank["data"]["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "仅 providerId 过滤应只返回该供应商: {rank}");
+    assert_eq!(items[0]["modelId"].as_str(), Some("gpt-y"));
+}

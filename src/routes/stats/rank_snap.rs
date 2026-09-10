@@ -108,11 +108,13 @@ fn fold_row(map: &mut HashMap<String, Prims>, entity: String, row: &sea_orm::Que
 }
 
 /// 快照侧原语并入（闭桶帧按 level 分组取行）。
+/// `entities`：主体集合过滤（赛马单侧过滤形态），None 取全量主体行。
 async fn fold_snapshot(
     db: &DatabaseConnection,
     cov: &snap::Coverage,
     entity_type: &str,
     exact: Option<&str>,
+    entities: Option<&[String]>,
     map: &mut HashMap<String, Prims>,
 ) -> Result<(), String> {
     let mut by_level: std::collections::BTreeMap<snap::Level, Vec<snap::Frame>> =
@@ -122,9 +124,17 @@ async fn fold_snapshot(
     }
     let prim_names: Vec<&str> = snap::success_prims().map(|(m, _)| m).collect();
     for (level, frames) in &by_level {
-        let rows = snap::snapshot_rows(db, *level, frames, entity_type, exact, &prim_names)
-            .await
-            .map_err(|e| e.to_string())?;
+        let rows = snap::snapshot_rows(
+            db,
+            *level,
+            frames,
+            entity_type,
+            exact,
+            entities,
+            &prim_names,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
         for (_, _, entity, metric, value) in rows {
             if let Some(i) = prim_names.iter().position(|m| *m == metric) {
                 map.entry(entity).or_default().0[i] += value;
@@ -162,17 +172,18 @@ pub(crate) async fn fold_live(
 }
 
 /// 合并后的主体 → 原语 map。
-/// - snap：entity_type 行（exact 指定时只取该主体键）；
+/// - snap：entity_type 行（exact 指定时只取该主体键；entities 指定时只取集合内主体）；
 /// - live：grouped_select 输出 key（须与快照 entity 文本同域）。
 pub(crate) async fn merged_prims(
     db: &DatabaseConnection,
     cov: &snap::Coverage,
     entity_type: &str,
     exact: Option<&str>,
+    entities: Option<&[String]>,
     grouped_select: impl FnMut(i64, i64) -> (String, Vec<sea_orm::Value>),
 ) -> Result<HashMap<String, Prims>, String> {
     let mut map: HashMap<String, Prims> = HashMap::new();
-    fold_snapshot(db, cov, entity_type, exact, &mut map).await?;
+    fold_snapshot(db, cov, entity_type, exact, entities, &mut map).await?;
     fold_live(db, cov, grouped_select, &mut map).await?;
     Ok(map)
 }

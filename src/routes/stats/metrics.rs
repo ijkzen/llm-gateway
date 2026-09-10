@@ -27,8 +27,8 @@ async fn metrics_prims(
     };
     // 快照侧按主体键（如 "1"）记账、兑底侧按哨兵键 "x" 记账：单主体端点
     // 全量加总（等价于同一主体的快照 + 兑底两部分）。
-    let map =
-        super::rank_snap::merged_prims(&state.db, &cov, snap_type, snap_exact, grouped).await?;
+    let map = super::rank_snap::merged_prims(&state.db, &cov, snap_type, snap_exact, None, grouped)
+        .await?;
     let mut total = super::rank_snap::Prims::default();
     for prims in map.values() {
         for i in 0..super::rank_snap::PRIM_COUNT {

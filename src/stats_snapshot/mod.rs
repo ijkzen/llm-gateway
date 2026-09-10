@@ -37,5 +37,6 @@ pub(crate) use registry::{expr_of, metric_exprs, select_list, success_prims};
 #[allow(unused_imports)]
 pub(crate) use subject::{
     api_key_reconcile_names, demote_if_unresolved, resolve_api_key_id, resolve_pm_key,
+    resolve_pm_keys_for_filter,
 };
 pub(crate) use tasks::{run_snapshot_generation, run_snapshot_heal};
