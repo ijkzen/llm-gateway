@@ -678,22 +678,24 @@ async fn summary_and_charts_equality_with_today_tail() {
     assert_eq!(snap_charts, live_charts, "charts 尾部窗口快照=实时");
 }
 
-/// 10-01 回归：day 粒度窗口含今日未闭天时，今日日桶由小时帧的日级分位合并
-///（各小时 p 值加权均值），不得被「最后一个小时帧」覆盖写。
+/// 10-01 回归：day 粒度下由小时帧拼出的日桶，其分位必须是各小时帧的加权均值，
+/// 不得被「最后一个小时帧」覆盖写。
 #[tokio::test]
-async fn insight_day_granularity_percentiles_merge_today_hours() {
+async fn insight_day_granularity_percentiles_merge_hour_frames() {
     let (app, db) = setup_app().await;
     let now = chrono::Utc::now().timestamp_millis();
     let off = 480 * 60_000i64;
-    let today_start = (now + off).div_euclid(24 * HOUR_MS) * 24 * HOUR_MS - off;
-    let cur_hour = (now + off).div_euclid(HOUR_MS) * HOUR_MS - off;
-    // 今日 3 个闭小时，每桶两条请求的 ttft：100/300、300/500、500/700
+    // 前天 0 点（CST）：该日的日桶与小时桶都早已闭桶（终点 + 固化余量 < now 恒成立）。
+    // 不用「今日」是因为今日的小时帧要等固化余量过后才闭桶，凌晨时段今日没有任何
+    // 闭小时帧（CST 00:00~03:00 必然构造不出该场景）。
+    let day_start = ((now + off).div_euclid(24 * HOUR_MS) - 2) * 24 * HOUR_MS - off;
+    // 该日 3 个闭小时，每桶两条请求的 ttft：100/300、300/500、500/700
     //（桶内真分位 200/400/600，桶级 p50 各不同 → 合并后应等于三者均值 400）。
     for (i, (t1, t2)) in [(100i64, 300i64), (300, 500), (500, 700)]
         .into_iter()
         .enumerate()
     {
-        let start_hour = cur_hour - (3 - i as i64) * HOUR_MS;
+        let start_hour = day_start + i as i64 * HOUR_MS;
         for (j, ttft) in [t1, t2].into_iter().enumerate() {
             insert_request(
                 &db,
@@ -726,8 +728,8 @@ async fn insight_day_granularity_percentiles_merge_today_hours() {
         .await
         .unwrap();
     }
-    // 窗口只覆盖今日这 3 个闭小时：day 粒度下今日桶 = 三个小时帧合并。
-    let window = format!("startTime={today_start}&endTime={cur_hour}");
+    // 窗口只覆盖该日这 3 个小时（无 day 帧、仅有小时帧）：day 粒度下日桶 = 三个小时帧合并。
+    let window = format!("startTime={day_start}&endTime={}", day_start + 3 * HOUR_MS);
     let resp = get_json(
         &app,
         &format!("/api/stats/insight?{window}&granularity=day"),
@@ -738,12 +740,12 @@ async fn insight_day_granularity_percentiles_merge_today_hours() {
     assert_eq!(
         pct.as_array().map(|a| a.len()),
         Some(1),
-        "今日未闭日桶应只有一个"
+        "该日应只有一个日桶"
     );
     let got = pct[0]["p50"].as_f64().unwrap();
     // 三个小时帧的桶内 p50 分别是 200/400/600；合并（等权均值）= 400。
     // 覆盖写旧行为会得到 600（最后一个小时帧的值）。
-    assert_eq!(got, 400.0, "今日桶 p50 应为小时帧合并均值而非末小时覆盖");
+    assert_eq!(got, 400.0, "日桶 p50 应为小时帧合并均值而非末小时覆盖");
 }
 
 /// 10-02 回归：provider-model-rank 单侧过滤（仅 modelId / 仅 providerId）时，
