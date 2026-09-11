@@ -20,5 +20,6 @@ accepted
 - charts/insight/排行/请求日志同窗同桶同时区，前端管理后台为单一时区视角（前端窗口推导见 ADR-0004 收敛后的 race-period/stats hooks）。
 - 聚合口径改动只落 stats 层一处（窗口核心 + 时区函数），并有纯函数直测。
 - 接口 JSON 形状与缺省行为稳定，客户端只需跟随设置表时区。
+- 前端把窗口解析结果放进 query key 导致的「重取复用旧窗口」问题，见 ADR-0022（窗口身份与取值分离）。
 
 规格：`.scratch/overview-today-stats/`、`.scratch/architecture-deepening-2026-09-08/`（03 窗口核心 / 04 时区统一）。
