@@ -54,6 +54,59 @@ async fn test_scheduler_loads_from_db() {
 }
 
 #[tokio::test]
+async fn test_list_jobs_sorted_by_group_then_name() {
+    let db = setup_db().await;
+    let repo = SeaOrmCronJobRepository::new(db.clone());
+    let worker = JobWorker::new_with_settings(
+        db.clone(),
+        2,
+        100,
+        tokio::sync::broadcast::channel(64).0,
+        AppSettings::default(),
+    );
+    let handle = worker.start();
+
+    let scheduler = SchedulerRuntime::new_with_settings(handle.tx.clone(), AppSettings::default())
+        .await
+        .unwrap();
+
+    for (name, group) in [
+        ("zeta", "default"),
+        ("usage_refresh", "system"),
+        ("alpha", "default"),
+        ("failure_recovery", "system"),
+    ] {
+        scheduler
+            .register_handler(
+                name,
+                Arc::new(|_ctx: JobContext| Box::pin(async move { Ok(()) })),
+            )
+            .await;
+        let job = JobDefinition {
+            group: group.to_string(),
+            ..sample_job(name)
+        };
+        repo.insert(&job, None).await.unwrap();
+    }
+    scheduler.load_from_db(&repo).await.unwrap();
+
+    let jobs = scheduler.list_jobs().await;
+    let actual: Vec<(String, String)> = jobs
+        .iter()
+        .map(|j| (j.group.clone(), j.name.clone()))
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            ("default".to_string(), "alpha".to_string()),
+            ("default".to_string(), "zeta".to_string()),
+            ("system".to_string(), "failure_recovery".to_string()),
+            ("system".to_string(), "usage_refresh".to_string()),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn test_load_from_db_skips_missed_cron_jobs() {
     let db = setup_db().await;
     let repo = SeaOrmCronJobRepository::new(db.clone());

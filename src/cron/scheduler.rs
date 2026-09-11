@@ -509,7 +509,8 @@ impl SchedulerRuntime {
     pub async fn list_jobs(&self) -> Vec<JobInfo> {
         let jobs = self.jobs.read().await;
         let tz = self.settings.timezone().await;
-        jobs.values()
+        let mut result: Vec<JobInfo> = jobs
+            .values()
             .map(|e| JobInfo {
                 name: e.name.clone(),
                 title: e.title.clone(),
@@ -522,7 +523,11 @@ impl SchedulerRuntime {
                 group: e.group.clone(),
                 frequency_secs: compute_frequency_secs_tz(&e.expression, tz),
             })
-            .collect()
+            .collect();
+        // 内存 map 是 HashMap，遍历顺序随进程随机种子变化；不排序会让列表在
+        // 重启或增删任务后自行跳动。
+        result.sort_by(|a, b| a.group.cmp(&b.group).then_with(|| a.name.cmp(&b.name)));
+        result
     }
 
     pub async fn list_jobs_detailed<R: CronJobRepository>(
