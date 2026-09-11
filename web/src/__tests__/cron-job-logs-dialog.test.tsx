@@ -343,7 +343,7 @@ describe("CronJobLogsDialog", () => {
 		expect(empty.closest("ul")).toBeNull();
 	});
 
-	it("选中的历史行以 aria-pressed 暴露选中态并切换箭头方向", () => {
+	it("选中的历史行以 aria-pressed 暴露选中态", () => {
 		mocks.runs = [makeRun("run-1"), makeRun("run-2", { log_count: 3 })];
 		mocks.runLogs["run-1"] = [makeLog(1, "INFO", "第一步")];
 		renderDialog();
@@ -353,14 +353,11 @@ describe("CronJobLogsDialog", () => {
 		const row2 = screen.getByText("3 条日志").closest("button") as HTMLElement;
 		expect(row1).toHaveAttribute("aria-pressed", "false");
 		expect(row2).toHaveAttribute("aria-pressed", "false");
-		expect(row1.querySelector(".lucide-chevron-right")).not.toBeNull();
 
 		fireEvent.click(row1);
 
 		expect(row1).toHaveAttribute("aria-pressed", "true");
 		expect(row2).toHaveAttribute("aria-pressed", "false");
-		expect(row1.querySelector(".lucide-chevron-down")).not.toBeNull();
-		expect(row2.querySelector(".lucide-chevron-right")).not.toBeNull();
 	});
 
 	it("关闭弹窗后重新打开回到实时模式", () => {

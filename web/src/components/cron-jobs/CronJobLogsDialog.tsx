@@ -12,7 +12,7 @@ import {
 } from "@/hooks/use-cron-job-logs";
 import type { CronJob } from "@/hooks/use-cron-jobs";
 import { cn } from "@/lib/utils";
-import { ArrowDown, ChevronDown, ChevronRight, ScrollText } from "lucide-react";
+import { ArrowDown, ScrollText } from "lucide-react";
 import { memo, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -95,11 +95,6 @@ function RunItem({
 					selected && "bg-foreground/5",
 				)}
 			>
-				{selected ? (
-					<ChevronDown className="size-4 shrink-0 text-muted-foreground" />
-				) : (
-					<ChevronRight className="size-4 shrink-0 text-muted-foreground" />
-				)}
 				{runStatusBadge(run, t)}
 				<span className="text-xs text-muted-foreground">{formatRunRange(run)}</span>
 				<span className="ml-auto shrink-0 text-xs text-muted-foreground">
