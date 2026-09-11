@@ -41,9 +41,15 @@ export default function ApiKeysPage() {
 	return (
 		<div className="space-y-6">
 			<PageHeader icon={API_KEYS_PAGE.icon} title={t(API_KEYS_PAGE.titleKey)}>
-				<Button size="sm" onClick={() => setCreating(true)}>
-					<Plus className="mr-2 size-4" />
-					{t("apiKeys.create")}
+				<Button
+					variant="outline"
+					size="iconSm"
+					className="bg-transparent"
+					title={t("apiKeys.create")}
+					aria-label={t("apiKeys.create")}
+					onClick={() => setCreating(true)}
+				>
+					<Plus className="size-4" />
 				</Button>
 			</PageHeader>
 

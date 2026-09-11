@@ -70,10 +70,8 @@ function SortableProviderRow({ provider, selected, onSelect }: SortableProviderR
 				onClick={onSelect}
 				title={`${provider.name}（${provider.enable ? t("common.enabled") : t("common.disabled")}）`}
 				className={cn(
-					"flex w-full items-center gap-3 rounded-lg px-4 py-3 text-left transition-colors",
-					selected
-						? "bg-foreground text-background dark:bg-primary dark:text-primary-foreground"
-						: "hover:bg-foreground/5",
+					"flex w-full items-center gap-3 rounded-md px-4 py-3 text-left transition-colors",
+					selected ? "bg-sidebar-accent text-sidebar-accent-foreground" : "hover:bg-foreground/5",
 				)}
 			>
 				<GripVertical
@@ -81,14 +79,12 @@ function SortableProviderRow({ provider, selected, onSelect }: SortableProviderR
 					{...listeners}
 					className={cn(
 						"size-4 shrink-0 cursor-grab touch-none text-muted-foreground active:cursor-grabbing",
-						selected && "text-background/70 dark:text-primary-foreground/70",
+						selected && "text-sidebar-accent-foreground/70",
 					)}
 				/>
 				<ProtocolIcon
 					protocolType={provider.protocolType}
-					className={
-						selected ? "text-background dark:text-primary-foreground" : "text-muted-foreground"
-					}
+					className={selected ? "text-sidebar-accent-foreground" : "text-muted-foreground"}
 				/>
 				<MidEllipsis text={provider.name} className="min-w-0 flex-1 font-medium" />
 				<span

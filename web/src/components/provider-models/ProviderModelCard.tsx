@@ -18,7 +18,7 @@ export function ProviderModelCard({ model, onOpen }: ProviderModelCardProps) {
 		<button
 			type="button"
 			data-testid={`provider-model-card-${model.modelId}`}
-			className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
+			className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md"
 			onClick={(event) => {
 				const target = event.target as HTMLElement;
 				if (target.closest("[data-nav]")) {

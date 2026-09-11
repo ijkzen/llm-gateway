@@ -507,7 +507,7 @@ export function AddProviderModelsDialog({
 											className="pl-9"
 										/>
 										{candidateSearchOpen && candidateQuery.trim() && (
-											<div className="absolute right-0 top-full z-20 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border bg-popover p-2 shadow-lg">
+											<div className="absolute right-0 top-full z-20 mt-2 max-h-80 w-full overflow-y-auto rounded-lg border bg-popover p-2 shadow-lg">
 												{candidateHits.length === 0 ? (
 													<p className="px-3 py-2 text-sm text-muted-foreground">
 														{t("providerModels.searchNoResults")}
@@ -519,7 +519,7 @@ export function AddProviderModelsDialog({
 																key={hit.providerModelId}
 																type="button"
 																onClick={() => locateCandidate(hit.providerModelId)}
-																className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+																className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
 															>
 																<MidEllipsis
 																	text={hit.providerModelId}
@@ -536,11 +536,11 @@ export function AddProviderModelsDialog({
 								</div>
 
 								{candidates === null ? (
-									<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+									<div className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
 										{t("providerModels.notRefreshed")}
 									</div>
 								) : candidates.length === 0 ? (
-									<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+									<div className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
 										{t("providerModels.refreshEmpty")}
 									</div>
 								) : (
@@ -561,7 +561,7 @@ export function AddProviderModelsDialog({
 														key={candidate.providerModelId}
 														data-model-id={candidate.providerModelId}
 														className={cn(
-															"rounded-lg border p-3 transition-colors",
+															"rounded-md border p-3 transition-colors",
 															clickable &&
 																"cursor-pointer hover:border-primary/50 hover:bg-muted/40",
 															candidate.providerModelId === highlightId &&
@@ -723,7 +723,7 @@ export function AddProviderModelsDialog({
 													(catalogHits?.length ?? 0) > 0 &&
 													modelSearchQuery.trim().length > 0 &&
 													!appliedModelId && (
-														<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
+														<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg">
 															{catalogHits?.map((hit) => (
 																<button
 																	key={hit.id}
@@ -825,7 +825,7 @@ export function AddProviderModelsDialog({
 				desc={
 					<>
 						<p>{t("providerModels.refreshFailedDesc")}</p>
-						<p className="mt-2 max-h-48 overflow-y-auto rounded-lg bg-muted p-3 font-mono text-xs text-destructive whitespace-pre-wrap break-all">
+						<p className="mt-2 max-h-48 overflow-y-auto rounded-md bg-muted p-3 font-mono text-xs text-destructive whitespace-pre-wrap break-all">
 							{refreshError}
 						</p>
 					</>

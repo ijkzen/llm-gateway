@@ -160,7 +160,7 @@ export function RaceWindowControl({
 						onClick={openDialog}
 						aria-label={t("race.customRangeLabel")}
 						data-testid="custom-range-label"
-						className="space-y-0.5 rounded-lg px-2 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+						className="space-y-0.5 rounded-md px-2 py-1 text-left text-xs text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
 					>
 						<div className="font-mono tabular-nums">
 							{t("race.startLabel")} {formatDateTimeLabel(displayStart)}

@@ -71,9 +71,13 @@ const config: Config = {
 				},
 			},
 			borderRadius: {
-				lg: "var(--radius)",
-				md: "calc(var(--radius) - 2px)",
-				sm: "calc(var(--radius) - 4px)",
+				/* Linear 圆角尺度：xs 4 / sm 6 / md 8（按钮·输入框）/ lg 12（卡片·弹窗）/ xl 16 / 2xl 24 */
+				xs: "4px",
+				sm: "6px",
+				md: "8px",
+				lg: "12px",
+				xl: "16px",
+				"2xl": "24px",
 			},
 		},
 	},

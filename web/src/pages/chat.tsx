@@ -250,20 +250,20 @@ export default function ChatPage() {
 
 	return (
 		<div className="flex h-[calc(100vh-10rem)] flex-col gap-4">
-			<div className="flex-1 space-y-3 overflow-y-auto rounded-xl border bg-card p-4">
+			<div className="flex-1 space-y-3 overflow-y-auto rounded-lg border bg-card p-4">
 				{messages.length === 0 && (
 					<p className="py-16 text-center text-sm text-muted-foreground">{t("chat.emptyHint")}</p>
 				)}
 				{messages.map((msg) =>
 					msg.role === "user" ? (
 						<div key={msg.id} className="flex justify-end">
-							<div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-primary px-4 py-2 text-sm text-primary-foreground">
+							<div className="max-w-[80%] whitespace-pre-wrap rounded-lg bg-primary px-4 py-2 text-sm text-primary-foreground">
 								{msg.content}
 							</div>
 						</div>
 					) : (
 						<div key={msg.id} className="flex justify-start">
-							<div className="max-w-[80%] space-y-2 rounded-2xl bg-muted px-4 py-2 text-sm">
+							<div className="max-w-[80%] space-y-2 rounded-lg bg-muted px-4 py-2 text-sm">
 								{msg.reasoning && (
 									<div>
 										<button
@@ -378,7 +378,7 @@ export default function ChatPage() {
 						}}
 						placeholder={t("chat.inputPlaceholder")}
 						rows={2}
-						className="w-full resize-none rounded-xl border bg-background px-3 py-2 pr-12 text-sm"
+						className="w-full resize-none rounded-lg border bg-background px-3 py-2 pr-12 text-sm"
 					/>
 					{streaming ? (
 						<Button

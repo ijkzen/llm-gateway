@@ -10,7 +10,7 @@ export function StatsCardsSkeleton({ count = 4 }: { count?: number }) {
 					key={i}
 				>
 					<CardContent className="flex items-start gap-4 p-6">
-						<Skeleton className="size-10 rounded-xl" />
+						<Skeleton className="size-10 rounded-lg" />
 						<div className="space-y-2">
 							<Skeleton className="h-4 w-20" />
 							<Skeleton className="h-8 w-16" />

@@ -19,7 +19,7 @@ export function TestFailedDialog({ message, onClose }: TestFailedDialogProps) {
 			desc={
 				<>
 					<p>{t("providerModels.testFailedDesc")}</p>
-					<p className="mt-2 break-all rounded-lg bg-muted p-3 font-mono text-xs text-destructive">
+					<p className="mt-2 break-all rounded-md bg-muted p-3 font-mono text-xs text-destructive">
 						{message}
 					</p>
 				</>

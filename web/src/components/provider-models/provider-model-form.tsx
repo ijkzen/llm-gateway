@@ -43,7 +43,7 @@ export function CapabilitySwitchGrid<TValues extends Record<CapabilityKey, boole
 					control={control}
 					name={key as Path<TValues>}
 					render={({ field }) => (
-						<FormItem className="flex items-center justify-between rounded-lg border p-3">
+						<FormItem className="flex items-center justify-between rounded-md border p-3">
 							<FormLabel>{t(labelKey)}</FormLabel>
 							<FormControl>
 								<Switch checked={field.value} onCheckedChange={field.onChange} />

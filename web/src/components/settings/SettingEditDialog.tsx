@@ -113,7 +113,7 @@ export function SettingEditDialog({ setting, open, onOpenChange }: SettingEditDi
 								name="value"
 								render={({ field }) =>
 									setting?.type === "Bool" ? (
-										<FormItem className="flex items-center justify-between rounded-lg border p-3">
+										<FormItem className="flex items-center justify-between rounded-md border p-3">
 											<FormLabel>{t("settings.value")}</FormLabel>
 											<FormControl>
 												<Switch

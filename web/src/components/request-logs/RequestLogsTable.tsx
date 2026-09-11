@@ -462,7 +462,10 @@ export function RequestLogsTable() {
 							}}
 						>
 							<SelectTrigger
-								className="w-[100px] border-white/70"
+								// 对齐相邻四个 MultiSelect（outline Button）的静止态规格：弱化文字 + 15px + px-4。
+								// Select 默认 text-sm/px-3，且仅在 data-[placeholder] 下弱化；「全部」是真实值
+								// 而非占位符，不补这套覆盖会比其它过滤项更亮、字更小。
+								className="w-[100px] border-border px-4 text-[15px] text-muted-foreground"
 								aria-label={t("requestLogs.filterByStatus")}
 							>
 								<SelectValue />
@@ -510,7 +513,7 @@ export function RequestLogsTable() {
 			</Card>
 
 			{isError ? (
-				<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-destructive">
+				<div className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-destructive">
 					{t("common.loadFailed")}
 					<Button variant="outline" size="sm" className="ml-3" onClick={() => refetch()}>
 						{t("common.retry")}

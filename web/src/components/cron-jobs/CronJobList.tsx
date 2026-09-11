@@ -54,9 +54,9 @@ export function CronJobList({ jobs, selectedName, onSelect }: CronJobListProps) 
 										type="button"
 										onClick={() => onSelect(job)}
 										className={cn(
-											"flex w-full items-center justify-between gap-3 rounded-lg px-4 py-3 text-left transition-colors",
+											"flex w-full items-center justify-between gap-3 rounded-md px-4 py-3 text-left transition-colors",
 											selectedName === job.name
-												? "bg-foreground text-background dark:bg-primary dark:text-primary-foreground"
+												? "bg-sidebar-accent text-sidebar-accent-foreground"
 												: "hover:bg-foreground/5",
 										)}
 									>
@@ -66,7 +66,7 @@ export function CronJobList({ jobs, selectedName, onSelect }: CronJobListProps) 
 												className={cn(
 													"text-xs",
 													selectedName === job.name
-														? "text-background/60 dark:text-primary-foreground/60"
+														? "text-sidebar-accent-foreground/60"
 														: "text-muted-foreground",
 												)}
 												text={job.title}

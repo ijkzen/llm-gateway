@@ -74,7 +74,7 @@ export function ProxyConfigFields<T extends FieldValues>({
 				control={control}
 				name={enabledName}
 				render={({ field }) => (
-					<FormItem className="flex items-center justify-between rounded-lg border p-3">
+					<FormItem className="flex items-center justify-between rounded-md border p-3">
 						<FormLabel>{t("providers.proxyEnabled")}</FormLabel>
 						<FormControl>
 							<Switch checked={field.value} onCheckedChange={field.onChange} />

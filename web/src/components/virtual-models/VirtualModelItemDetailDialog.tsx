@@ -116,14 +116,14 @@ export function VirtualModelItemDetailDialog({
 
 				<div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
 					<dl className="space-y-3">
-						<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
+						<div className="flex items-center justify-between gap-4 rounded-md border px-4 py-2.5">
 							<dt className="text-sm text-muted-foreground">{t("providerModels.modelId")}</dt>
 							<dd className="min-w-0 font-mono text-sm">
 								<MidEllipsis text={currentItem.providerModelId} />
 							</dd>
 						</div>
 						<div className="grid grid-cols-2 gap-3">
-							<div className="rounded-lg border px-4 py-2.5">
+							<div className="rounded-md border px-4 py-2.5">
 								<dt className="text-xs text-muted-foreground">
 									{t("providerModels.contextLength")}
 								</dt>
@@ -131,14 +131,14 @@ export function VirtualModelItemDetailDialog({
 									{currentItem.contextLength.toLocaleString()}
 								</dd>
 							</div>
-							<div className="rounded-lg border px-4 py-2.5">
+							<div className="rounded-md border px-4 py-2.5">
 								<dt className="text-xs text-muted-foreground">{t("providerModels.maxOutput")}</dt>
 								<dd className="mt-0.5 text-sm font-medium">
 									{currentItem.maxOutputTokens.toLocaleString()}
 								</dd>
 							</div>
 						</div>
-						<div className="rounded-lg border px-4 py-3">
+						<div className="rounded-md border px-4 py-3">
 							<dt className="text-xs text-muted-foreground">
 								{t("providerModels.modelCapabilities")}
 							</dt>
@@ -161,7 +161,7 @@ export function VirtualModelItemDetailDialog({
 								))}
 							</dd>
 						</div>
-						<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
+						<div className="flex items-center justify-between gap-4 rounded-md border px-4 py-2.5">
 							<dt className="text-sm text-muted-foreground">{t("providers.proxyEnabled")}</dt>
 							<dd>
 								<ProviderProxyRow
@@ -173,7 +173,7 @@ export function VirtualModelItemDetailDialog({
 								/>
 							</dd>
 						</div>
-						<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
+						<div className="flex items-center justify-between rounded-md border px-4 py-2.5">
 							<dt className="text-sm text-muted-foreground">
 								{t("virtualModels.enableInVirtualModel")}
 							</dt>

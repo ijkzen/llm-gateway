@@ -177,8 +177,8 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 
 				<div className="flex min-h-0 flex-1 flex-col gap-4 px-6 pb-6">
 					{/* 实时日志区 */}
-					<div className="relative flex h-64 shrink-0 flex-col overflow-hidden rounded-xl border border-white/70 bg-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-						<div className="flex items-center justify-between border-b border-border/70 bg-muted/50 px-3 py-2 dark:bg-white/5">
+					<div className="relative flex h-64 shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-background">
+						<div className="flex items-center justify-between border-b border-border bg-muted px-3 py-2">
 							<div className="flex items-center gap-2 text-sm font-medium">
 								{t("cronJobs.realTimeLogs")}
 								{stream.currentRun && (
@@ -250,8 +250,8 @@ export function CronJobLogsDialog({ job, open, onOpenChange }: CronJobLogsDialog
 					</div>
 
 					{/* 历史执行区 */}
-					<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-white/70 bg-white/60 shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.04]">
-						<div className="border-b border-border/70 bg-muted/50 px-3 py-2 text-sm font-medium dark:bg-white/5">
+					<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-background">
+						<div className="border-b border-border bg-muted px-3 py-2 text-sm font-medium">
 							{t("cronJobs.historyRuns")}
 						</div>
 						<div className="min-h-0 flex-1 overflow-y-auto">

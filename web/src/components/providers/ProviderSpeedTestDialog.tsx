@@ -136,7 +136,7 @@ export function ProviderSpeedTestDialog({
 									return (
 										<li
 											key={model.modelId}
-											className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5"
+											className="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5"
 										>
 											<MidEllipsis
 												text={model.providerModelId}

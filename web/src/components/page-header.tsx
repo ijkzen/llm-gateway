@@ -11,7 +11,7 @@ export function PageHeader({ icon: Icon, title, children }: PageHeaderProps) {
 		<div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
 			<div className="flex items-start gap-3">
 				{Icon && (
-					<div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-foreground/5 text-foreground shadow-[inset_0_1px_0_rgba(255,255,255,0.6)] dark:bg-white/5">
+					<div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
 						<Icon className="size-5" />
 					</div>
 				)}

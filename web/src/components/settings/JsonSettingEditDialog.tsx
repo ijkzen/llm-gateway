@@ -142,7 +142,7 @@ export function JsonSettingEditDialog({ setting, open, onOpenChange }: JsonSetti
 								value={rawValue}
 								onChange={(e) => setRawValue(e.target.value)}
 								rows={6}
-								className="flex w-full rounded-lg border border-input bg-white/70 px-3 py-2 font-mono text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:bg-white/5"
+								className="flex w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 							/>
 						) : (
 							rows.map((row, index) => (

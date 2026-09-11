@@ -300,14 +300,14 @@ export function ProviderModelDetailDialog({
 							</Form>
 						) : (
 							<dl className="space-y-3">
-								<div className="flex items-center justify-between gap-4 rounded-lg border px-4 py-2.5">
+								<div className="flex items-center justify-between gap-4 rounded-md border px-4 py-2.5">
 									<dt className="text-sm text-muted-foreground">{t("providerModels.modelId")}</dt>
 									<dd className="min-w-0 font-mono text-sm">
 										<MidEllipsis text={model.providerModelId} />
 									</dd>
 								</div>
 								<div className="grid grid-cols-2 gap-3">
-									<div className="rounded-lg border px-4 py-2.5">
+									<div className="rounded-md border px-4 py-2.5">
 										<dt className="text-xs text-muted-foreground">
 											{t("providerModels.contextLength")}
 										</dt>
@@ -315,7 +315,7 @@ export function ProviderModelDetailDialog({
 											{model.contextLength.toLocaleString()}
 										</dd>
 									</div>
-									<div className="rounded-lg border px-4 py-2.5">
+									<div className="rounded-md border px-4 py-2.5">
 										<dt className="text-xs text-muted-foreground">
 											{t("providerModels.maxOutput")}
 										</dt>
@@ -324,7 +324,7 @@ export function ProviderModelDetailDialog({
 										</dd>
 									</div>
 								</div>
-								<div className="rounded-lg border px-4 py-3">
+								<div className="rounded-md border px-4 py-3">
 									<dt className="text-xs text-muted-foreground">
 										{t("providerModels.modelCapabilities")}
 									</dt>
@@ -347,7 +347,7 @@ export function ProviderModelDetailDialog({
 										))}
 									</dd>
 								</div>
-								<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
+								<div className="flex items-center justify-between rounded-md border px-4 py-2.5">
 									<dt className="text-sm text-muted-foreground">
 										{t("providerModels.protocolType")}
 									</dt>
@@ -361,7 +361,7 @@ export function ProviderModelDetailDialog({
 												})}
 									</dd>
 								</div>
-								<div className="flex items-center justify-between rounded-lg border px-4 py-2.5">
+								<div className="flex items-center justify-between rounded-md border px-4 py-2.5">
 									<dt className="text-sm text-muted-foreground">{t("providers.proxyEnabled")}</dt>
 									<dd>
 										<ProviderProxyRow

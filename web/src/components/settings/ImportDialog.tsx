@@ -131,7 +131,7 @@ export function ImportDialog({ open, onOpenChange }: ImportDialogProps) {
 							}}
 							onDragLeave={() => setDragging(false)}
 							onDrop={handleDrop}
-							className={`flex h-32 cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed transition-colors ${
+							className={`flex h-32 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed transition-colors ${
 								dragging ? "border-primary bg-muted/60" : "border-muted-foreground/40"
 							}`}
 						>

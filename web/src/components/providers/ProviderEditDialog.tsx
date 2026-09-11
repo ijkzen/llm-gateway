@@ -305,7 +305,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 										</FormControl>
 										{/* 搜索框联想下拉：匹配到模板后，输入框下方浮出候选列表，点击某项即应用 */}
 										{!isEdit && !appliedTemplate && (matchedTemplates?.length ?? 0) > 0 && (
-											<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-lg border border-input bg-popover p-1 shadow-lg backdrop-blur-xl">
+											<div className="absolute inset-x-0 top-full z-20 mt-1 max-h-64 overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg">
 												{matchedTemplates?.map((template) => (
 													<button
 														key={template.name}
@@ -417,7 +417,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 								control={form.control}
 								name="enable"
 								render={({ field }) => (
-									<FormItem className="flex items-center justify-between rounded-lg border p-3">
+									<FormItem className="flex items-center justify-between rounded-md border p-3">
 										<FormLabel>{t("providers.enable")}</FormLabel>
 										<FormControl>
 											<Switch checked={field.value} onCheckedChange={field.onChange} />
@@ -430,7 +430,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 							<ProxyConfigFields control={form.control} withHint />
 
 							{/* 高级设置：常驻展示，默认折叠。 */}
-							<div className="overflow-hidden rounded-lg border">
+							<div className="overflow-hidden rounded-md border">
 								<button
 									type="button"
 									onClick={() => setAdvancedOpen((v) => !v)}
@@ -457,7 +457,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 															<textarea
 																id="custom-header"
 																rows={2}
-																className="flex w-full rounded-lg border border-input bg-white/70 px-3 py-2 font-mono text-xs shadow-[inset_0_1px_0_rgba(255,255,255,0.8)] backdrop-blur-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-white/12 dark:bg-white/5 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]"
+																className="flex w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
 																placeholder='{"X-Api-Key": "..."}'
 																{...field}
 															/>
@@ -474,7 +474,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 												control={form.control}
 												name="usageEnabled"
 												render={({ field }) => (
-													<FormItem className="flex items-center justify-between rounded-lg border p-3">
+													<FormItem className="flex items-center justify-between rounded-md border p-3">
 														<FormLabel>{t("providers.usageDisplay")}</FormLabel>
 														<FormControl>
 															<Switch checked={field.value} onCheckedChange={field.onChange} />

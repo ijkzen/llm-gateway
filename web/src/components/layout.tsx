@@ -79,7 +79,7 @@ export default function AppLayout() {
 						<SidebarMenuItem>
 							<SidebarMenuButton size="lg" asChild>
 								<Link to="/">
-									<div className="flex aspect-square size-9 items-center justify-center rounded-xl bg-foreground text-background shadow-[inset_0_1px_0_rgba(255,255,255,0.15),0_4px_10px_rgba(15,23,42,0.18)] dark:bg-primary dark:text-primary-foreground">
+									<div className="flex aspect-square size-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
 										<Waypoints className="size-4" />
 									</div>
 									<div className="flex flex-col gap-0.5 leading-none">

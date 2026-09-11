@@ -11,7 +11,7 @@ interface ErrorStateProps {
 export function ErrorState({ title, description, onRetry }: ErrorStateProps) {
 	const { t } = useTranslation();
 	return (
-		<div className="rounded-2xl border border-destructive/30 bg-destructive/[0.06] p-6 text-center backdrop-blur-xl dark:bg-destructive/10">
+		<div className="rounded-lg border border-destructive/30 bg-destructive/[0.06] p-6 text-center">
 			<AlertCircle className="mx-auto size-10 text-destructive" />
 			<h3 className="mt-4 text-lg font-semibold">{title ?? t("common.loadFailed")}</h3>
 			{description && <p className="mt-2 text-muted-foreground">{description}</p>}

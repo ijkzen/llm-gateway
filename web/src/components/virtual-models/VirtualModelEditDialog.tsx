@@ -353,7 +353,7 @@ export function VirtualModelEditDialog({
 							setGroupCollapsed(group.provider.id, !nextExpanded),
 						)
 					}
-					className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-1 text-left transition-colors hover:bg-muted/60"
+					className="flex w-full items-center justify-between gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-muted/60"
 				>
 					<span className="flex min-w-0 items-center gap-2">
 						<MidEllipsis text={group.provider.name} className="text-sm font-medium" />
@@ -380,7 +380,7 @@ export function VirtualModelEditDialog({
 									<div
 										key={draft.modelId}
 										className={cn(
-											"flex items-center gap-3 rounded-lg border px-3 py-2",
+											"flex items-center gap-3 rounded-md border px-3 py-2",
 											(draft.enable === false || providerDisabled) && "opacity-60",
 										)}
 									>
@@ -434,11 +434,11 @@ export function VirtualModelEditDialog({
 						)}
 
 						{(addOpen || group.rows.length === 0) && group.candidates.length > 0 && (
-							<div className="space-y-2 rounded-lg border border-dashed p-3">
+							<div className="space-y-2 rounded-md border border-dashed p-3">
 								{group.candidates.map((model) => (
 									<div
 										key={model.modelId}
-										className="flex items-center gap-2.5 rounded-lg border p-2.5"
+										className="flex items-center gap-2.5 rounded-md border p-2.5"
 									>
 										<Button
 											type="button"
@@ -587,7 +587,7 @@ export function VirtualModelEditDialog({
 								control={form.control}
 								name="enable"
 								render={({ field }) => (
-									<FormItem className="flex items-center justify-between rounded-lg border p-3">
+									<FormItem className="flex items-center justify-between rounded-md border p-3">
 										<div className="space-y-0.5">
 											<FormLabel>{t("virtualModels.enable")}</FormLabel>
 											<p className="text-xs text-muted-foreground">
@@ -630,14 +630,14 @@ export function VirtualModelEditDialog({
 					<div className="space-y-4">
 						{activeTab === "used" ? (
 							usedGroups.length === 0 ? (
-								<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+								<div className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
 									{t("virtualModels.usedEmptyHint")}
 								</div>
 							) : (
 								usedGroups.map(renderGroup)
 							)
 						) : unusedGroups.length === 0 ? (
-							<div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+							<div className="rounded-md border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
 								{t("virtualModels.unusedEmptyHint")}
 							</div>
 						) : (
@@ -679,7 +679,7 @@ export function VirtualModelEditDialog({
 					destructive
 					handleConfirm={confirmInterfaceChange}
 				>
-					<ul className="max-h-40 space-y-1 overflow-y-auto rounded-lg border p-3 font-mono text-sm">
+					<ul className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-3 font-mono text-sm">
 						{pendingRemovals.map((model) => (
 							<li key={model.modelId} className="flex items-center justify-between gap-2">
 								<MidEllipsis text={model.providerModelId} className="min-w-0" />

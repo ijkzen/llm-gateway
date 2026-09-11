@@ -66,9 +66,15 @@ export function ProviderModelSection({
 						onCheckedChange={toggleProvider}
 						aria-label={t("providerModels.toggleProvider", { provider: provider.name })}
 					/>
-					<Button size="sm" onClick={() => onAdd(provider)}>
-						<Plus className="mr-2 size-4" />
-						{t("common.add")}
+					<Button
+						variant="outline"
+						size="iconSm"
+						className="bg-transparent"
+						title={t("common.add")}
+						aria-label={t("common.add")}
+						onClick={() => onAdd(provider)}
+					>
+						<Plus className="size-4" />
 					</Button>
 				</div>
 			</div>

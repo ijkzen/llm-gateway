@@ -52,7 +52,7 @@ function MemberCard({
 			}}
 			title={item.providerModelId}
 			className={cn(
-				"flex w-full cursor-pointer flex-col gap-1.5 rounded-xl border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
+				"flex w-full cursor-pointer flex-col gap-1.5 rounded-lg border bg-card p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md",
 				(item.enable === false || providerDisabled) && "opacity-60",
 			)}
 		>

@@ -150,7 +150,7 @@ export default function VirtualModelsPage() {
 						className="pl-9"
 					/>
 					{searchOpen && search.trim() && (
-						<div className="absolute right-0 top-full z-20 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border bg-popover p-2 shadow-lg">
+						<div className="absolute right-0 top-full z-20 mt-2 max-h-80 w-full overflow-y-auto rounded-lg border bg-popover p-2 shadow-lg">
 							{searchGroups.length === 0 ? (
 								<p className="px-3 py-2 text-sm text-muted-foreground">
 									{t("virtualModels.searchNoResults")}
@@ -183,7 +183,7 @@ export default function VirtualModelsPage() {
 															key={item.virtualModelItemId}
 															type="button"
 															onClick={() => setDetail({ virtualModel, item })}
-															className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+															className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
 														>
 															<MidEllipsis
 																text={item.providerModelId}
@@ -204,13 +204,16 @@ export default function VirtualModelsPage() {
 					)}
 				</div>
 				<Button
-					size="sm"
+					variant="outline"
+					size="iconSm"
+					className="bg-transparent"
+					title={t("virtualModels.add")}
+					aria-label={t("virtualModels.add")}
 					onClick={() => {
 						setCreating(true);
 					}}
 				>
-					<Plus className="mr-2 size-4" />
-					{t("virtualModels.add")}
+					<Plus className="size-4" />
 				</Button>
 			</PageHeader>
 

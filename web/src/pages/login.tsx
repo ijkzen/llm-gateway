@@ -90,9 +90,9 @@ export default function LoginPage() {
 
 	return (
 		<div className="flex min-h-screen flex-1 items-center justify-center p-6">
-			<div className="content-surface w-full max-w-sm rounded-3xl p-8 shadow-[0_8px_30px_rgba(15,23,42,0.08)]">
+			<div className="content-surface w-full max-w-sm rounded-lg p-8">
 				<div className="mb-6 flex flex-col items-center gap-3 text-center">
-					<div className="flex size-12 items-center justify-center rounded-2xl bg-foreground text-background shadow-[inset_0_1px_0_rgba(255,255,255,0.15),0_4px_10px_rgba(15,23,42,0.18)] dark:bg-primary dark:text-primary-foreground">
+					<div className="flex size-12 items-center justify-center rounded-lg bg-primary text-primary-foreground">
 						<Settings className="size-6" />
 					</div>
 					<div>

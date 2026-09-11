@@ -64,9 +64,15 @@ export default function ProvidersPage() {
 	return (
 		<div className="flex h-full min-h-0 flex-col space-y-6">
 			<PageHeader icon={PROVIDERS_PAGE.icon} title={t(PROVIDERS_PAGE.titleKey)}>
-				<Button size="sm" onClick={() => setCreating(true)}>
-					<Plus className="mr-2 size-4" />
-					{t("providers.create")}
+				<Button
+					variant="outline"
+					size="iconSm"
+					className="bg-transparent"
+					title={t("providers.create")}
+					aria-label={t("providers.create")}
+					onClick={() => setCreating(true)}
+				>
+					<Plus className="size-4" />
 				</Button>
 			</PageHeader>
 

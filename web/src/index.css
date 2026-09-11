@@ -2,94 +2,102 @@
 @tailwind components;
 @tailwind utilities;
 
+/* 设计 token 取自 Linear 官方设计规格（hex → 精确 HSL 三元组，可无损还原）：
+   canvas #010102 / surface-1 #0F1011 / surface-2 #141516 / surface-3 #18191A /
+   surface-4 #191A1B / hairline #23252A / hairline-strong #34343A /
+   ink #F7F8F8 / ink-muted #D0D6E0 / ink-subtle #8A8F98。
+   主题色不用 Linear 的靛紫 #5E6AD2，改青绿 teal：暗色 #14B8A6 / 亮色 #0F766E（两模式各自满足 AA）。
+   亮色模式用 inverse-* 角色（canvas #FFFFFF / surface-1 #F5F6F6 / ink #000000）。 */
+
 @layer base {
 	:root {
 		/* 让浏览器原生 UI（滚动条、表单控件等）跟随当前主题配色 */
 		color-scheme: light;
 
-		--background: 220 13% 96%;
-		--foreground: 222 47% 8%;
-		--card: 0 0% 100%;
-		--card-foreground: 222 47% 8%;
-		--popover: 0 0% 100%;
-		--popover-foreground: 222 47% 8%;
-		--primary: 222 47% 8%;
+		/* 主题色：teal。亮色模式取深一档（#0F766E）→ 白色标签 5.47:1，链接文字 5.47:1（AA 通过） */
+		--background: 0 0% 100%;
+		--foreground: 0 0% 0%;
+		--card: 180 5.263% 96.275%;
+		--card-foreground: 0 0% 0%;
+		--popover: 180 5.882% 96.667%;
+		--popover-foreground: 0 0% 0%;
+		--primary: 175.34 77.444% 26.078%;
 		--primary-foreground: 0 0% 100%;
-		--secondary: 210 20% 96%;
-		--secondary-foreground: 215 28% 17%;
-		--muted: 210 20% 94%;
-		--muted-foreground: 215 16% 40%;
-		--accent: 210 20% 95%;
-		--accent-foreground: 222 47% 8%;
-		--destructive: 0 72% 51%;
+		--secondary: 210 7.143% 94.51%;
+		--secondary-foreground: 0 0% 0%;
+		--muted: 210 7.143% 94.51%;
+		--muted-foreground: 218.182 4.889% 44.118%;
+		--accent: 220 9.091% 93.529%;
+		--accent-foreground: 0 0% 0%;
+		--destructive: 358.089 75.12% 59.02%;
 		--destructive-foreground: 0 0% 100%;
-		--success: 160 84% 39%;
+		--success: 133.701 61.951% 40.196%;
 		--success-foreground: 0 0% 100%;
-		--warning: 38 92% 50%;
+		--warning: 36.066 87.56% 59.02%;
 		--warning-foreground: 0 0% 100%;
-		--info: 221 83% 53%;
+		--info: 201.266 96.341% 32.157%;
 		--info-foreground: 0 0% 100%;
-		--warning-foreground: 0 0% 100%;
-		--border: 214 24% 88%;
-		--input: 214 24% 88%;
-		--ring: 222 47% 8%;
-		--radius: 1rem;
+		--border: 220 6.383% 90.784%;
+		--input: 230 8.571% 86.275%;
+		--ring: 174.667 83.851% 31.569%;
+		--radius: 8px;
 		--sidebar-background: 0 0% 100%;
-		--sidebar-foreground: 222 47% 8%;
-		--sidebar-primary: 222 47% 8%;
+		--sidebar-foreground: 0 0% 0%;
+		--sidebar-primary: 175.34 77.444% 26.078%;
 		--sidebar-primary-foreground: 0 0% 100%;
-		--sidebar-accent: 210 20% 95%;
-		--sidebar-accent-foreground: 222 47% 8%;
-		--sidebar-border: 214 24% 88%;
-		--sidebar-ring: 222 47% 8%;
-		--chart-1: 221 83% 53%;
-		--chart-2: 160 84% 39%;
-		--chart-3: 38 92% 50%;
-		--chart-4: 280 65% 60%;
-		--chart-5: 340 75% 55%;
+		--sidebar-accent: 220 9.091% 93.529%;
+		--sidebar-accent-foreground: 0 0% 0%;
+		--sidebar-border: 220 6.383% 90.784%;
+		--sidebar-ring: 174.667 83.851% 31.569%;
+		--chart-1: 174.667 83.851% 31.569%;
+		--chart-2: 133.701 61.951% 40.196%;
+		--chart-3: 36.066 87.56% 59.02%;
+		--chart-4: 221.212 83.193% 53.333%;
+		--chart-5: 346.837 77.165% 49.804%;
 	}
 
 	.dark {
 		color-scheme: dark;
-		--background: 220 15% 6%;
-		--foreground: 210 20% 96%;
-		--card: 222 20% 10%;
-		--card-foreground: 210 20% 96%;
-		--popover: 222 20% 10%;
-		--popover-foreground: 210 20% 96%;
-		--primary: 210 20% 96%;
-		--primary-foreground: 222 47% 6%;
-		--secondary: 217 15% 16%;
-		--secondary-foreground: 210 20% 96%;
-		--muted: 217 15% 16%;
-		--muted-foreground: 215 12% 62%;
-		--accent: 217 15% 18%;
-		--accent-foreground: 210 20% 96%;
-		--destructive: 0 63% 45%;
-		--destructive-foreground: 210 20% 96%;
-		--success: 160 60% 45%;
-		--success-foreground: 222 47% 6%;
-		--warning: 38 92% 55%;
-		--warning-foreground: 222 47% 6%;
-		--info: 217 91% 65%;
-		--info-foreground: 222 47% 6%;
-		--warning-foreground: 222 47% 6%;
-		--border: 217 15% 18%;
-		--input: 217 15% 18%;
-		--ring: 210 20% 96%;
-		--sidebar-background: 220 15% 8%;
-		--sidebar-foreground: 210 20% 96%;
-		--sidebar-primary: 210 20% 96%;
-		--sidebar-primary-foreground: 222 47% 6%;
-		--sidebar-accent: 217 15% 16%;
-		--sidebar-accent-foreground: 210 20% 96%;
-		--sidebar-border: 217 15% 18%;
-		--sidebar-ring: 210 20% 96%;
-		--chart-1: 217 91% 65%;
-		--chart-2: 160 60% 50%;
-		--chart-3: 38 92% 60%;
-		--chart-4: 280 70% 70%;
-		--chart-5: 340 80% 65%;
+
+		/* 主题色：teal。暗色模式取亮一档（#14B8A6）→ 标签用近黑 8.38:1、对画布 8.38:1（醒目） */
+		--background: 240 33.333% 0.588%;
+		--foreground: 180 6.667% 97.059%;
+		--card: 210 6.25% 6.275%;
+		--card-foreground: 180 6.667% 97.059%;
+		--popover: 210 4.762% 8.235%;
+		--popover-foreground: 180 6.667% 97.059%;
+		--primary: 173.415 80.392% 40.000%;
+		--primary-foreground: 240 33.333% 0.588%;
+		--secondary: 210 4% 9.804%;
+		--secondary-foreground: 180 6.667% 97.059%;
+		--muted: 210 4% 9.804%;
+		--muted-foreground: 218.571 6.364% 56.863%;
+		--accent: 210 3.846% 10.196%;
+		--accent-foreground: 180 6.667% 97.059%;
+		--destructive: 358.089 75.12% 59.02%;
+		--destructive-foreground: 0 0% 100%;
+		--success: 133.701 61.951% 40.196%;
+		--success-foreground: 0 0% 100%;
+		--warning: 36.066 87.56% 59.02%;
+		--warning-foreground: 0 0% 100%;
+		--info: 198.438 93.204% 59.608%;
+		--info-foreground: 240 33.333% 0.588%;
+		--border: 222.857 9.091% 15.098%;
+		--input: 240 5.455% 21.569%;
+		--ring: 173.415 80.392% 40.000%;
+		--sidebar-background: 240 33.333% 0.588%;
+		--sidebar-foreground: 180 6.667% 97.059%;
+		--sidebar-primary: 173.415 80.392% 40.000%;
+		--sidebar-primary-foreground: 240 33.333% 0.588%;
+		--sidebar-accent: 210 4% 9.804%;
+		--sidebar-accent-foreground: 180 6.667% 97.059%;
+		--sidebar-border: 222.857 9.091% 15.098%;
+		--sidebar-ring: 173.415 80.392% 40.000%;
+		--chart-1: 173.415 80.392% 40.000%;
+		--chart-2: 133.701 61.951% 40.196%;
+		--chart-3: 36.066 87.56% 59.02%;
+		--chart-4: 213.117 93.902% 67.843%;
+		--chart-5: 349.724 89.163% 60.196%;
 	}
 }
 
@@ -108,51 +116,32 @@
 	}
 }
 
-/* ---------- macOS 拟态玻璃（nyro 浅色风格） ---------- */
+/* ---------- Linear 风格：层级靠「面色阶 + 发丝线」，不用大面积模糊 ---------- */
 
 html {
+	/* 系统字体栈：不下载 Web 字体，首屏与滚动都不产生额外开销 */
 	font-family: "SF Pro Text", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Helvetica Neue",
 		"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
-/* 页面背景：浅色顶部高光 + 浅灰渐变 */
+/* 页面背景：Linear canvas 纯色 */
 body {
 	margin: 0;
-	background: radial-gradient(50rem 28rem at 12% 0%, rgba(255, 255, 255, 0.72), transparent 70%),
-		radial-gradient(44rem 28rem at 88% 0%, rgba(255, 255, 255, 0.48), transparent 70%),
-		linear-gradient(180deg, #f8f8fa 0%, #f1f1f3 100%);
+	background-color: hsl(var(--background));
 }
 
-.dark body {
-	background: radial-gradient(58rem 32rem at 8% -12%, rgba(105, 130, 255, 0.1), transparent 72%),
-		radial-gradient(44rem 26rem at 92% -8%, rgba(56, 189, 248, 0.08), transparent 70%),
-		linear-gradient(180deg, #11131a 0%, #0c0d12 100%);
-}
-
-/* 内容区的玻璃质感表面（毛玻璃、半透明白、柔和阴影、内高光） */
 .content-surface {
-	border: 1px solid rgba(255, 255, 255, 0.65);
-	background: rgba(255, 255, 255, 0.56);
-	box-shadow: 0 8px 28px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.85);
-	backdrop-filter: blur(20px) saturate(118%);
-	-webkit-backdrop-filter: blur(20px) saturate(118%);
+	background-color: hsl(var(--card));
+	border: 1px solid hsl(var(--border));
+	border-radius: 12px;
 }
 
-.dark .content-surface {
-	border-color: rgba(255, 255, 255, 0.11);
-	background: linear-gradient(180deg, rgba(20, 22, 30, 0.88), rgba(13, 14, 20, 0.86));
-	box-shadow: 0 26px 44px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.09), inset 0 -1px
-		0 rgba(0, 0, 0, 0.34);
-}
-
-/* 表单控件：微妙的白色渐变 + 内高光 + 柔和描边 */
+/* 表单控件：Linear text-input 规格（surface-1 底 + 8px 圆角 + 发丝描边） */
 .content-surface
 	:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) {
-	border-color: rgba(148, 163, 184, 0.32);
-	background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.86));
-	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92), 0 1px 2px rgba(15, 23, 42, 0.05);
-	transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease, transform
-		0.12s ease;
+	border-color: hsl(var(--input));
+	background-color: hsl(var(--card));
+	transition: border-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .content-surface
@@ -161,12 +150,12 @@ body {
 		select,
 		textarea
 	)::placeholder {
-	color: #94a3b8;
+	color: hsl(var(--muted-foreground));
 }
 
 .content-surface
 	:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):hover {
-	border-color: rgba(100, 116, 139, 0.42);
+	border-color: hsl(var(--muted-foreground) / 0.5);
 }
 
 .content-surface
@@ -176,8 +165,8 @@ body {
 		textarea
 	):focus-visible {
 	outline: none;
-	border-color: rgba(71, 85, 105, 0.68);
-	box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.95);
+	border-color: hsl(var(--ring));
+	box-shadow: 0 0 0 3px hsl(var(--ring) / 0.2);
 }
 
 .content-surface
@@ -186,7 +175,7 @@ body {
 		select,
 		textarea
 	):disabled {
-	opacity: 0.62;
+	opacity: 0.5;
 	cursor: not-allowed;
 }
 
@@ -196,7 +185,7 @@ body {
 	appearance: none;
 	-webkit-appearance: none;
 	-moz-appearance: none;
-	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none'%3E%3Cpath d='M3.5 5.25L7 8.75L10.5 5.25' stroke='%23334155' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none'%3E%3Cpath d='M3.5 5.25L7 8.75L10.5 5.25' stroke='%238a8f98' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 	background-repeat: no-repeat;
 	background-position: right 0.85rem center;
 	background-size: 14px 14px;
@@ -212,101 +201,22 @@ body {
 }
 
 .content-surface input[type="checkbox"] {
-	accent-color: #0f172a;
-	border-color: rgba(100, 116, 139, 0.52);
+	accent-color: hsl(var(--primary));
+	border-color: hsl(var(--input));
 }
 
 .content-surface button:focus-visible {
 	outline: none;
-	box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.24);
+	box-shadow: 0 0 0 3px hsl(var(--ring) / 0.24);
 }
 
-.content-surface button:enabled:active {
-	transform: translateY(1px) scale(0.99);
-}
-
-.dark
-	.content-surface
-	:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea) {
-	color: #e4e8f1;
-	border-color: rgba(255, 255, 255, 0.14);
-	background: linear-gradient(180deg, rgba(33, 36, 49, 0.88), rgba(24, 26, 37, 0.82));
-	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0 -1px 0 rgba(0, 0, 0, 0.32);
-}
-
-.dark
-	.content-surface
-	:is(
-		input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
-		select,
-		textarea
-	)::placeholder {
-	color: #7f8799;
-}
-
-.dark
-	.content-surface
-	:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea):hover {
-	border-color: rgba(176, 189, 216, 0.25);
-}
-
-.dark
-	.content-surface
-	:is(
-		input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
-		select,
-		textarea
-	):focus-visible {
-	border-color: rgba(155, 178, 224, 0.5);
-	box-shadow: 0 0 0 3px rgba(96, 124, 190, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.12);
-}
-
-.dark .content-surface select {
-	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 14 14' fill='none'%3E%3Cpath d='M3.5 5.25L7 8.75L10.5 5.25' stroke='%23c8d1e6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-}
-
-.dark .content-surface input[type="checkbox"] {
-	accent-color: #8aa2db;
-	border-color: rgba(255, 255, 255, 0.2);
-}
-
-.dark .content-surface button:focus-visible {
-	box-shadow: 0 0 0 3px rgba(96, 124, 190, 0.28);
-}
-
-/* 玻璃 utility：毛玻璃卡片表面（浅色） */
 @layer utilities {
-	.glass {
-		background: linear-gradient(170deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.5));
-		border: 1px solid rgba(255, 255, 255, 0.74);
-		box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-		backdrop-filter: blur(18px) saturate(116%);
-		-webkit-backdrop-filter: blur(18px) saturate(116%);
-	}
-
-	.glass-strong {
-		background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.62));
-		border: 1px solid rgba(255, 255, 255, 0.8);
-		box-shadow: 0 14px 30px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.85);
-		backdrop-filter: blur(20px) saturate(118%);
-		-webkit-backdrop-filter: blur(20px) saturate(118%);
-	}
-
+	/* 面板 / 侧栏：Linear surface-1 纯色面 + 发丝线 */
+	.glass,
+	.glass-strong,
 	.sidebar-surface {
-		background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.52));
-		border: 1px solid rgba(255, 255, 255, 0.74);
-		box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-		backdrop-filter: blur(18px) saturate(116%);
-		-webkit-backdrop-filter: blur(18px) saturate(116%);
-	}
-
-	.dark .glass,
-	.dark .glass-strong,
-	.dark .sidebar-surface {
-		background: linear-gradient(180deg, rgba(23, 25, 34, 0.86), rgba(17, 18, 26, 0.8));
-		border-color: rgba(255, 255, 255, 0.1);
-		box-shadow: 0 16px 30px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.08), inset 0
-			-1px 0 rgba(0, 0, 0, 0.35);
+		background-color: hsl(var(--card));
+		border: 1px solid hsl(var(--border));
 	}
 }
 
@@ -335,5 +245,4 @@ body {
 	animation: page-enter 0.24s ease-out;
 }
 
-/* Sticky header 吸顶样式见 sticky-header.css（由 main.tsx 引入）：
-   使用 scroll-state 容器查询替代 JS 滚动监听，Biome 1.9 不支持该语法故单独抽离 */
+/* Sticky header 吸顶样式见 sticky-header.css（由 main.tsx 引入） */

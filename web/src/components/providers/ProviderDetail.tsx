@@ -61,7 +61,7 @@ function CollapsibleSection({ title, children }: { title: string; children: Reac
 				type="button"
 				aria-expanded={open}
 				onClick={() => setOpen((v) => !v)}
-				className="flex w-full items-center justify-between gap-2 rounded-lg px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
+				className="flex w-full items-center justify-between gap-2 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-muted/60"
 			>
 				<span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
 					{title}
@@ -280,7 +280,7 @@ export function ProviderDetail({ provider, onEdit, onDelete, onSpeedTest }: Prov
 
 				{hasHeader && (
 					<CollapsibleSection key={`header-${provider.id}`} title={t("providers.customHeader")}>
-						<pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-muted/50 p-3 font-mono text-xs">
+						<pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-3 font-mono text-xs">
 							{JSON.stringify(headerObject, null, 2)}
 						</pre>
 					</CollapsibleSection>

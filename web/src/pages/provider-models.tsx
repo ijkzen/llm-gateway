@@ -161,7 +161,7 @@ export default function ProviderModelsPage() {
 						className="pl-9"
 					/>
 					{searchOpen && search.trim() && (
-						<div className="absolute right-0 top-full z-20 mt-2 max-h-80 w-full overflow-y-auto rounded-xl border bg-popover p-2 shadow-lg">
+						<div className="absolute right-0 top-full z-20 mt-2 max-h-80 w-full overflow-y-auto rounded-lg border bg-popover p-2 shadow-lg">
 							{searchGroups.length === 0 ? (
 								<p className="px-3 py-2 text-sm text-muted-foreground">
 									{t("providerModels.searchNoResults")}
@@ -199,7 +199,7 @@ export default function ProviderModelsPage() {
 																	modelId: model.modelId,
 																})
 															}
-															className="flex w-full rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
+															className="flex w-full rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-muted"
 														>
 															{model.providerModelId}
 														</button>
