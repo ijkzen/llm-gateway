@@ -198,7 +198,7 @@ describe("CronJobLogsDialog", () => {
 		expect(screen.getByText("该定时任务未输出日志")).toBeInTheDocument();
 	});
 
-	it("渲染历史执行列表并可展开查看日志", () => {
+	it("渲染历史执行列表，点开某次执行后日志显示在上区", () => {
 		mocks.runs = [makeRun("run-1"), makeRun("run-2", { status: "failed", log_count: 3 })];
 		mocks.runLogs["run-1"] = [makeLog(1, "INFO", "第一步"), makeLog(2, "WARN", "第二步")];
 		renderDialog();
@@ -208,11 +208,187 @@ describe("CronJobLogsDialog", () => {
 		expect(screen.getByText("2 条日志")).toBeInTheDocument();
 		expect(screen.getByText("3 条日志")).toBeInTheDocument();
 
-		// 展开第一次执行
+		// 点开第一次执行：日志显示在上区（与历史头部同一面板），不在历史列表行下方
 		fireEvent.click(screen.getByText("2 条日志"));
 		expect(screen.getByText("第一步")).toBeInTheDocument();
 		expect(screen.getByText("第二步")).toBeInTheDocument();
 		expect(screen.getByText("WARN")).toBeInTheDocument();
+
+		const content = screen.getByText("第一步");
+		expect(content.closest("ul")).toBeNull();
+		expect(screen.getByText("历史执行日志").closest("div.rounded-lg")).toContainElement(content);
+	});
+
+	it("历史日志条目为两行：第一行时间+级别，第二行内容", () => {
+		mocks.runs = [makeRun("run-1")];
+		mocks.runLogs["run-1"] = [makeLog(1, "WARN", "第一步")];
+		renderDialog();
+		emitIdle();
+
+		fireEvent.click(screen.getByText("2 条日志"));
+
+		const content = screen.getByText("第一步");
+		const entry = content.parentElement as HTMLElement;
+		// 两行结构：第一行元信息（时间 + 级别），第二行内容。
+		expect(entry.children).toHaveLength(2);
+		expect(entry.children[0]).toHaveTextContent("WARN");
+		expect(entry.children[0]).toHaveTextContent(/2026-08-1[34] \d{2}:\d{2}:\d{2}/);
+		expect(entry.children[1]).toBe(content);
+	});
+
+	it("实时日志条目同样为两行：第一行时间+级别，第二行内容", () => {
+		renderDialog();
+		emitSnapshot("run-live", [makeLog(1, "ERROR", "出错了")]);
+
+		const content = screen.getByText("出错了");
+		const entry = content.parentElement as HTMLElement;
+		expect(entry.children).toHaveLength(2);
+		expect(entry.children[0]).toHaveTextContent("ERROR");
+		expect(entry.children[0]).toHaveTextContent(/2026-08-1[34] \d{2}:\d{2}:\d{2}/);
+		expect(entry.children[1]).toBe(content);
+	});
+
+	it("历史模式头部显示起止时间，不重复状态徽章与日志条数", () => {
+		mocks.runs = [makeRun("run-1")];
+		mocks.runLogs["run-1"] = [makeLog(1, "INFO", "第一步")];
+		renderDialog();
+		emitIdle();
+
+		fireEvent.click(screen.getByText("2 条日志"));
+
+		expect(screen.getByText("历史执行日志")).toBeInTheDocument();
+		expect(screen.queryByText("实时日志")).not.toBeInTheDocument();
+		expect(screen.getByText("返回实时")).toBeInTheDocument();
+
+		const header = screen.getByText("历史执行日志").parentElement as HTMLElement;
+		expect(header).toHaveTextContent(
+			/2026-08-1[34] \d{2}:\d{2}:\d{2} ~ 2026-08-1[34] \d{2}:\d{2}:\d{2}/,
+		);
+		// 状态徽章与日志条数只在历史行上出现一次，头部不再重复。
+		expect(screen.getAllByText("成功")).toHaveLength(1);
+		expect(screen.getAllByText("2 条日志")).toHaveLength(1);
+	});
+
+	it("点「返回实时」切回实时日志", () => {
+		mocks.runs = [makeRun("run-1")];
+		mocks.runLogs["run-1"] = [makeLog(1, "INFO", "历史一")];
+		renderDialog();
+		emitSnapshot("run-live", [makeLog(1, "INFO", "实时一")]);
+
+		fireEvent.click(screen.getByText("2 条日志"));
+		expect(screen.getByText("历史一")).toBeInTheDocument();
+		expect(screen.queryByText("实时一")).not.toBeInTheDocument();
+
+		fireEvent.click(screen.getByText("返回实时"));
+		expect(screen.getByText("实时日志")).toBeInTheDocument();
+		expect(screen.getByText("实时一")).toBeInTheDocument();
+		expect(screen.queryByText("历史一")).not.toBeInTheDocument();
+	});
+
+	it("从历史模式返回实时后滚到最新日志", () => {
+		mocks.runs = [makeRun("run-1")];
+		mocks.runLogs["run-1"] = [makeLog(1, "INFO", "历史一")];
+		renderDialog();
+		emitSnapshot("run-live", [makeLog(1, "INFO", "实时一")]);
+
+		// 实时与历史共用同一个滚动容器；jsdom 里 scrollHeight 默认为 0，需实测定义。
+		const liveLogs = screen.getByText("实时一").closest(".overflow-y-auto") as HTMLElement;
+		Object.defineProperty(liveLogs, "scrollHeight", { value: 500, configurable: true });
+
+		fireEvent.click(screen.getByText("2 条日志"));
+		// 历史模式下把同一容器滚离底部。
+		liveLogs.scrollTop = 100;
+
+		fireEvent.click(screen.getByText("返回实时"));
+		expect(liveLogs.scrollTop).toBe(500);
+	});
+
+	it("查看历史期间新执行开始不自动切回，实时日志继续在后台接收", () => {
+		mocks.runs = [makeRun("run-1")];
+		mocks.runLogs["run-1"] = [makeLog(1, "INFO", "历史一")];
+		renderDialog();
+		emitSnapshot("run-live", [makeLog(1, "INFO", "实时一")]);
+
+		fireEvent.click(screen.getByText("2 条日志"));
+
+		act(() => {
+			instance().emit("run_started", {
+				kind: "run_started",
+				job_name: "example",
+				run_id: "run-new",
+				ts: "2026-08-13T09:00:00Z",
+			});
+		});
+
+		// 仍停留在历史模式。
+		expect(screen.getByText("历史执行日志")).toBeInTheDocument();
+		expect(screen.queryByText("实时日志")).not.toBeInTheDocument();
+
+		// 切回实时可见新执行的日志（说明历史模式下实时流仍在接收）。
+		emitLog("run-new", makeLog(1, "INFO", "新执行一"));
+		fireEvent.click(screen.getByText("返回实时"));
+		expect(screen.getByText("新执行一")).toBeInTheDocument();
+	});
+
+	it("历史模式该次执行无日志时显示空态文案", () => {
+		mocks.runs = [makeRun("run-1")];
+		mocks.runLogs["run-1"] = [];
+		renderDialog();
+		emitIdle();
+
+		fireEvent.click(screen.getByText("2 条日志"));
+
+		const empty = screen.getByText("该次执行未输出日志");
+		expect(empty).toBeInTheDocument();
+		expect(empty.closest("ul")).toBeNull();
+	});
+
+	it("选中的历史行以 aria-pressed 暴露选中态并切换箭头方向", () => {
+		mocks.runs = [makeRun("run-1"), makeRun("run-2", { log_count: 3 })];
+		mocks.runLogs["run-1"] = [makeLog(1, "INFO", "第一步")];
+		renderDialog();
+		emitIdle();
+
+		const row1 = screen.getByText("2 条日志").closest("button") as HTMLElement;
+		const row2 = screen.getByText("3 条日志").closest("button") as HTMLElement;
+		expect(row1).toHaveAttribute("aria-pressed", "false");
+		expect(row2).toHaveAttribute("aria-pressed", "false");
+		expect(row1.querySelector(".lucide-chevron-right")).not.toBeNull();
+
+		fireEvent.click(row1);
+
+		expect(row1).toHaveAttribute("aria-pressed", "true");
+		expect(row2).toHaveAttribute("aria-pressed", "false");
+		expect(row1.querySelector(".lucide-chevron-down")).not.toBeNull();
+		expect(row2.querySelector(".lucide-chevron-right")).not.toBeNull();
+	});
+
+	it("关闭弹窗后重新打开回到实时模式", () => {
+		mocks.runs = [makeRun("run-1")];
+		mocks.runLogs["run-1"] = [makeLog(1, "INFO", "历史一")];
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const view = render(
+			<QueryClientProvider client={queryClient}>
+				<CronJobLogsDialog job={makeJob()} open onOpenChange={() => {}} />
+			</QueryClientProvider>,
+		);
+		emitIdle();
+		fireEvent.click(screen.getByText("2 条日志"));
+		expect(screen.getByText("历史执行日志")).toBeInTheDocument();
+
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<CronJobLogsDialog job={makeJob()} open={false} onOpenChange={() => {}} />
+			</QueryClientProvider>,
+		);
+		view.rerender(
+			<QueryClientProvider client={queryClient}>
+				<CronJobLogsDialog job={makeJob()} open onOpenChange={() => {}} />
+			</QueryClientProvider>,
+		);
+
+		expect(screen.getByText("实时日志")).toBeInTheDocument();
+		expect(screen.queryByText("历史执行日志")).not.toBeInTheDocument();
 	});
 
 	it("实时日志带时间戳渲染，新日志实时追加", () => {

@@ -134,6 +134,8 @@ const en: Translation = {
 		runTriggered: "Job triggered",
 		runFailed: "Execution failed",
 		realTimeLogs: "Live logs",
+		historyLogs: "History logs",
+		backToLive: "Back to live",
 		runningEllipsis: "Running…",
 		reconnecting: "Connection lost, reconnecting…",
 		reconnectFailed:

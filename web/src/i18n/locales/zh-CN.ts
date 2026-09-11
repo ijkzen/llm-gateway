@@ -132,6 +132,8 @@ const zhCN = {
 		runTriggered: "任务已触发执行",
 		runFailed: "执行失败",
 		realTimeLogs: "实时日志",
+		historyLogs: "历史执行日志",
+		backToLive: "返回实时",
 		runningEllipsis: "执行中…",
 		reconnecting: "连接断开，正在重连…",
 		reconnectFailed: "实时连接已中断（多次重连失败），请刷新页面后重试",
