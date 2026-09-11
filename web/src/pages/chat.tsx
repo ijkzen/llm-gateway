@@ -5,8 +5,11 @@ import { useProviderModels } from "@/hooks/use-provider-models";
 import { useProviders } from "@/hooks/use-providers";
 import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronRight, ChevronUp, Eraser, SendHorizontal, Square } from "lucide-react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+
+/** 距底部小于该像素视为「在底部」，与 cron 日志弹窗同一口径。 */
+const SCROLL_BOTTOM_THRESHOLD = 24;
 
 interface ChatMessage {
 	id: number;
@@ -81,6 +84,29 @@ export default function ChatPage() {
 	const [streaming, setStreaming] = useState(false);
 	const abortRef = useRef<AbortController | null>(null);
 	const nextIdRef = useRef(1);
+	const scrollRef = useRef<HTMLDivElement>(null);
+	/** 跟随最新消息：流式增量与思考区开合都会把视图贴回底部，用户上滚即暂停。 */
+	const [autoFollow, setAutoFollow] = useState(true);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: 消息更新是滚动到底部的触发条件
+	useEffect(() => {
+		const el = scrollRef.current;
+		if (autoFollow && el) {
+			el.scrollTop = el.scrollHeight;
+		}
+	}, [messages, autoFollow]);
+
+	const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+		const el = e.currentTarget;
+		const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_BOTTOM_THRESHOLD;
+		if (atBottom) {
+			// 回到底部立即对齐最新消息，并恢复跟随。
+			el.scrollTop = el.scrollHeight;
+			setAutoFollow(true);
+		} else {
+			setAutoFollow(false);
+		}
+	};
 
 	// 按启用供应商分组（provider_model 无独立启停，随供应商）；供应商顺序沿用列表序。
 	const groups = useMemo(() => {
@@ -129,6 +155,7 @@ export default function ChatPage() {
 		const controller = new AbortController();
 		abortRef.current = controller;
 		setInput("");
+		setAutoFollow(true);
 		setMessages((prev) => [
 			...prev,
 			{
@@ -250,7 +277,11 @@ export default function ChatPage() {
 
 	return (
 		<div className="flex h-[calc(100vh-10rem)] flex-col gap-4">
-			<div className="flex-1 space-y-3 overflow-y-auto rounded-lg border bg-card p-4">
+			<div
+				ref={scrollRef}
+				onScroll={handleScroll}
+				className="flex-1 space-y-3 overflow-y-auto rounded-lg border bg-card p-4"
+			>
 				{messages.length === 0 && (
 					<p className="py-16 text-center text-sm text-muted-foreground">{t("chat.emptyHint")}</p>
 				)}

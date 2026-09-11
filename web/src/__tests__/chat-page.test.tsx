@@ -81,6 +81,27 @@ function renderPage() {
 	);
 }
 
+/** 给消息滚动容器装上可读写的几何属性与 scrollTop 记录器（jsdom 无布局，默认全为 0）。 */
+function stubScrollContainer(scrollHeight = 1000, clientHeight = 300) {
+	const container = document.querySelector(".overflow-y-auto") as HTMLElement;
+	let scrollTop = 0;
+	Object.defineProperty(container, "scrollHeight", { value: scrollHeight, configurable: true });
+	Object.defineProperty(container, "clientHeight", { value: clientHeight, configurable: true });
+	Object.defineProperty(container, "scrollTop", {
+		configurable: true,
+		get: () => scrollTop,
+		set: (value: number) => {
+			scrollTop = value;
+		},
+	});
+	return {
+		container,
+		setScrollTop: (value: number) => {
+			scrollTop = value;
+		},
+	};
+}
+
 /** 经浮窗选择模型并发送一条消息。 */
 function selectModelAndSend(text: string) {
 	openModelPickerAndSelect("model-a1");
@@ -295,5 +316,46 @@ describe("ChatPage", () => {
 
 		// JSON.parse 抛错 → catch 路径标记错误（不静默）。
 		await waitFor(() => expect(document.querySelector(".text-destructive")).toBeTruthy());
+	});
+
+	it("流式输出跟踪到底部，用户上滚后暂停，发送新消息恢复跟踪", async () => {
+		const { fetchMock } = mockStreamingFetch([
+			new TextDecoder().decode(sseFrame({ reasoning_content: "想" })),
+			new TextDecoder().decode(sseFrame({ content: "答" })),
+			"data: [DONE]\n\n",
+		]);
+		vi.stubGlobal("fetch", fetchMock);
+		renderPage();
+		const { container, setScrollTop } = stubScrollContainer();
+		selectModelAndSend("嗨");
+
+		// 流式增量到达即贴到底部。
+		await waitFor(() => expect(screen.getByText("答")).toBeInTheDocument());
+		await waitFor(() => expect(container.scrollTop).toBe(1000));
+
+		// 用户上滚：后续消息更新（这里用展开思考区触发）不再改变滚动位置。
+		setScrollTop(0);
+		fireEvent.scroll(container);
+		fireEvent.click(screen.getByRole("button", { name: /思考过程/ }));
+		expect(container.scrollTop).toBe(0);
+
+		// 滚回底部附近：立即对齐底部并恢复跟踪。
+		setScrollTop(700);
+		fireEvent.scroll(container);
+		expect(container.scrollTop).toBe(1000);
+
+		// 再次上滚后用发送消息恢复跟踪。
+		setScrollTop(0);
+		fireEvent.scroll(container);
+		await waitFor(() => expect(screen.getByRole("button", { name: "发送" })).toBeInTheDocument());
+		const second = mockStreamingFetch([
+			new TextDecoder().decode(sseFrame({ content: "再答" })),
+			"data: [DONE]\n\n",
+		]);
+		vi.stubGlobal("fetch", second.fetchMock);
+		fireEvent.change(screen.getByPlaceholderText("输入消息…"), { target: { value: "再问" } });
+		fireEvent.click(screen.getByRole("button", { name: "发送" }));
+		await waitFor(() => expect(screen.getByText("再答")).toBeInTheDocument());
+		await waitFor(() => expect(container.scrollTop).toBe(1000));
 	});
 });
