@@ -91,6 +91,22 @@ pub async fn query_provider_usage(
         let login = sensenova_login::SensenovaLogin::with_proxy(proxy);
         let ctx = fetchers::SensenovaContext { db, provider_id };
         fetchers::sensenova::fetch_sensenova(&http, &login, &creds, &ctx).await?
+    } else if crate::provider_template::is_tokenrhythm_host(&host) {
+        // TokenRhythm：会话 Cookie 优先复用，失效才用账号密码登录换新 Cookie 并
+        // 回写 extra（需要 db/provider_id），因此在这里单独处理。
+        let first_attempt = match creds.extra_str("tr_session") {
+            Some(session) => fetchers::tokenrhythm::fetch_wallet(&http, session).await,
+            None => Err(UsageError::Auth),
+        };
+        match first_attempt {
+            Ok(output) => output,
+            Err(UsageError::Auth) => {
+                let session = fetchers::tokenrhythm::login(&http, &creds).await?;
+                write_back_extra_key(db, provider_id, "tr_session", &session).await?;
+                fetchers::tokenrhythm::fetch_wallet(&http, &session).await?
+            }
+            Err(error) => return Err(error),
+        }
     } else {
         let fetcher = fetcher_for(&host, &path).ok_or(UsageError::Unsupported)?;
         fetcher.fetch(&http, &creds).await?
@@ -252,7 +268,7 @@ impl Fetcher {
     ) -> Result<FetchOutput, UsageError> {
         use fetchers::{
             agentrouter, alibaba, api_key, balance, cloud_balance, copilot, siliconflow, stepfun,
-            tokenrhythm, volcengine, xiaomi,
+            volcengine, xiaomi,
         };
         match self {
             Fetcher::OpenCodeGo => api_key::fetch_opencode_go(http, creds).await,
@@ -312,7 +328,8 @@ impl Fetcher {
             Fetcher::Sensenova => Err(UsageError::Unsupported),
             Fetcher::SiliconFlow => siliconflow::fetch_siliconflow_wallets(http, creds).await,
             Fetcher::AgentRouter => agentrouter::fetch_agentrouter(http, creds).await,
-            Fetcher::TokenRhythm => tokenrhythm::fetch_tokenrhythm_wallet(http, creds).await,
+            // TokenRhythm 在 query_provider_usage 单独处理（需要 db/provider_id 回写会话 Cookie）。
+            Fetcher::TokenRhythm => Err(UsageError::Unsupported),
             // Krill 由 provider_template 模板覆盖、以 JWT 动态签发访问，无独立 fetcher。
             Fetcher::Krill => Err(UsageError::Unsupported),
         }

@@ -334,15 +334,23 @@ async fn backfill_agentrouter_provider_extra(db: &DatabaseConnection) -> Result<
 
 /// 每次启动幂等对齐历史 TokenRhythm Provider 的凭据结构与用量开关。
 ///
-/// TokenRhythm 模板本次新增，但生产已有手动创建的 provider（base_url host
-/// tokenrhythm.studio）。模板首次插入会触发 backfill_provider_extra，这里仍
-/// 仿 AgentRouter/Krill/SiliconFlow 每次启动无条件对齐，防模板已存在走
-/// update 分支（不触发首次插入回填）时历史 provider 漏补。只补缺、不覆盖：
-/// 已填的 cookie_cloud_server/uuid/password/domain 一律保留。
+/// TokenRhythm 由 CookieCloud 登录态改为账号密码登录：`cookie_cloud_server`/
+/// `uuid`/`domain` 已废弃，`password` 语义从 CookieCloud 解密口令变为账号密码。
+/// 仍带废弃键的历史 provider 就地迁移：删掉废弃键并把 password 清空，等用户在
+/// 编辑弹窗重填账号密码；迁移只发生一次（废弃键删掉后不再命中）。
 async fn backfill_tokenrhythm_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
     backfill_host_extras(db, "TokenRhythm", is_tokenrhythm_host, |extra, provider| {
         let before = extra.clone();
-        for key in ["cookie_cloud_server", "uuid", "password", "domain"] {
+        let legacy = ["cookie_cloud_server", "uuid", "domain"]
+            .iter()
+            .any(|key| extra.contains_key(*key));
+        if legacy {
+            for key in ["cookie_cloud_server", "uuid", "domain"] {
+                extra.remove(key);
+            }
+            extra.insert("password".to_string(), "".into());
+        }
+        for key in ["account", "password", "tr_session"] {
             extra.entry(key.to_string()).or_insert_with(|| "".into());
         }
         extra.entry("usage".to_string()).or_insert(true.into());

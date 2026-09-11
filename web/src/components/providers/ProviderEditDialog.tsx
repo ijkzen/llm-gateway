@@ -88,11 +88,16 @@ function isJsonObject(value: string): boolean {
 	}
 }
 
-/** 需要用户填写的 extra 字段：排除标记字段与后端维护的派生凭据（refresh_token/jwt）。 */
+/** 需要用户填写的 extra 字段：排除标记字段与后端维护的派生凭据（refresh_token/jwt/tr_session）。 */
 function editableExtraKeys(extra: string | undefined): string[] {
 	const map = parseExtra(extra);
 	return Object.keys(map).filter(
-		(k) => k !== "usage" && k !== "usage_type" && k !== "refresh_token" && k !== "jwt",
+		(k) =>
+			k !== "usage" &&
+			k !== "usage_type" &&
+			k !== "refresh_token" &&
+			k !== "jwt" &&
+			k !== "tr_session",
 	);
 }
 

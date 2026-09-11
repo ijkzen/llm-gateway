@@ -125,8 +125,8 @@ pub const TEMPLATES: &[Template] = &[
         base_url: "https://tokenrhythm.studio/v1",
         protocol_type: 0,
         billing_mode: 0,
-        // 用量查询：CookieCloud 登录态（tokenrhythm.studio 钱包接口）。
-        extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 0}",
+        // 用量查询：账号密码登录换取会话 Cookie（tokenrhythm.studio 钱包接口）。
+        extra: "{\"account\": \"\", \"password\": \"\", \"tr_session\": \"\", \"usage\": true, \"usage_type\": 0}",
     },
     Template {
         name: "TokenRouter",

@@ -269,6 +269,7 @@ pub(crate) fn validate_extra(extra: &str, lang: Lang) -> Option<String> {
                 // 下列字段为后端派生/模板隐藏凭据（登录后写回、模板动态签发），允许为空。
                 && key.as_str() != "refresh_token"
                 && key.as_str() != "jwt"
+                && key.as_str() != "tr_session"
                 && val.as_str().is_some_and(|s| s.trim().is_empty())
         })
         .map(|(key, _)| key.clone())

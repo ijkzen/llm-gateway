@@ -212,6 +212,107 @@ fn krill_login_reply() -> (StatusCode, Value) {
     )
 }
 
+// ── TokenRhythm：账号密码登录换会话 Cookie + 钱包查询 ──
+
+#[derive(Clone)]
+struct TokenRhythmMockState {
+    wallet_replies: Arc<std::sync::Mutex<std::collections::VecDeque<(StatusCode, Value)>>>,
+    wallet_hits: Arc<AtomicUsize>,
+    login_hits: Arc<AtomicUsize>,
+    cookie_headers: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+}
+
+/// TokenRhythm mock：`/api/auth/login` 下发 tr_session Cookie，
+/// `/api/wallet/summary` 按队列依次返回响应并记录请求 Cookie 头。
+async fn spawn_tokenrhythm_mock(
+    wallet_replies: Vec<(StatusCode, Value)>,
+) -> (String, TokenRhythmMockState) {
+    use axum::http::{HeaderMap, header};
+    use axum::response::IntoResponse;
+    use axum::routing::{get, post};
+
+    let state = TokenRhythmMockState {
+        wallet_replies: Arc::new(std::sync::Mutex::new(wallet_replies.into())),
+        wallet_hits: Arc::new(AtomicUsize::new(0)),
+        login_hits: Arc::new(AtomicUsize::new(0)),
+        cookie_headers: Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let wallet_state = state.clone();
+    let login_state = state.clone();
+    let app = axum::Router::new()
+        .route(
+            "/api/wallet/summary",
+            get(move |headers: HeaderMap| {
+                let state = wallet_state.clone();
+                async move {
+                    state.wallet_hits.fetch_add(1, Ordering::SeqCst);
+                    state.cookie_headers.lock().unwrap().push(
+                        headers
+                            .get("cookie")
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_string),
+                    );
+                    let (status, body) = state
+                        .wallet_replies
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("unexpected wallet request");
+                    (status, Json(body)).into_response()
+                }
+            }),
+        )
+        .route(
+            "/api/auth/login",
+            post(move || {
+                let state = login_state.clone();
+                async move {
+                    state.login_hits.fetch_add(1, Ordering::SeqCst);
+                    (
+                        StatusCode::OK,
+                        [(
+                            header::SET_COOKIE,
+                            "tr_session=sess-new; Max-Age=2592000; HttpOnly; Path=/; SameSite=Lax; Secure",
+                        )],
+                        Json(serde_json::json!({
+                            "code": 0,
+                            "message": "ok",
+                            "data": { "user": { "id": "u1", "name": "w5aw3e", "status": "active" } }
+                        })),
+                    )
+                        .into_response()
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (format!("http://{addr}"), state)
+}
+
+fn tokenrhythm_wallet_reply(available: &str) -> Value {
+    serde_json::json!({
+        "code": 0,
+        "message": "ok",
+        "data": {
+            "currency": "CNY",
+            "availableBalanceCny": available,
+            "giftAvailableCny": available,
+            "giftStatus": "active",
+            "asOf": "2026-09-11T07:33:10.838Z"
+        }
+    })
+}
+
+fn tokenrhythm_expired_reply() -> (StatusCode, Value) {
+    (
+        StatusCode::UNAUTHORIZED,
+        serde_json::json!({ "code": "UNAUTHORIZED", "message": "未认证或登录已过期" }),
+    )
+}
+
 // ── SenseNova：OAuth 续期 + refresh_token 轮换写回 + pool-usage ──
 
 const SENSENOVA_POOL_USAGE_BODY: &str = r#"{

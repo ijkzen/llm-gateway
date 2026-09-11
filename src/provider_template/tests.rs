@@ -646,7 +646,7 @@ async fn agentrouter_history_backfill_is_idempotent_and_preserves_user_values() 
 }
 
 #[tokio::test]
-async fn tokenrhythm_history_backfill_is_idempotent_and_preserves_user_values() {
+async fn tokenrhythm_history_backfill_migrates_cookiecloud_to_account_login() {
     temp_env::async_with_vars(
         [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
         async {
@@ -654,14 +654,23 @@ async fn tokenrhythm_history_backfill_is_idempotent_and_preserves_user_values() 
             // 先 upsert 让 TokenRhythm 模板入库（后续走 update 分支）。
             upsert_templates(&db).await.unwrap();
 
-            // 模拟模板引入前手动创建的历史 provider：缺 cookie 键，
-            // 且已手动填过部分凭据（回填不得覆盖）。
+            // 旧 CookieCloud 形态的历史 provider：废弃键删除、password 让位账号密码；
+            // 未知键保留。
             insert_provider_with_billing(
                 &db,
                 "TokenRhythm-历史",
                 "https://tokenrhythm.studio/v1",
-                r#"{"custom":"keep","cookie_cloud_server":"https://my.cc.example"}"#,
+                r#"{"custom":"keep","cookie_cloud_server":"https://my.cc.example","uuid":"u1","domain":"tokenrhythm.studio","password":"cc-secret"}"#,
                 0,
+            )
+            .await;
+            // 已迁移过的 provider（含 account）：password/会话 Cookie 一律不动，
+            // 避免每次启动清空。
+            insert_provider(
+                &db,
+                "TokenRhythm-已迁移",
+                "https://tokenrhythm.studio/v1",
+                r#"{"account":"17327713086","password":"real-pw","tr_session":"sess-live"}"#,
             )
             .await;
             // 其它 host 的 provider 不受影响。
@@ -678,16 +687,26 @@ async fn tokenrhythm_history_backfill_is_idempotent_and_preserves_user_values() 
             upsert_templates(&db).await.unwrap();
 
             let extra = provider_extra(&db, "TokenRhythm-历史").await;
-            assert_eq!(
-                extra["cookie_cloud_server"], "https://my.cc.example",
-                "已填的 cookie_cloud_server 不被覆盖"
-            );
-            assert_eq!(extra["uuid"], "");
-            assert_eq!(extra["password"], "");
-            assert_eq!(extra["domain"], "");
+            assert_eq!(extra["custom"], "keep", "未知键保留");
+            assert_eq!(extra["account"], "", "补齐 account 待用户填写");
+            assert_eq!(extra["password"], "", "旧 CookieCloud 口令清空");
+            assert_eq!(extra["tr_session"], "");
             assert_eq!(extra["usage"], true);
             assert_eq!(extra["usage_type"], 0);
-            assert_eq!(extra["custom"], "keep", "未知键保留");
+            assert!(extra.get("cookie_cloud_server").is_none(), "废弃键已删除");
+            assert!(extra.get("uuid").is_none(), "废弃键已删除");
+            assert!(extra.get("domain").is_none(), "废弃键已删除");
+
+            let migrated = provider_extra(&db, "TokenRhythm-已迁移").await;
+            assert_eq!(
+                migrated["password"], "real-pw",
+                "已迁移的 password 不被清空"
+            );
+            assert_eq!(
+                migrated["tr_session"], "sess-live",
+                "已存会话 Cookie 保留"
+            );
+            assert_eq!(migrated["account"], "17327713086");
 
             let other = provider_extra(&db, "TokenRhythm-其他host").await;
             assert_eq!(

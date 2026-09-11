@@ -119,6 +119,19 @@ impl UsageHttp {
             .await
     }
 
+    /// POST JSON 并额外返回响应头中的 Set-Cookie 值（账号密码登录换会话 Cookie 用）。
+    pub async fn post_json_capturing_cookies(
+        &self,
+        url: &str,
+        headers: &[(&str, String)],
+        body: &str,
+    ) -> Result<(HttpReply, Vec<String>), UsageError> {
+        let mut owned: Vec<(&str, String)> = headers.to_vec();
+        owned.push(("Content-Type", "application/json".to_string()));
+        self.send_capturing(reqwest::Method::POST, url, &owned, Some(body.to_string()))
+            .await
+    }
+
     async fn send(
         &self,
         method: reqwest::Method,
@@ -126,6 +139,19 @@ impl UsageHttp {
         headers: &[(&str, String)],
         body: Option<String>,
     ) -> Result<HttpReply, UsageError> {
+        self.send_capturing(method, url, headers, body)
+            .await
+            .map(|(reply, _)| reply)
+    }
+
+    /// 发送请求并同时取出 Set-Cookie 值列表。
+    async fn send_capturing(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        headers: &[(&str, String)],
+        body: Option<String>,
+    ) -> Result<(HttpReply, Vec<String>), UsageError> {
         let url = self.rewrite_url(url);
         let mut map = HeaderMap::new();
         for (name, value) in headers {
@@ -144,11 +170,18 @@ impl UsageHttp {
             .await
             .map_err(|e| UsageError::Network(e.to_string()))?;
         let status = resp.status().as_u16();
+        let set_cookie = resp
+            .headers()
+            .get_all(reqwest::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .map(str::to_string)
+            .collect();
         let body = resp
             .text()
             .await
             .map_err(|e| UsageError::Network(e.to_string()))?;
-        Ok(HttpReply { status, body })
+        Ok((HttpReply { status, body }, set_cookie))
     }
 
     fn rewrite_url(&self, url: &str) -> String {
