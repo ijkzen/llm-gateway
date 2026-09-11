@@ -252,6 +252,24 @@ async fn login_and_session_guard() {
     assert_eq!(status, 401);
 }
 
+/// 请求体不设上限（09-11 拍板去除原 5MB DefaultBodyLimit）：超过 5MB 的请求体
+/// 不再被 extractor 以 413 拦下，而是正常进入 handler（密码错误 → 401）。
+#[tokio::test]
+async fn oversized_request_body_reaches_handler() {
+    let (app, _db) = setup_app().await;
+    init_admin(&app).await;
+
+    let big = json!({
+        "username": ADMIN,
+        "password": "a".repeat(6 * 1024 * 1024),
+    });
+    let (status, _, _) = send_with_headers(app, "POST", "/api/auth/login", Some(big), &[]).await;
+    assert_eq!(
+        status, 401,
+        "超过 5MB 的请求体应进入 handler（密码错误 → 401），而非被 413 拒绝"
+    );
+}
+
 #[tokio::test]
 async fn change_password_revokes_other_sessions() {
     let (app, _db) = setup_app().await;

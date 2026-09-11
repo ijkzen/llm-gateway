@@ -41,7 +41,8 @@ pub fn create_app(state: &AppState) -> Router {
         .nest("/api/request-logs", request_logs::routes())
         .nest("/v1", openai_compat::routes())
         .fallback(api_aware_fallback)
-        .layer(DefaultBodyLimit::max(5 * 1024 * 1024))
+        // 不限制请求体大小；必须显式 disable——直接删除本层会退回 axum 默认的 2MB，反而更严。
+        .layer(DefaultBodyLimit::disable())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::auth_middleware,
