@@ -1,7 +1,8 @@
 import { statsKey, statsQuery } from "@/hooks/stats-query";
-import type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
+import type { QueryWindow } from "@/lib/race-period";
+import type { RaceSort, RaceSortKey } from "@/lib/race-types";
 
-export type { RaceSort, RaceSortKey, RaceWindow };
+export type { RaceSort, RaceSortKey };
 
 export interface ModelMetrics {
 	/** 供应商 ID。 */
@@ -25,32 +26,31 @@ export interface ModelMetrics {
 }
 
 export const modelMetricsKeys = {
-	metrics: (providerId: number, modelId: string, window: RaceWindow) =>
-		statsKey("model-metrics", [providerId, modelId, window.startTime, window.endTime]),
+	metrics: (providerId: number, modelId: string, window: QueryWindow) =>
+		statsKey("model-metrics", [providerId, modelId, ...window.key]),
 };
 
 /**
  * 单模型指标查询（模型详情三级页指标卡片用）。
  * @param providerId 供应商 ID
  * @param modelId 模型 ID
- * @param window 时间窗口
+ * @param window 取数窗口（key 用稳定身份，绝对起止在取数时解析）
  * @param enabled 是否启用
  */
 export function useModelMetrics(
 	providerId: number,
 	modelId: string,
-	window: RaceWindow,
+	window: QueryWindow,
 	enabled = true,
 ) {
 	return statsQuery<ModelMetrics>({
 		endpoint: "stats/model-metrics",
 		key: modelMetricsKeys.metrics(providerId, modelId, window),
+		window,
 		enabled,
 		params: {
 			providerId,
 			modelId,
-			startTime: window.startTime,
-			endTime: window.endTime,
 		},
 	});
 }

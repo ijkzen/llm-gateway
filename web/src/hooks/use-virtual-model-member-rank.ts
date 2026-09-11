@@ -1,7 +1,8 @@
 import { statsKey, statsQuery } from "@/hooks/stats-query";
-import type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
+import type { QueryWindow } from "@/lib/race-period";
+import type { RaceSort, RaceSortKey } from "@/lib/race-types";
 
-export type { RaceSort, RaceSortKey, RaceWindow };
+export type { RaceSort, RaceSortKey };
 
 export interface VirtualModelMemberRankItem {
 	/** 成员所属供应商 ID。 */
@@ -35,10 +36,9 @@ export interface VirtualModelMemberRankResponse {
 }
 
 export const virtualModelMemberRankKeys = {
-	rank: (window: RaceWindow, sort: RaceSort, virtualModelId: number) =>
+	rank: (window: QueryWindow, sort: RaceSort, virtualModelId: number) =>
 		statsKey("virtual-model-member-rank", [
-			window.startTime,
-			window.endTime,
+			...window.key,
 			sort.sortBy,
 			sort.sortOrder,
 			virtualModelId,
@@ -47,13 +47,13 @@ export const virtualModelMemberRankKeys = {
 
 /**
  * 虚拟模型成员模型排行查询（配置成员全量 + 后端排序）。
- * @param window 时间窗口
+ * @param window 取数窗口（key 用稳定身份，绝对起止在取数时解析）
  * @param sort 排序指标与方向
  * @param enabled 是否启用
  * @param virtualModelId 虚拟模型 ID（必填）
  */
 export function useVirtualModelMemberRank(
-	window: RaceWindow,
+	window: QueryWindow,
 	sort: RaceSort,
 	enabled: boolean,
 	virtualModelId: number,
@@ -61,12 +61,11 @@ export function useVirtualModelMemberRank(
 	return statsQuery<VirtualModelMemberRankResponse>({
 		endpoint: "stats/virtual-model-member-rank",
 		key: virtualModelMemberRankKeys.rank(window, sort, virtualModelId),
+		window,
 		enabled,
 		params: {
 			sortBy: sort.sortBy,
 			sortOrder: sort.sortOrder,
-			startTime: window.startTime,
-			endTime: window.endTime,
 			virtualModelId,
 		},
 	});

@@ -90,11 +90,12 @@ export function MetricRaceCard<T extends Record<RaceSortKey, number>>({
 	);
 }
 
-/** 行点击跳转的 URL 构造（四卡共用的窗口参数拼接）。 */
-export function raceHref(
-	path: string,
-	window: RaceWindowState,
-	bounds: { startTime: number; endTime: number },
-): string {
+/** 行点击跳转的 URL 构造（四卡共用的窗口参数拼接）。
+ *  自定义窗口用定义里已应用的起止（稳定），预设周期只带 period/offset。 */
+export function raceHref(path: string, window: RaceWindowState): string {
+	const bounds = window.appliedCustom ?? {
+		startTime: window.customStart,
+		endTime: window.customEnd,
+	};
 	return `${path}?${windowQueryString(window, bounds)}`;
 }

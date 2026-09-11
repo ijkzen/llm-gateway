@@ -8,7 +8,7 @@ import { initialWindowFromUrl } from "@/components/race-window-control";
 import {
 	CardStatsSection,
 	StatsSection,
-	sectionGranularity,
+	queryWindowGranularity,
 	sectionWindow,
 	useSectionSubtitle,
 	useSectionWindows,
@@ -50,15 +50,15 @@ export default function ModelOverviewPage() {
 	const modelDetail = detailQuery.data;
 
 	const tz = useStatsTimeZone();
-	const callWindow = sectionWindow(windows.call, now, tz);
-	const tokenWindow = sectionWindow(windows.token, now, tz);
-	const metricsWindow = sectionWindow(windows.metrics, now, tz);
-	const insightWindow = sectionWindow(windows.insight, now, tz);
+	const callWindow = sectionWindow(windows.call, tz);
+	const tokenWindow = sectionWindow(windows.token, tz);
+	const metricsWindow = sectionWindow(windows.metrics, tz);
+	const insightWindow = sectionWindow(windows.insight, tz);
 
 	// 图表桶粒度由所选时间窗口推导（分桶时区由后端按设置表解释）。
-	const callGranularity = sectionGranularity(windows.call, callWindow);
-	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
-	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
+	const callGranularity = queryWindowGranularity(windows.call, callWindow);
+	const tokenGranularity = queryWindowGranularity(windows.token, tokenWindow);
+	const insightGranularity = queryWindowGranularity(windows.insight, insightWindow);
 
 	const detailReady = modelDetail !== undefined;
 	const providerId = modelDetail?.providerId ?? -1;
@@ -66,8 +66,7 @@ export default function ModelOverviewPage() {
 
 	const callCharts = useDashboardCharts(
 		{
-			startTime: callWindow.startTime,
-			endTime: callWindow.endTime,
+			window: callWindow,
 			providerId,
 			modelId: remoteModelId,
 			granularity: callGranularity,
@@ -76,8 +75,7 @@ export default function ModelOverviewPage() {
 	);
 	const tokenCharts = useDashboardCharts(
 		{
-			startTime: tokenWindow.startTime,
-			endTime: tokenWindow.endTime,
+			window: tokenWindow,
 			providerId,
 			modelId: remoteModelId,
 			granularity: tokenGranularity,
@@ -86,8 +84,7 @@ export default function ModelOverviewPage() {
 	);
 	const insightQuery = useDashboardInsight(
 		{
-			startTime: insightWindow.startTime,
-			endTime: insightWindow.endTime,
+			window: insightWindow,
 			providerId,
 			modelId: remoteModelId,
 			granularity: insightGranularity,

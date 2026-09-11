@@ -22,6 +22,33 @@ export interface PeriodBounds {
 	endTime: number;
 }
 
+/**
+ * 时间窗口定义：预设周期（天/周/月/年 + 相对偏移）或自定义区间。
+ * 绝对起止由 `now` 解析——同一个定义在不同时刻解析出不同终点。
+ */
+export interface RaceWindowState {
+	period: RacePeriod | "custom";
+	offset: number;
+	customStart: number;
+	customEnd: number;
+	/** 已应用的自定义窗口（null 时退化为输入值）。 */
+	appliedCustom: { startTime: number; endTime: number } | null;
+}
+
+/**
+ * 取数窗口：key 用稳定身份（窗口定义 + 时区），绝对起止延到取数时现算。
+ *
+ * 存在的理由：把「挂载时刻解析出的绝对 endTime」放进 query key，会让重取复用
+ * 旧 key 与旧窗口——当前周期被永久截在上一刻，刷新拿不到新数据。这里把身份与
+ * 取值分开：key 只随定义变化，`resolve()` 每次取数都用调用时刻。
+ */
+export interface QueryWindow {
+	/** query key 用的稳定身份（随窗口定义/时区变化，不含 now）。 */
+	readonly key: readonly (string | number | null)[];
+	/** 解析为绝对起止（当前周期截到调用时刻）。 */
+	readonly resolve: () => PeriodBounds;
+}
+
 /** 一天（本地时区）的毫秒数。 */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -242,6 +269,33 @@ export function periodBounds(
 	const targetStart = shiftPeriod(period, nowDate, offset);
 	const nextStart = nextPeriodStart(period, targetStart);
 	return boundsOf(currentStart.getTime(), targetStart.getTime(), nextStart.getTime(), now);
+}
+
+/** 由窗口状态派生绝对起止（自定义取已应用区间，预设周期按 now 解析）。 */
+export function raceWindowBounds(
+	state: RaceWindowState,
+	now: number,
+	timeZone?: string,
+): PeriodBounds {
+	if (state.period === "custom") {
+		return state.appliedCustom ?? { startTime: state.customStart, endTime: state.customEnd };
+	}
+	return periodBounds(state.period, state.offset, now, timeZone);
+}
+
+/**
+ * 构造取数窗口：key 用窗口定义 + 时区（跨渲染稳定），绝对起止延到取数时解析。
+ * 自定义窗口的起止本身是稳定的，故直接进 key。
+ */
+export function queryWindow(state: RaceWindowState, timeZone?: string): QueryWindow {
+	const custom = state.appliedCustom ?? { startTime: state.customStart, endTime: state.customEnd };
+	return {
+		key:
+			state.period === "custom"
+				? ["custom", custom.startTime, custom.endTime, timeZone ?? null]
+				: [state.period, state.offset, timeZone ?? null],
+		resolve: () => raceWindowBounds(state, Date.now(), timeZone),
+	};
 }
 
 /**

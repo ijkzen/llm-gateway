@@ -1,7 +1,8 @@
 import { statsKey, statsQuery } from "@/hooks/stats-query";
-import type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
+import type { QueryWindow } from "@/lib/race-period";
+import type { RaceSort, RaceSortKey } from "@/lib/race-types";
 
-export type { RaceSort, RaceSortKey, RaceWindow };
+export type { RaceSort, RaceSortKey };
 
 export interface ProviderModelRankItem {
 	/** 实际服务的供应商 ID。 */
@@ -33,10 +34,9 @@ export interface ProviderModelRankResponse {
 }
 
 export const providerModelRaceKeys = {
-	rank: (window: RaceWindow, sort: RaceSort, providerId?: number, apiKey?: string) =>
+	rank: (window: QueryWindow, sort: RaceSort, providerId?: number, apiKey?: string) =>
 		statsKey("provider-model-rank", [
-			window.startTime,
-			window.endTime,
+			...window.key,
 			sort.sortBy,
 			sort.sortOrder,
 			providerId,
@@ -46,14 +46,14 @@ export const providerModelRaceKeys = {
 
 /**
  * 供应商模型平铺赛马排行查询（全部供应商×模型 + 后端排序；可选按供应商 / 调用方 API Key 过滤）。
- * @param window 时间窗口
+ * @param window 取数窗口（key 用稳定身份，绝对起止在取数时解析）
  * @param sort 排序指标与方向
  * @param enabled 是否启用（配合懒加载 useInView 使用，未进入视口不发请求）
  * @param providerId 可选：只返回该供应商的模型
  * @param apiKey 可选：只统计该调用方 API Key 的请求（API Key 数据面板用）
  */
 export function useProviderModelRace(
-	window: RaceWindow,
+	window: QueryWindow,
 	sort: RaceSort,
 	enabled: boolean,
 	providerId?: number,
@@ -62,12 +62,11 @@ export function useProviderModelRace(
 	return statsQuery<ProviderModelRankResponse>({
 		endpoint: "stats/provider-model-rank",
 		key: providerModelRaceKeys.rank(window, sort, providerId, apiKey),
+		window,
 		enabled,
 		params: {
 			sortBy: sort.sortBy,
 			sortOrder: sort.sortOrder,
-			startTime: window.startTime,
-			endTime: window.endTime,
 			providerId,
 			apiKey,
 		},

@@ -1,13 +1,16 @@
 import {
+	type RaceWindowState,
 	chartGranularity,
 	defaultCustomWindow,
 	formatCompactPeriodLabel,
 	formatDateTimeLabel,
 	formatPeriodLabel,
 	periodBounds,
+	queryWindow,
+	raceWindowBounds,
 	toLocalInputValue,
 } from "@/lib/race-period";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 /**
  * 固定锚点：2026-08-30（周日）本地时区，用于稳定断言。
@@ -297,5 +300,68 @@ describe("ISO 周界（16-15：简化公式的实际行为钉死）", () => {
 		const tue = new Date("2026-08-25T12:00:00+08:00").getTime();
 		const sun = new Date("2026-08-30T12:00:00+08:00").getTime();
 		expect(formatPeriodLabel("week", 0, tue, "zh")).toBe(formatPeriodLabel("week", 0, sun, "zh"));
+	});
+});
+
+describe("queryWindow（取数窗口：身份稳定、取值现算）", () => {
+	const dayState: RaceWindowState = {
+		period: "day",
+		offset: 0,
+		customStart: 0,
+		customEnd: 0,
+		appliedCustom: null,
+	};
+
+	it("key 只含窗口定义与时区，不含随时间变化的绝对起止", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(2026, 7, 31, 10, 0, 0));
+		const first = queryWindow(dayState, "Asia/Shanghai");
+		vi.setSystemTime(new Date(2026, 7, 31, 12, 0, 0));
+		const second = queryWindow(dayState, "Asia/Shanghai");
+		// 同一窗口定义跨时刻得到同一个 key（重取才会复用缓存条目而非新建）。
+		expect(second.key).toEqual(first.key);
+		vi.useRealTimers();
+	});
+
+	it("resolve 每次按调用时刻解析，终点随时间前进", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(2026, 7, 31, 10, 0, 0));
+		const window = queryWindow(dayState, "Asia/Shanghai");
+		expect(window.resolve().endTime).toBe(new Date(2026, 7, 31, 10, 0, 0).getTime());
+		vi.setSystemTime(new Date(2026, 7, 31, 10, 30, 0));
+		expect(window.resolve().endTime).toBe(new Date(2026, 7, 31, 10, 30, 0).getTime());
+		vi.useRealTimers();
+	});
+
+	it("历史周期终点是固定边界，不随 now 变化", () => {
+		const prevWeek = queryWindow({ ...dayState, period: "week", offset: -1 }, "Asia/Shanghai");
+		const at = new Date(2026, 7, 31, 10, 0, 0).getTime();
+		const later = new Date(2026, 8, 5, 10, 0, 0).getTime();
+		expect(prevWeek.resolve().endTime).not.toBe(at);
+		// 半开区间与被观测时刻无关（同一 key 可安全长期复用）。
+		const bounds = prevWeek.resolve();
+		expect(bounds.endTime).toBeGreaterThan(bounds.startTime);
+		expect(
+			raceWindowBounds({ ...dayState, period: "week", offset: -1 }, later, "Asia/Shanghai"),
+		).toEqual(raceWindowBounds({ ...dayState, period: "week", offset: -1 }, at, "Asia/Shanghai"));
+	});
+
+	it("自定义窗口用已应用区间，key 带绝对起止（本身稳定）", () => {
+		const custom = queryWindow(
+			{
+				...dayState,
+				period: "custom",
+				appliedCustom: { startTime: 1000, endTime: 2000 },
+			},
+			"Asia/Shanghai",
+		);
+		expect(custom.key).toEqual(["custom", 1000, 2000, "Asia/Shanghai"]);
+		expect(custom.resolve()).toEqual({ startTime: 1000, endTime: 2000 });
+	});
+
+	it("时区变化会改变 key（设置表切时区须触发重取）", () => {
+		expect(queryWindow(dayState, "Asia/Shanghai").key).not.toEqual(
+			queryWindow(dayState, "UTC").key,
+		);
 	});
 });

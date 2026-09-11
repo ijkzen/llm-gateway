@@ -5,15 +5,18 @@ import {
 	RaceWindowControl,
 	type RaceWindowState,
 	initialWindowFromUrl,
-	raceWindowBounds,
 	useSectionSubtitle,
 } from "@/components/race-window-control";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { InsightData } from "@/hooks/use-dashboard-insight";
 import type { DashboardCharts } from "@/hooks/use-dashboard-stats";
-import type { ChartGranularity } from "@/lib/race-period";
-import { chartGranularity } from "@/lib/race-period";
+import {
+	type ChartGranularity,
+	type QueryWindow,
+	chartGranularity,
+	queryWindow,
+} from "@/lib/race-period";
 import { type ReactNode, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
@@ -33,24 +36,25 @@ export function useSectionWindows<const K extends string>(
 		const init = initial ? initial() : initialWindowFromUrl(searchParams);
 		return Object.fromEntries(keys.map((k) => [k, { ...init }])) as Record<K, RaceWindowState>;
 	});
-	// 各块固化 now（标题/窗口终点稳定）。
+	// 展示用 now（副标题/控件标签）；窗口终点由取数窗口在取数时现算。
 	const [now] = useState(() => Date.now());
 	const setWindow = (key: K) => (patch: Partial<RaceWindowState>) =>
 		setWindows((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
 	return { windows, now, setWindow };
 }
 
-/** 区块窗口（毫秒起止；timeZone 缺省按浏览器本地解释）。 */
-export function sectionWindow(state: RaceWindowState, now: number, timeZone?: string) {
-	return raceWindowBounds(state, now, timeZone);
+/** 区块取数窗口（key 用稳定身份，绝对起止在取数时解析）。 */
+export function sectionWindow(state: RaceWindowState, timeZone?: string): QueryWindow {
+	return queryWindow(state, timeZone);
 }
 
-/** 图表桶粒度（由区块窗口推导）。 */
-export function sectionGranularity(
+/** 由取数窗口现算粒度（粒度只依赖窗口长度，与 now 无关，故可安全即时解析）。 */
+export function queryWindowGranularity(
 	state: RaceWindowState,
-	window: { startTime: number; endTime: number },
+	window: QueryWindow,
 ): ChartGranularity {
-	return chartGranularity(state.period, window.startTime, window.endTime);
+	const bounds = window.resolve();
+	return chartGranularity(state.period, bounds.startTime, bounds.endTime);
 }
 
 interface SectionStatus {

@@ -1,6 +1,6 @@
 import { statsKey, statsQuery } from "@/hooks/stats-query";
-import type { ChartGranularity } from "@/lib/race-period";
-import type { StatsFilter, TimeWindowParams } from "@/lib/race-types";
+import type { ChartGranularity, QueryWindow } from "@/lib/race-period";
+import type { StatsFilter } from "@/lib/race-types";
 
 /** 每桶趋势点（整数，如调用数/Token 数/失败数）。 */
 export interface TrendPoint {
@@ -49,15 +49,16 @@ export interface InsightData {
 }
 
 /** 查询参数（与 useDashboardCharts 同一套过滤/窗口/粒度）。 */
-export interface InsightParams extends TimeWindowParams, StatsFilter {
+export interface InsightParams extends StatsFilter {
 	granularity?: ChartGranularity;
+	/** 取数窗口；缺省由后端回退默认窗口。 */
+	window?: QueryWindow;
 }
 
 export const insightKeys = {
 	all: (params: InsightParams = {}) =>
 		statsKey("insight", [
-			params.startTime,
-			params.endTime,
+			...(params.window?.key ?? []),
 			params.providerId,
 			params.virtualModelId,
 			params.modelId,
@@ -70,10 +71,9 @@ export function useDashboardInsight(params: InsightParams = {}, enabled = true) 
 	return statsQuery<InsightData>({
 		endpoint: "stats/insight",
 		key: insightKeys.all(params),
+		window: params.window,
 		enabled,
 		params: {
-			startTime: params.startTime,
-			endTime: params.endTime,
 			providerId: params.providerId,
 			virtualModelId: params.virtualModelId,
 			modelId: params.modelId,

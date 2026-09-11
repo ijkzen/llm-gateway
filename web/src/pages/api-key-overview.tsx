@@ -6,7 +6,7 @@ import { ProviderRaceCard } from "@/components/provider-race/ProviderRaceCard";
 import { initialWindowFromUrl } from "@/components/race-window-control";
 import {
 	AnalysisSections,
-	sectionGranularity,
+	queryWindowGranularity,
 	sectionWindow,
 	useSectionSubtitle,
 	useSectionWindows,
@@ -45,23 +45,22 @@ export default function ApiKeyOverviewPage() {
 	const keyName = detailQuery.data?.name ?? null;
 
 	const tz = useStatsTimeZone();
-	const metricsWindow = sectionWindow(windows.metrics, now, tz);
-	const callWindow = sectionWindow(windows.call, now, tz);
-	const tokenWindow = sectionWindow(windows.token, now, tz);
-	const insightWindow = sectionWindow(windows.insight, now, tz);
+	const metricsWindow = sectionWindow(windows.metrics, tz);
+	const callWindow = sectionWindow(windows.call, tz);
+	const tokenWindow = sectionWindow(windows.token, tz);
+	const insightWindow = sectionWindow(windows.insight, tz);
 
 	// 图表桶粒度由所选时间窗口推导（分桶时区由后端按设置表解释）。
-	const callGranularity = sectionGranularity(windows.call, callWindow);
-	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
-	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
+	const callGranularity = queryWindowGranularity(windows.call, callWindow);
+	const tokenGranularity = queryWindowGranularity(windows.token, tokenWindow);
+	const insightGranularity = queryWindowGranularity(windows.insight, insightWindow);
 
 	// key 解析前不发指标/图表请求（query 无 name 参数无意义）。
 	const keyReady = keyName !== null;
 	const apiKeyMetrics = useApiKeyMetrics(keyName, metricsWindow, keyReady);
 	const callCharts = useDashboardCharts(
 		{
-			startTime: callWindow.startTime,
-			endTime: callWindow.endTime,
+			window: callWindow,
 			apiKey: keyName ?? undefined,
 			granularity: callGranularity,
 		},
@@ -69,8 +68,7 @@ export default function ApiKeyOverviewPage() {
 	);
 	const tokenCharts = useDashboardCharts(
 		{
-			startTime: tokenWindow.startTime,
-			endTime: tokenWindow.endTime,
+			window: tokenWindow,
 			apiKey: keyName ?? undefined,
 			granularity: tokenGranularity,
 		},
@@ -78,8 +76,7 @@ export default function ApiKeyOverviewPage() {
 	);
 	const insightQuery = useDashboardInsight(
 		{
-			startTime: insightWindow.startTime,
-			endTime: insightWindow.endTime,
+			window: insightWindow,
 			apiKey: keyName ?? undefined,
 			granularity: insightGranularity,
 		},

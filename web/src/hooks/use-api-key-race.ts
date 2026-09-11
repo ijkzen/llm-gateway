@@ -1,7 +1,8 @@
 import { statsFilterKeySegments, statsKey, statsQuery } from "@/hooks/stats-query";
-import type { RaceSort, RaceWindow, StatsFilter } from "@/lib/race-types";
+import type { QueryWindow } from "@/lib/race-period";
+import type { RaceSort, StatsFilter } from "@/lib/race-types";
 
-export type { RaceSort, RaceSortKey, RaceWindow } from "@/lib/race-types";
+export type { RaceSort, RaceSortKey } from "@/lib/race-types";
 
 export interface ApiKeyRankItem {
 	/** 调用方 API Key 名称（Key 已删除的历史行仍按原名聚合）。 */
@@ -32,10 +33,9 @@ export interface ApiKeyRankResponse {
 export type ApiKeyRaceFilter = Pick<StatsFilter, "providerId" | "virtualModelId" | "modelId">;
 
 export const apiKeyRaceKeys = {
-	rank: (window: RaceWindow, sort: RaceSort, filter?: ApiKeyRaceFilter) =>
+	rank: (window: QueryWindow, sort: RaceSort, filter?: ApiKeyRaceFilter) =>
 		statsKey("api-key-rank", [
-			window.startTime,
-			window.endTime,
+			...window.key,
 			sort.sortBy,
 			sort.sortOrder,
 			...(filter ? statsFilterKeySegments(filter).slice(0, 3) : [null, null, null]),
@@ -44,13 +44,13 @@ export const apiKeyRaceKeys = {
 
 /**
  * API Key 维度赛马排行查询（全部 API Key + 后端排序；可选按供应商/虚拟模型/模型过滤）。
- * @param window 时间窗口
+ * @param window 取数窗口（key 用稳定身份，绝对起止在取数时解析）
  * @param sort 排序指标与方向
  * @param enabled 是否启用（配合懒加载 useInView 使用，未进入视口不发请求）
  * @param filter 可选过滤（首页传空，二级/三级页按需传）
  */
 export function useApiKeyRace(
-	window: RaceWindow,
+	window: QueryWindow,
 	sort: RaceSort,
 	enabled: boolean,
 	filter?: ApiKeyRaceFilter,
@@ -58,12 +58,11 @@ export function useApiKeyRace(
 	return statsQuery<ApiKeyRankResponse>({
 		endpoint: "stats/api-key-rank",
 		key: apiKeyRaceKeys.rank(window, sort, filter),
+		window,
 		enabled,
 		params: {
 			sortBy: sort.sortBy,
 			sortOrder: sort.sortOrder,
-			startTime: window.startTime,
-			endTime: window.endTime,
 			providerId: filter?.providerId,
 			virtualModelId: filter?.virtualModelId,
 			modelId: filter?.modelId,

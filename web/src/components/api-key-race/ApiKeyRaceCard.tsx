@@ -47,7 +47,7 @@ export function ApiKeyRaceCard({
 				if (item.apiKeyId === null || item.apiKeyId === undefined) {
 					return;
 				}
-				navigate(raceHref(`/api-keys/${item.apiKeyId}/overview`, view.windowState, view.window));
+				navigate(raceHref(`/api-keys/${item.apiKeyId}/overview`, view.windowState));
 			}}
 			isRowClickable={isRowClickable}
 			rowTitleKey="race.openApiKeyOverview"

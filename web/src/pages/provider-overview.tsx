@@ -4,16 +4,12 @@ import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { ProviderUsageCard, usageEnabled } from "@/components/providers/ProviderUsageCard";
 import { initialWindowFromUrl } from "@/components/race-window-control";
-import {
-	type RaceWindowState,
-	raceWindowBounds,
-	windowQueryString,
-} from "@/components/race-window-control";
+import { type RaceWindowState, windowQueryString } from "@/components/race-window-control";
 import { SortableMetricTable, useRaceSort } from "@/components/sortable-metric-table";
 import {
 	AnalysisSections,
 	CardStatsSection,
-	sectionGranularity,
+	queryWindowGranularity,
 	sectionWindow,
 	useSectionSubtitle,
 	useSectionWindows,
@@ -37,23 +33,26 @@ const SECTION_KEYS = ["metrics", "call", "token", "race", "insight"] as const;
 function InternalModelRaceTable({
 	providerId,
 	windowState,
-	now,
+	tz,
 }: {
 	providerId: number;
 	windowState: RaceWindowState;
-	now: number;
+	tz: string;
 }) {
 	const navigate = useNavigate();
 	const { sort, onSort } = useRaceSort();
-	const tz = useStatsTimeZone();
-	const window = raceWindowBounds(windowState, now, tz);
+	const window = sectionWindow(windowState, tz);
 	const query = useProviderModelRace(window, sort, true, providerId);
 
 	const openModelOverview = (item: ProviderModelRankItem) => {
 		if (item.modelPk === null || item.modelPk === undefined) {
 			return;
 		}
-		navigate(`/models/${item.modelPk}/overview?${windowQueryString(windowState, window)}`);
+		const custom = windowState.appliedCustom ?? {
+			startTime: windowState.customStart,
+			endTime: windowState.customEnd,
+		};
+		navigate(`/models/${item.modelPk}/overview?${windowQueryString(windowState, custom)}`);
 	};
 
 	return (
@@ -91,15 +90,15 @@ export default function ProviderOverviewPage() {
 		providerDetail.data?.name ?? t("dashboardPage.providerLabel", { id: providerId });
 	const keyReady = idValid && !providerDetail.isError;
 
-	const metricsWindow = sectionWindow(windows.metrics, now, tz);
-	const callWindow = sectionWindow(windows.call, now, tz);
-	const tokenWindow = sectionWindow(windows.token, now, tz);
-	const insightWindow = sectionWindow(windows.insight, now, tz);
+	const metricsWindow = sectionWindow(windows.metrics, tz);
+	const callWindow = sectionWindow(windows.call, tz);
+	const tokenWindow = sectionWindow(windows.token, tz);
+	const insightWindow = sectionWindow(windows.insight, tz);
 
 	// 图表桶粒度由所选时间窗口推导（分桶时区由后端按设置表解释）。
-	const callGranularity = sectionGranularity(windows.call, callWindow);
-	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
-	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
+	const callGranularity = queryWindowGranularity(windows.call, callWindow);
+	const tokenGranularity = queryWindowGranularity(windows.token, tokenWindow);
+	const insightGranularity = queryWindowGranularity(windows.insight, insightWindow);
 
 	const providerMetrics = useProviderMetrics(providerId, metricsWindow, keyReady);
 	// 订阅制 + 开启用量时才有预估；非订阅制后端返回 400，此处直接禁用。
@@ -109,8 +108,7 @@ export default function ProviderOverviewPage() {
 
 	const callCharts = useDashboardCharts(
 		{
-			startTime: callWindow.startTime,
-			endTime: callWindow.endTime,
+			window: callWindow,
 			providerId,
 			granularity: callGranularity,
 		},
@@ -118,8 +116,7 @@ export default function ProviderOverviewPage() {
 	);
 	const tokenCharts = useDashboardCharts(
 		{
-			startTime: tokenWindow.startTime,
-			endTime: tokenWindow.endTime,
+			window: tokenWindow,
 			providerId,
 			granularity: tokenGranularity,
 		},
@@ -127,8 +124,7 @@ export default function ProviderOverviewPage() {
 	);
 	const insightQuery = useDashboardInsight(
 		{
-			startTime: insightWindow.startTime,
-			endTime: insightWindow.endTime,
+			window: insightWindow,
 			providerId,
 			granularity: insightGranularity,
 		},
@@ -198,7 +194,7 @@ export default function ProviderOverviewPage() {
 				windowState={windows.race}
 				onWindowChange={setWindow("race")}
 			>
-				<InternalModelRaceTable providerId={providerId} windowState={windows.race} now={now} />
+				<InternalModelRaceTable providerId={providerId} windowState={windows.race} tz={tz} />
 			</CardStatsSection>
 		</div>
 	);

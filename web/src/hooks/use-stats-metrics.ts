@@ -1,4 +1,5 @@
 import { statsKey, statsQuery } from "@/hooks/stats-query";
+import type { QueryWindow } from "@/lib/race-period";
 
 /** 供应商级 6 指标（与后端 GET /api/stats/provider-metrics 对齐）。 */
 export interface ProviderMetrics {
@@ -24,30 +25,22 @@ export interface VirtualModelMetrics {
 	cacheHitRate: number;
 }
 
-export interface MetricsWindow {
-	/** 窗口起点（毫秒时间戳，含）。 */
-	startTime: number;
-	/** 窗口终点（毫秒时间戳，不含）。 */
-	endTime: number;
-}
-
 export const statsMetricsKeys = {
-	provider: (providerId: number, window: MetricsWindow) =>
-		statsKey("provider-metrics", [providerId, window.startTime, window.endTime]),
-	virtualModel: (virtualModelId: number, window: MetricsWindow) =>
-		statsKey("virtual-model-metrics", [virtualModelId, window.startTime, window.endTime]),
+	provider: (providerId: number, window: QueryWindow) =>
+		statsKey("provider-metrics", [providerId, ...window.key]),
+	virtualModel: (virtualModelId: number, window: QueryWindow) =>
+		statsKey("virtual-model-metrics", [virtualModelId, ...window.key]),
 };
 
 /** 供应商级 6 指标聚合（二级页顶部指标卡）。 */
-export function useProviderMetrics(providerId: number, window: MetricsWindow, enabled = true) {
+export function useProviderMetrics(providerId: number, window: QueryWindow, enabled = true) {
 	return statsQuery<ProviderMetrics>({
 		endpoint: "stats/provider-metrics",
 		key: statsMetricsKeys.provider(providerId, window),
+		window,
 		enabled,
 		params: {
 			providerId,
-			startTime: window.startTime,
-			endTime: window.endTime,
 		},
 	});
 }
@@ -55,17 +48,16 @@ export function useProviderMetrics(providerId: number, window: MetricsWindow, en
 /** 虚拟模型级 6 指标聚合（二级页顶部指标卡）。 */
 export function useVirtualModelMetrics(
 	virtualModelId: number,
-	window: MetricsWindow,
+	window: QueryWindow,
 	enabled = true,
 ) {
 	return statsQuery<VirtualModelMetrics>({
 		endpoint: "stats/virtual-model-metrics",
 		key: statsMetricsKeys.virtualModel(virtualModelId, window),
+		window,
 		enabled,
 		params: {
 			virtualModelId,
-			startTime: window.startTime,
-			endTime: window.endTime,
 		},
 	});
 }
@@ -82,15 +74,14 @@ export interface ApiKeyMetrics {
 	cacheHitRate: number;
 }
 
-export function useApiKeyMetrics(apiKey: string | null, window: MetricsWindow, enabled = true) {
+export function useApiKeyMetrics(apiKey: string | null, window: QueryWindow, enabled = true) {
 	return statsQuery<ApiKeyMetrics>({
 		endpoint: "stats/api-key-metrics",
-		key: statsKey("api-key-metrics", [apiKey, window.startTime, window.endTime]),
+		key: statsKey("api-key-metrics", [apiKey, ...window.key]),
+		window,
 		enabled: enabled && apiKey !== null,
 		params: {
 			apiKey: apiKey ?? undefined,
-			startTime: window.startTime,
-			endTime: window.endTime,
 		},
 	});
 }

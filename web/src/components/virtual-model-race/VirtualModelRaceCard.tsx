@@ -33,13 +33,7 @@ export function VirtualModelRaceCard({
 			renderName={(item) => item.virtualModelDisplayId || t("race.unknownVirtualModel")}
 			rowKey={(item) => item.virtualModelId}
 			onRowClick={(item, view) =>
-				navigate(
-					raceHref(
-						`/virtual-models/${item.virtualModelId}/overview`,
-						view.windowState,
-						view.window,
-					),
-				)
+				navigate(raceHref(`/virtual-models/${item.virtualModelId}/overview`, view.windowState))
 			}
 			rowTitleKey="race.openVirtualModelOverview"
 		/>

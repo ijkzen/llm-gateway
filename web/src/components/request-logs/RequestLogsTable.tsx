@@ -2,11 +2,7 @@ import { DataTableColumnHeader } from "@/components/data-table/column-header";
 import { DataTableViewOptions } from "@/components/data-table/view-options";
 import { EmptyState } from "@/components/empty-state";
 import { MultiSelect, type MultiSelectOption } from "@/components/multi-select";
-import {
-	RaceWindowControl,
-	type RaceWindowState,
-	raceWindowBounds,
-} from "@/components/race-window-control";
+import { RaceWindowControl, type RaceWindowState } from "@/components/race-window-control";
 import { RequestLogDetailDialog } from "@/components/request-logs/RequestLogDetailDialog";
 import { TableSkeleton } from "@/components/table-skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +29,7 @@ import { useProviders } from "@/hooks/use-providers";
 import { type RequestLogRow, useRequestLogs } from "@/hooks/use-request-logs";
 import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import { useVirtualModels } from "@/hooks/use-virtual-models";
+import { queryWindow } from "@/lib/race-period";
 import {
 	type ColumnDef,
 	type SortingState,
@@ -146,11 +143,10 @@ export function RequestLogsTable() {
 	const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
 	// 时间过滤：通用时间组件（天/周/月/年/自定义），默认今天。
 	const [timeWindow, setTimeWindow] = useState<RaceWindowState>(defaultTimeWindow);
-	// now 随重置刷新：当前周期（offset=0）的 endTime 由它派生，
-	// 若固化在挂载时刻，重置后结束时间不更新，最新日志查不到。
-	const [now, setNow] = useState(() => Date.now());
+	// 展示用 now（窗口控件标签）；取数窗口的终点在取数时现算，不依赖它。
+	const [now] = useState(() => Date.now());
 	const tz = useStatsTimeZone();
-	const timeBounds = raceWindowBounds(timeWindow, now, tz);
+	const timeWindowQuery = queryWindow(timeWindow, tz);
 
 	const { data: virtualModels } = useVirtualModels();
 	const { data: providers } = useProviders();
@@ -228,23 +224,23 @@ export function RequestLogsTable() {
 	const sortOrder = sorting[0]?.desc ? "desc" : "asc";
 
 	// 过滤参数：空数组（=全部）归一化为 undefined，请求不携带该参数。
-	const query = useRequestLogs({
-		page,
-		pageSize,
-		vmId: vmIds.length > 0 ? vmIds.map(Number) : undefined,
-		providerId: selectedProviderIds.length > 0 ? selectedProviderIds : undefined,
-		modelId: modelIds.length > 0 ? modelIds : undefined,
-		success,
-		apiKey: selectedApiKeys.length > 0 ? selectedApiKeys : undefined,
-		startTime: timeBounds.startTime,
-		endTime: timeBounds.endTime,
-		sortBy,
-		sortOrder,
-	});
+	const query = useRequestLogs(
+		{
+			page,
+			pageSize,
+			vmId: vmIds.length > 0 ? vmIds.map(Number) : undefined,
+			providerId: selectedProviderIds.length > 0 ? selectedProviderIds : undefined,
+			modelId: modelIds.length > 0 ? modelIds : undefined,
+			success,
+			apiKey: selectedApiKeys.length > 0 ? selectedApiKeys : undefined,
+			sortBy,
+			sortOrder,
+		},
+		timeWindowQuery,
+	);
 	const { data, isLoading, isError, refetch } = query;
 
 	const resetAll = () => {
-		setNow(Date.now());
 		setTimeWindow(defaultTimeWindow());
 		setVmIds([]);
 		setProviderIds([]);

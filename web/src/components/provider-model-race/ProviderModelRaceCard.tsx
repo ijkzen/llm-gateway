@@ -46,7 +46,7 @@ export function ProviderModelRaceCard({
 				if (item.modelPk === null || item.modelPk === undefined) {
 					return;
 				}
-				navigate(raceHref(`/models/${item.modelPk}/overview`, view.windowState, view.window));
+				navigate(raceHref(`/models/${item.modelPk}/overview`, view.windowState));
 			}}
 			isRowClickable={isRowClickable}
 			rowTitleKey="race.openModelDetail"

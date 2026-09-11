@@ -3,16 +3,12 @@ import { MetricsSummaryCard } from "@/components/dashboard/metrics-summary-card"
 import { ErrorState } from "@/components/error-state";
 import { PageHeader } from "@/components/page-header";
 import { initialWindowFromUrl } from "@/components/race-window-control";
-import {
-	type RaceWindowState,
-	raceWindowBounds,
-	windowQueryString,
-} from "@/components/race-window-control";
+import { type RaceWindowState, windowQueryString } from "@/components/race-window-control";
 import { SortableMetricTable, useRaceSort } from "@/components/sortable-metric-table";
 import {
 	AnalysisSections,
 	CardStatsSection,
-	sectionGranularity,
+	queryWindowGranularity,
 	sectionWindow,
 	useSectionSubtitle,
 	useSectionWindows,
@@ -39,24 +35,27 @@ const SECTION_KEYS = ["metrics", "call", "token", "race", "insight"] as const;
 function MemberModelRaceTable({
 	virtualModelId,
 	windowState,
-	now,
+	tz,
 }: {
 	virtualModelId: number;
 	windowState: RaceWindowState;
-	now: number;
+	tz: string;
 }) {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const { sort, onSort } = useRaceSort();
-	const tz = useStatsTimeZone();
-	const window = raceWindowBounds(windowState, now, tz);
+	const window = sectionWindow(windowState, tz);
 	const query = useVirtualModelMemberRank(window, sort, true, virtualModelId);
 
 	const openModelOverview = (item: VirtualModelMemberRankItem) => {
 		if (item.modelPk === null || item.modelPk === undefined) {
 			return;
 		}
-		navigate(`/models/${item.modelPk}/overview?${windowQueryString(windowState, window)}`);
+		const custom = windowState.appliedCustom ?? {
+			startTime: windowState.customStart,
+			endTime: windowState.customEnd,
+		};
+		navigate(`/models/${item.modelPk}/overview?${windowQueryString(windowState, custom)}`);
 	};
 
 	if (query.isLoading) {
@@ -116,22 +115,21 @@ export default function VirtualModelOverviewPage() {
 		detail.data?.displayId ?? t("dashboardPage.virtualModelLabel", { id: virtualModelId });
 	const keyReady = idValid && !detail.isError;
 
-	const metricsWindow = sectionWindow(windows.metrics, now, tz);
-	const callWindow = sectionWindow(windows.call, now, tz);
-	const tokenWindow = sectionWindow(windows.token, now, tz);
-	const insightWindow = sectionWindow(windows.insight, now, tz);
+	const metricsWindow = sectionWindow(windows.metrics, tz);
+	const callWindow = sectionWindow(windows.call, tz);
+	const tokenWindow = sectionWindow(windows.token, tz);
+	const insightWindow = sectionWindow(windows.insight, tz);
 
 	const vmMetrics = useVirtualModelMetrics(virtualModelId, metricsWindow, keyReady);
 
 	// 图表桶粒度由所选时间窗口推导（分桶时区由后端按设置表解释）。
-	const callGranularity = sectionGranularity(windows.call, callWindow);
-	const tokenGranularity = sectionGranularity(windows.token, tokenWindow);
-	const insightGranularity = sectionGranularity(windows.insight, insightWindow);
+	const callGranularity = queryWindowGranularity(windows.call, callWindow);
+	const tokenGranularity = queryWindowGranularity(windows.token, tokenWindow);
+	const insightGranularity = queryWindowGranularity(windows.insight, insightWindow);
 
 	const callCharts = useDashboardCharts(
 		{
-			startTime: callWindow.startTime,
-			endTime: callWindow.endTime,
+			window: callWindow,
 			virtualModelId,
 			granularity: callGranularity,
 		},
@@ -139,8 +137,7 @@ export default function VirtualModelOverviewPage() {
 	);
 	const tokenCharts = useDashboardCharts(
 		{
-			startTime: tokenWindow.startTime,
-			endTime: tokenWindow.endTime,
+			window: tokenWindow,
 			virtualModelId,
 			granularity: tokenGranularity,
 		},
@@ -148,8 +145,7 @@ export default function VirtualModelOverviewPage() {
 	);
 	const insightQuery = useDashboardInsight(
 		{
-			startTime: insightWindow.startTime,
-			endTime: insightWindow.endTime,
+			window: insightWindow,
 			virtualModelId,
 			granularity: insightGranularity,
 		},
@@ -212,11 +208,7 @@ export default function VirtualModelOverviewPage() {
 				windowState={windows.race}
 				onWindowChange={setWindow("race")}
 			>
-				<MemberModelRaceTable
-					virtualModelId={virtualModelId}
-					windowState={windows.race}
-					now={now}
-				/>
+				<MemberModelRaceTable virtualModelId={virtualModelId} windowState={windows.race} tz={tz} />
 			</CardStatsSection>
 		</div>
 	);

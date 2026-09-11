@@ -33,7 +33,7 @@ export function ProviderRaceCard({
 			renderName={(item) => item.providerName || t("race.unknownProvider")}
 			rowKey={(item) => item.providerId}
 			onRowClick={(item, view) =>
-				navigate(raceHref(`/providers/${item.providerId}/overview`, view.windowState, view.window))
+				navigate(raceHref(`/providers/${item.providerId}/overview`, view.windowState))
 			}
 			rowTitleKey="race.openProviderOverview"
 		/>

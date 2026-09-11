@@ -1,4 +1,5 @@
 import { RequestLogsTable } from "@/components/request-logs/RequestLogsTable";
+import type { QueryWindow } from "@/lib/race-period";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -88,6 +89,12 @@ function lastParams(): Record<string, unknown> | undefined {
 	return calls[calls.length - 1]?.[0];
 }
 
+/** 最近一次传给 useRequestLogs 的取数窗口。 */
+function lastWindow(): QueryWindow | undefined {
+	const calls = mocks.useRequestLogs.mock.calls;
+	return calls[calls.length - 1]?.[1] as QueryWindow | undefined;
+}
+
 describe("RequestLogsTable", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -175,17 +182,21 @@ describe("RequestLogsTable", () => {
 		expect(screen.getByRole("button", { name: "天" })).toHaveAttribute("aria-pressed", "true");
 	});
 
-	it("时间过滤通过 startTime/endTime 传给请求", () => {
+	it("时间过滤以取数窗口传给请求（默认今天，终点在取数时解析）", () => {
 		mockQuery({ items: [], total: 0 });
 		render(<RequestLogsTable />);
 
-		// 默认「天」：startTime = 今天 0 点，endTime = 当前时刻。
-		const params = mocks.useRequestLogs.mock.calls[0]?.[0];
-		expect(params).toBeDefined();
-		const start = new Date(params?.startTime ?? 0);
+		// 默认「天」：key 只带窗口定义，绝对起止由 resolve() 现算。
+		const window = lastWindow();
+		expect(window?.key).toEqual(["day", 0, expect.any(String)]);
+		const bounds = window?.resolve();
+		const start = new Date(bounds?.startTime ?? 0);
 		expect(start.getHours()).toBe(0);
 		expect(start.getMinutes()).toBe(0);
-		expect(typeof params.endTime).toBe("number");
+		expect(typeof bounds?.endTime).toBe("number");
+		// 查询参数里不再内联绝对起止（改由 queryFn 现算并拼进 URL）。
+		expect(lastParams()?.startTime).toBeUndefined();
+		expect(lastParams()?.endTime).toBeUndefined();
 	});
 
 	it("时间窗口变更重置回第一页（16-03 回归）", () => {
@@ -233,23 +244,27 @@ describe("RequestLogsTable", () => {
 		expect(params?.page).toBe(1);
 	});
 
-	it("重置后 endTime 刷新为新的当前时刻（修复固化 now 导致查不到最新日志）", () => {
+	it("取数窗口终点随当前时刻前进，且跨零点窗口起点跟随（刷新即见最新日志）", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date(2026, 7, 31, 10, 0, 0));
 		mockQuery({ items: [], total: 0 });
 		render(<RequestLogsTable />);
 
-		const firstEnd = mocks.useRequestLogs.mock.calls[0]?.[0]?.endTime;
-		expect(firstEnd).toBe(new Date(2026, 7, 31, 10, 0, 0).getTime());
+		const window = lastWindow();
+		// 此前固化 now 导致终点钉在挂载时刻；现在同一窗口身份可重复解析。
+		expect(window?.resolve().endTime).toBe(new Date(2026, 7, 31, 10, 0, 0).getTime());
+		// key 不含绝对时间：跨时刻稳定，故重取不会因 key 变化而丢缓存、也不会复用旧窗口。
+		expect(window?.key).toEqual(["day", 0, expect.any(String)]);
 
-		// 时间前进 5 分钟后重置：endTime 应更新到新时刻。
+		// 时间前进 5 分钟：同一取数窗口解析出更晚的终点 —— 顶栏刷新即可拿到新行。
 		vi.setSystemTime(new Date(2026, 7, 31, 10, 5, 0));
-		fireEvent.click(screen.getByRole("button", { name: /重置/ }));
+		expect(window?.resolve().endTime).toBe(new Date(2026, 7, 31, 10, 5, 0).getTime());
 
-		const calls = mocks.useRequestLogs.mock.calls;
-		const lastCall = calls[calls.length - 1]?.[0];
-		expect(lastCall?.endTime).toBe(new Date(2026, 7, 31, 10, 5, 0).getTime());
-		expect(lastCall?.endTime).toBeGreaterThan(firstEnd ?? 0);
+		// 跨零点：窗口整体滚到新的一天（旧实现里 startTime 也冻在昨天）。
+		vi.setSystemTime(new Date(2026, 8, 1, 0, 30, 0));
+		const afterMidnight = window?.resolve();
+		expect(new Date(afterMidnight?.startTime ?? 0).getDate()).toBe(1);
+		expect(afterMidnight?.endTime).toBe(new Date(2026, 8, 1, 0, 30, 0).getTime());
 
 		vi.useRealTimers();
 	});

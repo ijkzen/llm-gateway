@@ -3,40 +3,39 @@ import {
 	RaceWindowControl,
 	type RaceWindowState,
 	defaultRaceWindowState,
-	raceWindowBounds,
 	useSectionSubtitle,
 } from "@/components/race-window-control";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useInView } from "@/hooks/use-in-view";
 import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
-import type { RaceWindow } from "@/lib/race-types";
+import { type QueryWindow, queryWindow } from "@/lib/race-period";
 import type { LucideIcon } from "lucide-react";
 import { type ReactNode, type RefObject, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-/** 赛马卡窗口视图：固化 now + 窗口状态 + 懒加载观察（四张赛马卡共用）。 */
+/** 赛马卡窗口视图：展示用 now + 窗口状态 + 取数窗口 + 懒加载观察（四张赛马卡共用）。 */
 export interface RaceCardWindow {
-	/** 挂载时刻固化的 now（当前周期标题/窗口终点稳定）。 */
+	/** 挂载时刻固化的 now，仅供标题/窗口标签展示（不参与取数）。 */
 	now: number;
 	windowState: RaceWindowState;
 	onWindowChange: (patch: Partial<RaceWindowState>) => void;
-	/** 由窗口状态派生的查询窗口（毫秒起止）。 */
-	window: RaceWindow;
+	/** 取数窗口：key 用稳定身份，绝对起止在取数时解析。 */
+	window: QueryWindow;
 	/** 挂到 Card 上的懒加载观察 ref。 */
 	ref: RefObject<HTMLDivElement | null>;
 	inView: boolean;
 }
 
-/** 赛马卡窗口状态机：now 固化、窗口状态、派生窗口与懒加载。 */
+/** 赛马卡窗口状态机：展示用 now、窗口状态、取数窗口与懒加载。 */
 export function useRaceCardWindow(initialWindow?: RaceWindowState): RaceCardWindow {
-	// 挂载时刻固化 now：保证「当前周期」的窗口终点稳定，不因渲染抖动重复请求。
+	// 固化 now 只服务展示（标题/标签），取数窗口由 queryWindow 在取数时现算。
 	const [now] = useState(() => Date.now());
 	const tz = useStatsTimeZone();
 	const [windowState, setWindowState] = useState<RaceWindowState>(
 		() => initialWindow ?? defaultRaceWindowState(),
 	);
-	const window = raceWindowBounds(windowState, now, tz);
+	const window = queryWindow(windowState, tz);
 	const { ref, inView } = useInView();
 	const onWindowChange = (patch: Partial<RaceWindowState>) => {
 		setWindowState((prev) => ({ ...prev, ...patch }));

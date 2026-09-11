@@ -11,11 +11,12 @@ import { Input } from "@/components/ui/input";
 import { useStatsTimeZone } from "@/hooks/use-stats-time-zone";
 import {
 	type RacePeriod,
+	type RaceWindowState,
 	defaultCustomWindow,
 	formatCompactPeriodLabel,
 	formatDateTimeLabel,
 	formatPeriodLabel,
-	periodBounds,
+	raceWindowBounds,
 	toLocalInputValue,
 } from "@/lib/race-period";
 import { localeOf } from "@/lib/utils";
@@ -33,14 +34,9 @@ const PERIOD_OPTION_KEYS: Record<(typeof PERIOD_OPTION_VALUES)[number], string> 
 	custom: "race.custom",
 };
 
-export interface RaceWindowState {
-	period: RacePeriod | "custom";
-	offset: number;
-	customStart: number;
-	customEnd: number;
-	/** 已应用的自定义窗口（null 时退化为输入值）。 */
-	appliedCustom: { startTime: number; endTime: number } | null;
-}
+/** 窗口数学与定义类型归位到 lib/race-period.ts，此处转出以保持既有导入路径。 */
+export type { RaceWindowState };
+export { raceWindowBounds };
 
 /** 合法的 period 取值（URL 参数白名单：非法值回落 day，16-01）。 */
 const PERIOD_WHITELIST = ["day", "week", "month", "year", "custom"] as const;
@@ -242,18 +238,6 @@ export function RaceWindowControl({
 			</Dialog>
 		</div>
 	);
-}
-
-/** 由 RaceWindowState 派生查询窗口（毫秒起止；timeZone 缺省按浏览器本地解释）。 */
-export function raceWindowBounds(
-	state: RaceWindowState,
-	now: number,
-	timeZone?: string,
-): { startTime: number; endTime: number } {
-	if (state.period === "custom") {
-		return state.appliedCustom ?? { startTime: state.customStart, endTime: state.customEnd };
-	}
-	return periodBounds(state.period, state.offset, now, timeZone);
 }
 
 /** 赛马卡默认窗口：当天（offset 0），自定义输入值退化为过去 1 小时。 */

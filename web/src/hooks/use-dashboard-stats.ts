@@ -1,6 +1,6 @@
 import { statsKey, statsQuery } from "@/hooks/stats-query";
-import type { ChartGranularity } from "@/lib/race-period";
-import type { StatsFilter, TimeWindowParams } from "@/lib/race-types";
+import type { ChartGranularity, QueryWindow } from "@/lib/race-period";
+import type { StatsFilter } from "@/lib/race-types";
 
 export interface DashboardSummary {
 	totalRequests: number;
@@ -29,20 +29,24 @@ export interface DashboardCharts {
 }
 
 /** 图表查询参数（全部可选；缺省回退过去 24 小时）。 */
-export interface ChartsParams extends TimeWindowParams, StatsFilter {
+export interface ChartsParams extends StatsFilter {
 	/** 桶粒度（hour/day/month/year）。缺省由后端按窗口长度回退推断。 */
 	granularity?: ChartGranularity;
+	/** 取数窗口；缺省由后端回退默认窗口。 */
+	window?: QueryWindow;
 }
 
 /** 累计指标查询参数（可选时间窗口；缺省返回全历史累计）。 */
-export type SummaryParams = TimeWindowParams;
+export interface SummaryParams {
+	/** 取数窗口；缺省返回全历史累计。 */
+	window?: QueryWindow;
+}
 
 export const dashboardStatsKeys = {
-	summary: (params: SummaryParams = {}) => statsKey("summary", [params.startTime, params.endTime]),
+	summary: (params: SummaryParams = {}) => statsKey("summary", [...(params.window?.key ?? [])]),
 	charts: (params: ChartsParams = {}) =>
 		statsKey("charts", [
-			params.startTime,
-			params.endTime,
+			...(params.window?.key ?? []),
 			params.providerId,
 			params.virtualModelId,
 			params.modelId,
@@ -58,8 +62,9 @@ export function useDashboardSummary(params: SummaryParams = {}) {
 	return statsQuery<DashboardSummary>({
 		endpoint: "stats/summary",
 		key: dashboardStatsKeys.summary(params),
-		params: { startTime: params.startTime, endTime: params.endTime },
+		window: params.window,
 		keepPrevious: false,
+		params: {},
 	});
 }
 
@@ -67,10 +72,9 @@ export function useDashboardCharts(params: ChartsParams = {}, enabled = true) {
 	return statsQuery<DashboardCharts>({
 		endpoint: "stats/charts",
 		key: dashboardStatsKeys.charts(params),
+		window: params.window,
 		enabled,
 		params: {
-			startTime: params.startTime,
-			endTime: params.endTime,
 			providerId: params.providerId,
 			virtualModelId: params.virtualModelId,
 			modelId: params.modelId,

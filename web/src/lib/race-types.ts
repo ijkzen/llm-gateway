@@ -9,14 +9,6 @@ export type RaceSortKey =
 	| "tps"
 	| "cacheHitRate";
 
-/** 时间窗口（毫秒时间戳）。 */
-export interface RaceWindow {
-	/** 窗口起点（毫秒时间戳，含）。 */
-	startTime: number;
-	/** 窗口终点（毫秒时间戳，不含）。 */
-	endTime: number;
-}
-
 export interface RaceSort {
 	sortBy: RaceSortKey;
 	sortOrder: "asc" | "desc";
@@ -32,10 +24,4 @@ export interface StatsFilter {
 	modelId?: string;
 	/** 按调用方 API Key 名称过滤（可选；API Key 数据面板用）。 */
 	apiKey?: string;
-}
-
-/** 可选时间窗口（毫秒时间戳；缺省由后端回退默认窗口）。 */
-export interface TimeWindowParams {
-	startTime?: number;
-	endTime?: number;
 }

@@ -1,4 +1,5 @@
 import type { DashboardCharts, DashboardSummary } from "@/hooks/use-dashboard-stats";
+import type { QueryWindow } from "@/lib/race-period";
 import OverviewPage from "@/pages/overview";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,9 +28,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/hooks/use-dashboard-stats", () => ({
 	useDashboardSummary: (params?: unknown) => {
 		mocks.summaryParamsList.push(params as Record<string, unknown>);
-		// 今日（带时间窗口）与累计（不带）走不同分支返回。
+		// 今日（带取数窗口）与累计（不带）走不同分支返回。
 		const p = params as Record<string, unknown> | undefined;
-		const isToday = p?.startTime !== undefined || p?.endTime !== undefined;
+		const isToday = p?.window !== undefined;
 		return {
 			data: isToday ? mocks.todaySummary : mocks.summary,
 			isLoading: mocks.summaryLoading,
@@ -207,7 +208,7 @@ describe("OverviewPage（数据面板）", () => {
 		expect(screen.getByText("10%")).toBeTruthy();
 	});
 
-	it("今日 summary 请求携带本地今日窗口，累计请求不带时间参数", () => {
+	it("今日 summary 请求携带今日取数窗口，累计请求不带窗口", () => {
 		mocks.summary = makeSummary();
 		mocks.todaySummary = makeSummary();
 		mocks.charts = makeCharts();
@@ -215,15 +216,20 @@ describe("OverviewPage（数据面板）", () => {
 
 		const calls = mocks.summaryParamsList;
 		expect(calls.length).toBe(2);
-		const todayCall = calls.find((p) => p?.startTime !== undefined);
-		const allCall = calls.find((p) => p?.startTime === undefined);
-		expect(allCall?.endTime).toBeUndefined();
-		// 今日窗口：本地今日 0 点 → 当前时刻（endTime 在 render 时捕获，容差放宽防 CI 抖动）。
+		const todayCall = calls.find((p) => p?.window !== undefined);
+		// 累计调用不带任何参数（mock 原样记录无参调用为 undefined）。
+		expect(calls.filter((p) => p?.window === undefined).length).toBe(1);
+		expect(todayCall).toBeDefined();
+		// 今日窗口按取数窗口表达：key 只带定义，绝对起止在取数时解析成
+		// 本地今日 0 点 → 当前时刻（端点随调用时刻前进，刷新即可见新数据）。
+		const bounds = (todayCall?.window as QueryWindow).resolve();
 		const now = Date.now();
 		const startOfToday = new Date(now);
 		startOfToday.setHours(0, 0, 0, 0);
-		expect(todayCall?.startTime).toBe(startOfToday.getTime());
-		expect(Number(todayCall?.endTime)).toBeCloseTo(now, -3);
+		expect(bounds.startTime).toBe(startOfToday.getTime());
+		expect(bounds.endTime).toBeGreaterThanOrEqual(startOfToday.getTime());
+		expect(bounds.endTime).toBeLessThanOrEqual(Date.now());
+		expect((todayCall?.window as QueryWindow).key).toEqual(["day", 0, expect.any(String)]);
 	});
 
 	it("默认展示两个折线图（调用趋势 + token 使用分布）", () => {
@@ -302,13 +308,15 @@ describe("OverviewPage 时间组件（默认今天，调用/Token/可靠性三�
 				"true",
 			);
 		}
-		// 调用与 Token 各发一次 charts 请求，均携带显式窗口 + granularity=hour
+		// 调用与 Token 各发一次 charts 请求，均携带小时粒度 + 取数窗口
 		//（tzOffsetMinutes 已停发：分桶时区由后端按设置表解释）。
 		expect(mocks.chartsParamsList.length).toBe(2);
 		for (const params of mocks.chartsParamsList) {
 			expect(params?.granularity).toBe("hour");
-			expect(params?.startTime).toBeTypeOf("number");
-			expect(params?.endTime).toBeTypeOf("number");
+			const bounds = (params?.window as QueryWindow).resolve();
+			expect(bounds.startTime).toBeTypeOf("number");
+			expect(bounds.endTime).toBeTypeOf("number");
+			expect(bounds.endTime).toBeGreaterThan(bounds.startTime);
 		}
 	});
 
