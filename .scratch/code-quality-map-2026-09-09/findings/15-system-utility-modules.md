@@ -67,7 +67,7 @@ response.rs:68-70 `db_error(e.to_string())`——SeaORM DbErr 部分变体 Displ
 
 ### 15-12 测试缺口（P3）【已部分修复 2026-09-10】
 
-已有：backup.rs 内 18 单测（parse/validate 矩阵）+ backup_integration 9 用例 + logs_cleanup 4 用例 + config 用例（含 APP_ENV 回退锁定）+ response/i18n 极薄无专测（结构简单可接受）。缺口：T1 build_export 无单测+解密失败路径零覆盖（15-04）；T2 apply_import 注入失败点的回滚单测；T3 并发导入（SQLite 写锁竞争表现）；T4 大备份 >5MB 413；T5 导入后运行时一致性（时区 reload_all_jobs、settings 缓存热更、cron/会话不受影响）；T6 关停顺序与 SSE 挂起（15-01）零回归；config 的 BIND_ADDRESS 格式/CRON_JOB_* 空白串边界。
+已有：backup.rs 内 18 单测（parse/validate 矩阵）+ backup_integration 9 用例 + logs_cleanup 4 用例 + config 用例（含 APP_ENV 回退锁定）+ response/i18n 极薄无专测（结构简单可接受）。缺口：T1 build_export 无单测+解密失败路径零覆盖（15-04）；T2 apply_import 注入失败点的回滚单测；T3 并发导入（SQLite 写锁竞争表现）；T4 大备份 >5MB 413（已随 2026-09-11 去除请求体上限而失效）；T5 导入后运行时一致性（时区 reload_all_jobs、settings 缓存热更、cron/会话不受影响）；T6 关停顺序与 SSE 挂起（15-01）零回归；config 的 BIND_ADDRESS 格式/CRON_JOB_* 空白串边界。
 
 ## handler 注册与 seed 双源核对（票内问题 4 的正面对账）
 

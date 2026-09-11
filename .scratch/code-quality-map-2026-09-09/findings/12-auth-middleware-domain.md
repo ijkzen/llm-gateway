@@ -78,7 +78,7 @@ session_user（auth/mod.rs:100-118）= session 主键点查 + user 主键点查�
 - **会话面**：256 位 OsRng 随机 token；库只存 SHA-256（hash_token 为主键）；HttpOnly+SameSite=Lax；7 天 TTL 单常量；过期顺带删除幂等（并发双删安全）；改密吊销其他会话保留当前（集成测试锁定）；登出吊销当前。
 - **Bearer 面**：key_hash=SHA-256 索引查找（O(1)）；enable 过滤；DB 错误 500 与无效凭证 401 区分；错误格式按端点分 Anthropic（/v1/messages）/OpenAI（其余）双形状；Bearer 大小写两种 scheme 前缀（测试锁定）。
 - **守卫面**：公开清单=healthz+status/login/init（auth/mod.rs:263-266）；/api/* 会话、/v1/* Bearer 分流正确；SPA 与未知路径放行在守卫之后；logout/me/change-password 均需会话（12-05 记 logout 边界）；11 票的尾斜杠（11-17）与未知路径 HTML 200（11-18）不重复记录。
-- **中间件层序**：create_app 内 fallback→DefaultBodyLimit→auth，apply 再包 Cors→Trace→CatchPanic——CatchPanic 最外层兜住含 auth 在内的全部 handler panic；DefaultBodyLimit 经 extension 作用于 extractor，层序不影响其生效；Trace 默认级别在 RUST_LOG=info 下静默。
+- **中间件层序**：create_app 内 fallback→DefaultBodyLimit→auth，apply 再包 Cors→Trace→CatchPanic——CatchPanic 最外层兜住含 auth 在内的全部 handler panic；DefaultBodyLimit 经 extension 作用于 extractor，层序不影响其生效；Trace 默认级别在 RUST_LOG=info 下静默。（2026-09-11：该层已改为 `DefaultBodyLimit::disable()`，请求体不再设上限。）
 - **CORS 现状**：`CorsLayer::permissive()`（middleware/mod.rs:12）为 AGENTS.md 安全节已登记风险；SameSite=Lax 使跨站 POST 不携带会话 cookie；/v1 需持 key 才可调。维持登记口径，不重复拍板。
 - **crypto 边界**：AES-256-GCM 每次随机 nonce（重复密文测试锁定）；tag 篡改/密钥轮换/无密钥/短 blob/非 UTF-8 五类错误路径有测试；enc:v1: 前缀识别；空串加解密直通；明文只在未配置密钥时落库且 warn（模块头注释明示的文档化设计）。
 - **启动回填**：backfill_api_key_hashes 对解不开的 key 跳过并 warn（该 key 无法用于 /v1 鉴权），不阻断启动。

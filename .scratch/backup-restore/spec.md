@@ -119,7 +119,7 @@ Status: ready-for-agent
 
 - 数据库无外键约束（逻辑外键 + 级联硬删由代码保证），导入整体替换必须在**单个事务**内按依赖序删除与插入，避免中途失败留下孤儿行。
 - 导出 `disabledReason` / `enable` / `cascadeDisabled` 等运行时状态，保证恢复后忠实还原启用/停用情况。
-- 请求体上限 5MB（现有 `DefaultBodyLimit`）对配置 JSON 足够。
+- 请求体无上限（原 5MB `DefaultBodyLimit` 已于 2026-09-11 去除），配置 JSON 不受体积限制。
 - 生产库 provider 的 `api_key`/`extra` 与 api_key 的 `key` 为加密存储，导出解密（失败回退空串）、导入重新加密（复用现有 `crypto`；`decrypt` 对无前缀的历史明文原样返回，天然兼容）。
 - API Key 在设置页有独立管理区，导出/恢复后前端需刷新 api-keys 列表。
 - 需求来源与已拍板决策见 `.scratch/backup-restore/REQUIREMENTS.md`。

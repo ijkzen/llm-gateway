@@ -54,7 +54,7 @@ LLM 网关通常是一个**语义上的「内容网关/反向代理」**（转�
 - 当前行为 `src/proxy/upstream.rs:512-514` 固定 `Content-Length = body.len()`；且协议转换可能改 body（`build_request_body` 重写 JSON），所以**长度必须基于出站 body 计算**。
 - RFC 9112 §6.3（body length 优先级）：同时收到 `Transfer-Encoding` 与 `Content-Length` 时以 TE 为准、CL 应被移除，且这类消息可能是 request smuggling；RFC 9112 §11.2 定义了 request smuggling 场景与防御（下游对 framing 不一致必须 400/502 关闭连接）。
   来源: https://www.rfc-editor.org/rfc/rfc9112.html#section-6.3 、https://www.rfc-editor.org/rfc/rfc9112.html#section-11.2
-- 结论：出站请求**永远只发一条由网关按出站 body 长度计算的 `Content-Length`**；下游的 `Content-Length`/`Transfer-Encoding`/`TE`/`Trailer` 一律不进上游头。axum 侧已把下游 body 完整读取为 `Json<Value>`（有 DefaultBodyLimit 5 MiB），故不会出现 chunked 转发问题。
+- 结论：出站请求**永远只发一条由网关按出站 body 长度计算的 `Content-Length`**；下游的 `Content-Length`/`Transfer-Encoding`/`TE`/`Trailer` 一律不进上游头。axum 侧已把下游 body 完整读取为 `Json<Value>`（请求体上限已于 2026-09-11 去除），故不会出现 chunked 转发问题。
 
 ### 1.5 Content-Type / Accept
 

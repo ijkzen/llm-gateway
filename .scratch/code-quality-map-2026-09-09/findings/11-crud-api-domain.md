@@ -36,7 +36,7 @@
 
 **拍板记录（两项，均不改代码，结论锁定现状）**：
 - **拍板一（原 B-06）**：创建/更新虚拟模型**允许**把已停用供应商的模型加为成员，保持现状——成员关系 ≠ 可用性，选路时 `traffic_available` 剔除、恢复后自动回归候选，语义归 availability 单点，创建侧不加校验。
-- **拍板二（原 C-04）**：全局 `DefaultBodyLimit(5MB)`（mod.rs:43）保持现状作为 DoS 兜底，接受巨型多模态 /v1 请求被 413；若未来有真实大 payload 需求再单独放宽 /v1。
+- **拍板二（原 C-04）**：全局 `DefaultBodyLimit(5MB)`（mod.rs:43）保持现状作为 DoS 兜底，接受巨型多模态 /v1 请求被 413；若未来有真实大 payload 需求再单独放宽 /v1。→ **已推翻（2026-09-11）：用户拍板去除该上限**（`DefaultBodyLimit::disable()`），回归测试见 `tests/auth_integration.rs::oversized_request_body_reaches_handler`。
 
 ## 各条证据
 
