@@ -15,7 +15,7 @@ use serde_json::json;
 
 use llm_gateway::entity::{provider, provider_model, virtual_model, virtual_model_item};
 use llm_gateway::state::AppState;
-use llm_gateway::usage::persist::{probe_boundary_providers, write_usage_cache};
+use llm_gateway::usage::persist::{apply_usage_gate, probe_boundary_providers, write_usage_cache};
 use llm_gateway::usage::types::{QuotaWindow, UsageData, UsageKind, WindowKind};
 
 /// 订阅制边界供应商 + 名下模型 + 虚拟模型条目（直连本地 mock，无代理）。
@@ -231,6 +231,71 @@ async fn boundary_probe_failure_disables_provider() {
     let item = item_row(&db, model_id).await;
     assert!(!item.enable);
     assert!(item.cascade_disabled, "被级联停用的成员应带标记");
+}
+
+/// 回归：边界区（剩余 (0,1)）的供应商探活失败停用后，**后续每轮用量门控都不得
+/// 凭同一份边界区数据把它恢复回来**——否则每轮刷新「先恢复、1~2 秒后被探活停用」
+/// 成对抖动。
+///
+/// 生产症状（2026-09-18 实测，供应商「Command Code Google」）：月度窗口剩 0.12%
+/// 落在边界区，于是每轮 usage_refresh（5 分钟）都发出成对的「自动启用 + 自动停用」
+/// 通知；更糟的是那 1~2 秒窗口里它重新进入选路候选，真实请求会打到已耗尽的账号上
+/// （上游回 400 insufficient credits，实测 2 分钟内有 10 条真实请求撞死）。
+///
+/// 根因：恢复通道 A（数据）判据是 `subscription_usable() == Some(true)`，而它只
+/// 要求「无窗口剩余 ≤ 0」——边界区 (0,1) 的 0.12% 同样满足。于是探活通道刚用真实
+/// 请求判定「不可用」，同一份数据立刻判回「可用」，通道 B（探活成功）根本没机会
+/// 参与。两条通道对同一份数据给出相反结论，且每轮互相推翻。
+///
+/// 本用例按**真实任务顺序**（门控 → 探活，见 usage_refresh handler）跑满两轮。
+#[tokio::test]
+async fn boundary_band_provider_is_not_recovered_by_data_channel() {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    let (url, shared) = spawn_probe_mock().await;
+    shared.lock().unwrap().0 = 400; // 上游额度不足（同生产）
+    let (pid, model_id) = seed_boundary_provider(&db, &url).await;
+    // 月度剩 0.12%：边界区，但 subscription_usable() 仍为 true。
+    let band = || quota_data(pid, 100.0, 80.91, 0.12);
+    write_usage_cache(&db, &band()).await.unwrap();
+
+    let reload = async || {
+        provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+
+    // 第 1 轮：门控（已启用 → 幂等空转）→ 探活失败 → 按额度耗尽停用。
+    apply_usage_gate(&db, &reload().await, &band())
+        .await
+        .unwrap();
+    probe_boundary_providers(&test_state(db.clone(), scheduler.clone(), log_tx.clone()))
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await, "探活失败应停用");
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("quota"));
+
+    // 第 2 轮：同一份边界区数据再走一遍完整流程。门控不得恢复（这是修复前失败
+    // 的那一步），探活继续失败保持停用——两轮之间不应出现任何启用窗口。
+    apply_usage_gate(&db, &reload().await, &band())
+        .await
+        .unwrap();
+    assert!(
+        !provider_enabled(&db, pid).await,
+        "边界区数据不得把探活刚判定耗尽的供应商恢复回来——否则每轮刷新成对抖动，\
+         且窗口期内已耗尽的供应商会重新进入选路候选"
+    );
+    assert!(
+        !item_row(&db, model_id).await.enable,
+        "子模型不应被级联恢复"
+    );
+
+    probe_boundary_providers(&test_state(db.clone(), scheduler.clone(), log_tx.clone()))
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await, "探活仍失败应保持停用");
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("quota"));
 }
 
 /// 恢复闭环：quota 停用后每轮继续探活——仍失败保持禁用不抖动，成功后自动恢复。

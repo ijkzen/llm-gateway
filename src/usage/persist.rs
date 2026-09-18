@@ -216,6 +216,14 @@ pub async fn refresh_all_usage(
 /// - 订阅制（billing_mode=1）：按 `subscription_usable` 判定（任一已提供窗口剩余为 0 即不可用）。
 /// - 按量付费（billing_mode=0）：按 `balance_usable` 判定（查得到余额且合计为 0 即不可用）。
 ///
+/// **边界区不恢复**：`subscription_usable` 只要求「无窗口剩余 ≤ 0」，边界区
+/// (0, 1) 的剩余百分比同样满足——若据此恢复，会把边界探活刚用真实请求判定耗尽
+/// 的供应商立刻捞回来（探活停用写的是 quota 态，正是本函数有权清除的），于是每轮
+/// 刷新「先恢复、1~2 秒后被探活停用」成对抖动，窗口期内该供应商还重新进入选路
+/// 候选（生产实证：Command Code Google 月度剩 0.12%、上游回 400 insufficient
+/// credits，10 条真实请求打到死账号）。边界区的判定权归边界探活，本函数只在
+/// **离开**边界区（剩余 ≥ 1%）时才恢复——即恢复通道 A 的语义。
+///
 /// 无法判定（None）或未开启用量查询的供应商不做任何动作；抓取失败/无数据的场景由调用方保证不传入。
 /// 状态迁移的守卫（额度刷新只解除 quota 态，manual/failure 不受触碰）由 availability 模块保证。
 pub async fn apply_usage_gate(
@@ -232,7 +240,11 @@ pub async fn apply_usage_gate(
         "余额"
     };
     if usable {
-        crate::availability::recover_quota(db, p.id, &p.name, label).await?;
+        // 边界区交给探活裁决（见函数头注释）。对已启用的供应商本就是幂等空转，
+        // 这里只影响「被探活停用后又被同一份数据恢复」这一条路径。
+        if !data.has_low_remaining_window() {
+            crate::availability::recover_quota(db, p.id, &p.name, label).await?;
+        }
     } else {
         crate::availability::disable_for_quota(db, p.id, &p.name, label).await?;
     }
