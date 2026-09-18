@@ -11,6 +11,7 @@ pub mod failure_recovery;
 pub mod i18n;
 pub mod logs_cleanup;
 pub mod middleware;
+pub mod notification;
 pub mod provider_model;
 pub mod provider_repo;
 pub mod provider_template;
@@ -159,6 +160,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         upstream_pool: crate::proxy::pool::UpstreamPool::new(std::time::Duration::from_secs(600)),
         settings: settings.clone(),
         usage_mem: Default::default(),
+        feishu_registration: Default::default(),
     };
 
     // 用量刷新 handler：刷新全部已开启用量展示的供应商用量并落库、执行订阅

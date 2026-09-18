@@ -2,6 +2,7 @@ pub mod api_key;
 pub mod cron_job;
 pub mod cron_job_log;
 pub mod cron_job_run;
+pub mod notification_channel;
 pub mod provider;
 pub mod provider_model;
 pub mod provider_template;

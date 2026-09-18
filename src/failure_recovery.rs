@@ -181,6 +181,7 @@ mod tests {
             )),
             settings: crate::app_settings::AppSettings::default(),
             usage_mem: Default::default(),
+            feishu_registration: Default::default(),
         }
     }
 

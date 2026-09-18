@@ -557,6 +557,72 @@ async fn migration_26_rebuilds_tables_on_legacy_db() {
     assert!(column_exists(&db, "snapshot_meta", "key").await.unwrap());
 }
 
+/// 新库从 0 迁移完必须带齐 Migration 27 的通知渠道表（ADR-0023）。
+#[tokio::test]
+async fn migration_27_creates_notification_channel_on_fresh_db() {
+    let db = connect("sqlite::memory:").await.unwrap();
+    migrate(&db).await.unwrap();
+
+    for column in ["channel", "config", "enable", "last_error", "last_sent_at"] {
+        assert!(
+            column_exists(&db, "notification_channel", column)
+                .await
+                .unwrap(),
+            "通知渠道表缺列 {column}"
+        );
+    }
+}
+
+/// 历史库迁移：通知渠道表被删 + 版本记录移除后，migrate() 必须重建（幂等兜底）。
+#[tokio::test]
+async fn migration_27_rebuilds_notification_channel_on_legacy_db() {
+    let db = connect("sqlite::memory:").await.unwrap();
+    migrate(&db).await.unwrap();
+
+    db.execute_unprepared("DROP TABLE notification_channel")
+        .await
+        .unwrap();
+    db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 27")
+        .await
+        .unwrap();
+
+    let changed = migrate(&db).await.unwrap();
+    assert!(changed, "migrate 应报告有变更");
+    assert!(
+        column_exists(&db, "notification_channel", "config")
+            .await
+            .unwrap()
+    );
+}
+
+/// 生产库残留废弃号段（14/15 为旧 lg-proxy 方案）时，迁移 27 不与其撞号，
+/// 通知渠道表仍正常创建（回归：撞号会被版本守卫静默吞掉）。
+#[tokio::test]
+async fn migration_27_applies_despite_stale_versions() {
+    let db = connect("sqlite::memory:").await.unwrap();
+    migrate(&db).await.unwrap();
+
+    db.execute_unprepared("DROP TABLE notification_channel")
+        .await
+        .unwrap();
+    db.execute_unprepared(
+        "INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (14, datetime('now')), (15, datetime('now'))",
+    )
+    .await
+    .unwrap();
+    db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 27")
+        .await
+        .unwrap();
+
+    let changed = migrate(&db).await.unwrap();
+    assert!(changed, "migrate 应报告有变更");
+    assert!(
+        column_exists(&db, "notification_channel", "last_error")
+            .await
+            .unwrap()
+    );
+}
+
 /// 13-06（T4）：迁移语句失败时整体回滚，且不写入版本号（下次启动可重试）。
 /// 用破坏性 ALTER（对不存在的列 DROP）触发失败。
 #[tokio::test]

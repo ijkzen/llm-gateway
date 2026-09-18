@@ -28,6 +28,7 @@ use sea_orm::{
 };
 
 use crate::entity::{provider, virtual_model_item};
+use crate::notification::notify;
 
 /// 停用原因（provider.disabled_reason 的非空取值，NULL 表示正常启用）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +194,13 @@ pub async fn disable_for_quota(
         items,
         "{label}已耗尽，自动停用供应商「{provider_name}」及其全部虚拟模型子模型（{items} 个）"
     );
+    notify::spawn_provider_transition(
+        db,
+        provider_id,
+        notify::Transition::QuotaDisabled {
+            label: label.to_string(),
+        },
+    );
     Ok(true)
 }
 
@@ -229,6 +237,13 @@ pub async fn recover_quota(
         items,
         "{label}已恢复，自动启用供应商「{provider_name}」及其全部虚拟模型子模型（{items} 个）"
     );
+    notify::spawn_provider_transition(
+        db,
+        provider_id,
+        notify::Transition::QuotaRecovered {
+            label: label.to_string(),
+        },
+    );
     Ok(true)
 }
 
@@ -262,6 +277,11 @@ pub async fn disable_for_failures(
         consecutive,
         items,
         "连续失败达到阈值，熔断停用供应商及其全部虚拟模型子模型"
+    );
+    notify::spawn_provider_transition(
+        db,
+        provider_id,
+        notify::Transition::FailureDisabled { consecutive },
     );
     Ok(true)
 }
@@ -354,6 +374,7 @@ pub async fn recover_probe(
         items,
         "自动恢复连续失败禁用供应商「{provider_name}」（{items} 个子模型已启用）"
     );
+    notify::spawn_provider_transition(db, provider_id, notify::Transition::FailureRecovered);
     Ok(true)
 }
 

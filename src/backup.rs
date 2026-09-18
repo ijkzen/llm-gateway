@@ -2,9 +2,10 @@
 //!
 //! 导出内容：供应商（含明文 api_key/extra）、各供应商名下模型、虚拟模型及
 //! 成员（成员以 `providerName`+`providerModelId` 自然键引用）、API Key（明文）、
-//! 系统设置，组装为 versioned JSON。
+//! 系统设置、通知渠道配置（含明文 appSecret），组装为 versioned JSON。
 //! 导入流程：解析与语义校验（自然键唯一、成员引用可解析、枚举/数值合法）后，
-//! 在单事务内整体替换上述配置（设置只 upsert 覆盖、不删除），任一步失败回滚。
+//! 在单事务内整体替换上述配置（设置只 upsert 覆盖、不删除；通知渠道字段缺省时
+//! 不触碰现有配置），任一步失败回滚。
 
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, QueryOrder,
@@ -20,8 +21,10 @@ use crate::entity::virtual_model::{
     INTERFACE_FULL_COMPATIBLE, INTERFACE_OPENAI_COMPAT, LB_RANDOM, LB_SUBSCRIPTION_FIRST,
 };
 use crate::entity::{
-    api_key, provider, provider_model, setting, virtual_model, virtual_model_item,
+    api_key, notification_channel, provider, provider_model, setting, virtual_model,
+    virtual_model_item,
 };
+use crate::notification::{FeishuConfig, RECEIVER_TYPE_EMAIL, RECEIVER_TYPE_OPEN_ID};
 use crate::provider_model::refresh::{PROTOCOL_GEMINI, PROTOCOL_OPENAI_COMPATIBLE};
 
 /// 当前备份格式版本；`parse_backup` 只接受与该值一致的版本。
@@ -38,6 +41,10 @@ pub struct BackupFile {
     pub virtual_models: Vec<BackupVirtualModel>,
     pub api_keys: Vec<BackupApiKey>,
     pub settings: Vec<BackupSetting>,
+    /// 通知渠道配置（ADR-0023）。**可选**：早于该特性的导出文件缺此字段，
+    /// 导入时视为「不要动现有配置」；字段出现即整体替换。
+    #[serde(default)]
+    pub notification_channels: Option<Vec<BackupNotificationChannel>>,
     /// 15-04：导出时解密失败的凭据条数（密钥轮换/异机导出等）。非 0 表示文件里
     /// 这些凭据已退化为空串——原本静默（校验全过、凭据全空），现由调用方回带提示。
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -120,6 +127,18 @@ pub struct BackupSetting {
     pub r#type: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupNotificationChannel {
+    pub channel: String,
+    pub app_id: String,
+    /// 明文——与其他凭据口径一致（备份必须能脱离原库密钥恢复），导入时重新加密落库。
+    pub app_secret: String,
+    pub receiver_type: String,
+    pub receiver: String,
+    pub enable: bool,
+}
+
 /// 导入结果计数，供路由返回给前端。
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -129,6 +148,7 @@ pub struct ImportSummary {
     pub virtual_models: usize,
     pub api_keys: usize,
     pub settings: usize,
+    pub notification_channels: usize,
 }
 
 // ─── 导出 ───
@@ -257,6 +277,33 @@ pub async fn build_export(db: &DatabaseConnection) -> Result<BackupFile, DbErr> 
         })
         .collect();
 
+    // 通知渠道：config 整段密文，导出为明文（含 appSecret）。
+    let channels = notification_channel::Entity::find()
+        .order_by_asc(notification_channel::Column::Channel)
+        .all(db)
+        .await?;
+    let mut channels_out = Vec::with_capacity(channels.len());
+    let mut all_readable = true;
+    for c in &channels {
+        let plain = decrypt_or_count(&c.config);
+        let Ok(config) = serde_json::from_str::<FeishuConfig>(&plain) else {
+            all_readable = false;
+            break;
+        };
+        channels_out.push(BackupNotificationChannel {
+            channel: c.channel.clone(),
+            app_id: config.app_id,
+            app_secret: config.app_secret,
+            receiver_type: config.receiver_type,
+            receiver: config.receiver,
+            enable: c.enable,
+        });
+    }
+    // 解不开的渠道整段不导出（`None` = 导入侧不触碰现有配置）：降级成空凭据会
+    // 产出一份自己都导入不了的文件（`validate_backup` 拒绝空 appId）。计数已由
+    // `decrypt_or_count` 记录，导出侧照常告警。
+    let notification_channels = all_readable.then_some(channels_out);
+
     Ok(BackupFile {
         version: BACKUP_VERSION,
         exported_at: chrono::Utc::now().to_rfc3339(),
@@ -264,6 +311,7 @@ pub async fn build_export(db: &DatabaseConnection) -> Result<BackupFile, DbErr> 
         virtual_models: virtual_models_out,
         api_keys: api_keys_out,
         settings: settings_out,
+        notification_channels,
         decrypt_failures,
     })
 }
@@ -458,6 +506,28 @@ pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
             return Err(format!("settings[{si}].key 不能为空"));
         }
         setting_type_from_name(&s.r#type).map_err(|e| format!("settings[{si}]：{e}"))?;
+    }
+
+    if let Some(channels) = &file.notification_channels {
+        let mut seen_channels = std::collections::HashSet::new();
+        for (ci, c) in channels.iter().enumerate() {
+            let loc = format!("notificationChannels[{ci}]");
+            if c.channel.trim().is_empty() {
+                return Err(format!("{loc}.channel 不能为空"));
+            }
+            if !seen_channels.insert(c.channel.trim().to_string()) {
+                return Err(format!("{loc}.channel 重复：{}", c.channel));
+            }
+            if c.app_id.trim().is_empty() {
+                return Err(format!("{loc}.appId 不能为空"));
+            }
+            if c.receiver.trim().is_empty() {
+                return Err(format!("{loc}.receiver 不能为空"));
+            }
+            if c.receiver_type != RECEIVER_TYPE_OPEN_ID && c.receiver_type != RECEIVER_TYPE_EMAIL {
+                return Err(format!("{loc}.receiverType 取值非法：{}", c.receiver_type));
+            }
+        }
     }
 
     Ok(())
@@ -679,6 +749,39 @@ pub async fn apply_import(
         summary.settings += 1;
     }
 
+    // 通知渠道：`Some` 出现即整体替换（先清后插，密文重新加密落库）；
+    // `None`（早于该特性的导出文件缺此字段）**完全不触碰**现有配置——这是与
+    // 「整体替换」的唯一例外，避免老备份静默清掉配置。
+    if let Some(channels) = &file.notification_channels {
+        notification_channel::Entity::delete_many()
+            .exec(&txn)
+            .await
+            .map_err(|e| format!("清空通知渠道失败：{e}"))?;
+        for c in channels {
+            let config = FeishuConfig {
+                app_id: c.app_id.clone(),
+                app_secret: c.app_secret.clone(),
+                receiver_type: c.receiver_type.clone(),
+                receiver: c.receiver.clone(),
+            };
+            let encoded = crypto::encrypt(
+                &serde_json::to_string(&config).map_err(|e| format!("序列化通知配置失败：{e}"))?,
+            );
+            notification_channel::ActiveModel {
+                channel: Set(c.channel.trim().to_string()),
+                config: Set(encoded),
+                enable: Set(c.enable),
+                last_error: Set(String::new()),
+                last_sent_at: Set(None),
+                updated_at: Set(chrono::Utc::now()),
+            }
+            .insert(&txn)
+            .await
+            .map_err(|e| format!("导入通知渠道 {} 失败：{e}", c.channel))?;
+            summary.notification_channels += 1;
+        }
+    }
+
     txn.commit()
         .await
         .map_err(|e| format!("提交事务失败：{e}"))?;
@@ -748,6 +851,7 @@ mod tests {
                 value: "gw".to_string(),
                 r#type: "String".to_string(),
             }],
+            notification_channels: None,
         }
     }
 

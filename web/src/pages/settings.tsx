@@ -4,6 +4,7 @@ import { PageHeaderSkeleton } from "@/components/page-header-skeleton";
 import { BackupDialog } from "@/components/settings/BackupDialog";
 import { ChangePasswordDialog } from "@/components/settings/ChangePasswordDialog";
 import { JsonSettingEditDialog } from "@/components/settings/JsonSettingEditDialog";
+import { NotificationDialog } from "@/components/settings/NotificationDialog";
 import { SettingDeleteDialog } from "@/components/settings/SettingDeleteDialog";
 import { SettingEditDialog } from "@/components/settings/SettingEditDialog";
 import { SettingsTable } from "@/components/settings/SettingsTable";
@@ -11,7 +12,7 @@ import { TableSkeleton } from "@/components/table-skeleton";
 import { Button } from "@/components/ui/button";
 import { type Setting, useSettings } from "@/hooks/use-settings";
 import { SETTINGS_PAGE } from "@/lib/pages";
-import { ArchiveRestore, KeyRound } from "lucide-react";
+import { ArchiveRestore, Bell, KeyRound } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -21,6 +22,7 @@ export default function SettingsPage() {
 	const [deletingSetting, setDeletingSetting] = useState<Setting | null>(null);
 	const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 	const [backupOpen, setBackupOpen] = useState(false);
+	const [notificationOpen, setNotificationOpen] = useState(false);
 
 	const { data: settings, isLoading, isError, refetch } = useSettings();
 
@@ -46,6 +48,10 @@ export default function SettingsPage() {
 		<div className="space-y-6">
 			<PageHeader icon={SETTINGS_PAGE.icon} title={t(SETTINGS_PAGE.titleKey)}>
 				<div className="flex items-center gap-2">
+					<Button variant="outline" size="sm" onClick={() => setNotificationOpen(true)}>
+						<Bell className="size-4" />
+						{t("notification.title")}
+					</Button>
 					<Button variant="outline" size="sm" onClick={() => setBackupOpen(true)}>
 						<ArchiveRestore className="size-4" />
 						{t("backup.title")}
@@ -83,6 +89,8 @@ export default function SettingsPage() {
 			<ChangePasswordDialog open={changePasswordOpen} onOpenChange={setChangePasswordOpen} />
 
 			<BackupDialog open={backupOpen} onOpenChange={setBackupOpen} />
+
+			<NotificationDialog open={notificationOpen} onOpenChange={setNotificationOpen} />
 		</div>
 	);
 }

@@ -30,6 +30,15 @@ vi.mock("@/hooks/use-auth", () => ({
 	useChangePassword: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
+// 通知弹窗自身有独立测试；这里只关心入口按钮，隔离其数据依赖。
+vi.mock("@/hooks/use-notification", () => ({
+	useNotificationChannel: () => ({ data: undefined }),
+	useSaveNotificationChannel: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useTestNotificationChannel: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useStartRegistration: () => ({ mutateAsync: vi.fn(), isPending: false }),
+	useRegistrationStatus: () => ({ data: undefined }),
+}));
+
 function makeSetting(key: string, type: string, value: string) {
 	return { key, value, type, updated_at: "2026-08-01T00:00:00Z" };
 }
@@ -106,5 +115,15 @@ describe("SettingsPage 弹窗编排", () => {
 		expect(screen.getByRole("button", { name: /重试/ })).toBeTruthy();
 		fireEvent.click(screen.getByRole("button", { name: /重试/ }));
 		expect(mocks.refetch).toHaveBeenCalled();
+	});
+
+	it("「消息通知」入口位于备份按钮左侧", () => {
+		renderPage();
+		const notification = screen.getByRole("button", { name: "消息通知" });
+		const backup = screen.getByRole("button", { name: "备份与恢复" });
+
+		expect(
+			notification.compareDocumentPosition(backup) & Node.DOCUMENT_POSITION_FOLLOWING,
+		).toBeTruthy();
 	});
 });

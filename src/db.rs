@@ -106,9 +106,9 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, DbErr> {
 
 pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     use crate::entity::{
-        api_key, cron_job, cron_job_log, cron_job_run, provider, provider_model, provider_template,
-        request, session, setting, snapshot, snapshot_meta, usage_cache, user, virtual_model,
-        virtual_model_item,
+        api_key, cron_job, cron_job_log, cron_job_run, notification_channel, provider,
+        provider_model, provider_template, request, session, setting, snapshot, snapshot_meta,
+        usage_cache, user, virtual_model, virtual_model_item,
     };
     use sea_orm::ConnectionTrait;
 
@@ -175,6 +175,10 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     db.execute(&stmt).await?;
 
     let mut stmt = Schema::new(backend).create_table_from_entity(snapshot_meta::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(notification_channel::Entity);
     stmt.if_not_exists();
     db.execute(&stmt).await?;
 
@@ -553,6 +557,23 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_request_log_snapshot_bucket \
              ON request_log_snapshot (duration_type, start_time, entity_type, entity, metric_type)",
         ],
+    )
+    .await?;
+
+    // Migration 27: 通知渠道表（飞书机器人通知，ADR-0023）。单行表：channel 为主键
+    // （当前恒 'feishu'）；config 存 AES-256-GCM 密文（明文 JSON 含 appId/appSecret/
+    // receiverType/receiver）。新库已由第一遍 create_table_from_entity 建表，此处
+    // CREATE IF NOT EXISTS 兜底历史库。
+    changed |= ensure_migration(
+        db,
+        27,
+        &["CREATE TABLE IF NOT EXISTS notification_channel (\
+             channel varchar PRIMARY KEY NOT NULL, \
+             config varchar NOT NULL, \
+             enable boolean NOT NULL DEFAULT 1, \
+             last_error varchar NOT NULL DEFAULT '', \
+             last_sent_at text, \
+             updated_at text NOT NULL)"],
     )
     .await?;
 

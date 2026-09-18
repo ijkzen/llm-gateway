@@ -3,6 +3,7 @@ mod auth;
 mod backup;
 mod chat;
 mod cron_jobs;
+mod notification;
 mod openai_compat;
 mod provider_models;
 mod provider_templates;
@@ -36,6 +37,7 @@ pub fn create_app(state: &AppState) -> Router {
         .nest("/api/virtual-models", virtual_models::routes())
         .nest("/api/api-keys", api_keys::routes())
         .nest("/api/backup", backup::routes())
+        .nest("/api/notification", notification::routes())
         .nest("/api/stats", stats::routes())
         .nest("/api/chat", chat::routes())
         .nest("/api/request-logs", request_logs::routes())
