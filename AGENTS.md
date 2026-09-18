@@ -17,6 +17,7 @@
   - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率等 19 个字段），供后续指标展示。ttft 起点=建连开始（新建连接）或请求发出（复用连接）；tps=output_tokens/(ttft+输出耗时)（流式）或 output_tokens/(end_time−请求发出)（非流式）。
   - 数据面板：`/api/stats/summary`（全量历史累计：请求数/成功率/总 token/加权缓存命中率）+ `/api/stats/charts`（过去 24 小时：按小时分桶趋势 + 按上游 `model_id` 分布）；前端 overview 页（侧边栏「数据面板」）用 Recharts + shadcn chart 展示 4 指标卡与两组三态图表（折线/饼图/降序条形图，Top 10 + 其他）。
   - 统计快照（`request_log_snapshot`，ADR-0021）：数据面板全部 stats 端点（summary/charts/5×rank/4×metrics/insight）不再整窗实时扫 `request`——按设置表时区把已闭桶的时间片（hour/day/month/year 四级独立物化）由内置任务 `stats_snapshot`（@every 1h，首启/时区变更自动全量回填）与 `stats_snapshot_rebuild`（@every 1h 自愈补缺哨兵桶）固化；读路径只对「闭桶取快照 + 未覆盖增量兑底」（快照缺失的闭桶一律实时兑底，快照只是加速层、数字口径不变）。表为 EAV 窄表（每行=桶×主体×指标名×值，指标存加和/计数原语与闭桶分位标量 p50/90/95/99），主体键一律用主键 id（model/api_key 生成时由 (provider_id, provider_model_id)/name 映射，映射不到的请求不产该主体行）。
+  - 飞书机器人消息通知（ADR-0023）：供应商发生**自动**停用/自动启用（额度门控停用/恢复、边界实测停用/恢复、连续失败熔断、自动恢复探测）时异步发一条纯文本飞书消息；管理员手动启停不发。配置为单行 `notification_channel` 表（飞书应用凭据整段加密落库、接口掩码返回），设置页「消息通知」弹窗支持手填 App ID/Secret、扫码一键创建（OAuth 2.0 Device Authorization Grant，前端渲染二维码 + 后端会话轮询）与测试发送。发送尽力而为：不重试、不阻塞转发热路径，只记录最近一次失败原因。
   - 供应商用量查询：`GET /api/providers/{id}/usage?refresh=1`（`src/usage/`）。对 `extra.usage=true` 的供应商按 base_url host（火山/阶跃再看 path 区分订阅 Plan 与按量账户）分发到各厂商 fetcher（API key 直查 / Copilot OAuth / 火山与阿里 AK/SK 签名 / CookieCloud cookie 系），归一化为订阅制窗口（5h/周/月，厂商不提供的窗口 `available=false`）或按量余额条目；成功结果写**数据库缓存**（`provider_usage_cache` 表，10 分钟内直出，过期/缺失才真实抓取并重新落库；更新/删除供应商时失效；`?refresh=1` 强制重取），详情页内嵌「用量信息」卡片（进度条按剩余百分比着色）。
   - 用量自动刷新与额度门控：内置定时任务 `usage_refresh`（`@every 5m`，`src/cron/seed.rs` 种子行）刷新全部用量供应商（**不含 enable 过滤**，停用的也持续监测）并落库；订阅制供应商额度耗尽（任一厂商已提供的窗口剩余为 0）时自动停用该 Provider 及名下全部虚拟模型子模型，恢复后自动启用；窗口剩余百分比落在 (0,1) 边界区时先发最小测试请求实测，失败同样停用、成功保持/解除停用（恢复双通道=窗口余量回升离开边界区或实测成功；`src/usage/persist.rs::apply_usage_gate`/`probe_boundary_providers`，实测请求同模型弹窗测速记入 request 表）。
   - 虚拟模型 LB 用量感知排序：策略 0/1（订阅制优先/按量优先）分组后组内排序——订阅制**截止时间优先**（FEFO）：从 5h 层起逐层检查双方该层都有额度（剩余 > 0），有则跳过剩余百分比改比更上层（日/周/月）截止时间（早重置者优先、缺截止时间者排后），截止链全平回退剩余百分比逐层比较（5h→日→周→月、同层打平比该层重置时间），层内无额度/窗口不可用判平进下一层，全平随机选一；按量付费按 fetcher 标记的主余额字段（`BalanceItem.primary`，各家指定单字段不做合计）降序；用量优先取 10 分钟数据库缓存，缺失/过期才真实抓取（`src/proxy/usage_rank.rs`）。**剔除口径**：订阅制任一已提供窗口剩余为 0（`UsageData::subscription_usable()` 为 false）即从候选剔除；按量付费查得到余额且合计为 0（`UsageData::balance_usable()` 为 false）即从候选剔除，查不到余额的按量成员**不剔除**（无法判定视为可用）；剔除后的顺序即 failover 尝试顺序（降级策略=1 时每次失败在剩余成员中按同策略重新选路）。
@@ -91,6 +92,9 @@
 │   │   ├── metrics.rs      # request 表记录与流式指标（ttft/输出耗时）
 │   │   ├── sse.rs          # SSE 拆分/写出工具
 │   │   └── usage_rank.rs   # 用量感知排序纯比较器（订阅 5h→周→月剩余百分比 / 按量余额合计）
+│   ├── notification/       # 飞书通知渠道（ADR-0023）：mod.rs（配置读写/加密掩码/测试发送）、
+│   │                       # feishu.rs（取 token + 发消息，手写 HTTP）、register.rs（扫码注册会话）、
+│   │                       # notify.rs（自动转换 → 文案 → 异步发送）
 │   ├── usage/              # 供应商用量查询：按 base_url host 分发 fetcher，归一化输出
 │   │   ├── types.rs        # UsageData/QuotaWindow（available 标记三窗）/BalanceItem
 │   │   ├── persist.rs      # 用量数据库缓存（10 分钟新鲜度，cache_age_fresh* 单一判定）+ 全量刷新 + 订阅额度耗尽自动停用/恢复 + 订阅制边界实测探活（probe_boundary_providers）
@@ -122,6 +126,7 @@
 │   │   ├── cron_jobs.rs    # 任务 CRUD + logs 列表/单次日志/SSE 实时流
 │   │   ├── openai_compat.rs# /v1/models 元数据 + /v1/chat/completions 转发入口
 │   │   ├── stats.rs        # 数据面板 12 路由注册（stats.rs 门面 + stats/ 子目录：window/compute/summary_charts/insight/rank/metrics，均 ≤1000 行）
+│   │   ├── notification.rs # 通知渠道配置 CRUD + 测试发送 + 扫码注册 begin/poll
 │   │   └── settings.rs
 │   └── entity/             # SeaORM 实体
 │       ├── mod.rs
@@ -132,6 +137,7 @@
 │       ├── session.rs      # 登录会话（主键为令牌 SHA-256）
 │       ├── request.rs      # /v1 每次转发的指标记录（20 字段）
 │       ├── usage_cache.rs  # 供应商用量数据库缓存（provider_usage_cache：provider_id 唯一 + usage_json + fetched_at）
+│       ├── notification_channel.rs # 通知渠道配置（单行表：channel 主键 + 加密 config + enable + last_error/last_sent_at）
 │       ├── snapshot.rs     # 统计快照行（request_log_snapshot，EAV：duration_type/start_time/
 │       │                   # end_time/entity_type/entity/metric_type/metric_value）
 │       ├── snapshot_meta.rs# 快照生成元信息（键值：时区偏移/各粒度水位）
@@ -246,10 +252,10 @@ Dockerfile 为多阶段构建：
 
 ## 测试说明
 
-- **Rust 测试**: `cargo test`。941 个测试函数：src 内单元测试 568 个（`auth`、`config`、`app_settings`、`availability`（可用性状态机）、`backup`（备份 JSON 解析/校验）、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`（含迁移 26 快照两表）、`logs_cleanup`、`provider_model`/`provider_repo`/`provider_template`、`proxy::convert`（四协议转换）、`proxy` 头处理、`proxy::sse`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`routes::stats`（桶归并/分位/时区）、`stats_snapshot`（桶帧/闭桶判定/窗口分解/历法周期、生成器含分位标量与哨兵行、subject 键解析与降级守卫、生命周期任务、summary_charts 兑底合并）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词，含 `has_low_remaining_window` 边界判定）等模块）+ `tests/` 集成测试 373 个（32 个顶层测试文件：auth、backup、chat、proxy（本地 mock 上游四协议转换/failover/LB 用量排序/原生透传/头透传剥离，含上游中断回归 `upstream_abort`、Responses 转换流式 live 转发 `responses_live` 子模块、流中畸形事件转换失败记失败回归）、cron_jobs、cron_job_logs、settings、providers、provider_models（CRUD/刷新/测速，含 `provider_models_test_integration` 测速端点）、virtual_models（含 openai `/v1/models`）、stats（summary/charts/insight/rank/metrics）、request_logs、stats_snapshot（快照↔实时等价：summary/charts/赛马/指标/insight 全端点响应逐字节一致，含缺口桶兑底与删除主体过滤降级）、model_metrics、provider_usage（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>，经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向本地 mock）、usage_estimate、provider_quota_gate（额度耗尽停用/恢复 + 种子任务被调度）、provider_boundary_probe（订阅制窗口剩余 (0,1)% 边界实测探活：失败停用/成功保持与恢复/禁用后继续探活不抖动/manual 不探活）、provider_failure_recovery（恢复探测）、lb_48_scenarios（48 场景矩阵）、lb_failure_disable、provider/provider_model/virtual_model 三个 rank 端点（`*_race_integration`）、upstream_pool（连接池：同一上游复用连接 / 空闲超时释放 / `Connection: close` 不归还，mock server 手动计数连接数）、stats_snapshot_jobs（两个内置快照任务的 handler 接线：失败交回 worker 记 failed + 失败日志、正常记 success）、i18n、provider_schema_check）。五个曾超 1000 行的大文件（proxy_integration/provider_models_integration/provider_usage_integration/stats_integration/virtual_models_integration）已按域拆分为同目录子模块（tests/<stem>/，由根文件 `#[path]` 引入，helpers 留在根文件），target 名与测试函数数不变。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
+- **Rust 测试**: `cargo test`。987 个测试函数：src 内单元测试 584 个（`auth`、`config`、`app_settings`、`availability`（可用性状态机）、`backup`（备份 JSON 解析/校验）、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`（含迁移 26 快照两表、迁移 27 通知渠道表）、`logs_cleanup`、`provider_model`/`provider_repo`/`provider_template`、`proxy::convert`（四协议转换）、`proxy` 头处理、`proxy::sse`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`routes::stats`（桶归并/分位/时区）、`stats_snapshot`（桶帧/闭桶判定/窗口分解/历法周期、生成器含分位标量与哨兵行、subject 键解析与降级守卫、生命周期任务、summary_charts 兑底合并）、`notification::*`（飞书消息体组装与错误码映射、注册轮询响应解析/退避/字段名兼容、通知文案渲染）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词，含 `has_low_remaining_window` 边界判定）等模块）+ `tests/` 集成测试 403 个（33 个顶层测试文件：auth、backup、chat、proxy（本地 mock 上游四协议转换/failover/LB 用量排序/原生透传/头透传剥离，含上游中断回归 `upstream_abort`、Responses 转换流式 live 转发 `responses_live` 子模块、流中畸形事件转换失败记失败回归）、cron_jobs、cron_job_logs、settings、providers、provider_models（CRUD/刷新/测速，含 `provider_models_test_integration` 测速端点）、virtual_models（含 openai `/v1/models`）、stats（summary/charts/insight/rank/metrics）、request_logs、stats_snapshot（快照↔实时等价：summary/charts/赛马/指标/insight 全端点响应逐字节一致，含缺口桶兑底与删除主体过滤降级）、model_metrics、provider_usage（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>，经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向本地 mock）、usage_estimate、provider_quota_gate（额度耗尽停用/恢复 + 种子任务被调度）、provider_boundary_probe（订阅制窗口剩余 (0,1)% 边界实测探活：失败停用/成功保持与恢复/禁用后继续探活不抖动/manual 不探活）、provider_failure_recovery（恢复探测）、notification（通知渠道配置读写与掩码、测试发送对 mock 飞书、扫码注册 begin/poll 状态流转与 interval 节流、自动转换触发通知<含手动不发与开关停用回归>、备份导入导出<含旧文件不清配置与解不开时不导出降级凭据>）、lb_48_scenarios（48 场景矩阵）、lb_failure_disable、provider/provider_model/virtual_model 三个 rank 端点（`*_race_integration`）、upstream_pool（连接池：同一上游复用连接 / 空闲超时释放 / `Connection: close` 不归还，mock server 手动计数连接数）、stats_snapshot_jobs（两个内置快照任务的 handler 接线：失败交回 worker 记 failed + 失败日志、正常记 success）、i18n、provider_schema_check）。六个曾超 1000 行的大文件（proxy_integration/provider_models_integration/provider_usage_integration/stats_integration/virtual_models_integration/notification_integration）已按域拆分为同目录子模块（tests/<stem>/，由根文件 `#[path]` 引入，helpers 留在根文件），target 名与测试函数数不变。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
 - 环境变量隔离使用 `temp-env`，临时目录使用 `tempfile`。
 - 调度器测试包含关键行为回归：禁用的任务不会触发（`set_stop` 在 tokio-cron-scheduler 内存存储下无效，禁用必须走移除）、启用后恢复触发、禁用任务仍可手动执行。
-- **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 67 个测试文件 529 个用例，分布于 `web/src/__tests__/`（页面级 20 个，含 providers/settings 整页）、`web/src/components/__tests__/`（组件级 36 个，含 sidebar/setting-edit-dialog、请求日志刷新时窗回归 request-logs-refresh-window）、各 race 组件、`hooks/__tests__/`（use-in-view、statsQuery 取数窗口回归 stats-query-window）、`lib/__tests__/`（api/utils/race-period）、`i18n/__tests__/`（键集合一致性）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill，并为 `ResizeObserver`/`scrollIntoView`/`matchMedia` 补了 jsdom 缺失的桩；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
+- **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 68 个测试文件 540 个用例，分布于 `web/src/__tests__/`（页面级 20 个，含 providers/settings 整页）、`web/src/components/__tests__/`（组件级 37 个，含 sidebar/setting-edit-dialog、请求日志刷新时窗回归 request-logs-refresh-window）、各 race 组件、`hooks/__tests__/`（use-in-view、statsQuery 取数窗口回归 stats-query-window）、`lib/__tests__/`（api/utils/race-period）、`i18n/__tests__/`（键集合一致性）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill，并为 `ResizeObserver`/`scrollIntoView`/`matchMedia` 补了 jsdom 缺失的桩；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
 - 没有 E2E 测试。
 
 ## 代码风格与开发约定
@@ -295,7 +301,7 @@ pnpm vitest run                    # 前端全量测试
 ## 数据库与迁移
 
 - 使用 SQLite，默认开启 WAL 模式、`synchronous=NORMAL`、外键、5 秒 busy timeout、约 256 MB 页缓存与 256 MB mmap。
-- 启动时 `src/db.rs::migrate()` 自动建表（`cron_jobs`、`setting`、`schema_migrations`），并按版本号执行增量迁移（当前编至 26：迁移 26 建 `request_log_snapshot`/`snapshot_meta` 表与复合唯一索引，ADR-0021；生产库 14/15 号段被旧 lg-proxy 方案废弃占用，新迁移从 16 起编）；schema 变化后执行一次 `ANALYZE`。
+- 启动时 `src/db.rs::migrate()` 自动建表（`cron_jobs`、`setting`、`schema_migrations`），并按版本号执行增量迁移（当前编至 27：迁移 26 建 `request_log_snapshot`/`snapshot_meta` 表与复合唯一索引（ADR-0021），迁移 27 建 `notification_channel` 表（ADR-0023）；生产库 14/15 号段被旧 lg-proxy 方案废弃占用，新迁移从 16 起编）；schema 变化后执行一次 `ANALYZE`。
 - `ensure_sqlite_dir` 会从 `DATABASE_URL` 解析出文件路径（保留绝对路径）并预先创建父目录。
 - 生产环境数据库文件位于 `/config/db/app.db`，建议挂载持久化卷。
 
