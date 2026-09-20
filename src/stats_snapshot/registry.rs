@@ -127,6 +127,17 @@ pub(crate) const METRICS: [MetricSpec; 16] = [
     },
 ];
 
+/// 统计口径基础谓词：排除探测/测速流量。`test_model` 写入的探测行
+/// `api_key_name` 恒为 `TEST_API_KEY_NAME`（恢复探测/边界实测/弹窗测速三入口共用），
+/// 生成端与全部实时端点的 WHERE 链统一追加本谓词，数据面板只统计真实服务流量。
+/// 谓词文本直接绑定常量，标记若变编译期联动。返回以 `" AND "` 开头的片段。
+pub(crate) fn base_predicate(alias: &str) -> String {
+    format!(
+        " AND {alias}.api_key_name != '{}'",
+        crate::proxy::TEST_API_KEY_NAME
+    )
+}
+
 /// 全部可加和指标 (键, 表达式)：生成端单遍扫描固化用（表序即列序）。
 pub(crate) fn metric_exprs() -> impl Iterator<Item = (&'static str, &'static str)> {
     METRICS.iter().map(|s| (s.key, s.expr))

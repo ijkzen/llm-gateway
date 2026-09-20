@@ -12,6 +12,8 @@ use llm_gateway::entity::request as request_entity;
 mod api_key_filter;
 #[path = "stats_integration/api_key_rank.rs"]
 mod api_key_rank;
+#[path = "stats_integration/exclude_probe.rs"]
+mod exclude_probe;
 #[path = "stats_integration/granularity.rs"]
 mod granularity;
 #[path = "stats_integration/insight.rs"]

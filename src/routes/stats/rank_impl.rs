@@ -487,8 +487,9 @@ pub(crate) async fn virtual_model_member_rank(
                  LEFT JOIN provider_model pm ON pm.provider_id = r.provider_id \
                                               AND pm.provider_model_id = r.model_id \
                  WHERE r.start_time >= {s} AND r.start_time < {e} AND r.success = 1 \
-                   AND r.virtual_model_id = ? AND pm.model_id IS NOT NULL \
+                   AND r.virtual_model_id = ? AND pm.model_id IS NOT NULL{base} \
                  GROUP BY key",
+                base = snap::base_predicate("r"),
             ),
             vec![virtual_model_id.into()],
         )
@@ -711,7 +712,8 @@ pub(crate) async fn api_key_rank(
     let grouped = |s: i64, e: i64| {
         let mut sql = format!(
             "SELECT r.api_key_name AS key, {prim_list} FROM request r \
-             WHERE r.start_time >= {s} AND r.start_time < {e} AND r.success = 1"
+             WHERE r.start_time >= {s} AND r.start_time < {e} AND r.success = 1{base}",
+            base = snap::base_predicate("r"),
         );
         let mut params: Vec<sea_orm::Value> = Vec::new();
         if let Some(p) = query.provider_id {

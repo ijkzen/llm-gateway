@@ -90,7 +90,8 @@ async fn summary_live(
                 DbBackend::Sqlite,
                 format!(
                     "SELECT {select} FROM request r \
-                     WHERE r.start_time >= {s} AND r.start_time < {e}"
+                     WHERE r.start_time >= {s} AND r.start_time < {e}{base}",
+                    base = snap::base_predicate("r"),
                 ),
             ))
             .await?;
@@ -222,8 +223,9 @@ pub(crate) async fn summary(
 }
 
 /// 过滤子句与参数（live SQL 共用；charts/insight 同级模块复用）。
+/// 起始即带统计口径基础谓词（排除探测/测速流量），维度过滤随后追加。
 pub(crate) fn filter_parts(query: &ChartsQuery) -> (String, Vec<sea_orm::Value>) {
-    let mut sql = String::new();
+    let mut sql = snap::base_predicate("r");
     let mut params: Vec<sea_orm::Value> = Vec::new();
     if let Some(provider_id) = query.provider_id {
         sql.push_str(" AND r.provider_id = ?");

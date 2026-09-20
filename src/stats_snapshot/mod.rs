@@ -31,7 +31,7 @@ pub(crate) use registry::{
     ENTITY_API_KEY, ENTITY_API_KEY_MODEL, ENTITY_MODEL, ENTITY_PROVIDER, ENTITY_VIRTUAL_MODEL,
     ENTITY_VM_MEMBER, ENTITY_WHOLE, percentile_level_ok,
 };
-pub(crate) use registry::{expr_of, select_list, success_prims};
+pub(crate) use registry::{base_predicate, expr_of, select_list, success_prims};
 pub(crate) use subject::{
     api_key_reconcile_names, demote_if_unresolved, resolve_api_key_id, resolve_pm_key,
     resolve_pm_keys_for_filter,

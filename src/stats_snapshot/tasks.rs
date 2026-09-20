@@ -17,6 +17,11 @@ static SNAPSHOT_TASK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// meta 键：最近一次生成的时区偏移（分钟；变更即触发全量重算）。
 const META_TZ_OFFSET: &str = "tz_offset_minutes";
+/// meta 键：统计口径版本（快照生成/实时端点的基础谓词版本；不一致即触发全量重算）。
+const META_PREDICATE_VERSION: &str = "predicate_version";
+/// 当前口径版本：1 = 隐含旧口径（无版本键）；2 = 排除探测/测速流量
+///（`registry::base_predicate`，ADR-0024）。口径谓词再变时递增。
+const PREDICATE_VERSION: &str = "2";
 /// meta 键：各粒度最近固化桶起点（增量生成水位）。
 const META_WM: [(&str, Level); 4] = [
     ("wm_hour", Level::Hour),
@@ -164,13 +169,37 @@ pub(crate) async fn run_snapshot_generation(db: &DatabaseConnection) -> anyhow::
 
     let initialized = meta_get(db, "initialized").await?.is_some();
     let stored_offset = meta_get(db, META_TZ_OFFSET).await?;
+    let stored_predicate = meta_get(db, META_PREDICATE_VERSION).await?;
     if !initialized {
         tracing::info!("统计快照表为空，开始全量回填整个 request 历史");
         let stats = full_backfill(db, offset, now).await?;
         meta_set(db, "initialized", "1").await?;
         meta_set(db, META_TZ_OFFSET, &offset_str).await?;
+        meta_set(db, META_PREDICATE_VERSION, PREDICATE_VERSION).await?;
         log_finished(
             "统计快照全量回填完成",
+            &stats,
+            stats.coverage_text(),
+            started.elapsed(),
+        );
+        return Ok(true);
+    }
+    if stored_predicate.as_deref() != Some(PREDICATE_VERSION) {
+        tracing::info!(
+            stored_predicate = ?stored_predicate,
+            current_predicate = PREDICATE_VERSION,
+            "统计口径版本变化，清空快照并全量重算"
+        );
+        db.execute_unprepared("DELETE FROM request_log_snapshot")
+            .await?;
+        for (key, _) in META_WM {
+            meta_delete(db, key).await?;
+        }
+        let stats = full_backfill(db, offset, now).await?;
+        meta_set(db, META_TZ_OFFSET, &offset_str).await?;
+        meta_set(db, META_PREDICATE_VERSION, PREDICATE_VERSION).await?;
+        log_finished(
+            "统计快照口径变更重算完成",
             &stats,
             stats.coverage_text(),
             started.elapsed(),
@@ -505,6 +534,85 @@ mod tests {
         let before = count(&db, "hour").await;
         assert!(run_snapshot_generation(&db).await.unwrap());
         assert_eq!(count(&db, "hour").await, before);
+    }
+
+    /// 小时桶 whole 主体 calls 指标值（无行返回 0）。
+    async fn whole_calls(db: &DatabaseConnection, bucket_start: i64) -> f64 {
+        db.query_one_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            format!(
+                "SELECT metric_value AS v FROM request_log_snapshot \
+                 WHERE duration_type = 'hour' AND start_time = {bucket_start} \
+                 AND entity_type = 'whole' AND entity = '' AND metric_type = 'calls'"
+            ),
+        ))
+        .await
+        .unwrap()
+        .and_then(|row| row.try_get("", "v").ok())
+        .unwrap_or(0.0)
+    }
+
+    /// 口径版本升级回归：predicate_version 缺失/落后 → 清空快照全量重算；
+    /// 探测流量（api_key_name='test'，与 test_model 落库同标记）不产快照贡献。
+    #[tokio::test]
+    async fn predicate_version_change_triggers_recalc_and_excludes_probe() {
+        let _serial = test_lock().await;
+        let db = setup().await;
+        let now = now_ms();
+        let (_older, closed) = closed_hour_frame(now);
+        insert_request(&db, "n1", closed.start + 1000).await;
+        // 探测行：与正常行同桶。
+        exec(
+            &db,
+            &format!(
+                "INSERT INTO request (request_id, virtual_model_id, provider_id, model_id, \
+                 stream, input_cache_tokens, input_cache_rate, tps, start_time, end_time, \
+                 request_time, success, api_key_name) \
+                 VALUES ('p1', 0, 1, 'm', 0, 0, 0.0, 0.0, {}, {}, 100, 0, 'test')",
+                closed.start + 2000,
+                closed.start + 2000
+            ),
+        )
+        .await;
+
+        // 首启回填：探测行不计入，whole calls = 1；版本键写入。
+        assert!(run_snapshot_generation(&db).await.unwrap());
+        assert_eq!(
+            meta_get(&db, META_PREDICATE_VERSION)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(PREDICATE_VERSION)
+        );
+        assert_eq!(whole_calls(&db, closed.start).await, 1.0);
+
+        // 模拟旧口径存量：删掉版本键 + 篡改该桶 whole calls 为 2（旧口径含探测）。
+        meta_delete(&db, META_PREDICATE_VERSION).await.unwrap();
+        exec(
+            &db,
+            &format!(
+                "UPDATE request_log_snapshot SET metric_value = 2 \
+                 WHERE duration_type = 'hour' AND start_time = {} \
+                 AND entity_type = 'whole' AND metric_type = 'calls'",
+                closed.start
+            ),
+        )
+        .await;
+
+        // 版本落后 → 清空重算：快照回到新口径（排除探测），版本键补齐。
+        assert!(run_snapshot_generation(&db).await.unwrap());
+        assert_eq!(
+            whole_calls(&db, closed.start).await,
+            1.0,
+            "重算后应排除探测行"
+        );
+        assert_eq!(
+            meta_get(&db, META_PREDICATE_VERSION)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(PREDICATE_VERSION)
+        );
     }
 
     #[tokio::test]

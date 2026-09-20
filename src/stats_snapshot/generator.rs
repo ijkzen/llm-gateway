@@ -82,11 +82,12 @@ pub async fn finalize_bucket(db: &DatabaseConnection, frame: Frame) -> anyhow::R
         let sql = format!(
             "SELECT {key} AS entity, {metrics} \
              FROM request r {joins} \
-             WHERE r.start_time >= ? AND r.start_time < ? \
+             WHERE r.start_time >= ? AND r.start_time < ?{base} \
              GROUP BY entity",
             key = pattern.key_expr,
             metrics = select_list,
             joins = pattern.joins,
+            base = super::registry::base_predicate("r"),
         );
         let rows = txn
             .query_all_raw(Statement::from_sql_and_values(
@@ -153,7 +154,8 @@ async fn write_percentiles<C: ConnectionTrait>(txn: &C, frame: Frame) -> anyhow:
              FROM request r \
              LEFT JOIN provider_model pm ON pm.provider_id = r.provider_id AND pm.provider_model_id = r.model_id \
              LEFT JOIN api_key k ON k.name = r.api_key_name \
-             WHERE r.start_time >= ? AND r.start_time < ? AND r.success = 1 AND {extra_cond}"
+             WHERE r.start_time >= ? AND r.start_time < ? AND r.success = 1 AND {extra_cond}{base}",
+            base = super::registry::base_predicate("r"),
         );
         let rows = txn
             .query_all_raw(Statement::from_sql_and_values(

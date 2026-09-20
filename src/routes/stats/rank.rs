@@ -188,11 +188,13 @@ pub(crate) async fn resolve_names(
 
 /// 按固定顺序（providerId → virtualModelId → modelId → apiKey）追加可选过滤：
 /// 占位符与参数一一对应，五个端点共用同一拼接实现。
+/// 起始即带统计口径基础谓词（排除探测/测速流量），无占位符不占参数位。
 pub(crate) fn push_rank_filters(
     where_sql: &mut String,
     params: &mut Vec<sea_orm::Value>,
     query: &RankQuery,
 ) {
+    where_sql.push_str(&snap::base_predicate("r"));
     if let Some(provider_id) = query.provider_id {
         where_sql.push_str(" AND r.provider_id = ?");
         params.push(provider_id.into());

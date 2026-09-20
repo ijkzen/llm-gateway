@@ -21,7 +21,8 @@ async fn metrics_prims(
     let grouped = |s: i64, e: i64| {
         let sql = format!(
             "SELECT 'x' AS key, {prim_list} FROM request r \
-             WHERE r.start_time >= {s} AND r.start_time < {e} AND r.success = 1{extra_where}"
+             WHERE r.start_time >= {s} AND r.start_time < {e} AND r.success = 1{base}{extra_where}",
+            base = snap::base_predicate("r"),
         );
         (sql, extra_params.clone())
     };
