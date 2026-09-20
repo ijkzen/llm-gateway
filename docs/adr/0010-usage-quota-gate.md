@@ -20,6 +20,6 @@ accepted
 - 额度耗尽即停、恢复即启，全自动闭环；判定口径与选路剔除同源（`subscription_usable`/`balance_usable`，见 ADR-0011），无「剔除说耗尽、门控说可用」的分叉。
 - 状态迁移统一走 availability 动作（幂等/级联/计数规则收口于 ADR-0003 模块），门控只管「判定 + 触发」。
 - 停用/恢复事件在定时任务日志里点名供应商，可观测。
-- 边界区供应商不再带着「看似可用」的余量承接真实流量后被拒：实测失败即提前转 quota 停用、实测通过才恢复；实测请求与模型弹窗测速同口径写入 request 表（`api_key_name=test`）。
+- 边界区供应商不再带着「看似可用」的余量承接真实流量后被拒：实测失败即提前转 quota 停用、实测通过才恢复；实测请求与模型弹窗测速同口径写入 request 表（`api_key_name=test`；写入口径不变，但自 ADR-0024 起不再计入数据面板统计）。
 
 规格与测试：`.scratch/balance-usage-gate/`、`tests/provider_quota_gate_integration.rs`。
