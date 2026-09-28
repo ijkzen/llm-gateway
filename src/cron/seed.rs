@@ -17,6 +17,9 @@ pub const STATS_SNAPSHOT_JOB: &str = "stats_snapshot";
 /// 统计快照自愈任务名：每小时扫描并补算最近 7 天缺哨兵行的闭桶小时/天桶与
 /// 最近闭月/闭年（跳跑/宕机错过生成时兜底）。
 pub const STATS_SNAPSHOT_REBUILD_JOB: &str = "stats_snapshot_rebuild";
+/// 模型目录刷新任务名：每天 04:00 从 models.dev 拉取全量模型目录并原子写入
+/// 外置文件（db 目录父目录 models.json），失败保留旧文件（ADR-0025）。
+pub const MODELS_REFRESH_JOB: &str = "models_refresh";
 
 /// 内置任务的默认标题（按语言）。语言切换同步未自定义任务时复用。
 pub fn default_title(name: &str, lang: crate::i18n::Lang) -> String {
@@ -33,6 +36,7 @@ pub fn default_title(name: &str, lang: crate::i18n::Lang) -> String {
         STATS_SNAPSHOT_REBUILD_JOB => lang
             .tr("统计快照自愈", "Stats Snapshot Self-Heal")
             .to_string(),
+        MODELS_REFRESH_JOB => lang.tr("模型目录刷新", "Model Catalog Refresh").to_string(),
         _ => lang.tr("定时任务", "Cron Job").to_string(),
     }
 }
@@ -77,6 +81,15 @@ pub fn default_description(name: &str, lang: crate::i18n::Lang) -> String {
                  generation skipped by deployments or downtime",
             )
             .to_string(),
+        MODELS_REFRESH_JOB => lang
+            .tr(
+                "每天 04:00 从 models.dev 拉取全量模型目录，校验为合法非空 JSON 后原子写入\
+                 外置文件（db 目录父目录的 models.json）；失败保留旧文件",
+                "Fetches the full model catalog from models.dev every day at 04:00 and atomically \
+                 writes it to the external file (models.json beside the db directory) after \
+                 validating it as non-empty valid JSON; keeps the old file on failure",
+            )
+            .to_string(),
         _ => lang
             .tr("系统内置定时任务", "Built-in scheduled job")
             .to_string(),
@@ -101,6 +114,11 @@ pub async fn ensure_stats_snapshot_job(db: &DatabaseConnection) -> anyhow::Resul
 /// 确保 `stats_snapshot_rebuild` 任务行存在（不存在则插入，幂等）。
 pub async fn ensure_stats_snapshot_rebuild_job(db: &DatabaseConnection) -> anyhow::Result<()> {
     ensure_job(db, STATS_SNAPSHOT_REBUILD_JOB, "@every 1h").await
+}
+
+/// 确保 `models_refresh` 任务行存在（不存在则插入，幂等）。
+pub async fn ensure_models_refresh_job(db: &DatabaseConnection) -> anyhow::Result<()> {
+    ensure_job(db, MODELS_REFRESH_JOB, "0 0 4 * * *").await
 }
 
 async fn ensure_job(db: &DatabaseConnection, name: &str, expression: &str) -> anyhow::Result<()> {

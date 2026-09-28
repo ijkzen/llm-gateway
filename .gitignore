@@ -11,6 +11,8 @@ web/tsconfig.tsbuildinfo
 /.codegraph
 /.zcode/plans
 /.zcode/tmp
+# 外置模型目录（dev 默认落在仓库根，见 ADR-0025）
+/models.json
 /web/logs
 /deploy/llm-gateway
 /.deploy

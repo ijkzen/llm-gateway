@@ -108,6 +108,12 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
 
     let db = db::connect(&config.database_url).await?;
 
+    // 外置模型目录：路径由 DATABASE_URL 推导（db 目录父目录的 models.json），
+    // 注入进程级目录读取器；缺失/读不到时自动回退内嵌快照（ADR-0025）。
+    crate::provider_model::catalog::init(
+        crate::provider_model::catalog::external_path_for_database_url(&config.database_url),
+    );
+
     // 回填历史 api_key 的 key_hash（migration 7 新增列，无法在 SQL 内解密计算）。
     auth::backfill_api_key_hashes(&db).await;
 
@@ -224,6 +230,41 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         })
         .await;
 
+    // 模型目录刷新 handler（ADR-0025）：每天 04:00 从 models.dev 拉取全量目录，
+    // 校验后原子写入外置文件；失败保留旧文件并把本次执行记为失败。
+    let models_refresh_lock = Arc::new(tokio::sync::Mutex::new(()));
+    scheduler
+        .register_handler(crate::cron::seed::MODELS_REFRESH_JOB, {
+            let lock = models_refresh_lock.clone();
+            Arc::new(move |_ctx: JobContext| {
+                let lock = lock.clone();
+                Box::pin(async move {
+                    let Ok(_guard) = lock.try_lock() else {
+                        tracing::warn!("模型目录刷新上次仍在运行，本次跳过");
+                        return Ok(());
+                    };
+                    let Some(path) = crate::provider_model::catalog::external_path() else {
+                        tracing::warn!("未配置外置模型目录路径，跳过刷新");
+                        return Ok(());
+                    };
+                    match crate::provider_model::catalog_refresh::refresh_from(
+                        crate::provider_model::catalog_refresh::MODELS_URL,
+                        &path,
+                    )
+                    .await
+                    {
+                        Ok(n) => tracing::info!("模型目录刷新完成，共 {n} 条"),
+                        Err(e) => {
+                            tracing::error!("模型目录刷新失败：{e}");
+                            return Err(e.into());
+                        }
+                    }
+                    Ok(())
+                })
+            })
+        })
+        .await;
+
     // 统计快照生成/自愈 handler（ADR-0021）：进程级互斥在 tasks 内部（静态锁）；
     // 失败交回 worker（run 记 failed + 追加「任务执行失败：…」）。
     scheduler
@@ -244,6 +285,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
     crate::cron::seed::ensure_failure_recovery_job(&db).await?;
     crate::cron::seed::ensure_stats_snapshot_job(&db).await?;
     crate::cron::seed::ensure_stats_snapshot_rebuild_job(&db).await?;
+    crate::cron::seed::ensure_models_refresh_job(&db).await?;
 
     // 启动预热：首启全量回填/时区变更重算不等到下一个整点触发（与定时任务同一
     // 进程级互斥，任务运行时本次自动跳过）。

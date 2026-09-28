@@ -6,6 +6,7 @@
 #   llm-gateway           本地 zig 交叉编译的静态二进制（x86_64-unknown-linux-musl）
 #   .env                  API_KEY_ENCRYPTION_KEY=<openssl rand -hex 32 生成>
 #   data/db, data/logs    SQLite 数据库与日志（自动创建）
+#   data/models.json      外置模型目录（每日刷新任务写入，ADR-0025；可选，缺失时用内嵌快照）
 #
 # 仅监听 127.0.0.1，由 Caddy 反代 gateway.ijkzen.cn。
 services:
@@ -28,8 +29,8 @@ services:
       # 供应商 API Key 的 AES-256-GCM 加密密钥（必配，否则明文落库）
       API_KEY_ENCRYPTION_KEY: ${API_KEY_ENCRYPTION_KEY:?请在 .env 中配置 API_KEY_ENCRYPTION_KEY}
     volumes:
-      - ./data/db:/config/db
-      - ./data/logs:/config/logs
+      # 整目录挂载：db、logs 与外置模型目录 models.json 一同持久化（ADR-0025）。
+      - ./data:/config
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4007/api/healthz"]
       interval: 30s

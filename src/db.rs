@@ -1,5 +1,4 @@
 use sea_orm::{ConnectOptions, Database, DatabaseConnection, DbErr, Schema, Statement};
-use std::path::Path;
 use std::time::Duration;
 
 const SLOW_QUERY_THRESHOLD_MS: u64 = 100;
@@ -33,9 +32,16 @@ fn sqlite_url_path(database_url: &str) -> Option<String> {
     }
 }
 
+/// SQLite URL 对应的文件路径（内存库/非路径 URL 返回 `None`）。
+///
+/// 供需要「数据库文件所在目录」的调用方复用同一解析口径（如外置模型目录路径推导）。
+pub(crate) fn sqlite_file_path(database_url: &str) -> Option<std::path::PathBuf> {
+    sqlite_url_path(database_url).map(std::path::PathBuf::from)
+}
+
 async fn ensure_sqlite_dir(database_url: &str) -> Result<(), std::io::Error> {
-    if let Some(path) = sqlite_url_path(database_url)
-        && let Some(parent) = Path::new(&path).parent()
+    if let Some(path) = sqlite_file_path(database_url)
+        && let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
         tokio::fs::create_dir_all(parent).await.map_err(|e| {
