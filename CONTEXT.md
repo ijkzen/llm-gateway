@@ -27,8 +27,16 @@ provider 或 provider_model 的可选出口代理（`proxy_enabled`+`proxy_addr`
 _Avoid_: 出口代理（裸称）
 
 **模型目录 (Model Catalog)**:
-内嵌于二进制的 models.dev 全量模型元数据（432 条），是智能填充的唯一数据源。
+智能填充所用的 models.dev 全量模型元数据，两层来源：优先「外置模型目录」，读不到时回退编译期内嵌快照（432 条）。
 _Avoid_: models.json（实现指代）、知识库
+
+**外置模型目录 (External Model Catalog)**:
+模型目录的运行时覆盖文件 `models.json`，位于 db 目录的父目录（由 DATABASE_URL 推导：dev 为工作目录，prod 为 /config）。存在且可解析时优先于内嵌快照；读取按 mtime/size 变更才重解析，缺失/读不到/解析失败一律回退内嵌快照（ADR-0025）。
+_Avoid_: 外置 models.json（裸称）、缓存文件
+
+**目录刷新 (Catalog Refresh)**:
+内置任务 `models_refresh` 每天 04:00（本地时区）从 models.dev 拉取全量 models.json，校验为合法非空 JSON 后原子替换「外置模型目录」；失败保留旧文件并记任务失败，不预热、无状态接口（ADR-0025）。
+_Avoid_: 同步目录、更新 models.json（裸称，与「远端模型刷新」混淆）
 
 **远端模型刷新 (Model Refresh)**:
 按供应商协议调用其 Models 接口，拉取远端模型 ID 列表作为待导入候选。

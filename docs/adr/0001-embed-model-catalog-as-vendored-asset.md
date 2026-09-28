@@ -2,7 +2,7 @@
 
 ## Status
 
-accepted
+accepted（「不做运行时更新」条款由 ADR-0025 取代：模型目录仍编译期内嵌为兜底，但匹配优先读外置文件、并由每日任务刷新）
 
 ## Context
 
@@ -10,7 +10,7 @@ accepted
 
 ## Decision
 
-models.json 以 minified JSON 文件 vendor 进仓库 `src/provider_model/data/models.json`，通过 `include_str!` 编译期内嵌进二进制，进程内 `OnceLock` 惰性解析一次。不做运行时更新；目录过期时手动重新下载 minify 后替换该文件并随版本发布。
+models.json 以 minified JSON 文件 vendor 进仓库 `src/provider_model/data/models.json`，通过 `include_str!` 编译期内嵌进二进制，作为零依赖的兜底快照。~~不做运行时更新；目录过期时手动重新下载 minify 后替换该文件并随版本发布。~~ 运行时更新条款由 ADR-0025 取代：匹配优先读「外置模型目录」、每日任务刷新，内嵌文件作为兜底保留。
 
 ## Consequences
 
