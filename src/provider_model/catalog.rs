@@ -295,8 +295,8 @@ mod tests {
 
     #[test]
     fn test_catalog_parses_all_entries() {
-        // 2026-09-10 抓取的 models.json 共 379 条。
-        assert_eq!(entry_count(), 379);
+        // 2026-09-29 抓取的 models.json 共 432 条。
+        assert_eq!(entry_count(), 432);
     }
 
     #[test]
@@ -362,12 +362,12 @@ mod tests {
 
     #[test]
     fn test_incomplete_entries_exist() {
-        // 379 条中有 8 条缺 limit.output，用于验证 partial 状态的判定来源。
+        // 432 条中有 9 条缺 limit.output，用于验证 partial 状态的判定来源。
         let incomplete = catalog()
             .values()
             .filter(|entry| !entry.is_complete())
             .count();
-        assert_eq!(incomplete, 8);
+        assert_eq!(incomplete, 9);
     }
 
     #[test]
