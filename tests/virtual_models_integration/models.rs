@@ -87,8 +87,10 @@ async fn test_update_missing_virtual_model_returns_404() {
     assert_eq!(status, 404);
 }
 
+/// 删除虚拟模型只删其名下成员条目（共享映射，ADR-0026）：其他虚拟模型的
+/// 共享成员不受影响；全部删除后条目清空；重复删除 404。
 #[tokio::test]
-async fn test_delete_virtual_model_releases_members() {
+async fn test_delete_virtual_model_removes_only_its_items() {
     let (app, db) = setup_app().await;
     let p1 = seed_provider(&db, "p1").await;
     let a = seed_provider_model(&db, p1, "a").await;
@@ -113,17 +115,18 @@ async fn test_delete_virtual_model_releases_members() {
     assert_eq!(status, 201);
     let vm2 = body["data"]["virtualModelId"].as_i64().unwrap();
 
-    // a、b 均被占用 → 400。
-    let (status, _) = send_json(
+    // 共享映射：a、b 可同时加入 vm3。
+    let (status, body) = send_json(
         app.clone(),
         "POST",
         "/api/virtual-models",
         vm_payload("vm3", &[a, b]),
     )
     .await;
-    assert_eq!(status, 400);
+    assert_eq!(status, 201);
+    let vm3 = body["data"]["virtualModelId"].as_i64().unwrap();
 
-    // 删除 vm1 释放 a；b 仍被占用 → 400。
+    // 删除 vm1 只删其名下条目：vm3 的共享成员 a 不受影响。
     let (status, _) = send_json(
         app.clone(),
         "DELETE",
@@ -132,35 +135,23 @@ async fn test_delete_virtual_model_releases_members() {
     )
     .await;
     assert_eq!(status, 200);
-    let (status, _) = send_json(
-        app.clone(),
-        "POST",
-        "/api/virtual-models",
-        vm_payload("vm3", &[a, b]),
-    )
-    .await;
-    assert_eq!(status, 400);
+    let items = virtual_model_item::Entity::find().all(&db).await.unwrap();
+    assert_eq!(items.len(), 3, "vm2 的 b + vm3 的 a、b 不受 vm1 删除影响");
+    assert!(items.iter().all(|it| it.virtual_model_id != vm1 as i32));
 
-    // 删除 vm2 后 a、b 全部释放。
-    let (status, _) = send_json(
-        app.clone(),
-        "DELETE",
-        &format!("/api/virtual-models/{vm2}"),
-        Value::Null,
-    )
-    .await;
-    assert_eq!(status, 200);
+    // 删除 vm2、vm3 后条目清空。
+    for id in [vm2, vm3] {
+        let (status, _) = send_json(
+            app.clone(),
+            "DELETE",
+            &format!("/api/virtual-models/{id}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, 200);
+    }
     let items = virtual_model_item::Entity::find().all(&db).await.unwrap();
     assert!(items.is_empty(), "级联删除成员条目");
-
-    let (status, _) = send_json(
-        app.clone(),
-        "POST",
-        "/api/virtual-models",
-        vm_payload("vm3", &[a, b]),
-    )
-    .await;
-    assert_eq!(status, 201);
 
     // 重复删除 → 404。
     let (status, _) = send_json(

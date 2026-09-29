@@ -286,12 +286,11 @@ fn dedupe_items(items: &[VirtualModelItemRequest]) -> Vec<VirtualModelItemReques
         .collect()
 }
 
-/// 校验成员 model_id：必须存在于 provider_model，且未被其他虚拟模型占用
-/// （exclude_vm_id 用于编辑场景排除自身）。Some(msg) 表示校验失败。
+/// 校验成员 model_id 必须存在于 provider_model。Some(msg) 表示校验失败。
+/// 共享映射（ADR-0026）：同一供应商模型可归属多个虚拟模型，不做占用检查。
 async fn validate_item_model_ids<C: ConnectionTrait>(
     db: &C,
     model_ids: &[i32],
-    exclude_vm_id: Option<i32>,
     lang: Lang,
 ) -> Result<Option<String>, DbErr> {
     let found = provider_model::Entity::find()
@@ -308,24 +307,6 @@ async fn validate_item_model_ids<C: ConnectionTrait>(
             };
             return Ok(Some(msg));
         }
-    }
-
-    let mut query = virtual_model_item::Entity::find()
-        .filter(virtual_model_item::Column::ModelId.is_in(model_ids.to_vec()));
-    if let Some(vm_id) = exclude_vm_id {
-        query = query.filter(virtual_model_item::Column::VirtualModelId.ne(vm_id));
-    }
-    let conflicts = query.all(db).await?;
-    if let Some(conflict) = conflicts.first() {
-        let msg = if lang == Lang::En {
-            format!(
-                "model {} is already used by another virtual model",
-                conflict.model_id
-            )
-        } else {
-            format!("模型 {} 已被其他虚拟模型使用", conflict.model_id)
-        };
-        return Ok(Some(msg));
     }
     Ok(None)
 }
@@ -625,7 +606,7 @@ async fn create_virtual_model(
     }
     let items = dedupe_items(&req.items);
     let model_ids: Vec<i32> = items.iter().map(|item| item.model_id).collect();
-    match validate_item_model_ids(&state.db, &model_ids, None, lang).await {
+    match validate_item_model_ids(&state.db, &model_ids, lang).await {
         Ok(Some(msg)) => return response::bad_request(msg),
         Ok(None) => {}
         Err(e) => return response::db_error(e.to_string()),
@@ -656,14 +637,11 @@ async fn create_virtual_model(
     let model = match active.insert(&txn).await {
         Ok(model) => model,
         Err(e) if crate::db::is_unique_violation(&e) => {
-            return response::bad_request(unique_conflict_message(&e, lang));
+            return response::bad_request(unique_conflict_message(lang));
         }
         Err(e) => return response::db_error(e.to_string()),
     };
     if let Err(e) = insert_items(&txn, model.virtual_model_id, &items, now).await {
-        if crate::db::is_unique_violation(&e) {
-            return response::bad_request(unique_conflict_message(&e, lang));
-        }
         return response::db_error(e.to_string());
     }
     if let Err(e) = txn.commit().await {
@@ -742,7 +720,7 @@ async fn update_virtual_model(
         }
         let items = dedupe_items(req_items);
         let model_ids: Vec<i32> = items.iter().map(|item| item.model_id).collect();
-        match validate_item_model_ids(&txn, &model_ids, Some(id), lang).await {
+        match validate_item_model_ids(&txn, &model_ids, lang).await {
             Ok(Some(msg)) => return response::bad_request::<()>(msg).into_response(),
             Ok(None) => {}
             Err(e) => return response::db_error::<()>(e.to_string()).into_response(),
@@ -800,10 +778,6 @@ async fn update_virtual_model(
                 Some(_) => {}
                 None => {
                     if let Err(e) = insert_items(&txn, id, std::slice::from_ref(item), now).await {
-                        if crate::db::is_unique_violation(&e) {
-                            return response::bad_request::<()>(unique_conflict_message(&e, lang))
-                                .into_response();
-                        }
                         return response::db_error::<()>(e.to_string()).into_response();
                     }
                     added.push(item.model_id);
@@ -861,7 +835,7 @@ async fn update_virtual_model(
             }
         }
         Err(e) if crate::db::is_unique_violation(&e) => {
-            response::bad_request::<()>(unique_conflict_message(&e, lang)).into_response()
+            response::bad_request::<()>(unique_conflict_message(lang)).into_response()
         }
         Err(e) => response::db_error::<()>(e.to_string()).into_response(),
     }
@@ -878,7 +852,8 @@ async fn delete_virtual_model(
         Ok(None) => return not_found_virtual_model(lang, id),
         Err(e) => return response::db_error(e.to_string()),
     };
-    // 级联硬删：同一事务内先删全部成员条目（释放成员模型），再删虚拟模型本身。
+    // 级联硬删：同一事务内先删全部成员条目，再删虚拟模型本身（只删本虚拟模型
+    // 的条目；共享映射下其他虚拟模型的归属不受影响，ADR-0026）。
     let txn = match state.db.begin().await {
         Ok(txn) => txn,
         Err(e) => return response::db_error(e.to_string()),
@@ -909,19 +884,9 @@ async fn delete_virtual_model(
     }
 }
 
-/// 区分 display_id 与成员 model_id 的唯一冲突，返回对应的提示。
-fn unique_conflict_message(err: &DbErr, lang: Lang) -> String {
-    let text = err.to_string();
-    if text.contains("virtual_model_item.model_id")
-        || text.contains("uq_virtual_model_items_model_id")
-    {
-        lang.tr(
-            "部分模型已被其他虚拟模型使用",
-            "some models are already used by other virtual models",
-        )
+/// 唯一冲突提示：virtual_model.display_id 已存在
+/// （成员 model_id 唯一约束已随 ADR-0026 移除，共享映射）。
+fn unique_conflict_message(lang: Lang) -> String {
+    lang.tr("虚拟模型 ID 已存在", "virtual model ID already exists")
         .to_string()
-    } else {
-        lang.tr("虚拟模型 ID 已存在", "virtual model ID already exists")
-            .to_string()
-    }
 }

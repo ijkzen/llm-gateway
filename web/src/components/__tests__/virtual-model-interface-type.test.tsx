@@ -117,7 +117,6 @@ describe("VirtualModelEditDialog：接口类型", () => {
 				virtualModel={null}
 				providers={[makeProvider()]}
 				providerModels={[makeModel()]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 		expect(screen.getAllByText("OpenAI Compatible").length).toBeGreaterThan(0);
@@ -131,7 +130,6 @@ describe("VirtualModelEditDialog：接口类型", () => {
 				virtualModel={makeVirtualModel({ interfaceType: 2 })}
 				providers={[makeProvider()]}
 				providerModels={[makeModel()]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 		expect(screen.getAllByText("Messages（Anthropic）").length).toBeGreaterThan(0);

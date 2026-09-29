@@ -347,7 +347,7 @@ const en: Translation = {
 		usedEmptyHint:
 			'No provider model has been added yet. Switch to the "Not in use" tab to add member models.',
 		unusedEmptyHint:
-			"No providers to add: every candidate model is already added or used by another virtual model.",
+			"No providers to add: every candidate model is already added to this virtual model.",
 		selectStrategy: "Select strategy",
 		disableHint: "When disabled, this virtual model will not appear in /v1/models",
 		providerDisabled: "Provider disabled",
@@ -363,7 +363,8 @@ const en: Translation = {
 		viewVirtualModelOverview: "View {{model}} overview",
 		deleteTitle: "Delete Virtual Model",
 		deleteDesc: "Delete virtual model",
-		deleteDescSuffix: "? Its members will be released. This cannot be undone.",
+		deleteDescSuffix:
+			"? Its member entries will be removed with it (shared members in other virtual models are unaffected). This cannot be undone.",
 		noMemberHint: 'No member models. Click "Edit" in the top-right menu to add',
 		strategies: {
 			subscriptionFirst: "Subscription first",

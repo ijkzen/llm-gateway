@@ -11,7 +11,8 @@ pub struct Model {
     /// 所属虚拟模型 id(逻辑外键;虚拟模型删除时应用层级联硬删)。
     pub virtual_model_id: i32,
     /// 成员供应商模型 id(逻辑外键 → provider_model.model_id)。
-    /// 一个供应商模型最多归属一个虚拟模型(全局唯一索引,见 migration 6)。
+    /// 一个供应商模型可归属多个虚拟模型（共享映射，ADR-0026；同一虚拟模型内
+    /// 不重复）。
     pub model_id: i32,
     /// 是否启用;实际可用性还受所属供应商 enable 影响。
     #[sea_orm(default_value = "1")]

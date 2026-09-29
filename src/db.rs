@@ -249,14 +249,15 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     )
     .await?;
 
-    // Migration 6: 虚拟模型成员的全局唯一约束（一个供应商模型最多归属一个虚拟模型）
-    // 与按虚拟模型查成员的索引。
+    // Migration 6: 虚拟模型成员按虚拟模型查成员的索引与按 model_id 查成员的索引。
+    // （曾建 model_id 全局唯一约束实现互斥映射，已被迁移 28 / ADR-0026 取代，
+    // 新库直接建普通索引，存量库由迁移 28 换索引。）
     changed |= ensure_migration(
         db,
         6,
         &[
             "CREATE INDEX IF NOT EXISTS idx_virtual_model_items_virtual_model_id ON virtual_model_item (virtual_model_id)",
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_virtual_model_items_model_id ON virtual_model_item (model_id)",
+            "CREATE INDEX IF NOT EXISTS idx_virtual_model_items_model_id ON virtual_model_item (model_id)",
         ],
     )
     .await?;
@@ -580,6 +581,19 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
              last_error varchar NOT NULL DEFAULT '', \
              last_sent_at text, \
              updated_at text NOT NULL)"],
+    )
+    .await?;
+
+    // Migration 28: 解除虚拟模型互斥映射（共享映射，ADR-0026 取代迁移 6 的唯一约束）。
+    // 同一供应商模型可归属多个虚拟模型：drop model_id 唯一索引，换普通索引
+    // （按 model_id 查成员/级联删除的查询路径保留索引能力）。
+    changed |= ensure_migration(
+        db,
+        28,
+        &[
+            "DROP INDEX IF EXISTS uq_virtual_model_items_model_id",
+            "CREATE INDEX IF NOT EXISTS idx_virtual_model_items_model_id ON virtual_model_item (model_id)",
+        ],
     )
     .await?;
 

@@ -339,7 +339,7 @@ const zhCN = {
 		unusedTab: "未使用",
 		addMore: "继续添加模型",
 		usedEmptyHint: "还没有任何供应商的模型被加入，可切到「未使用」Tab 添加成员模型。",
-		unusedEmptyHint: "没有可添加的供应商：全部候选模型均已被加入或被其他虚拟模型占用。",
+		unusedEmptyHint: "没有可添加的供应商：全部候选模型均已加入当前虚拟模型。",
 		selectStrategy: "选择策略",
 		disableHint: "禁用后该虚拟模型不会出现在 /v1/models 中",
 		providerDisabled: "供应商已禁用",
@@ -355,7 +355,7 @@ const zhCN = {
 		viewVirtualModelOverview: "查看 {{model}} 的数据面板",
 		deleteTitle: "删除虚拟模型",
 		deleteDesc: "确定要删除虚拟模型",
-		deleteDescSuffix: "吗？其成员模型将被释放，此操作无法撤销。",
+		deleteDescSuffix: "吗？其成员条目将一并删除（不影响其他虚拟模型的共享成员），此操作无法撤销。",
 		noMemberHint: "暂无成员模型，点击右上角菜单「编辑」添加",
 		strategies: {
 			subscriptionFirst: "订阅制优先",

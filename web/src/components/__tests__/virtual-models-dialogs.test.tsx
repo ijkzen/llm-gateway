@@ -183,7 +183,6 @@ describe("VirtualModelEditDialog 创建模式", () => {
 				virtualModel={null}
 				providers={providers}
 				providerModels={[makeModel()]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -204,18 +203,21 @@ describe("VirtualModelEditDialog 创建模式", () => {
 					makeModel({ modelId: 12, providerId: 7, providerModelId: "o3" }),
 					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
 				]}
-				mappedModelIds={new Set([12])}
 			/>,
 		);
 
 		// 创建模式无成员 → 默认「未使用」Tab：候选按供应商分组直接展示。
 		expect(screen.getByRole("tab", { name: "未使用" }).getAttribute("aria-selected")).toBe("true");
 		expect(screen.getByRole("button", { name: "添加 gpt-4o" })).toBeTruthy();
-		// 已被其他虚拟模型占用的 o3 不出现。
-		expect(screen.queryByRole("button", { name: "添加 o3" })).toBeNull();
+		// 已被其他虚拟模型映射的 o3 仍出现在候选（共享映射，ADR-0026），且可添加。
+		expect(screen.getByRole("button", { name: "添加 o3" })).toBeTruthy();
 
+		fireEvent.click(screen.getByRole("button", { name: "添加 o3" }));
+		// 组内已有成员 → 迁到「已使用」Tab，继续添加走「继续添加模型」。
+		switchTab("已使用");
+		openAddGroup("OpenAI");
 		fireEvent.click(screen.getByRole("button", { name: "添加 gpt-4o" }));
-		expect(screen.getByText("已选 1 个成员模型")).toBeTruthy();
+		expect(screen.getByText("已选 2 个成员模型")).toBeTruthy();
 
 		fireEvent.change(screen.getByPlaceholderText("如 gpt-4o"), {
 			target: { value: "gpt-4o" },
@@ -228,7 +230,13 @@ describe("VirtualModelEditDialog 创建模式", () => {
 		expect(payload.enable).toBe(true);
 		expect(payload.loadBalancingStrategy).toBe(0);
 		expect(payload.fallbackStrategy).toBe(0);
-		expect(payload.items).toEqual([{ modelId: 11, enable: true }]);
+		expect(payload.items).toHaveLength(2);
+		expect(payload.items).toEqual(
+			expect.arrayContaining([
+				{ modelId: 11, enable: true },
+				{ modelId: 12, enable: true },
+			]),
+		);
 	});
 
 	it("从两个供应商分别添加成员（未使用 Tab 平铺候选）→ payload 汇总两组", async () => {
@@ -242,7 +250,6 @@ describe("VirtualModelEditDialog 创建模式", () => {
 					makeModel({ modelId: 11, providerId: 7, providerModelId: "gpt-4o" }),
 					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
 				]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -276,7 +283,6 @@ describe("VirtualModelEditDialog 创建模式", () => {
 				virtualModel={null}
 				providers={providers}
 				providerModels={[makeModel()]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -316,7 +322,6 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 					makeModel({ modelId: 12, providerModelId: "o3" }),
 					makeModel({ modelId: 13, providerModelId: "o3-mini" }),
 				]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -369,7 +374,6 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 				})}
 				providers={providers}
 				providerModels={[makeModel()]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -390,7 +394,6 @@ describe("VirtualModelEditDialog 编辑模式", () => {
 				})}
 				providers={providers}
 				providerModels={[makeModel()]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -653,7 +656,6 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 					makeModel({ modelId: 12, providerId: 7, providerModelId: "o3" }),
 					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
 				]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -716,7 +718,6 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 					makeModel({ modelId: 13, providerModelId: "o3-mini" }),
 					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
 				]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -744,7 +745,6 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 					makeModel(),
 					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
 				]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -773,7 +773,6 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 					makeModel(),
 					makeModel({ modelId: 21, providerId: 8, providerModelId: "deepseek-chat" }),
 				]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 
@@ -806,7 +805,6 @@ describe("VirtualModelEditDialog 成员 Tab 与排序", () => {
 				})}
 				providers={disabledProviders}
 				providerModels={[makeModel()]}
-				mappedModelIds={new Set()}
 			/>,
 		);
 

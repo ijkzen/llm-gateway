@@ -483,13 +483,16 @@ async fn test_duplicate_display_id_rejected() {
     assert!(body["msg"].as_str().unwrap().contains("已存在"));
 }
 
+/// 共享映射（ADR-0026）：同一供应商模型可同时归属多个虚拟模型；
+/// 同一虚拟模型内同一供应商模型仍去重。
 #[tokio::test]
-async fn test_model_can_only_belong_to_one_virtual_model() {
+async fn test_model_can_belong_to_multiple_virtual_models() {
     let (app, db) = setup_app().await;
     let p1 = seed_provider(&db, "p1").await;
     let a = seed_provider_model(&db, p1, "a").await;
     let b = seed_provider_model(&db, p1, "b").await;
 
+    // a 加入 vm1。
     let (status, _) = send_json(
         app.clone(),
         "POST",
@@ -499,7 +502,7 @@ async fn test_model_can_only_belong_to_one_virtual_model() {
     .await;
     assert_eq!(status, 201);
 
-    // 创建时包含已被 vm1 占用的 a → 400。
+    // 同一供应商模型 a 再建 vm2 → 也成功（共享映射）。
     let (status, body) = send_json(
         app.clone(),
         "POST",
@@ -507,46 +510,35 @@ async fn test_model_can_only_belong_to_one_virtual_model() {
         vm_payload("vm2", &[a]),
     )
     .await;
-    assert_eq!(status, 400);
-    assert!(
-        body["msg"]
-            .as_str()
-            .unwrap()
-            .contains("已被其他虚拟模型使用")
-    );
-
-    // 更新其他虚拟模型把 a 加进来 → 400。
-    let (status, body) = send_json(
-        app.clone(),
-        "POST",
-        "/api/virtual-models",
-        vm_payload("vm2", &[b]),
-    )
-    .await;
     assert_eq!(status, 201);
     let vm2 = body["data"]["virtualModelId"].as_i64().unwrap();
-    let (status, body) = send_json(
+
+    // 更新 vm2 加入 b：同虚拟模型内重复的 a 被去重，更新成功。
+    let (status, _) = send_json(
         app.clone(),
         "PUT",
         &format!("/api/virtual-models/{vm2}"),
-        vm_payload("vm2", &[b, a]),
-    )
-    .await;
-    assert_eq!(status, 400);
-    assert!(
-        body["msg"]
-            .as_str()
-            .unwrap()
-            .contains("已被其他虚拟模型使用")
-    );
-
-    // 保留自身成员的更新不受影响。
-    let (status, _) = send_json(
-        app,
-        "PUT",
-        &format!("/api/virtual-models/{vm2}"),
-        vm_payload("vm2", &[b]),
+        vm_payload("vm2", &[b, a, a]),
     )
     .await;
     assert_eq!(status, 200);
+
+    // 两个虚拟模型各自独立持有 a。
+    let (status, body) = send_json(app, "GET", "/api/virtual-models", Value::Null).await;
+    assert_eq!(status, 200);
+    let vms = body["data"].as_array().unwrap();
+    assert_eq!(vms.len(), 2);
+    let items_of = |display_id: &str| {
+        vms.iter().find(|vm| vm["displayId"] == display_id).unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .clone()
+    };
+    let vm1_items = items_of("vm1");
+    let vm2_items = items_of("vm2");
+    assert_eq!(vm1_items.len(), 1);
+    assert_eq!(vm1_items[0]["providerModelId"], "a");
+    assert_eq!(vm2_items.len(), 2, "重复的 a 应被去重，只剩 b + a");
+    assert!(vm2_items.iter().any(|it| it["providerModelId"] == "a"));
+    assert!(vm2_items.iter().any(|it| it["providerModelId"] == "b"));
 }

@@ -9,7 +9,7 @@ interface VirtualModelDeleteDialogProps {
 	virtualModel: VirtualModel | null;
 }
 
-/** 删除虚拟模型二次确认弹窗：删除后成员模型被释放，可再映射到其他虚拟模型。 */
+/** 删除虚拟模型二次确认弹窗：删除后其名下成员条目一并删除，其他虚拟模型的共享成员不受影响。 */
 export function VirtualModelDeleteDialog({
 	open,
 	onOpenChange,

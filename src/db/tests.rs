@@ -623,6 +623,70 @@ async fn migration_27_applies_despite_stale_versions() {
     );
 }
 
+/// virtual_model_item 上 model_id 索引形态：(是否仍有唯一索引, 是否有普通索引
+/// idx_virtual_model_items_model_id)。
+async fn virtual_model_item_model_id_indexes(db: &DatabaseConnection) -> (bool, bool) {
+    let rows = db
+        .query_all_raw(Statement::from_string(
+            db.get_database_backend(),
+            "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'virtual_model_item'"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+    let mut unique = false;
+    let mut plain = false;
+    for row in rows {
+        let name = row.try_get::<String>("", "name").unwrap_or_default();
+        let sql = row.try_get::<String>("", "sql").unwrap_or_default();
+        if name == "idx_virtual_model_items_model_id" {
+            plain = true;
+        }
+        if sql.to_uppercase().contains("UNIQUE") {
+            unique = true;
+        }
+    }
+    (unique, plain)
+}
+
+/// 共享映射（ADR-0026）：迁移 28 把 model_id 唯一索引换成普通索引，
+/// 新库最终 schema 不再有互斥约束。
+#[tokio::test]
+async fn migration_28_replaces_unique_index_with_plain_index_on_fresh_db() {
+    let db = connect("sqlite::memory:").await.unwrap();
+    migrate(&db).await.unwrap();
+
+    let (unique, plain) = virtual_model_item_model_id_indexes(&db).await;
+    assert!(!unique, "新库不应有 model_id 唯一约束");
+    assert!(plain, "新库应有 model_id 普通索引");
+}
+
+/// 存量库带迁移 6 的唯一索引时，migrate() 必须 drop 唯一索引并补普通索引。
+#[tokio::test]
+async fn migration_28_upgrades_legacy_db_with_unique_index() {
+    let db = connect("sqlite::memory:").await.unwrap();
+    migrate(&db).await.unwrap();
+
+    // 模拟存量库：迁移 28 未跑过，唯一索引仍在、普通索引不在。
+    db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 28")
+        .await
+        .unwrap();
+    db.execute_unprepared("DROP INDEX IF EXISTS idx_virtual_model_items_model_id")
+        .await
+        .unwrap();
+    db.execute_unprepared(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_virtual_model_items_model_id ON virtual_model_item (model_id)",
+    )
+    .await
+    .unwrap();
+
+    let changed = migrate(&db).await.unwrap();
+    assert!(changed, "migrate 应报告有变更");
+    let (unique, plain) = virtual_model_item_model_id_indexes(&db).await;
+    assert!(!unique, "存量库迁移后不应再有 model_id 唯一约束");
+    assert!(plain, "存量库迁移后应有 model_id 普通索引");
+}
+
 /// 13-06（T4）：迁移语句失败时整体回滚，且不写入版本号（下次启动可重试）。
 /// 用破坏性 ALTER（对不存在的列 DROP）触发失败。
 #[tokio::test]

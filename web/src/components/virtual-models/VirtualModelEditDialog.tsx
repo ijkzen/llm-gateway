@@ -77,8 +77,6 @@ interface VirtualModelEditDialogProps {
 	virtualModel: VirtualModel | null;
 	providers: Provider[];
 	providerModels: ProviderModel[];
-	/** 已被其他虚拟模型映射的 modelId 集合（页面计算，已排除当前编辑目标自身的成员）。 */
-	mappedModelIds: Set<number>;
 }
 
 /** 供应商分组：成员（组内按 enable 优先 + 后端 LB 序排序）与可添加候选。 */
@@ -113,7 +111,6 @@ export function VirtualModelEditDialog({
 	virtualModel,
 	providers,
 	providerModels,
-	mappedModelIds,
 }: VirtualModelEditDialogProps) {
 	const { t } = useTranslation();
 	const { toastSuccess, toastError } = useToastActions();
@@ -259,13 +256,13 @@ export function VirtualModelEditDialog({
 		});
 	};
 
-	// 候选 = 该供应商名下、协议匹配当前接口类型、未被其他虚拟模型占用且尚未加入暂存的模型。
+	// 候选 = 该供应商名下、协议匹配当前接口类型且尚未加入暂存的模型。
+	// 共享映射（ADR-0026）：已被其他虚拟模型映射的模型同样可作候选。
 	const candidatesOf = (providerId: number) =>
 		providerModels.filter(
 			(model) =>
 				model.providerId === providerId &&
 				acceptsProtocol(model) &&
-				!mappedModelIds.has(model.modelId) &&
 				!draftItems.some((draft) => draft.modelId === model.modelId),
 		);
 

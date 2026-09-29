@@ -57,16 +57,6 @@ export default function VirtualModelsPage() {
 		refetch: refetchModels,
 	} = useProviderModels();
 
-	// 编辑弹窗中需排除的 modelId：全部已映射成员，但保留当前编辑目标自身的成员。
-	const mappedForEdit = useMemo(() => {
-		const editingId = editing?.virtualModelId ?? null;
-		return new Set(
-			(virtualModels ?? [])
-				.filter((vm) => vm.virtualModelId !== editingId)
-				.flatMap((vm) => vm.items.map((item) => item.modelId)),
-		);
-	}, [virtualModels, editing]);
-
 	// 搜索结果：按成员 providerModelId 匹配，命中成员按所属虚拟模型分组。
 	const searchGroups = useMemo<SearchGroup[]>(() => {
 		const query = search.trim().toLowerCase();
@@ -247,7 +237,6 @@ export default function VirtualModelsPage() {
 				virtualModel={editing}
 				providers={providers ?? []}
 				providerModels={providerModels ?? []}
-				mappedModelIds={mappedForEdit}
 			/>
 
 			<VirtualModelDeleteDialog

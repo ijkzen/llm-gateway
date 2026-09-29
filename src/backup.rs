@@ -370,9 +370,6 @@ pub fn parse_backup(input: &str) -> Result<BackupFile, String> {
 pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
     let mut provider_names = std::collections::HashSet::new();
     let mut model_keys = std::collections::HashSet::new();
-    // 15-03：同次导入内的成员唯一性（跨虚拟模型也不允许同一 (供应商,模型) 重复）。
-    let mut seen_members: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
     let mut model_protocols: std::collections::HashMap<(String, String), i32> =
         std::collections::HashMap::new();
     let mut vm_display_ids = std::collections::HashSet::new();
@@ -429,6 +426,10 @@ pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
 
     for (vi, vm) in file.virtual_models.iter().enumerate() {
         let loc = format!("virtualModels[{vi}]");
+        // 15-03：同一虚拟模型内成员不得重复（组内去重语义）；跨虚拟模型共享
+        // 同一供应商模型允许（ADR-0026），故判重集合按虚拟模型重置。
+        let mut seen_members: std::collections::HashSet<(String, String)> =
+            std::collections::HashSet::new();
         if vm.display_id.trim().is_empty() {
             return Err(format!("{loc}.displayId 不能为空"));
         }
@@ -470,11 +471,9 @@ pub fn validate_backup(file: &BackupFile) -> Result<(), String> {
                     it.provider_name, it.provider_model_id
                 ));
             }
-            // 15-03：同次导入内 (providerName, providerModelId) 不得重复——数据库
-            // 唯一索引会把重复撞成裸 SQL 错误文案。
             if !seen_members.insert(key.clone()) {
                 return Err(format!(
-                    "{i_loc} 成员重复：{}/{}（同一次导入内同一供应商模型不可重复）",
+                    "{i_loc} 成员重复：{}/{}（同一虚拟模型内同一供应商模型不可重复）",
                     it.provider_name, it.provider_model_id
                 ));
             }
@@ -990,7 +989,7 @@ mod tests {
         f.providers[0].protocol_type = 3; // Gemini 成员
         assert!(validate_backup(&f).is_ok());
     }
-    /// 15-03：同次导入内的成员重复在校验阶段被拒（不再撞数据库唯一索引报裸 SQL）。
+    /// 15-03：同一虚拟模型内的成员重复在校验阶段被拒（组内去重语义）。
     #[test]
     fn validate_backup_rejects_duplicate_member() {
         let mut file = sample_file();
@@ -998,6 +997,23 @@ mod tests {
         file.virtual_models[0].items.push(first);
         let err = validate_backup(&file).unwrap_err();
         assert!(err.contains("成员重复"), "{err}");
+    }
+
+    /// 共享映射（ADR-0026）：同一供应商模型可出现在多个虚拟模型，
+    /// 跨虚拟模型不判重。
+    #[test]
+    fn validate_backup_allows_shared_member_across_virtual_models() {
+        let mut file = sample_file();
+        let shared = file.virtual_models[0].items[0].clone();
+        file.virtual_models.push(BackupVirtualModel {
+            display_id: "gpt-turbo-2".to_string(),
+            enable: true,
+            load_balancing_strategy: 0,
+            fallback_strategy: 0,
+            interface_type: 0,
+            items: vec![shared],
+        });
+        assert!(validate_backup(&file).is_ok());
     }
 
     /// 15-06：未知设置类型编号导出时不再降级为 String（保真）。
