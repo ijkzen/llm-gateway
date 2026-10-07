@@ -74,6 +74,7 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
     backfill_siliconflow_provider_extra(db).await?;
     backfill_agentrouter_provider_extra(db).await?;
     backfill_tokenrhythm_provider_extra(db).await?;
+    backfill_qianwenai_provider_extra(db).await?;
     tracing::info!("Provider templates seeded: {inserted} inserted, {updated} updated");
     Ok(inserted + updated)
 }
@@ -111,6 +112,11 @@ pub(crate) fn is_agentrouter_host(host: &str) -> bool {
 /// TokenRhythm（tokenrhythm.studio，「基元律动」自研路由站）用量查询 host。
 pub(crate) fn is_tokenrhythm_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("tokenrhythm.studio")
+}
+
+/// 千问 Token Plan（千问AI平台品牌，`token-plan.maas.qianwenaiapi.com`）用量查询 host。
+pub(crate) fn is_qianwenai_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("token-plan.maas.qianwenaiapi.com")
 }
 
 /// OpenCode 上游 host（模板含 OpenCode Zen / OpenCode Go 两个入口，同域）。
@@ -361,9 +367,30 @@ async fn backfill_tokenrhythm_provider_extra(db: &DatabaseConnection) -> Result<
     .map(|_| ())
 }
 
-/// 模板首次插入时，向 base_url host 匹配的既有 provider 的 extra 补齐
-/// 模板中存在而 provider 缺失的键（只补缺、不覆盖用户已设值）。
-/// 仅在首次插入分支调用；模板更新不触发，尊重用户后续修改。
+/// 每次启动幂等对齐历史千问 Token Plan Provider 的凭据结构与用量开关。
+///
+/// 该 host 的模板新增时，历史 provider（如生产 extra 为 `{}` 的行）走的是
+/// update 分支（不触发模板首次插入回填），extra 不会补入缺失键、编辑弹窗
+/// 也就渲染不出可填字段；这里仿 Krill/SenseNova/SiliconFlow/AgentRouter
+/// 每次启动无条件对齐。只补缺、不覆盖：已填的
+/// cookie_cloud_server/uuid/password/domain 一律保留。
+async fn backfill_qianwenai_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
+    backfill_host_extras(db, "Qianwen", is_qianwenai_host, |extra, provider| {
+        let before = extra.clone();
+        for key in ["cookie_cloud_server", "uuid", "password", "domain"] {
+            extra.entry(key.to_string()).or_insert_with(|| "".into());
+        }
+        extra.entry("usage".to_string()).or_insert(true.into());
+        extra.insert("usage_type".to_string(), provider.billing_mode.into());
+        *extra != before
+    })
+    .await
+    .map(|_| ())
+}
+
+/// 向 base_url host 匹配的既有 provider 的 extra 补齐模板中存在而 provider 缺失的键
+/// （只补缺、不覆盖用户已设值）。每次启动随模板 upsert 执行（14-08 起与首次插入
+/// 分支解耦：模板更新也要让存量 provider 拿到新增键）。
 async fn backfill_provider_extra(
     db: &DatabaseConnection,
     tmpl: &seed::Template,

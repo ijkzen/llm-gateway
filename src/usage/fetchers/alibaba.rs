@@ -133,8 +133,8 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// form 值编码（`application/x-www-form-urlencoded`）。
-fn form_encode_value(s: &str) -> String {
+/// form 值编码（`application/x-www-form-urlencoded`；qianwenai fetcher 共用）。
+pub(super) fn form_encode_value(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b'*') {
@@ -243,7 +243,8 @@ fn parse_alibaba_coding(body: &str) -> Result<FetchOutput, UsageError> {
 // ── Token Plan 个人版 ───────────────────────────────────────
 // POST {token_api}/data/api.json?action={token_action}&product=sfm_bailian&api=zeldaHttp...
 // form body：params=<json>&region=...&sec_token=...
-// 响应：OneConsole 信封，data 可能是 JSON 字符串需二次解析。
+// 响应：OneConsole 信封，载荷在 data.DataV2.data.data，data 可能是 JSON 字符串需二次解析。
+// 解析与千问品牌（qianwenai）共用 `parse_token_plan_usage`。
 
 pub async fn fetch_alibaba_token(
     http: &UsageHttp,
@@ -275,14 +276,35 @@ pub async fn fetch_alibaba_token(
     if reply.status != 200 {
         return Err(UsageError::Upstream(reply.status, snippet(&reply.body)));
     }
-    parse_alibaba_token(&reply.body)
+    parse_token_plan_usage(&reply.body)
 }
 
-fn parse_alibaba_token(body: &str) -> Result<FetchOutput, UsageError> {
+/// Token Plan 个人版用量解析（CN/INTL 与千问品牌共用）。
+///
+/// 信封：`{ code, successResponse, data: { success, errorCode, errorMsg,
+/// DataV2: { data: { data: {…} } } } }`，载荷位于 `data.DataV2.data.data`
+/// （外层 `data` 兼容字符串二次解析）。
+/// 窗口字段 `per5Hour*` / `per1Week*` / `per1Month*` 按上游实际下发防御性填充
+/// （控制台会轮换窗口组合，当前常见为仅月窗口）；`*Percentage` 是 0–1 的**已用**比例。
+pub(super) fn parse_token_plan_usage(body: &str) -> Result<FetchOutput, UsageError> {
+    // 登录失效是 HTTP 200 + 体内标记（非传输状态码），先于成功判定识别。
+    let lower = body.to_ascii_lowercase();
+    if [
+        "bailiangateway.login.notlogined",
+        "consoleneedlogin",
+        "no_login",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        return Err(UsageError::Auth);
+    }
+
     let v: Value = serde_json::from_str(body)
         .map_err(|e| UsageError::Parse(format!("响应不是合法 JSON：{e}")))?;
-    let code = v.get("code").and_then(Value::as_str).unwrap_or_default();
-    if code != "200" {
+    let ok = v.get("successResponse").and_then(Value::as_bool) == Some(true)
+        || v.get("code").and_then(Value::as_str) == Some("200");
+    if !ok {
         return Err(UsageError::Upstream(200, snippet(body)));
     }
     // data 可能是 JSON 字符串，需二次解析。
@@ -301,27 +323,27 @@ fn parse_alibaba_token(body: &str) -> Result<FetchOutput, UsageError> {
             .unwrap_or("未知错误");
         return Err(UsageError::Upstream(200, msg.to_string()));
     }
-
     let mut windows = empty_windows();
-    if let Some(percent) = data.get("per5HourPercentage").and_then(num) {
-        let resets_at = data
-            .get("per5HourResetTime")
-            .and_then(Value::as_i64)
-            .and_then(ts_ms);
-        set_window(
-            &mut windows,
-            QuotaWindow::from_used_percent(WindowKind::FiveHour, percent, resets_at),
-        );
-    }
-    if let Some(percent) = data.get("per1WeekPercentage").and_then(num) {
-        let resets_at = data
-            .get("per1WeekResetTime")
-            .and_then(Value::as_i64)
-            .and_then(ts_ms);
-        set_window(
-            &mut windows,
-            QuotaWindow::from_used_percent(WindowKind::Weekly, percent, resets_at),
-        );
+    if let Some(payload) = data.pointer("/DataV2/data/data") {
+        for (prefix, kind) in [
+            ("per5Hour", WindowKind::FiveHour),
+            ("per1Week", WindowKind::Weekly),
+            ("per1Month", WindowKind::Monthly),
+        ] {
+            let Some(raw) = payload.get(format!("{prefix}Percentage")).and_then(num) else {
+                continue;
+            };
+            // 上游下发 0–1 已用比例；>1 视为已是百分比（防单位漂移），越界由构造器收敛。
+            let used_percent = if raw > 1.0 { raw } else { raw * 100.0 };
+            let resets_at = payload
+                .get(format!("{prefix}ResetTime"))
+                .and_then(Value::as_i64)
+                .and_then(ts_ms);
+            set_window(
+                &mut windows,
+                QuotaWindow::from_used_percent(kind, used_percent, resets_at),
+            );
+        }
     }
     if windows.iter().all(|w| !w.available) {
         // 该网关偶发返回 200 但无窗口字段（瞬时空包）。
@@ -402,20 +424,141 @@ mod tests {
         assert_eq!(windows[1].used_percent, Some(16.0));
     }
 
+    /// 生产实测响应原样（2026-10-07，千问品牌）：仅月窗口，0–1 已用比例。
+    const TOKEN_LIVE_MONTHLY: &str = r#"{
+      "code": "200",
+      "data": {
+        "DataV2": {
+          "ret": ["SUCCESS::接口调用成功"],
+          "data": {
+            "msg": "Success.", "code": "SUCCESS", "success": true,
+            "data": {
+              "per1MonthPercentage": 0.00946406956521739,
+              "per1MonthResetTime": 1794067200000
+            },
+            "requestId": "6fcc2c27-69d1-98b2-ba43-1463651405a1"
+          }
+        },
+        "success": true, "httpStatus": 200, "errorCode": "", "errorMsg": "",
+        "api": "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage"
+      },
+      "httpStatusCode": "200",
+      "requestId": "6fcc2c27-69d1-48b2-ba43-1463651405a1",
+      "successResponse": true
+    }"#;
+
+    #[test]
+    fn token_monthly_window_from_live_capture() {
+        let FetchOutput::Quota { windows, .. } =
+            parse_token_plan_usage(TOKEN_LIVE_MONTHLY).unwrap()
+        else {
+            panic!("expected quota")
+        };
+        assert!(!windows[0].available, "5 小时窗口未下发");
+        assert!(!windows[1].available, "周窗口未下发");
+        let month = &windows[2];
+        assert!(month.available);
+        assert_eq!(month.window, WindowKind::Monthly);
+        let used = month.used_percent.unwrap();
+        // 构造器按 2 位小数收敛（0.9464…% → 0.95%），与展示层口径一致。
+        assert_eq!(used, 0.95);
+        assert!((month.remaining_percent.unwrap() - 99.05).abs() < 1e-9);
+        assert_eq!(month.resets_at, ts_ms(1794067200000));
+    }
+
+    #[test]
+    fn token_five_hour_and_week_windows() {
+        let body = r#"{ "code": "200", "successResponse": true,
+          "data": { "success": true, "DataV2": { "data": { "success": true, "data": {
+            "per5HourPercentage": 0.5, "per5HourResetTime": 1700000300000,
+            "per1WeekPercentage": 0.25, "per1WeekResetTime": 1700100000000 } } } } }"#;
+        let FetchOutput::Quota { windows, .. } = parse_token_plan_usage(body).unwrap() else {
+            panic!("expected quota")
+        };
+        assert_eq!(windows[0].used_percent, Some(50.0));
+        assert_eq!(windows[0].resets_at, ts_ms(1700000300000));
+        assert_eq!(windows[1].used_percent, Some(25.0));
+        assert!(!windows[2].available);
+    }
+
+    #[test]
+    fn token_mixed_window_sets() {
+        // 控制台轮换窗口组合期间可能同时下发 5 小时与月窗口。
+        let body = r#"{ "code": "200", "successResponse": true,
+          "data": { "success": true, "DataV2": { "data": { "success": true, "data": {
+            "per5HourPercentage": 1.0,
+            "per1MonthPercentage": 0.25, "per1MonthResetTime": 1700179200000 } } } } }"#;
+        let FetchOutput::Quota { windows, .. } = parse_token_plan_usage(body).unwrap() else {
+            panic!("expected quota")
+        };
+        assert_eq!(windows[0].used_percent, Some(100.0));
+        assert!(!windows[1].available);
+        assert_eq!(windows[2].used_percent, Some(25.0));
+        assert!(windows[2].resets_at.is_some());
+    }
+
+    #[test]
+    fn token_percentage_units_are_used_ratios() {
+        // 1.0 = 100% 已用（耗尽），不是 1%。
+        let exhausted = r#"{ "code": "200", "successResponse": true,
+          "data": { "success": true, "DataV2": { "data": { "success": true,
+          "data": { "per5HourPercentage": 1.0 } } } } }"#;
+        let FetchOutput::Quota { windows, .. } = parse_token_plan_usage(exhausted).unwrap() else {
+            panic!("expected quota")
+        };
+        assert_eq!(windows[0].used_percent, Some(100.0));
+        assert_eq!(windows[0].remaining_percent, Some(0.0));
+
+        // >1 视为已是百分比（防上游单位漂移）；越界由构造器收敛到 100。
+        let percent_scaled = r#"{ "code": "200", "successResponse": true,
+          "data": { "success": true, "DataV2": { "data": { "success": true,
+          "data": { "per1WeekPercentage": 42.5 } } } } }"#;
+        let FetchOutput::Quota { windows, .. } = parse_token_plan_usage(percent_scaled).unwrap()
+        else {
+            panic!("expected quota")
+        };
+        assert_eq!(windows[1].used_percent, Some(42.5));
+
+        let over = r#"{ "code": "200", "successResponse": true,
+          "data": { "success": true, "DataV2": { "data": { "success": true,
+          "data": { "per1WeekPercentage": 250.0 } } } } }"#;
+        let FetchOutput::Quota { windows, .. } = parse_token_plan_usage(over).unwrap() else {
+            panic!("expected quota")
+        };
+        assert_eq!(windows[1].used_percent, Some(100.0));
+    }
+
     #[test]
     fn token_data_string_double_parse() {
-        let inner = r#"{"per5HourPercentage": 42.5, "per5HourResetTime": 1700000300000, "per1WeekPercentage": 10.0}"#;
+        let inner = r#"{"success": true, "DataV2": {"data": {"data": {"per5HourPercentage": 0.5, "per5HourResetTime": 1700000300000, "per1WeekPercentage": 0.25}}}}"#;
         let body = format!(
             r#"{{ "code": "200", "successResponse": true, "data": {} }}"#,
             serde_json::to_string(inner).unwrap()
         );
-        let FetchOutput::Quota { windows, .. } = parse_alibaba_token(&body).unwrap() else {
+        let FetchOutput::Quota { windows, .. } = parse_token_plan_usage(&body).unwrap() else {
             panic!("expected quota")
         };
-        assert!(windows[0].available);
-        assert_eq!(windows[0].used_percent, Some(42.5));
-        assert!(windows[1].available);
+        assert_eq!(windows[0].used_percent, Some(50.0));
+        assert_eq!(windows[1].used_percent, Some(25.0));
         assert!(!windows[2].available);
+    }
+
+    #[test]
+    fn token_login_expired_markers_map_to_auth() {
+        for marker in [
+            "BailianGateway.Login.NotLogined",
+            "ConsoleNeedLogin",
+            "NO_LOGIN",
+        ] {
+            let body = format!(
+                r#"{{ "code": "200", "successResponse": true,
+                  "data": {{ "success": false, "errorCode": "{marker}", "errorMsg": "{marker}" }} }}"#
+            );
+            assert!(
+                matches!(parse_token_plan_usage(&body), Err(UsageError::Auth)),
+                "marker={marker}"
+            );
+        }
     }
 
     #[test]
@@ -423,7 +566,7 @@ mod tests {
         let body = r#"{ "code": "200", "successResponse": true,
           "data": { "success": false, "errorCode": "BailianGateway.Workspace.NotAuthorised" } }"#;
         assert!(matches!(
-            parse_alibaba_token(body),
+            parse_token_plan_usage(body),
             Err(UsageError::Upstream(_, _))
         ));
     }
@@ -432,7 +575,7 @@ mod tests {
     fn token_transient_empty_frame() {
         let body = r#"{ "code": "200", "successResponse": true, "data": {} }"#;
         assert!(matches!(
-            parse_alibaba_token(body),
+            parse_token_plan_usage(body),
             Err(UsageError::Upstream(_, _))
         ));
     }

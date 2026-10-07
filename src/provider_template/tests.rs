@@ -718,3 +718,84 @@ async fn tokenrhythm_history_backfill_migrates_cookiecloud_to_account_login() {
     )
     .await;
 }
+
+#[test]
+fn qianwenai_seed_has_token_plan_template() {
+    let tmpl = seed::all()
+        .find(|t| t.name == "Qianwen Token Plan")
+        .expect("missing Qianwen Token Plan template");
+    assert_eq!(
+        tmpl.base_url,
+        "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1"
+    );
+    assert_eq!(tmpl.protocol_type, 0);
+    assert_eq!(tmpl.billing_mode, 1, "订阅制");
+    let extra: serde_json::Value = serde_json::from_str(tmpl.extra).unwrap();
+    for key in ["cookie_cloud_server", "uuid", "password", "domain"] {
+        assert_eq!(extra[key], "", "模板 {key} 应为空串待用户填写");
+    }
+    assert_eq!(extra["usage"], true);
+    assert_eq!(extra["usage_type"], 1);
+}
+
+#[tokio::test]
+async fn qianwenai_history_backfill_is_idempotent_and_preserves_user_values() {
+    temp_env::async_with_vars(
+        [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
+        async {
+            let db = setup_db().await.unwrap();
+            upsert_templates(&db).await.unwrap();
+
+            // 生产 #28 形态：extra 为空对象，订阅制启用中。
+            insert_provider_with_billing(
+                &db,
+                "Qianwen-历史",
+                "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
+                "{}",
+                1,
+            )
+            .await;
+            // 已手填部分凭据的历史 provider：回填不得覆盖。
+            insert_provider_with_billing(
+                &db,
+                "Qianwen-已填",
+                "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
+                r#"{"domain":"qianwenai.com","custom":"keep"}"#,
+                1,
+            )
+            .await;
+            // 其它 host（同 host 的子域）不受影响。
+            insert_provider(
+                &db,
+                "Qianwen-其他host",
+                "https://sub.token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
+                r#"{"own":1}"#,
+            )
+            .await;
+
+            // 再次 upsert（模板走 update 分支），历史 provider 仍应被无条件对齐。
+            upsert_templates(&db).await.unwrap();
+            upsert_templates(&db).await.unwrap();
+
+            let extra = provider_extra(&db, "Qianwen-历史").await;
+            assert_eq!(extra["cookie_cloud_server"], "");
+            assert_eq!(extra["uuid"], "");
+            assert_eq!(extra["password"], "");
+            assert_eq!(extra["domain"], "");
+            assert_eq!(extra["usage"], true);
+            assert_eq!(extra["usage_type"], 1);
+
+            let filled = provider_extra(&db, "Qianwen-已填").await;
+            assert_eq!(filled["domain"], "qianwenai.com", "已填 domain 不被覆盖");
+            assert_eq!(filled["custom"], "keep", "未知键保留");
+
+            let other = provider_extra(&db, "Qianwen-其他host").await;
+            assert_eq!(
+                other,
+                serde_json::json!({ "own": 1 }),
+                "仅精确 host token-plan.maas.qianwenaiapi.com 回填"
+            );
+        },
+    )
+    .await;
+}

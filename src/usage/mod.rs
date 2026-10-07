@@ -221,6 +221,7 @@ fn fetcher_for(host: &str, path: &str) -> Option<Fetcher> {
         "coding-intl.dashscope.aliyuncs.com" => Fetcher::AlibabaCoding { intl: true },
         "token-plan.cn-beijing.maas.aliyuncs.com" => Fetcher::AlibabaToken { intl: false },
         "token-plan.ap-southeast-1.maas.aliyuncs.com" => Fetcher::AlibabaToken { intl: true },
+        "token-plan.maas.qianwenaiapi.com" => Fetcher::QianwenTokenPlan,
         _ if host.starts_with("token-plan-") && host.ends_with(".xiaomimimo.com") => {
             Fetcher::XiaomiTokenPlan
         }
@@ -253,6 +254,7 @@ enum Fetcher {
     StepfunBalance { intl: bool },
     AlibabaCoding { intl: bool },
     AlibabaToken { intl: bool },
+    QianwenTokenPlan,
     Sensenova,
     SiliconFlow,
     AgentRouter,
@@ -267,8 +269,8 @@ impl Fetcher {
         creds: &Credentials<'_>,
     ) -> Result<FetchOutput, UsageError> {
         use fetchers::{
-            agentrouter, alibaba, api_key, balance, cloud_balance, copilot, siliconflow, stepfun,
-            volcengine, xiaomi,
+            agentrouter, alibaba, api_key, balance, cloud_balance, copilot, qianwenai, siliconflow,
+            stepfun, volcengine, xiaomi,
         };
         match self {
             Fetcher::OpenCodeGo => api_key::fetch_opencode_go(http, creds).await,
@@ -324,6 +326,7 @@ impl Fetcher {
             Fetcher::AlibabaToken { intl } => {
                 alibaba::fetch_alibaba_token(http, creds, *intl).await
             }
+            Fetcher::QianwenTokenPlan => qianwenai::fetch_qianwenai(http, creds).await,
             // SenseNova 在 query_provider_usage 单独处理（需要 db/provider_id 回写登录/轮换凭据）。
             Fetcher::Sensenova => Err(UsageError::Unsupported),
             Fetcher::SiliconFlow => siliconflow::fetch_siliconflow_wallets(http, creds).await,
@@ -370,6 +373,8 @@ mod tests {
             ("coding-intl.dashscope.aliyuncs.com", true),
             ("token-plan.cn-beijing.maas.aliyuncs.com", true),
             ("token-plan.ap-southeast-1.maas.aliyuncs.com", true),
+            ("token-plan.maas.qianwenaiapi.com", true),
+            ("token-plan.maas.qianwenaiapi.com.evil.com", false),
             ("api.siliconflow.cn", true),
             ("api.siliconflow.com", false),
             ("agentrouter.org", true),

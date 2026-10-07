@@ -115,6 +115,13 @@ pub const TEMPLATES: &[Template] = &[
         extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 1}",
     },
     Template {
+        name: "Qianwen Token Plan",
+        base_url: "https://token-plan.maas.qianwenaiapi.com/compatible-mode/v1",
+        protocol_type: 0,
+        billing_mode: 1,
+        extra: "{\"cookie_cloud_server\": \"\", \"uuid\": \"\", \"password\": \"\", \"domain\": \"\", \"usage\": true, \"usage_type\": 1}",
+    },
+    Template {
         name: "Ambient",
         base_url: "https://api.ambient.xyz/v1",
         protocol_type: 0,
