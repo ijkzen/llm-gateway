@@ -248,6 +248,10 @@ export function RequestLogsTable() {
 		setSuccess(undefined);
 		setSelectedApiKeys([]);
 		setPage(1);
+		// 重置兼有「把窗口终点推到现在」的刷新语义：过滤与窗口已在默认态时
+		// query key 不变，React Query 不会自动重取（ADR-0022 只覆盖真正的重取路径），
+		// 显式 refetch 让终点按点击时刻重新解析；key 变化时这次重取 redundant 但无害。
+		refetch();
 	};
 
 	const columns = useMemo<ColumnDef<RequestLogRow>[]>(

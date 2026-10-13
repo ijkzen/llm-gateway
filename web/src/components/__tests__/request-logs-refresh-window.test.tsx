@@ -88,6 +88,26 @@ describe("请求日志时间窗随刷新前进（回归）", () => {
 		vi.useRealTimers();
 	});
 
+	it("点重置同样把 endTime 推到当前时刻（窗口已在默认态、key 不变时重置不触发重取的回归）", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		vi.setSystemTime(new Date(2026, 7, 31, 10, 0, 0));
+		renderPage();
+
+		await waitFor(() => expect(mocks.requests.length).toBeGreaterThan(0));
+		expect(endTimeOf(mocks.requests[0] ?? "")).toBe(new Date(2026, 7, 31, 10, 0, 0).getTime());
+
+		// 窗口与过滤均已在默认态：重置只 setState，query key 不变，
+		// 必须靠重置里显式 refetch 触发重取，否则终点停在旧时刻。
+		vi.setSystemTime(new Date(2026, 7, 31, 10, 5, 0));
+		fireEvent.click(screen.getByRole("button", { name: /重置/ }));
+		await waitFor(() => expect(mocks.requests.length).toBeGreaterThan(1));
+
+		const lastEnd = endTimeOf(mocks.requests[mocks.requests.length - 1] ?? "");
+		expect(lastEnd).toBe(new Date(2026, 7, 31, 10, 5, 0).getTime());
+
+		vi.useRealTimers();
+	});
+
 	it("跨零点后刷新，窗口起点滚到新的一天而非停在昨天", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		vi.setSystemTime(new Date(2026, 7, 31, 23, 50, 0));
