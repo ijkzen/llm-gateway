@@ -7,6 +7,11 @@
 //!   展示模式只由 `provider.billing_mode` 决定：0=按量（credit+welfare 合计为主余额，
 //!   另给钱包/福利明细），1=订阅（只处理 `status=active` 的套餐，逐份产出带套餐名
 //!   label 的窗口；无 active 套餐或无可解析窗口时 windows 为空）。
+//!   套餐窗口口径对齐官方控制台：`usd_weekly` 产当前周窗口（quota.used_usd /
+//!   quota.daily_limit_usd，字段名为历史遗留），跨周套餐（duration_days/7 > 1，
+//!   如 30 天月卡按周发放）再产一条整周期「月额度」（total_used_usd /
+//!   total_limit_usd，重置到 subscription_end_at）；`usd_monthly` 月窗口优先取
+//!   quota 内周期字段，缺失/上限为 0 时回退顶层 total_*（单月套餐两者同值）。
 //! - JWT 状态机：`extra.jwt` 非空先直接查 subscription；只有 HTTP 401/403 或
 //!   可解析的业务 code=401 才用 email/password 登录换取新 JWT；登录成功后先把新
 //!   JWT 合并回写加密 extra（保留其他字段），再用它重试 subscription 一次。其余
@@ -212,13 +217,15 @@ fn parse_subscription(body: &str) -> Result<FetchOutput, UsageError> {
         if plan_name.is_none() {
             plan_name = name.clone();
         }
-        // 重置时间优先 quota.window_reset_at，回退 subscription_end_at；
-        // 非法时间只省略 resets_at，不导致整个响应失败。
+        // 窗口重置时间优先 quota.window_reset_at，回退 subscription_end_at；
+        // 非法时间只省略 resets_at，不导致整个响应失败。整周期（月额度）窗口
+        // 的重置时间只取订阅结束时间。
         let resets_at = sub
             .get("quota")
             .and_then(|q| q.get("window_reset_at"))
             .and_then(reset_ts)
             .or_else(|| sub.get("subscription_end_at").and_then(reset_ts));
+        let end_at = sub.get("subscription_end_at").and_then(reset_ts);
         let billing_type = sub
             .get("plan")
             .and_then(|p| p.get("billing_type"))
@@ -230,7 +237,12 @@ fn parse_subscription(body: &str) -> Result<FetchOutput, UsageError> {
                 }
             }
             Some("usd_weekly") => {
-                if let Some(w) = weekly_window(sub, name, resets_at) {
+                if let Some(w) = weekly_window(sub, name.clone(), resets_at) {
+                    windows.push(w);
+                }
+                if is_multi_week(sub)
+                    && let Some(w) = monthly_total_window(sub, name, end_at)
+                {
                     windows.push(w);
                 }
             }
@@ -293,28 +305,65 @@ fn daily_window(
     })
 }
 
-/// usd_weekly / usd_monthly：文档未单独确认周/月套餐内 quota 的周期 used/limit 字段，
-/// 保守使用顶层 total_used_usd / total_limit_usd（Krill 的额度周期语义）。
+/// usd_weekly 的当前周窗口：quota.used_usd / quota.daily_limit_usd（字段名为
+/// 历史遗留，周套餐下即本周额度的已用/上限，官方控制台「本周额度」条同口径）。
 fn weekly_window(
     sub: &serde_json::Map<String, Value>,
     label: Option<String>,
     resets_at: Option<DateTime<Utc>>,
 ) -> Option<QuotaWindow> {
-    let used = sub.get("total_used_usd").and_then(num)?;
-    let limit = sub.get("total_limit_usd").and_then(num)?;
+    let quota = sub.get("quota")?;
+    let used = quota.get("used_usd").and_then(num)?;
+    let limit = quota.get("daily_limit_usd").and_then(num)?;
     Some(QuotaWindow {
         label,
         ..QuotaWindow::from_used_limit(WindowKind::Weekly, used, limit, resets_at, Some("USD"))
     })
 }
 
+/// 周套餐是否跨周：plan.duration_days 按 7 天折算周数 > 1（对齐官方控制台
+/// floor(duration_days/7) > 1 才额外展示「月额度」条）。
+fn is_multi_week(sub: &serde_json::Map<String, Value>) -> bool {
+    sub.get("plan")
+        .and_then(|p| p.get("duration_days"))
+        .and_then(num)
+        .is_some_and(|days| (days / 7.0).floor() > 1.0)
+}
+
+/// 跨周周套餐的整周期「月额度」：total_used_usd / total_limit_usd，
+/// 重置时间即订阅结束时间。
+fn monthly_total_window(
+    sub: &serde_json::Map<String, Value>,
+    label: Option<String>,
+    end_at: Option<DateTime<Utc>>,
+) -> Option<QuotaWindow> {
+    let used = sub.get("total_used_usd").and_then(num)?;
+    let limit = sub.get("total_limit_usd").and_then(num)?;
+    Some(QuotaWindow {
+        label,
+        ..QuotaWindow::from_used_limit(WindowKind::Monthly, used, limit, end_at, Some("USD"))
+    })
+}
+
+/// usd_monthly：月窗口优先取 quota.used_usd / quota.daily_limit_usd（当前账期
+/// 已用/上限，官方控制台「总额度」条同口径）；字段缺失或上限为 0 时回退顶层
+/// total_used_usd / total_limit_usd（单月套餐两者同值）。
 fn monthly_window(
     sub: &serde_json::Map<String, Value>,
     label: Option<String>,
     resets_at: Option<DateTime<Utc>>,
 ) -> Option<QuotaWindow> {
-    let used = sub.get("total_used_usd").and_then(num)?;
-    let limit = sub.get("total_limit_usd").and_then(num)?;
+    let quota = sub.get("quota");
+    let quota_pair = quota
+        .and_then(|q| q.get("used_usd"))
+        .and_then(num)
+        .zip(quota.and_then(|q| q.get("daily_limit_usd")).and_then(num))
+        .filter(|(_, limit)| *limit > 0.0);
+    let (used, limit) = quota_pair.or_else(|| {
+        sub.get("total_used_usd")
+            .and_then(num)
+            .zip(sub.get("total_limit_usd").and_then(num))
+    })?;
     Some(QuotaWindow {
         label,
         ..QuotaWindow::from_used_limit(WindowKind::Monthly, used, limit, resets_at, Some("USD"))
@@ -494,8 +543,9 @@ mod tests {
               {
                 "subscription_id": "s2",
                 "status": "active",
-                "plan": { "name": "周套餐", "billing_type": "usd_weekly" },
-                "quota": { "used_usd": "7", "daily_limit_usd": "0", "window_reset_at": "2026-09-07T06:22:00Z" },
+                "subscription_end_at": "2026-10-01T06:22:00Z",
+                "plan": { "name": "周套餐", "billing_type": "usd_weekly", "duration_days": 28 },
+                "quota": { "used_usd": "2", "daily_limit_usd": "10", "window_reset_at": "2026-09-07T06:22:00Z" },
                 "total_used_usd": "7",
                 "total_limit_usd": "30",
                 "total_remaining_usd": "23"
@@ -532,8 +582,9 @@ mod tests {
             panic!("expected quota")
         };
         assert_eq!(plan.as_deref(), Some("日套餐"));
-        // 日套餐 Daily + 周套餐 Weekly + 计次套餐账户级 3 窗 = 5 条；frozen 被忽略。
-        assert_eq!(windows.len(), 5);
+        // 日套餐 Daily + 周套餐 Weekly + 跨周整周期 Monthly + 计次套餐账户级 3 窗
+        // = 6 条；frozen 被忽略。
+        assert_eq!(windows.len(), 6);
 
         let daily = windows
             .iter()
@@ -546,12 +597,29 @@ mod tests {
             DateTime::parse_from_rfc3339("2026-09-04T06:22:00Z").unwrap()
         );
 
+        // 本周额度：当前周窗口 quota.used_usd / quota.daily_limit_usd。
         let weekly_plan = windows
             .iter()
             .find(|w| w.window == WindowKind::Weekly && w.label.as_deref() == Some("周套餐"))
             .unwrap();
-        assert_eq!(weekly_plan.used, Some(7.0));
-        assert_eq!(weekly_plan.limit, Some(30.0));
+        assert_eq!(weekly_plan.used, Some(2.0));
+        assert_eq!(weekly_plan.limit, Some(10.0));
+        assert_eq!(
+            weekly_plan.resets_at.unwrap(),
+            DateTime::parse_from_rfc3339("2026-09-07T06:22:00Z").unwrap()
+        );
+
+        // 跨周套餐（28 天）额外产整周期「月额度」：total_*，重置到订阅结束时间。
+        let monthly_plan = windows
+            .iter()
+            .find(|w| w.window == WindowKind::Monthly && w.label.as_deref() == Some("周套餐"))
+            .unwrap();
+        assert_eq!(monthly_plan.used, Some(7.0));
+        assert_eq!(monthly_plan.limit, Some(30.0));
+        assert_eq!(
+            monthly_plan.resets_at.unwrap(),
+            DateTime::parse_from_rfc3339("2026-10-01T06:22:00Z").unwrap()
+        );
 
         // 账户级计次配额：5h/周/月三窗只输出一次，label = 计次套餐名。
         let five_hour: Vec<_> = windows
@@ -577,6 +645,92 @@ mod tests {
             five_hour[0].resets_at.unwrap(),
             DateTime::parse_from_rfc3339("2026-10-03T00:00:00Z").unwrap()
         );
+    }
+
+    #[test]
+    fn weekly_single_week_plan_has_no_monthly_window() {
+        // 7 天周套餐（周数 = 1）：只产本周窗口，不重复产整周期月窗口。
+        let body = r#"{
+          "success": true, "code": 0,
+          "data": {
+            "subscriptions": [
+              {
+                "subscription_id": "s1",
+                "status": "active",
+                "subscription_end_at": "2026-09-10T06:22:00Z",
+                "plan": { "name": "单周套餐", "billing_type": "usd_weekly", "duration_days": 7 },
+                "quota": { "used_usd": "1", "daily_limit_usd": "10", "window_reset_at": "2026-09-10T06:22:00Z" },
+                "total_used_usd": "1",
+                "total_limit_usd": "10"
+              }
+            ],
+            "summary": {}, "credit_balance_usd": "0", "welfare_balance_usd": "0",
+            "request_count_quota": null
+          }
+        }"#;
+        let FetchOutput::Quota { windows, .. } = parse_subscription_by_mode(body, 1).unwrap()
+        else {
+            panic!("expected quota")
+        };
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].window, WindowKind::Weekly);
+        assert_eq!(windows[0].used, Some(1.0));
+        assert_eq!(windows[0].limit, Some(10.0));
+    }
+
+    #[test]
+    fn monthly_plan_prefers_quota_window_fields() {
+        // 多月卡：月窗口取当前账期 quota.used_usd / quota.daily_limit_usd，
+        // 而不是整周期 total_*；quota 上限为 0 时回退 total_*。
+        let body = r#"{
+          "success": true, "code": 0,
+          "data": {
+            "subscriptions": [
+              {
+                "subscription_id": "s1",
+                "status": "active",
+                "subscription_end_at": "2026-12-03T06:22:00Z",
+                "plan": { "name": "季卡", "billing_type": "usd_monthly", "duration_days": 90 },
+                "quota": { "used_usd": "5", "daily_limit_usd": "100", "window_reset_at": "2026-11-03T06:22:00Z" },
+                "total_used_usd": "105",
+                "total_limit_usd": "300"
+              },
+              {
+                "subscription_id": "s2",
+                "status": "active",
+                "subscription_end_at": "2026-10-03T06:22:00Z",
+                "plan": { "name": "月卡", "billing_type": "usd_monthly", "duration_days": 30 },
+                "quota": { "used_usd": "0", "daily_limit_usd": "0", "window_reset_at": "2026-10-03T06:22:00Z" },
+                "total_used_usd": "12.34",
+                "total_limit_usd": "100"
+              }
+            ],
+            "summary": {}, "credit_balance_usd": "0", "welfare_balance_usd": "0",
+            "request_count_quota": null
+          }
+        }"#;
+        let FetchOutput::Quota { windows, .. } = parse_subscription_by_mode(body, 1).unwrap()
+        else {
+            panic!("expected quota")
+        };
+        assert_eq!(windows.len(), 2);
+        let seasonal = windows
+            .iter()
+            .find(|w| w.label.as_deref() == Some("季卡"))
+            .unwrap();
+        assert_eq!(seasonal.window, WindowKind::Monthly);
+        assert_eq!(seasonal.used, Some(5.0));
+        assert_eq!(seasonal.limit, Some(100.0));
+        assert_eq!(
+            seasonal.resets_at.unwrap(),
+            DateTime::parse_from_rfc3339("2026-11-03T06:22:00Z").unwrap()
+        );
+        let monthly = windows
+            .iter()
+            .find(|w| w.label.as_deref() == Some("月卡"))
+            .unwrap();
+        assert_eq!(monthly.used, Some(12.34));
+        assert_eq!(monthly.limit, Some(100.0));
     }
 
     #[test]
