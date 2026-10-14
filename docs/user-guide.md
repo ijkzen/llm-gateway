@@ -305,8 +305,10 @@ Base URL 为 `{网关地址}`。管理 API（`/api/*`）走登录会话，**转�
 | `POST /v1/chat/completions` | Bearer | OpenAI 兼容主入口：请求体即 OpenAI Chat Completions 格式，`model` = 虚拟模型 `display_id` |
 | `POST /v1/messages` | Bearer 或 `x-api-key`（Bearer 优先） | Anthropic Messages 原生透传，仅接口类型 = Messages 的虚拟模型；上游固定带 `anthropic-version: 2023-06-01`；响应为 Anthropic 原生格式（含 SSE 事件类型），适配 Anthropic SDK |
 | `POST /v1/responses` | Bearer | OpenAI Responses 原生透传，仅接口类型 = Responses 的虚拟模型；适配 Responses SDK |
+| `GET /v1/providers` | Bearer | 列出全部供应商（含停用）：`id`/`name`/`enable`/`billingMode`/`usageSupported`，不暴露密钥、Base URL 等敏感配置 |
+| `GET /v1/providers/{id}/usage` | Bearer | 按供应商 ID 查用量（余额/订阅窗口），与详情页用量卡同一数据：10 分钟缓存，`?refresh=1` 强制重取；未开启用量查询返回 400 |
 
-> 鉴权失败：`/v1/messages` 返回 Anthropic 原生错误结构，其余端点返回 OpenAI 风格错误结构。`/v1/*` 一律**不**返回管理 API 的 `code/msg/data` 信封（那是 `/api/*` 与聊天页通道的错误格式）。
+> 鉴权失败：`/v1/messages` 返回 Anthropic 原生错误结构，其余端点返回 OpenAI 风格错误结构。业务响应方面，`/v1/providers*` 两个只读端点返回管理 API 的 `code/msg/data` 信封，其余 `/v1` 转发/模型端点一律**不**返回该信封（那是 `/api/*` 与聊天页通道的错误格式）。
 
 ### 13.2 接口类型与端点对应
 
