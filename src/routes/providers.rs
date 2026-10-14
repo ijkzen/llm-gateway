@@ -757,9 +757,14 @@ async fn get_provider_api_key(
 }
 
 #[derive(Deserialize)]
-struct ProviderUsageQuery {
+pub(crate) struct ProviderUsageQuery {
     /// `?refresh=1` 绕过 10 分钟数据库缓存，强制重新拉取上游。
-    refresh: Option<String>,
+    pub(crate) refresh: Option<String>,
+}
+
+/// `?refresh=1`/`?refresh=true` 视为强制刷新（/api 与 /v1 两个入口同一口径）。
+pub(crate) fn refresh_forced(refresh: Option<&str>) -> bool {
+    refresh.is_some_and(|v| v == "1" || v == "true")
 }
 
 /// 用量响应：用量数据（flatten 平铺到与原来同层）+ 展示时区。
@@ -776,11 +781,15 @@ struct ProviderUsageResponse {
 /// 查询供应商用量（余额/订阅窗口额度）。
 ///
 /// 优先直出数据库缓存（10 分钟内新鲜），过期/缺失才真实抓取并重新落库。
-async fn get_provider_usage(
-    State(state): State<AppState>,
-    Path(id): Path<i32>,
-    Query(query): Query<ProviderUsageQuery>,
-) -> impl IntoResponse {
+/// 共享核心：管理后台 `/api/providers/{id}/usage` 与对外 `/v1/providers/{id}/usage`
+/// 两个入口共用，行为与错误响应完全一致。
+pub(crate) async fn provider_usage_response(
+    state: &AppState,
+    id: i32,
+    force_refresh: bool,
+    // 具体返回类型不借用入参（全为拥有所有权的响应元组）；use<> 显式不捕获
+    // 生命周期，否则 Rust 2024 下调用方局部 state 会被 opaque 类型锁住。
+) -> impl IntoResponse + use<> {
     let lang = state.settings.lang().await;
     let model = match Entity::find_by_id(id).one(&state.db).await {
         Ok(Some(m)) => m,
@@ -803,10 +812,6 @@ async fn get_provider_usage(
         timezone: timezone.clone(),
         data: data.with_normalized_remaining().with_localized_labels(lang),
     };
-    let force_refresh = query
-        .refresh
-        .as_deref()
-        .is_some_and(|v| v == "1" || v == "true");
     // 单飞 + 失效代次护栏（11-02/11-25）：并发 GET 只打一次上游；抓取期间
     // 凭据被更新则结果作废（502 类，客户端可重试）。
     match state
@@ -818,6 +823,14 @@ async fn get_provider_usage(
         Err(e) if e.is_client_error() => response::bad_request(e.user_message(lang)),
         Err(e) => response::bad_gateway(e.user_message(lang)),
     }
+}
+
+async fn get_provider_usage(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    Query(query): Query<ProviderUsageQuery>,
+) -> impl IntoResponse {
+    provider_usage_response(&state, id, refresh_forced(query.refresh.as_deref())).await
 }
 
 #[derive(Serialize)]
