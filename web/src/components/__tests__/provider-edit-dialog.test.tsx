@@ -157,3 +157,36 @@ describe("ProviderEditDialog Krill 凭据", () => {
 		});
 	});
 });
+
+describe("ProviderEditDialog：OpenDesign 控制端凭据", () => {
+	const opendesignProvider = makeProvider({
+		id: 11,
+		name: "OpenDesign",
+		baseUrl: "https://amr-link.open-design.ai/v1",
+		billingMode: 1,
+		extra: JSON.stringify({
+			workspace_id: "ws-1",
+			control_key: "ck-secret",
+			usage: true,
+			usage_type: 1,
+		}),
+	});
+
+	it("control_key 使用密码框并在保存时原样保留", async () => {
+		render(<ProviderEditDialog open onOpenChange={vi.fn()} provider={opendesignProvider} />);
+		fireEvent.click(screen.getByRole("button", { name: "高级设置" }));
+
+		expect(screen.getByLabelText("workspace_id")).toHaveValue("ws-1");
+		expect(screen.getByLabelText("control_key")).toHaveAttribute("type", "password");
+
+		fireEvent.click(screen.getByRole("button", { name: "保存" }));
+		await waitFor(() => expect(mocks.updateMutate).toHaveBeenCalledOnce());
+		const payload = mocks.updateMutate.mock.calls[0]?.[0];
+		expect(JSON.parse(payload.extra)).toMatchObject({
+			workspace_id: "ws-1",
+			control_key: "ck-secret",
+			usage: true,
+			usage_type: 1,
+		});
+	});
+});

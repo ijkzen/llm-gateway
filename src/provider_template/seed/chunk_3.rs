@@ -163,6 +163,13 @@ pub const TEMPLATES: &[Template] = &[
         extra: "{\"usage\": true, \"usage_type\": 1}",
     },
     Template {
+        name: "OpenDesign",
+        base_url: "https://amr-link.open-design.ai/v1",
+        protocol_type: 0,
+        billing_mode: 1,
+        extra: "{\"workspace_id\": \"\", \"control_key\": \"\", \"usage\": true, \"usage_type\": 1}",
+    },
+    Template {
         name: "OpenReason",
         base_url: "https://api.openreason.app/v1",
         protocol_type: 0,

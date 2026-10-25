@@ -138,6 +138,28 @@ describe("ProviderUsageCard", () => {
 		expect(screen.getAllByText("CNY").length).toBeGreaterThan(0);
 	});
 
+	it("quota + balance：订阅窗口下方追加钱包余额（OpenDesign 混合形态）", () => {
+		mockQuery({
+			data: {
+				providerId: 1,
+				fetchedAt: "2026-08-30T12:00:00Z",
+				kind: "quota",
+				windows: [
+					{ window: "five_hour", available: true, remainingPercent: 75 },
+					{ window: "weekly", available: true, remainingPercent: 100 },
+					{ window: "monthly", available: false },
+				],
+				balances: [{ label: "钱包余额", amount: 12.34, currency: "USD" }],
+			} satisfies ProviderUsage,
+		});
+		render(<ProviderUsageCard providerId={1} />);
+		expect(screen.getByText("5 小时")).toBeInTheDocument();
+		expect(screen.getByText("本周")).toBeInTheDocument();
+		expect(screen.getByText("钱包余额")).toBeInTheDocument();
+		expect(screen.getByText("12.34")).toBeInTheDocument();
+		expect(screen.getByText("USD")).toBeInTheDocument();
+	});
+
 	it("错误态展示消息并支持重试（重试走 refresh=1 绕过缓存）", () => {
 		mockQuery({ error: new Error("用量查询凭据无效或已过期") });
 		render(<ProviderUsageCard providerId={1} />);

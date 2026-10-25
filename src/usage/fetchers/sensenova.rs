@@ -230,7 +230,9 @@ async fn renew_and_query(
     }
     let output = parse_pool_usage(&reply.body)?;
     let window_count = match &output {
-        FetchOutput::Quota { windows, .. } => windows.len(),
+        FetchOutput::Quota { windows, .. } | FetchOutput::QuotaWithBalance { windows, .. } => {
+            windows.len()
+        }
         FetchOutput::Balance { .. } => 0,
     };
     tracing::info!(window_count, "pool-usage 查询成功");

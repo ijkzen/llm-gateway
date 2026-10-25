@@ -799,3 +799,77 @@ async fn qianwenai_history_backfill_is_idempotent_and_preserves_user_values() {
     )
     .await;
 }
+
+#[test]
+fn opendesign_seed_has_subscription_template() {
+    let tmpl = seed::all()
+        .find(|t| t.name == "OpenDesign")
+        .expect("missing OpenDesign template");
+    assert_eq!(tmpl.base_url, "https://amr-link.open-design.ai/v1");
+    assert_eq!(tmpl.protocol_type, 0, "OpenAI Compatible");
+    assert_eq!(tmpl.billing_mode, 1, "订阅制");
+    let extra: serde_json::Value = serde_json::from_str(tmpl.extra).unwrap();
+    assert_eq!(extra["workspace_id"], "", "工作区 ID 待用户填写");
+    assert_eq!(extra["control_key"], "", "Control Key 待用户填写");
+    assert_eq!(extra["usage"], true);
+    assert_eq!(extra["usage_type"], 1);
+}
+
+#[tokio::test]
+async fn opendesign_history_backfill_is_idempotent_and_preserves_user_values() {
+    temp_env::async_with_vars(
+        [(crate::crypto::ENCRYPTION_KEY_ENV, Some("test-key"))],
+        async {
+            let db = setup_db().await.unwrap();
+            upsert_templates(&db).await.unwrap();
+
+            insert_provider_with_billing(
+                &db,
+                "OpenDesign-历史",
+                "https://amr-link.open-design.ai/v1",
+                "{}",
+                1,
+            )
+            .await;
+            insert_provider_with_billing(
+                &db,
+                "OpenDesign-已填",
+                "https://amr-link.open-design.ai/v1",
+                r#"{"workspace_id":"ws-1","control_key":"ck-1","usage":false,"custom":"keep"}"#,
+                1,
+            )
+            .await;
+            insert_provider(
+                &db,
+                "OpenDesign-其他host",
+                "https://amr-api.open-design.ai/api/v1",
+                r#"{"own":1}"#,
+            )
+            .await;
+
+            // 再次 upsert（模板走 update 分支），历史 provider 仍应被无条件对齐。
+            upsert_templates(&db).await.unwrap();
+            upsert_templates(&db).await.unwrap();
+
+            let extra = provider_extra(&db, "OpenDesign-历史").await;
+            assert_eq!(extra["workspace_id"], "");
+            assert_eq!(extra["control_key"], "");
+            assert_eq!(extra["usage"], true);
+            assert_eq!(extra["usage_type"], 1);
+
+            let filled = provider_extra(&db, "OpenDesign-已填").await;
+            assert_eq!(filled["workspace_id"], "ws-1", "已填工作区不被覆盖");
+            assert_eq!(filled["control_key"], "ck-1", "已填 Control Key 不被覆盖");
+            assert_eq!(filled["usage"], false, "用户关闭的开关不被覆盖");
+            assert_eq!(filled["custom"], "keep", "未知键保留");
+
+            let other = provider_extra(&db, "OpenDesign-其他host").await;
+            assert_eq!(
+                other,
+                serde_json::json!({ "own": 1 }),
+                "仅精确 host amr-link.open-design.ai 回填"
+            );
+        },
+    )
+    .await;
+}

@@ -120,6 +120,18 @@ pub async fn query_provider_usage(
             windows,
             balances: vec![],
         },
+        FetchOutput::QuotaWithBalance {
+            plan,
+            windows,
+            balances,
+        } => UsageData {
+            provider_id,
+            fetched_at: chrono::Utc::now(),
+            kind: UsageKind::Quota,
+            plan,
+            windows,
+            balances,
+        },
         FetchOutput::Balance { items } => UsageData {
             provider_id,
             fetched_at: chrono::Utc::now(),
@@ -187,6 +199,7 @@ fn path_of(base_url: &str) -> String {
 fn fetcher_for(host: &str, path: &str) -> Option<Fetcher> {
     Some(match host {
         "opencode.ai" => Fetcher::OpenCodeGo,
+        "amr-link.open-design.ai" => Fetcher::OpenDesign,
         "api.kimi.com" => Fetcher::Kimi,
         "open.bigmodel.cn" => Fetcher::Zhipu { intl: false },
         "api.z.ai" => Fetcher::Zhipu { intl: true },
@@ -236,6 +249,7 @@ fn fetcher_for(host: &str, path: &str) -> Option<Fetcher> {
 
 enum Fetcher {
     OpenCodeGo,
+    OpenDesign,
     Kimi,
     Zhipu { intl: bool },
     Minimax { intl: bool },
@@ -269,11 +283,12 @@ impl Fetcher {
         creds: &Credentials<'_>,
     ) -> Result<FetchOutput, UsageError> {
         use fetchers::{
-            agentrouter, alibaba, api_key, balance, cloud_balance, copilot, qianwenai, siliconflow,
-            stepfun, volcengine, xiaomi,
+            agentrouter, alibaba, api_key, balance, cloud_balance, copilot, opendesign, qianwenai,
+            siliconflow, stepfun, volcengine, xiaomi,
         };
         match self {
             Fetcher::OpenCodeGo => api_key::fetch_opencode_go(http, creds).await,
+            Fetcher::OpenDesign => opendesign::fetch_opendesign(http, creds).await,
             Fetcher::Kimi => api_key::fetch_kimi(http, creds).await,
             Fetcher::Zhipu { intl } => {
                 let host = if *intl {
@@ -348,6 +363,8 @@ mod tests {
     fn host_dispatch_covers_seed_templates() {
         for (host, expect_some) in [
             ("opencode.ai", true),
+            ("amr-link.open-design.ai", true),
+            ("amr-link.open-design.ai.evil.com", false),
             ("api.kimi.com", true),
             ("open.bigmodel.cn", true),
             ("api.z.ai", true),

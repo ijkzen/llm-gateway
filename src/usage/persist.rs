@@ -241,8 +241,9 @@ pub async fn apply_usage_gate(
     };
     if usable {
         // 边界区交给探活裁决（见函数头注释）。对已启用的供应商本就是幂等空转，
-        // 这里只影响「被探活停用后又被同一份数据恢复」这一条路径。
-        if !data.has_low_remaining_window() {
+        // 这里只影响「被探活停用后又被同一份数据恢复」这一条路径。混合计费有
+        // 钱包兜底时探活已跳过，这里直接恢复。
+        if !data.has_low_remaining_window() || data.has_positive_balance() {
             crate::availability::recover_quota(db, p.id, &p.name, label).await?;
         }
     } else {
@@ -265,9 +266,12 @@ pub(crate) fn boundary_probe_eligible(p: &provider::Model) -> bool {
 }
 
 /// 边界探活是否适用（纯判定）：订阅额度可用（非耗尽）且任一已提供窗口剩余
-/// 落在 (0,1) 边界区。
+/// 落在 (0,1) 边界区。混合计费（窗口 + 钱包）有钱包兜底时不探活——窗口耗尽
+/// 不等于不可用，实测失败也不应停用。
 pub(crate) fn boundary_probe_applicable(data: &UsageData) -> bool {
-    data.subscription_usable() == Some(true) && data.has_low_remaining_window()
+    data.subscription_usable() == Some(true)
+        && data.has_low_remaining_window()
+        && !data.has_positive_balance()
 }
 
 /// 订阅制边界探活：读取新鲜的用量数据库缓存，对处于边界区（任一已提供窗口
@@ -690,6 +694,87 @@ mod tests {
         set_window(&mut windows, window(WindowKind::Weekly, 0.0));
         set_window(&mut windows, window(WindowKind::Monthly, 90.0));
         assert_eq!(quota_data(1, windows).subscription_usable(), Some(false));
+    }
+
+    #[test]
+    fn subscription_usable_positive_wallet_covers_exhausted_window() {
+        // 混合计费（OpenDesign）：套餐窗口耗尽但钱包仍有余额 → 仍可用。
+        let mut windows = empty_windows();
+        set_window(&mut windows, window(WindowKind::FiveHour, 0.0));
+        set_window(&mut windows, window(WindowKind::Weekly, 50.0));
+        let mut data = quota_data(1, windows);
+        data.balances = vec![BalanceItem {
+            label: "钱包余额".to_string(),
+            amount: 5.0,
+            currency: Some("USD".to_string()),
+            primary: true,
+        }];
+        assert_eq!(data.subscription_usable(), Some(true));
+
+        data.balances[0].amount = 0.0;
+        assert_eq!(data.subscription_usable(), Some(false));
+    }
+
+    #[test]
+    fn boundary_probe_skips_hybrid_with_positive_wallet() {
+        let mut windows = empty_windows();
+        set_window(&mut windows, window(WindowKind::FiveHour, 0.5));
+        let mut data = quota_data(1, windows);
+        assert!(boundary_probe_applicable(&data));
+        data.balances = vec![BalanceItem {
+            label: "钱包余额".to_string(),
+            amount: 1.0,
+            currency: Some("USD".to_string()),
+            primary: true,
+        }];
+        assert!(!boundary_probe_applicable(&data), "钱包兜底时不应实测停用");
+    }
+
+    #[tokio::test]
+    async fn hybrid_wallet_balance_recovers_quota_disabled_provider_in_boundary() {
+        let db = crate::db::connect("sqlite::memory:").await.unwrap();
+        let (pid, model_id) = seed_balance_provider(&db).await;
+        let p = provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut active: provider::ActiveModel = p.into();
+        active.billing_mode = Set(1);
+        active.update(&db).await.unwrap();
+
+        // 先按套餐窗口耗尽停用。
+        let mut windows = empty_windows();
+        set_window(&mut windows, window(WindowKind::FiveHour, 0.0));
+        let p = provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        apply_usage_gate(&db, &p, &quota_data(pid, windows))
+            .await
+            .unwrap();
+        assert!(!provider_enabled(&db, pid).await);
+        assert!(!item_enabled(&db, model_id).await);
+
+        // 窗口进入边界区（0.5%）但钱包有正数余额 → 直接恢复，不等实测。
+        let mut windows = empty_windows();
+        set_window(&mut windows, window(WindowKind::FiveHour, 0.5));
+        let mut data = quota_data(pid, windows);
+        data.balances = vec![BalanceItem {
+            label: "钱包余额".to_string(),
+            amount: 1.0,
+            currency: Some("USD".to_string()),
+            primary: true,
+        }];
+        let p = provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        apply_usage_gate(&db, &p, &data).await.unwrap();
+        assert!(provider_enabled(&db, pid).await);
+        assert!(item_enabled(&db, model_id).await);
     }
 
     #[test]

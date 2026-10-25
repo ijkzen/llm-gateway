@@ -101,6 +101,17 @@ function editableExtraKeys(extra: string | undefined): string[] {
 	);
 }
 
+/** 密钥类 extra 字段：密码框输入，避免 Control Key 等凭据明文展示。 */
+function isSecretExtraKey(key: string): boolean {
+	const normalized = key.toLowerCase();
+	return (
+		normalized.includes("password") ||
+		normalized.includes("secret") ||
+		normalized.includes("token") ||
+		normalized.endsWith("_key")
+	);
+}
+
 /** 模板 extra 中值为 true 的 usage 标记（开关当前值）。 */
 function usageFlag(extra: string | undefined): boolean {
 	return parseExtra(extra).usage === true;
@@ -495,7 +506,7 @@ export function ProviderEditDialog({ open, onOpenChange, provider }: ProviderEdi
 													<Label htmlFor={`extra-${key}`}>{key}</Label>
 													<Input
 														id={`extra-${key}`}
-														type={key === "password" ? "password" : "text"}
+														type={isSecretExtraKey(key) ? "password" : "text"}
 														autoComplete="off"
 														value={extraValues[key] ?? ""}
 														onChange={(e) =>

@@ -24,6 +24,8 @@ use llm_gateway::entity::{provider, usage_cache};
 mod cache;
 #[path = "provider_usage_integration/krill.rs"]
 mod krill;
+#[path = "provider_usage_integration/opendesign.rs"]
+mod opendesign;
 #[path = "provider_usage_integration/qianwenai.rs"]
 mod qianwenai;
 #[path = "provider_usage_integration/sensenova.rs"]

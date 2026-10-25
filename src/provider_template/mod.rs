@@ -75,6 +75,7 @@ pub async fn upsert_templates(db: &DatabaseConnection) -> Result<usize, DbErr> {
     backfill_agentrouter_provider_extra(db).await?;
     backfill_tokenrhythm_provider_extra(db).await?;
     backfill_qianwenai_provider_extra(db).await?;
+    backfill_opendesign_provider_extra(db).await?;
     tracing::info!("Provider templates seeded: {inserted} inserted, {updated} updated");
     Ok(inserted + updated)
 }
@@ -117,6 +118,11 @@ pub(crate) fn is_tokenrhythm_host(host: &str) -> bool {
 /// 千问 Token Plan（千问AI平台品牌，`token-plan.maas.qianwenaiapi.com`）用量查询 host。
 pub(crate) fn is_qianwenai_host(host: &str) -> bool {
     host.eq_ignore_ascii_case("token-plan.maas.qianwenaiapi.com")
+}
+
+/// OpenDesign 推理网关 host（控制面 `amr-api.open-design.ai` 固定由 fetcher 访问）。
+pub(crate) fn is_opendesign_host(host: &str) -> bool {
+    host.eq_ignore_ascii_case("amr-link.open-design.ai")
 }
 
 /// OpenCode 上游 host（模板含 OpenCode Zen / OpenCode Go 两个入口，同域）。
@@ -378,6 +384,24 @@ async fn backfill_qianwenai_provider_extra(db: &DatabaseConnection) -> Result<()
     backfill_host_extras(db, "Qianwen", is_qianwenai_host, |extra, provider| {
         let before = extra.clone();
         for key in ["cookie_cloud_server", "uuid", "password", "domain"] {
+            extra.entry(key.to_string()).or_insert_with(|| "".into());
+        }
+        extra.entry("usage".to_string()).or_insert(true.into());
+        extra.insert("usage_type".to_string(), provider.billing_mode.into());
+        *extra != before
+    })
+    .await
+    .map(|_| ())
+}
+
+/// 每次启动幂等对齐历史 OpenDesign Provider 的凭据结构与用量开关。
+///
+/// 模板新增前已存在的同 host provider 走 update 分支，不会补入缺失键；
+/// 只补缺、不覆盖：已填的 workspace_id/control_key 与 usage 开关一律保留。
+async fn backfill_opendesign_provider_extra(db: &DatabaseConnection) -> Result<(), DbErr> {
+    backfill_host_extras(db, "OpenDesign", is_opendesign_host, |extra, provider| {
+        let before = extra.clone();
+        for key in ["workspace_id", "control_key"] {
             extra.entry(key.to_string()).or_insert_with(|| "".into());
         }
         extra.entry("usage".to_string()).or_insert(true.into());

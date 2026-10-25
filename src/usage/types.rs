@@ -173,10 +173,12 @@ impl UsageData {
     }
 
     /// 订阅制「当前是否可用」判定：全部可推导剩余 > 0 → true；任一可推导窗口
-    /// 剩余为 0 → false；无任何可推导窗口数据（无法判定）→ None。调用方在 None
-    /// 时必须保持原状，避免上游抖动误伤。available 但无法推导的窗口不计入判定
-    /// （无从判断耗尽）。逐层取最差走 [`Self::worst_window`]，与 FEFO 排序共用
-    /// 同一扫描实现，两口径一致性由 usage_rank 测试锁定。
+    /// 剩余为 0 且没有正数钱包余额 → false；无任何可推导窗口数据（无法判定）→ None。
+    /// 混合计费（窗口 + 钱包，如 OpenDesign）中套餐窗口耗尽但钱包仍有余额时
+    /// 仍可由钱包继续扣费，视为可用。调用方在 None 时必须保持原状，避免上游
+    /// 抖动误伤。available 但无法推导的窗口不计入判定（无从判断耗尽）。
+    /// 逐层取最差走 [`Self::worst_window`]，与 FEFO 排序共用同一扫描实现，
+    /// 两口径一致性由 usage_rank 测试锁定。
     pub fn subscription_usable(&self) -> Option<bool> {
         if self.kind != UsageKind::Quota {
             return None;
@@ -191,12 +193,19 @@ impl UsageData {
         for kind in kinds {
             if let Some(window) = self.worst_window(kind) {
                 saw_derivable = true;
-                if window.remaining_percent_value().is_some_and(|p| p <= 0.0) {
+                if window.remaining_percent_value().is_some_and(|p| p <= 0.0)
+                    && !self.has_positive_balance()
+                {
                     return Some(false);
                 }
             }
         }
         saw_derivable.then_some(true)
+    }
+
+    /// 是否存在正数余额条目（混合计费用：套餐窗口耗尽后钱包仍可继续扣费）。
+    pub fn has_positive_balance(&self) -> bool {
+        self.balances.iter().any(|item| item.amount > 0.0)
     }
 
     /// 是否存在已提供窗口的剩余百分比落在 (0, 1)——未耗尽但逼近耗尽，
@@ -375,6 +384,12 @@ pub enum FetchOutput {
     Quota {
         plan: Option<String>,
         windows: Vec<QuotaWindow>,
+    },
+    /// 订阅窗口 + 钱包余额同时存在（如 OpenDesign：套餐耗尽后可继续扣钱包）。
+    QuotaWithBalance {
+        plan: Option<String>,
+        windows: Vec<QuotaWindow>,
+        balances: Vec<BalanceItem>,
     },
     Balance {
         items: Vec<BalanceItem>,

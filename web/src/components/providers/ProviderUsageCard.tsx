@@ -1,7 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { type UsageWindow, useProviderUsage } from "@/hooks/use-provider-usage";
+import { type ProviderUsage, type UsageWindow, useProviderUsage } from "@/hooks/use-provider-usage";
 import type { UsageEstimate } from "@/hooks/use-usage-estimate";
 import { cn, formatTokenCount, localeOf } from "@/lib/utils";
 import { AlertCircle, RefreshCw } from "lucide-react";
@@ -66,6 +66,26 @@ function formatReset(
 
 function formatAmount(amount: number): string {
 	return amount.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+}
+
+function BalanceGrid({ items }: { items: NonNullable<ProviderUsage["balances"]> }) {
+	return (
+		<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+			{items.map((item) => (
+				<div key={item.label}>
+					<p className="text-xs text-muted-foreground">{item.label}</p>
+					<p className="mt-0.5 text-lg font-semibold tabular-nums">
+						{formatAmount(item.amount)}
+						{item.currency && (
+							<span className="ml-1 text-xs font-normal text-muted-foreground">
+								{item.currency}
+							</span>
+						)}
+					</p>
+				</div>
+			))}
+		</div>
+	);
 }
 
 function WindowRow({ window, timezone }: { window: UsageWindow; timezone?: string }) {
@@ -169,29 +189,29 @@ export function ProviderUsageCard({
 					</Button>
 				</div>
 			) : data?.kind === "balance" ? (
-				<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-					{data.balances?.map((item) => (
-						<div key={item.label}>
-							<p className="text-xs text-muted-foreground">{item.label}</p>
-							<p className="mt-0.5 text-lg font-semibold tabular-nums">
-								{formatAmount(item.amount)}
-								{item.currency && (
-									<span className="ml-1 text-xs font-normal text-muted-foreground">
-										{item.currency}
-									</span>
-								)}
-							</p>
-						</div>
-					))}
-				</div>
-			) : availableWindows.length > 0 ? (
-				<div className="space-y-4">
-					{availableWindows.map((w) => (
-						<WindowRow key={`${w.window}-${w.label ?? ""}`} window={w} timezone={data?.timezone} />
-					))}
-				</div>
+				<BalanceGrid items={data.balances ?? []} />
 			) : (
-				<p className="text-sm text-muted-foreground">{t("providers.noUsageData")}</p>
+				<div className="space-y-4">
+					{availableWindows.length > 0 && (
+						<div className="space-y-4">
+							{availableWindows.map((w) => (
+								<WindowRow
+									key={`${w.window}-${w.label ?? ""}`}
+									window={w}
+									timezone={data?.timezone}
+								/>
+							))}
+						</div>
+					)}
+					{data?.balances && data.balances.length > 0 && (
+						<div className={cn("space-y-2", availableWindows.length > 0 && "border-t pt-3")}>
+							<BalanceGrid items={data.balances} />
+						</div>
+					)}
+					{availableWindows.length === 0 && (!data?.balances || data.balances.length === 0) && (
+						<p className="text-sm text-muted-foreground">{t("providers.noUsageData")}</p>
+					)}
+				</div>
 			)}
 
 			{/* 底部：右下角展示预估月 Token 总量（无法预估时留空）。 */}

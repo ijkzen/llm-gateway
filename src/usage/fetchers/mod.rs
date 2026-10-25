@@ -10,6 +10,7 @@ pub mod balance;
 pub mod cloud_balance;
 pub mod copilot;
 pub mod krill;
+pub mod opendesign;
 pub mod qianwenai;
 pub mod sensenova;
 pub mod siliconflow;
