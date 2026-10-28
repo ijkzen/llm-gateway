@@ -247,23 +247,35 @@ fn enqueue_write(db: DatabaseConnection, active: ActiveModel) {
     }
 }
 
-/// 写者主循环：串行消费队列，积攒到批大小或空闲超时即逐行落库。
+/// 写者主循环：串行消费队列，积攒到批大小或冲刷截止时刻即逐行落库。
+///
+/// 截止时刻从「收到当前批次第一行」起算，**不随后续入队重置**——否则持续
+/// 流量（行间隔小于空闲超时）下定时器每轮都被重建，批大小又攒不满，日志将
+/// 无限积压、直到流量彻底停止才一次性落库。
 async fn writer_loop(mut rx: tokio::sync::mpsc::Receiver<PendingWrite>) {
     let mut pending: Vec<PendingWrite> = Vec::with_capacity(WRITE_BATCH_SIZE);
+    // None = 队列空（无待冲刷批次），此时超时分支禁用。
+    let mut deadline: Option<tokio::time::Instant> = None;
     loop {
-        let idle = tokio::time::sleep(WRITE_IDLE_FLUSH);
-        tokio::pin!(idle);
+        let flush_at = deadline.unwrap_or_else(|| tokio::time::Instant::now() + WRITE_IDLE_FLUSH);
         tokio::select! {
             item = rx.recv() => match item {
                 Some(item) => {
+                    if deadline.is_none() {
+                        deadline = Some(tokio::time::Instant::now() + WRITE_IDLE_FLUSH);
+                    }
                     pending.push(item);
                     if pending.len() >= WRITE_BATCH_SIZE {
                         flush_pending(&mut pending).await;
+                        deadline = None;
                     }
                 }
                 None => break,
             },
-            _ = &mut idle, if !pending.is_empty() => flush_pending(&mut pending).await,
+            _ = tokio::time::sleep_until(flush_at), if deadline.is_some() => {
+                flush_pending(&mut pending).await;
+                deadline = None;
+            }
         }
     }
     // 通道关闭：清空残余。
@@ -342,5 +354,62 @@ mod tests {
         // 无输出 token → 0。
         let r = record(false, None, None, None, 0, 1000);
         assert_eq!(r.tps_value(), 0.0);
+    }
+
+    /// 带唯一 request_id 的最小记录（落库用）。
+    fn record_with_id(id: usize) -> RequestRecord {
+        let mut r = record(
+            false,
+            Some(10),
+            None,
+            None,
+            1_700_000_000_000,
+            1_700_000_001_000,
+        );
+        r.request_id = format!("trickle-{id}");
+        r
+    }
+
+    /// 回归：持续低流量下队首行不得被无限推迟。
+    ///
+    /// 旧实现的 200ms 空闲定时器建在循环体内、每收到一行就重建；当行间隔
+    /// 小于空闲超时且攒不满批大小时（10 RPS 即如此），定时器永不触发，日志
+    /// 只有等流量彻底停下才一次性落库——表现为「请求日志不实时」。
+    ///
+    /// 用临时文件库而非 `sqlite::memory:`：连接池多连接下内存库各自独立，
+    /// 写者落库与断言查询可能落到不同连接而互不可见。
+    #[tokio::test]
+    async fn writer_flushes_under_sustained_trickle() {
+        use sea_orm::EntityTrait;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trickle.db");
+        let db = crate::db::connect(&format!("sqlite:///{}?mode=rwc", path.display()))
+            .await
+            .unwrap();
+
+        // 100ms 一行：间隔 < 200ms 空闲超时，且 10 行远小于批大小 50。
+        for i in 0..10 {
+            record_with_id(i).insert(&db);
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        let during_traffic = crate::entity::request::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len();
+        assert!(
+            during_traffic > 0,
+            "流量仍在持续时日志必须已可见（旧实现此处为 0，要等停投 200ms 才落库）"
+        );
+
+        // 停投后残余批次由空闲超时兜底，不得丢失。
+        tokio::time::sleep(WRITE_IDLE_FLUSH * 3).await;
+        let total = crate::entity::request::Entity::find()
+            .all(&db)
+            .await
+            .unwrap()
+            .len();
+        assert_eq!(total, 10, "全部记录最终必须落库");
     }
 }

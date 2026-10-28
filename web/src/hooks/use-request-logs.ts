@@ -92,6 +92,15 @@ function buildQuery(filters: RequestLogFilters, bounds: { startTime: number; end
 }
 
 /**
+ * 请求日志轮询间隔：页面驻留时周期性重取，否则日志页只在挂载/改筛选/点刷新
+ * 时取一次，新请求（落库延迟已压到 200ms 内）永远不会自己冒出来。
+ *
+ * 取 5s 而非更快：日志页是观察面板而非逐条推送，react-query 默认在窗口失焦
+ * 时暂停轮询；`window.resolve()` 每次按调用时刻解析终点，轮询即可拿到新行。
+ */
+export const REQUEST_LOGS_REFETCH_INTERVAL_MS = 5000;
+
+/**
  * 服务端分页查询请求日志。
  *
  * 时间窗以取数窗口表达：queryKey 只含窗口定义（稳定），绝对起止在 queryFn 内
@@ -108,5 +117,6 @@ export function useRequestLogs(filters: RequestLogFilters, window: QueryWindow) 
 			return unwrap(res);
 		},
 		placeholderData: (prev) => prev,
+		refetchInterval: REQUEST_LOGS_REFETCH_INTERVAL_MS,
 	});
 }
