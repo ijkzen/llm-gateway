@@ -14,6 +14,7 @@
   - 登录认证（单用户）：首次启动走初始化流程创建管理员（argon2 哈希），Cookie Session（7 天）保护 `/api/*`；设置页可修改密码（吊销其他会话）。
   - 供应商 API Key 管理：服务端生成 `lg-` 密钥，AES-256-GCM 加密存储（含 SHA-256 `key_hash` 供鉴权查找）。
   - `/v1` OpenAI 兼容转发：对外仅提供 `POST /v1/chat/completions`（Bearer API Key 鉴权），按虚拟模型 LB 策略选成员转发到 OpenAI Compatible / OpenAI Responses / Anthropic / Gemini 四种上游协议（转换逻辑参考 nyro 与 LiteLLM），支持流式与非流式、failover（成员失败——本地或上游 HTTP >=400——即降级尝试下一成员，降级策略开启时直至成功或全部成员试完，无状态码白名单）。出站头优先级：协议鉴权头（网关生成，不可覆盖）> 下游 allowlist 透传（allowlist 由设置项 `downstream_request_header_allow_list`（Json 字符串数组）动态提供、`AppSettings` 缓存热生效，种子默认 `traceparent`/`tracestate`/`x-opencode-session`/`user-agent`，同名只补缺，剥离清单始终兜底且写入时拒绝黑名单头）> provider `custom_header` > 模板默认头（`provider_template::template_default_headers` 按 base_url host 查漏补缺：`opencode.ai` 兜底 pi 同款动态 UA、`api.kimi.com` 兜底 `KimiCLI/1.50.0`，模板匹配接口同步返回供前端预填）；对 `opencode.ai` 上游再注入 `x-opencode-session` 会话头（OpenCode Go 会话亲和：缺失时按 API Key + 本地日期（设置表时区，缺省 Asia/Shanghai）派生当日稳定 UUID 回退，当日内恒定、跨日零点轮换）。**思考块无损透传**：三转换协议把上游签名类思考载体（Anthropic `thinking+signature`/`redacted_thinking`、Responses reasoning item 的 `encrypted_content`（请求侧恒带 `include: ["reasoning.encrypted_content"]`）、Gemini functionCall 的 `thoughtSignature`）按 OpenRouter 兼容格式装进 `message/delta.reasoning_details`（`reasoning.text`/`reasoning.encrypted` + `format: anthropic-claude-v1`/`openai-responses-v1`/`google-gemini-v1`）；客户端在 assistant 消息上原样回传后，请求方向按 format 匹配注入（不匹配/failover 换厂商即 debug 丢弃；OpenAI Compat 直通上游剥离该字段），Anthropic 工具轮有块回传时不再禁用 thinking。
+  - 模型测速页（ADR-0027）：侧边栏「观测」分组 `/speed-test`，对供应商模型做 TPS 基准。候选集 = 供应商 `enable=true` 且 `disabled_reason` 为空（`provider_model` 无 enable 字段，模型层不再二次判定）；过滤为供应商/虚拟模型多选 + 关键词（供应商名 ∪ 上游模型名 ∪ 关联虚拟模型 `display_id`，子串忽略大小写），条件写进 URL query，`GET /api/speed-test/candidates` 与启动共用 `speedtest::candidate::resolve` 单一事实源（候选接口返回 `models[]` 完整清单，筛选一变化即展示会测哪些模型，不必等跑过测速；运行响应带回 `providerIds`/`vmIds`/`keyword` 快照，前端据此判断结果是否属于当前筛选）。测速请求流式 + 内置长文题面 + `max_tokens` 取模型登记值（不夹取，未登记兜底 2048），经 `build_upstream_call` 四协议统一、`PumpSource::feed_for_metrics` 复用转发事件解析、`RequestRecord::tps_value` 与 `request.tps` 同口径；落库仍带 `api_key_name='test'`（故不入统计、不计熔断），`request_id` 前缀 `speedtest-`。运行单实例 + 可取消（**无并发上限**：所有候选同时开测、不做同供应商串行；不设单模型硬超时，耗时由上游客户端自身超时兜底），开始即写全部 `pending` 占位行并逐行终态化；四态 `running/completed/cancelled/interrupted`，启动时残留 running 改判 interrupted；结果落 `speed_test_run`/`speed_test_result` 只留最近一次运行（新运行即删旧结果），结果行冗余供应商名等快照字段。页面 2s 轮询 `GET /api/speed-test/run`，切页面回来即恢复；供应商详情的旧弹窗保留并改名「连通性测试（时延）」。
   - 请求指标：每次转发成功/失败各落一行 `request` 表（ttft、tps、缓存命中率等 19 个字段），供后续指标展示。ttft 起点=建连开始（新建连接）或请求发出（复用连接）；tps=output_tokens/(ttft+输出耗时)（流式）或 output_tokens/(end_time−请求发出)（非流式）。
   - 数据面板：`/api/stats/summary`（全量历史累计：请求数/成功率/总 token/加权缓存命中率）+ `/api/stats/charts`（过去 24 小时：按小时分桶趋势 + 按上游 `model_id` 分布）；前端 overview 页（侧边栏「数据面板」）用 Recharts + shadcn chart 展示 4 指标卡与两组三态图表（折线/饼图/降序条形图，Top 10 + 其他）。**统计口径排除探测/测速流量**（ADR-0024）：`test_model` 落库的探测行（恢复探测/边界实测/弹窗测速，统一标记 `virtual_model_id=0`、`api_key_name='test'`）照常写入 request 表（请求日志页可见），但全部 12 个 stats 端点与快照生成统一追加基础谓词排除（`stats_snapshot::registry::base_predicate` 单一事实源，绑定 `TEST_API_KEY_NAME` 常量）；存量快照经 `snapshot_meta.predicate_version` 版本检查自动清空重算。
   - 统计快照（`request_log_snapshot`，ADR-0021）：数据面板全部 stats 端点（summary/charts/5×rank/4×metrics/insight）不再整窗实时扫 `request`——按设置表时区把已闭桶的时间片（hour/day/month/year 四级独立物化）由内置任务 `stats_snapshot`（@every 1h，首启/时区变更自动全量回填）与 `stats_snapshot_rebuild`（@every 1h 自愈补缺哨兵桶）固化；读路径只对「闭桶取快照 + 未覆盖增量兑底」（快照缺失的闭桶一律实时兑底，快照只是加速层、数字口径不变）。表为 EAV 窄表（每行=桶×主体×指标名×值，指标存加和/计数原语与闭桶分位标量 p50/90/95/99），主体键一律用主键 id（model/api_key 生成时由 (provider_id, provider_model_id)/name 映射，映射不到的请求不产该主体行）。
@@ -67,7 +68,7 @@
 │   ├── config/mod.rs       # 环境变量与 Config 结构
 │   ├── db.rs               # SeaORM 连接、连接池与自动建表/迁移（单元测试在 db/tests.rs）
 │   ├── db/tests.rs         # 迁移与连接配置的单元测试（主文件瘦身迁出）
-│   ├── state.rs            # AppState（db + scheduler + lb_state + usage_cache）
+│   ├── state.rs            # AppState（db + scheduler + lb_state + usage_cache + speed_test 槽位）
 │   ├── logs_cleanup.rs     # 日志过期清理
 │   ├── failure_recovery.rs # 连续失败禁用供应商的自动恢复探测（每小时 handler 业务体）
 │   ├── response.rs         # 统一 API 响应结构
@@ -95,6 +96,12 @@
 │   ├── notification/       # 飞书通知渠道（ADR-0023）：mod.rs（配置读写/加密掩码/测试发送）、
 │   │                       # feishu.rs（取 token + 发消息，手写 HTTP）、register.rs（扫码注册会话）、
 │   │                       # notify.rs（自动转换 → 文案 → 异步发送）
+│   ├── speedtest/          # 模型测速（ADR-0027）：长文流式请求测 TPS，结果落库只留最近一次运行
+│   │   ├── mod.rs          # 门面：SpeedTestSlot（单实例 + 取消旗标 + SlotGuard）/内置题面与常量/target_max_tokens
+│   │   ├── candidate.rs    # 候选集与过滤单一事实源（启用门槛 → 虚拟模型 → 关键词三字段），预览与启动共用
+│   │   ├── bench.rs        # 单模型流式采样（build_upstream_call + PumpSource::feed_for_metrics + StreamMetrics）
+│   │   ├── store.rs        # 运行/结果读写（单行语义 clear_previous、pending 占位行、启动改判 interrupted）
+│   │   └── runner.rs       # 运行控制（单实例/可取消/无并发上限；无单模型硬超时）
 │   ├── usage/              # 供应商用量查询：按 base_url host 分发 fetcher，归一化输出
 │   │   ├── types.rs        # UsageData/QuotaWindow（available 标记三窗）/BalanceItem
 │   │   ├── persist.rs      # 用量数据库缓存（10 分钟新鲜度，cache_age_fresh* 单一判定）+ 全量刷新 + 订阅额度耗尽自动停用/恢复 + 订阅制边界实测探活（probe_boundary_providers）
@@ -130,6 +137,7 @@
 │   │   │                   # /api 用量接口共享 providers::provider_usage_response 核心）
 │   │   ├── stats.rs        # 数据面板 12 路由注册（stats.rs 门面 + stats/ 子目录：window/compute/summary_charts/insight/rank/metrics，均 ≤1000 行）
 │   │   ├── notification.rs # 通知渠道配置 CRUD + 测试发送 + 扫码注册 begin/poll
+│   │   ├── speed_test.rs   # 模型测速 4 路由（候选预览/读运行/启动/取消）
 │   │   └── settings.rs
 │   └── entity/             # SeaORM 实体
 │       ├── mod.rs
@@ -144,6 +152,8 @@
 │       ├── snapshot.rs     # 统计快照行（request_log_snapshot，EAV：duration_type/start_time/
 │       │                   # end_time/entity_type/entity/metric_type/metric_value）
 │       ├── snapshot_meta.rs# 快照生成元信息（键值：时区偏移/各粒度水位）
+│       ├── speed_test_run.rs   # 测速运行元信息（四态 + 过滤/题面快照 + 候选总数）
+│       ├── speed_test_result.rs # 测速成绩行（冗余供应商名等快照字段 + request_id 审计指针）
 │       └── setting.rs
 ├── tests/                  # 集成测试
 │   ├── common/mod.rs       # 集成测试共享引导（内存库 + worker + scheduler；build_authed_app 自动注入测试凭证）
@@ -170,12 +180,13 @@
 │       ├── main.tsx
 │       ├── index.css
 │       ├── lib/            # api.ts（ky 封装）、utils.ts、constants.ts
-│       ├── hooks/          # use-cron-jobs、use-cron-job-logs（runs/单次日志/SSE 实时流）、use-settings、use-theme（light/dark/system）、use-toast（sonner 封装）、use-debounced-value（共享防抖值）等
+│       ├── hooks/          # use-cron-jobs、use-cron-job-logs（runs/单次日志/SSE 实时流）、use-settings、use-theme（light/dark/system）、use-toast（sonner 封装）、use-debounced-value（共享防抖值）、use-speed-test（候选预览/运行 2s 轮询/启动/取消）等
 │       ├── components/     # UI 组件（ui/ 为 shadcn/ui 基础组件，data-table/ 为 react-table 封装，
 │       │                   # cron-jobs/ 下含 CronJobLogsDialog 日志弹窗等，另有 confirm-dialog、
 │       │                   # skip-to-main、theme-toggle 等共享组件；metric-race-card 为四张赛马卡
-│       │                   # 的泛型骨架，settings/ 下含 use-setting-submit-callbacks 域内 helper）
-│       └── pages/          # overview、cron-jobs、settings、not-found（404）页面
+│       │                   # 的泛型骨架，settings/ 下含 use-setting-submit-callbacks 域内 helper，
+│       │                   # speed-test/ 下为测速面板/过滤栏/汇总条/结果表）
+│       └── pages/          # overview、cron-jobs、settings、speed-test、not-found（404）页面
 ├── db/                     # 开发用 SQLite 数据库目录
 ├── logs/                   # 开发用日志目录
 └── .github/workflows/     # GitHub Actions CI（ci.yml 测试 / docker.yml 推 GHCR）
@@ -255,10 +266,10 @@ Dockerfile 为多阶段构建：
 
 ## 测试说明
 
-- **Rust 测试**: `cargo test`。1042 个测试函数：src 内单元测试 622 个（`auth`、`config`、`app_settings`、`availability`（可用性状态机）、`backup`（备份 JSON 解析/校验）、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`（含迁移 26 快照两表、迁移 27 通知渠道表、迁移 28 共享映射索引）、`provider_model`（含 `catalog` 外置优先/mtime 缓存/回退内嵌与 `catalog_refresh` 抓取校验原子写）/`provider_repo`/`provider_template`、`proxy::convert`（四协议转换）、`proxy` 头处理、`proxy::sse`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`routes::stats`（桶归并/分位/时区）、`stats_snapshot`（桶帧/闭桶判定/窗口分解/历法周期、生成器含分位标量与哨兵行、subject 键解析与降级守卫、生命周期任务、summary_charts 兑底合并）、`notification::*`（飞书消息体组装与错误码映射、注册轮询响应解析/退避/字段名兼容、通知文案渲染）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词，含 `has_low_remaining_window` 边界判定 + 混合计费（窗口+钱包）可用性兜底与边界探活跳过）等模块）+ `tests/` 集成测试 420 个（34 个顶层测试文件：auth、backup、chat、proxy（本地 mock 上游四协议转换/failover/LB 用量排序/原生透传/头透传剥离，含上游中断回归 `upstream_abort`、Responses 转换流式 live 转发 `responses_live` 子模块、流中畸形事件转换失败记失败回归）、cron_jobs、cron_job_logs、settings、providers、provider_models（CRUD/刷新/测速，含 `provider_models_test_integration` 测速端点）、virtual_models（含 openai `/v1/models`）、stats（summary/charts/insight/rank/metrics + exclude_probe 统计口径排除探测流量）、request_logs、stats_snapshot（快照↔实时等价：summary/charts/赛马/指标/insight 全端点响应逐字节一致，含缺口桶兑底与删除主体过滤降级）、model_metrics、provider_usage（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>，经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向本地 mock，含千问 Token Plan 月窗口与登录失效形态、OpenDesign 套餐窗口+钱包双读与单边降级）、v1_providers（对外只读 `/v1/providers*`：Bearer 缺失/错误 401、列表最小字段不泄露敏感配置、404/未开启 400、缓存与 `?refresh=1`）、usage_estimate、provider_quota_gate（额度耗尽停用/恢复 + 种子任务被调度）、provider_boundary_probe（订阅制窗口剩余 (0,1)% 边界实测探活：失败停用/成功保持与恢复/禁用后继续探活不抖动/manual 不探活）、provider_failure_recovery（恢复探测）、notification（通知渠道配置读写与掩码、测试发送对 mock 飞书、扫码注册 begin/poll 状态流转与 interval 节流、自动转换触发通知<含手动不发与开关停用回归>、备份导入导出<含旧文件不清配置与解不开时不导出降级凭据>）、lb_48_scenarios（48 场景矩阵）、lb_failure_disable、provider/provider_model/virtual_model 三个 rank 端点（`*_race_integration`）、upstream_pool（连接池：同一上游复用连接 / 空闲超时释放 / `Connection: close` 不归还，mock server 手动计数连接数）、stats_snapshot_jobs（两个内置快照任务的 handler 接线：失败交回 worker 记 failed + 失败日志、正常记 success）、models_refresh（`models_refresh` 种子任务接线：幂等 + 表达式 + 调度器可见）、i18n、provider_schema_check）。六个曾超 1000 行的大文件（proxy_integration/provider_models_integration/provider_usage_integration/stats_integration/virtual_models_integration/notification_integration）已按域拆分为同目录子模块（tests/<stem>/，由根文件 `#[path]` 引入，helpers 留在根文件），target 名与测试函数数不变。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
+- **Rust 测试**: `cargo test`。1063 个测试函数：src 内单元测试 633 个（`auth`、`config`、`app_settings`、`availability`（可用性状态机）、`backup`（备份 JSON 解析/校验）、`cron::*`（含 `seed` 种子幂等）、`crypto`、`db`（含迁移 26 快照两表、迁移 27 通知渠道表、迁移 28 共享映射索引、迁移 29 测速两表）、`provider_model`（含 `catalog` 外置优先/mtime 缓存/回退内嵌与 `catalog_refresh` 抓取校验原子写）/`provider_repo`/`provider_template`、`proxy::convert`（四协议转换）、`proxy` 头处理、`proxy::sse`、`proxy::usage_rank`（订阅 5h→周→月比较链/按量余额排序）、`routes::stats`（桶归并/分位/时区）、`stats_snapshot`（桶帧/闭桶判定/窗口分解/历法周期、生成器含分位标量与哨兵行、subject 键解析与降级守卫、生命周期任务、summary_charts 兑底合并）、`notification::*`（飞书消息体组装与错误码映射、注册轮询响应解析/退避/字段名兼容、通知文案渲染）、`speedtest::*`（测速槽位单实例与取消旗标、目标 token 夹取、`candidate` 关键词三字段与过滤空判定、`bench` 失败原因按字符截断、`routes::speed_test` CSV id 解析）、`usage::*`（各厂商用量解析/签名/CookieCloud 解密 + `persist` 缓存写读与 10 分钟过期判定 + 额度判定谓词，含 `has_low_remaining_window` 边界判定 + 混合计费（窗口+钱包）可用性兜底与边界探活跳过）等模块）+ `tests/` 集成测试 430 个（36 个顶层测试文件：auth、backup、chat、proxy（本地 mock 上游四协议转换/failover/LB 用量排序/原生透传/头透传剥离，含上游中断回归 `upstream_abort`、Responses 转换流式 live 转发 `responses_live` 子模块、流中畸形事件转换失败记失败回归）、cron_jobs、cron_job_logs、settings、providers、provider_models（CRUD/刷新/测速，含 `provider_models_test_integration` 测速端点）、virtual_models（含 openai `/v1/models`）、stats（summary/charts/insight/rank/metrics + exclude_probe 统计口径排除探测流量）、request_logs、stats_snapshot（快照↔实时等价：summary/charts/赛马/指标/insight 全端点响应逐字节一致，含缺口桶兑底与删除主体过滤降级）、model_metrics、provider_usage（用量查询：404/未开启/不支持 host + 数据库缓存 10 分钟过期重取 + `refresh_all_usage` 只写用量供应商<含停用>，经 `LLM_GATEWAY_USAGE_HTTP_OVERRIDE` 重定向本地 mock，含千问 Token Plan 月窗口与登录失效形态、OpenDesign 套餐窗口+钱包双读与单边降级）、v1_providers（对外只读 `/v1/providers*`：Bearer 缺失/错误 401、列表最小字段不泄露敏感配置、404/未开启 400、缓存与 `?refresh=1`）、usage_estimate、provider_quota_gate（额度耗尽停用/恢复 + 种子任务被调度）、provider_boundary_probe（订阅制窗口剩余 (0,1)% 边界实测探活：失败停用/成功保持与恢复/禁用后继续探活不抖动/manual 不探活）、provider_failure_recovery（恢复探测）、notification（通知渠道配置读写与掩码、测试发送对 mock 飞书、扫码注册 begin/poll 状态流转与 interval 节流、自动转换触发通知<含手动不发与开关停用回归>、备份导入导出<含旧文件不清配置与解不开时不导出降级凭据>）、lb_48_scenarios（48 场景矩阵）、lb_failure_disable、provider/provider_model/virtual_model 三个 rank 端点（`*_race_integration`）、upstream_pool（连接池：同一上游复用连接 / 空闲超时释放 / `Connection: close` 不归还，mock server 手动计数连接数）、stats_snapshot_jobs（两个内置快照任务的 handler 接线：失败交回 worker 记 failed + 失败日志、正常记 success）、models_refresh（`models_refresh` 种子任务接线：幂等 + 表达式 + 调度器可见）、speed_test（候选只含启用供应商/关键词三字段/虚拟模型过滤、成功行 TPS>0 且 request 行带 `speedtest-` 前缀与 `test` 标记、上游 500 记失败行而运行仍 completed、取消后无残留 pending、重复启动返回 alreadyRunning、新运行替换旧结果、重启恢复改判 interrupted、测速流量不进 `/api/stats/summary`）、i18n、provider_schema_check）。六个曾超 1000 行的大文件（proxy_integration/provider_models_integration/provider_usage_integration/stats_integration/virtual_models_integration/notification_integration）已按域拆分为同目录子模块（tests/<stem>/，由根文件 `#[path]` 引入，helpers 留在根文件），target 名与测试函数数不变。注意：依赖全局 tracing subscriber 的测试（`log_capture` 与 worker 日志链路测试）通过 `SUBSCRIBER_LOCK` 串行执行；worker 日志测试需用 `current_thread` runtime（`set_default` 是线程局部的）。集成测试默认经 `tests/common::build_authed_app` 注入固定凭证（Admin/Password 会话 + `itest-key` Bearer），auth 集成测试用未注入的 `build_app` 验证 401 行为。
 - 环境变量隔离使用 `temp-env`，临时目录使用 `tempfile`。
 - 调度器测试包含关键行为回归：禁用的任务不会触发（`set_stop` 在 tokio-cron-scheduler 内存存储下无效，禁用必须走移除）、启用后恢复触发、禁用任务仍可手动执行。
-- **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 68 个测试文件 543 个用例，分布于 `web/src/__tests__/`（页面级 20 个，含 providers/settings 整页）、`web/src/components/__tests__/`（组件级 37 个，含 sidebar/setting-edit-dialog、请求日志刷新时窗回归 request-logs-refresh-window）、各 race 组件、`hooks/__tests__/`（use-in-view、statsQuery 取数窗口回归 stats-query-window）、`lib/__tests__/`（api/utils/race-period）、`i18n/__tests__/`（键集合一致性）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill，并为 `ResizeObserver`/`scrollIntoView`/`matchMedia` 补了 jsdom 缺失的桩；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
+- **前端测试**: `cd web && pnpm vitest run`（`pnpm test` 为 watch 模式）。现有 69 个测试文件 551 个用例，分布于 `web/src/__tests__/`（页面级 21 个，含 providers/settings 整页、speed-test 测速页）、`web/src/components/__tests__/`（组件级 37 个，含 sidebar/setting-edit-dialog、请求日志刷新时窗回归 request-logs-refresh-window）、各 race 组件、`hooks/__tests__/`（use-in-view、statsQuery 取数窗口回归 stats-query-window）、`lib/__tests__/`（api/utils/race-period）、`i18n/__tests__/`（键集合一致性）。注意：`web/src/test/setup.ts` 中为 Node 26 与 jsdom 的全局 `localStorage` 冲突做了内存 polyfill，并为 `ResizeObserver`/`scrollIntoView`/`matchMedia` 补了 jsdom 缺失的桩；`cron-job-logs-dialog` 测试用 MockEventSource 驱动 SSE 事件（`act` 包裹）并 mock 数据 hooks。
 - 没有 E2E 测试。
 
 ## 代码风格与开发约定
@@ -304,7 +315,7 @@ pnpm vitest run                    # 前端全量测试
 ## 数据库与迁移
 
 - 使用 SQLite，默认开启 WAL 模式、`synchronous=NORMAL`、外键、5 秒 busy timeout、约 256 MB 页缓存与 256 MB mmap。
-- 启动时 `src/db.rs::migrate()` 自动建表（`cron_jobs`、`setting`、`schema_migrations`），并按版本号执行增量迁移（当前编至 28：迁移 26 建 `request_log_snapshot`/`snapshot_meta` 表与复合唯一索引（ADR-0021），迁移 27 建 `notification_channel` 表（ADR-0023），迁移 28 将 `virtual_model_item.model_id` 唯一索引换为普通索引（共享映射，ADR-0026）；生产库 14/15 号段被旧 lg-proxy 方案废弃占用，新迁移从 16 起编）；schema 变化后执行一次 `ANALYZE`。
+- 启动时 `src/db.rs::migrate()` 自动建表（`cron_jobs`、`setting`、`schema_migrations`），并按版本号执行增量迁移（当前编至 29：迁移 26 建 `request_log_snapshot`/`snapshot_meta` 表与复合唯一索引（ADR-0021），迁移 27 建 `notification_channel` 表（ADR-0023），迁移 28 将 `virtual_model_item.model_id` 唯一索引换为普通索引（共享映射，ADR-0026），迁移 29 建 `speed_test_run`/`speed_test_result` 两表（模型测速，ADR-0027）；生产库 14/15 号段被旧 lg-proxy 方案废弃占用，新迁移从 16 起编）；schema 变化后执行一次 `ANALYZE`。
 - `ensure_sqlite_dir` 会从 `DATABASE_URL` 解析出文件路径（保留绝对路径）并预先创建父目录。
 - 生产环境数据库文件位于 `/config/db/app.db`，建议挂载持久化卷。
 
