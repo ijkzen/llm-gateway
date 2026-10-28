@@ -162,8 +162,11 @@ impl OpenAiStreamScanner {
                 self.usage = Some(usage);
             }
         }
-        // 内容判定与 chunk_has_content 对齐：content / reasoning_content / tool_calls
-        // 任一非空即视为首个内容 token（推理模型与纯函数调用流同样计入 ttft）。
+        // 内容判定与 chunk_has_content 对齐：content / reasoning_content /
+        // reasoning / tool_calls 任一非空即视为首个内容 token（推理模型与纯
+        // 函数调用流同样计入 ttft）。`reasoning` 是 OpenAI 兼容直通上游的
+        // 思考增量别名（OpenDesign 等），漏掉它会让这类模型在正文被推理吃满
+        // 预算时 ttft/tps 全缺失。
         if !self.saw_content
             && (value
                 .pointer("/choices/0/delta/content")
@@ -171,6 +174,10 @@ impl OpenAiStreamScanner {
                 .is_some_and(|s| !s.is_empty())
                 || value
                     .pointer("/choices/0/delta/reasoning_content")
+                    .and_then(Value::as_str)
+                    .is_some_and(|s| !s.is_empty())
+                || value
+                    .pointer("/choices/0/delta/reasoning")
                     .and_then(Value::as_str)
                     .is_some_and(|s| !s.is_empty())
                 || value
@@ -299,10 +306,16 @@ mod tests {
 
     #[test]
     fn scanner_detects_reasoning_and_tool_content() {
-        // 推理模型（reasoning_content）与纯函数调用（tool_calls）流同样应标记首 token。
+        // 推理模型（reasoning_content / reasoning 两种字段名）与纯函数调用
+        // （tool_calls）流同样应标记首 token。
         let mut reasoning = OpenAiStreamScanner::default();
         reasoning.feed("data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"思考\"}}]}\n\n");
         assert!(reasoning.saw_content);
+
+        // 直通上游别名（OpenDesign 等）：漏掉它会让这类推理模型 ttft 永远记不到。
+        let mut alias = OpenAiStreamScanner::default();
+        alias.feed("data: {\"choices\":[{\"delta\":{\"reasoning\":\"我们需要\"}}]}\n\n");
+        assert!(alias.saw_content);
 
         let mut tools = OpenAiStreamScanner::default();
         tools.feed(

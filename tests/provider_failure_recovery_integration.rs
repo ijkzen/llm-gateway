@@ -159,6 +159,7 @@ async fn test_state() -> AppState {
         settings: llm_gateway::app_settings::AppSettings::default(),
         usage_mem: Default::default(),
         feishu_registration: Default::default(),
+        speed_test: Default::default(),
     }
 }
 

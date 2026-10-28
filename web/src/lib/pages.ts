@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
 	Boxes,
 	Clock,
+	Gauge,
 	KeyRound,
 	Layers,
 	LayoutDashboard,
@@ -78,6 +79,12 @@ export const REQUEST_LOGS_PAGE: PageConfig = {
 	icon: ScrollText,
 };
 
+export const SPEED_TEST_PAGE: PageConfig = {
+	path: "/speed-test",
+	titleKey: "nav.pages.speedTest.title",
+	icon: Gauge,
+};
+
 /** 侧边栏导航分组：概览 / 接入配置 / 观测 / 管理。 */
 export const NAV_GROUPS: readonly PageGroup[] = [
 	{ labelKey: "nav.groups.overview", pages: [OVERVIEW_PAGE, CHAT_PAGE] },
@@ -85,6 +92,6 @@ export const NAV_GROUPS: readonly PageGroup[] = [
 		labelKey: "nav.groups.access",
 		pages: [PROVIDERS_PAGE, PROVIDER_MODELS_PAGE, VIRTUAL_MODELS_PAGE, API_KEYS_PAGE],
 	},
-	{ labelKey: "nav.groups.observability", pages: [REQUEST_LOGS_PAGE] },
+	{ labelKey: "nav.groups.observability", pages: [SPEED_TEST_PAGE, REQUEST_LOGS_PAGE] },
 	{ labelKey: "nav.groups.admin", pages: [CRON_JOBS_PAGE, SETTINGS_PAGE] },
 ];

@@ -52,6 +52,8 @@ struct ListQuery {
     success: Option<bool>,
     /// 按 API Key 名过滤，逗号分隔多值。
     api_key: Option<String>,
+    /// 按请求 ID 精确过滤（测速结果行跳转审计用：一次只查那一条）。
+    request_id: Option<String>,
     start_time: Option<i64>,
     end_time: Option<i64>,
     sort_by: Option<String>,
@@ -190,6 +192,14 @@ async fn list_request_logs(
             .collect(),
         &mut params,
     );
+    // 请求 ID 精确匹配（测速结果行跳转审计）：空串等同不过滤，避免前端把
+    // 「未预填」写成 `requestId=` 时查出空列表。
+    if let Some(request_id) = query.request_id.as_ref().map(|s| s.trim())
+        && !request_id.is_empty()
+    {
+        where_sql.push_str(" AND r.request_id = ?");
+        params.push(request_id.to_string().into());
+    }
     if let Some(start) = query.start_time {
         where_sql.push_str(" AND r.start_time >= ?");
         params.push(start.into());

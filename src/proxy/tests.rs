@@ -1,4 +1,5 @@
 use super::*;
+use crate::proxy::relay::{chunk_has_content, strip_reasoning_delta};
 
 fn provider(proxy_enabled: bool, proxy_addr: &str) -> provider::Model {
     let now = chrono::Utc::now();
@@ -687,4 +688,47 @@ fn native_call_injects_opencode_session_for_opencode_host() {
         .collect();
     assert_eq!(map2.get("x-opencode-session").copied(), Some("client-sess"));
     assert!(!has_duplicate_names(&call2));
+}
+
+/// 回归（ADR-0027 补记）：OpenAI 兼容直通上游用 `reasoning` 作为思考增量
+/// 字段名（OpenDesign 等），而我们三种转换协议产出的是 `reasoning_content`。
+/// 只认后者会让这类推理模型的首 token 永远记不到——正文被推理吃满预算时
+/// ttft / tps 直接缺失（生产实测：output_tokens=2048 但 ttft 与 tps 均空）。
+#[test]
+fn chunk_has_content_counts_reasoning_alias() {
+    let reasoning = json!({"choices":[{"delta":{"reasoning":"我们需要"}}]});
+    assert!(
+        chunk_has_content(&reasoning),
+        "直通上游的 reasoning 字段应计入首 token"
+    );
+
+    let reasoning_content = json!({"choices":[{"delta":{"reasoning_content":"思考"}}]});
+    assert!(chunk_has_content(&reasoning_content));
+
+    let content = json!({"choices":[{"delta":{"content":"正文"}}]});
+    assert!(chunk_has_content(&content));
+
+    // 空串与纯 role 帧不算内容。
+    let empty = json!({"choices":[{"delta":{"role":"assistant","reasoning":""}}]});
+    assert!(!chunk_has_content(&empty));
+    let role_only = json!({"choices":[{"delta":{"role":"assistant"}}]});
+    assert!(!chunk_has_content(&role_only));
+}
+
+/// exclude:true 时两种思考字段名都要剥（直通上游用 reasoning，转换协议用
+/// reasoning_content），否则剥离在直通路径上形同虚设。
+#[test]
+fn strip_reasoning_delta_removes_both_field_names() {
+    let mut chunk = json!({"choices":[{"delta":{
+        "content":"正文",
+        "reasoning":"思考",
+        "reasoning_content":"思考2",
+        "reasoning_details":[{"type":"reasoning.text"}]
+    }}]});
+    strip_reasoning_delta(&mut chunk);
+    let delta = &chunk["choices"][0]["delta"];
+    assert!(delta.get("reasoning").is_none());
+    assert!(delta.get("reasoning_content").is_none());
+    assert!(delta.get("reasoning_details").is_none());
+    assert_eq!(delta["content"], "正文", "正文不受影响");
 }

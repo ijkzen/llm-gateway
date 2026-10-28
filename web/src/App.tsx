@@ -19,6 +19,7 @@ const ProviderModelsPage = lazy(() => import("./pages/provider-models"));
 const VirtualModelsPage = lazy(() => import("./pages/virtual-models"));
 const ApiKeysPage = lazy(() => import("./pages/api-keys"));
 const RequestLogsPage = lazy(() => import("./pages/request-logs"));
+const SpeedTestPage = lazy(() => import("./pages/speed-test"));
 const SettingsPage = lazy(() => import("./pages/settings"));
 const LoginPage = lazy(() => import("./pages/login"));
 const NotFoundPage = lazy(() => import("./pages/not-found"));
@@ -62,6 +63,7 @@ function App() {
 						<Route path="/virtual-models" element={<VirtualModelsPage />} />
 						<Route path="/api-keys" element={<ApiKeysPage />} />
 						<Route path="/request-logs" element={<RequestLogsPage />} />
+						<Route path="/speed-test" element={<SpeedTestPage />} />
 						<Route path="/settings" element={<SettingsPage />} />
 						<Route path="*" element={<NotFoundPage />} />
 					</Route>

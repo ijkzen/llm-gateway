@@ -1,6 +1,7 @@
 import { RequestLogsTable } from "@/components/request-logs/RequestLogsTable";
 import type { QueryWindow } from "@/lib/race-period";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -118,7 +119,11 @@ describe("RequestLogsTable", () => {
 
 	it("渲染行数据并可打开详情弹窗展示全部字段", async () => {
 		mockQuery({ items: [makeRow()], total: 1 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		expect(screen.getByText("vm-a")).toBeInTheDocument();
 		expect(screen.getByText("Provider Beta")).toBeInTheDocument();
@@ -138,20 +143,32 @@ describe("RequestLogsTable", () => {
 	it("供应商列缺失名称时兜底显示 #providerId", () => {
 		// providerName 为 null（对应供应商已删除）：表格行应显示 #id 而非空。
 		mockQuery({ items: [makeRow({ providerName: null })], total: 1 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		expect(screen.getByText("#2")).toBeInTheDocument();
 	});
 
 	it("空数据显示空态", () => {
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 		expect(screen.getByText("暂无请求日志")).toBeInTheDocument();
 	});
 
 	it("重置按钮清空过滤并回第一页", () => {
 		mockQuery({ items: [makeRow()], total: 1 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 先勾选一个虚拟模型（部分选择），再重置。
 		fireEvent.click(screen.getByRole("button", { name: "按虚拟模型过滤" }));
@@ -168,7 +185,11 @@ describe("RequestLogsTable", () => {
 
 	it("默认时间组件选中「天」，重置后回到「天」", () => {
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 默认「天」处于按下态。
 		const dayButton = screen.getByRole("button", { name: "天" });
@@ -184,7 +205,11 @@ describe("RequestLogsTable", () => {
 
 	it("时间过滤以取数窗口传给请求（默认今天，终点在取数时解析）", () => {
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 默认「天」：key 只带窗口定义，绝对起止由 resolve() 现算。
 		const window = lastWindow();
@@ -202,7 +227,11 @@ describe("RequestLogsTable", () => {
 	it("时间窗口变更重置回第一页（16-03 回归）", () => {
 		// total 400 / 每页 20 → 20 页，可翻到第 2 页。
 		mockQuery({ items: [makeRow()], total: 400 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		fireEvent.click(screen.getByRole("button", { name: "下一页" }));
 		expect(lastParams()?.page).toBe(2);
@@ -214,7 +243,11 @@ describe("RequestLogsTable", () => {
 
 	it("后端不支持排序的四列不渲染排序入口（16-04 回归）", () => {
 		mockQuery({ items: [makeRow()], total: 1 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 不在后端 SORTABLE_COLUMNS 白名单内：纯文本表头，没有排序按钮。
 		for (const label of ["虚拟模型", "供应商", "输入", "输出"]) {
@@ -228,7 +261,11 @@ describe("RequestLogsTable", () => {
 
 	it("点排序菜单把 sortBy/sortOrder 传给请求（16-04 回归）", () => {
 		mockQuery({ items: [makeRow()], total: 1 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 默认按开始时间倒序。
 		expect(lastParams()?.sortBy).toBe("startTime");
@@ -248,7 +285,11 @@ describe("RequestLogsTable", () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date(2026, 7, 31, 10, 0, 0));
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		const window = lastWindow();
 		// 此前固化 now 导致终点钉在挂载时刻；现在同一窗口身份可重复解析。
@@ -271,7 +312,11 @@ describe("RequestLogsTable", () => {
 
 	it("localStorage 无数据时默认全部列 + 每页 20", () => {
 		mockQuery({ items: [makeRow()], total: 1 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 默认每页 20 条。
 		const lastCall = mocks.useRequestLogs.mock.calls[0]?.[0];
@@ -285,7 +330,11 @@ describe("RequestLogsTable", () => {
 
 	it("勾选隐藏列后写入 localStorage，重新渲染保持隐藏", () => {
 		mockQuery({ items: [makeRow()], total: 1 });
-		const { unmount } = render(<RequestLogsTable />);
+		const { unmount } = render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// Radix DropdownMenu 在 jsdom 下通过键盘事件打开。
 		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
@@ -299,7 +348,11 @@ describe("RequestLogsTable", () => {
 		// 重新渲染（模拟刷新）：结果列保持隐藏。
 		unmount();
 		mockQuery({ items: [makeRow()], total: 1 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
 		expect(screen.getByRole("menuitemcheckbox", { name: "结果" })).toHaveAttribute(
 			"data-state",
@@ -309,7 +362,11 @@ describe("RequestLogsTable", () => {
 
 	it("切换每页条数后写入 localStorage，重新渲染保持", () => {
 		mockQuery({ items: [], total: 0 });
-		const { unmount } = render(<RequestLogsTable />);
+		const { unmount } = render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 每页切到 10 条。
 		fireEvent.click(screen.getByRole("combobox", { name: "每页条数" }));
@@ -319,7 +376,11 @@ describe("RequestLogsTable", () => {
 		// 重新渲染（模拟刷新）：每页仍 10 条。
 		unmount();
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 		const calls = mocks.useRequestLogs.mock.calls;
 		const lastCall = calls[calls.length - 1]?.[0];
 		expect(lastCall?.pageSize).toBe(10);
@@ -340,7 +401,11 @@ describe("RequestLogsTable", () => {
 			],
 		});
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		fireEvent.click(screen.getByRole("button", { name: "按供应商模型过滤" }));
 		// 分组标题按供应商列表顺序展示。
@@ -366,7 +431,11 @@ describe("RequestLogsTable", () => {
 			],
 		});
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		fireEvent.click(screen.getByRole("button", { name: "按供应商模型过滤" }));
 		// 折叠 Provider Beta 组：其下 gpt-4o 只剩 Provider Alpha 组那一个。
@@ -399,7 +468,11 @@ describe("RequestLogsTable", () => {
 			],
 		});
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 「全部」态下点 Provider Beta → 退化为只选 Beta。
 		fireEvent.click(screen.getByRole("button", { name: "按供应商过滤" }));
@@ -415,7 +488,11 @@ describe("RequestLogsTable", () => {
 
 	it("「全部」态点虚拟模型退化为仅选该项，过滤参数为该项", () => {
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 初始为「全部」，点 vm-b 退化为只选 vm-b。
 		fireEvent.click(screen.getByRole("button", { name: "按虚拟模型过滤" }));
@@ -428,7 +505,11 @@ describe("RequestLogsTable", () => {
 
 	it("勾满全部选项归一化为「全部」，不传过滤参数", () => {
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		fireEvent.click(screen.getByRole("button", { name: "按虚拟模型过滤" }));
 		fireEvent.click(screen.getByRole("checkbox", { name: "vm-a" }));
@@ -455,7 +536,11 @@ describe("RequestLogsTable", () => {
 			],
 		});
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 供应商「全部」态点 Provider Alpha → 退化为只选 Alpha。
 		fireEvent.click(screen.getByRole("button", { name: "按供应商过滤" }));
@@ -485,7 +570,11 @@ describe("RequestLogsTable", () => {
 			],
 		});
 		mockQuery({ items: [], total: 0 });
-		render(<RequestLogsTable />);
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
 
 		// 供应商「全部」态点 Provider Alpha → 只选 Alpha。
 		fireEvent.click(screen.getByRole("button", { name: "按供应商过滤" }));

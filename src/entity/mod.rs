@@ -11,6 +11,8 @@ pub mod session;
 pub mod setting;
 pub mod snapshot;
 pub mod snapshot_meta;
+pub mod speed_test_result;
+pub mod speed_test_run;
 pub mod usage_cache;
 pub mod user;
 pub mod virtual_model;

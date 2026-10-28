@@ -18,6 +18,7 @@ pub mod provider_template;
 pub mod proxy;
 pub mod response;
 pub mod routes;
+pub mod speedtest;
 pub mod state;
 pub mod static_assets;
 pub mod stats_snapshot;
@@ -145,6 +146,10 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         tracing::warn!("Failed to delete orphan cron job logs: {e}");
     }
 
+    // 同理处理测速运行：重启打断的 running 改判 interrupted，已完成的结果行
+    // 原样保留（用户回来能看到「上次被中断」而非记录凭空消失）。
+    crate::speedtest::recover_on_startup(&db).await;
+
     let worker = JobWorker::new_with_settings(
         db.clone(),
         config.cron_job_max_concurrent,
@@ -167,6 +172,7 @@ async fn init(config: Config) -> anyhow::Result<AppContext> {
         settings: settings.clone(),
         usage_mem: Default::default(),
         feishu_registration: Default::default(),
+        speed_test: Default::default(),
     };
 
     // 用量刷新 handler：刷新全部已开启用量展示的供应商用量并落库、执行订阅

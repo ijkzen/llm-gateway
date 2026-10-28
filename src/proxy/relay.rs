@@ -82,27 +82,37 @@ impl Converter {
 }
 
 /// chunk 是否携带内容（用于 ttft / 末 token 时刻统计）。
+///
+/// `reasoning` 与 `reasoning_content` 同等对待：前者是 OpenAI 兼容直通上游
+/// （如 OpenDesign）的思考增量字段名，后者是我们三种转换协议（Anthropic /
+/// Responses / Gemini）产出的字段名。只认后者会让直通上游的推理模型首 token
+/// 永远记不到——正文被推理吃满预算时 ttft/tps 直接缺失（ADR-0027 补记）。
 pub(crate) fn chunk_has_content(chunk: &Value) -> bool {
     let delta = chunk.pointer("/choices/0/delta");
     let Some(delta) = delta else { return false };
-    ["content", "reasoning_content"].iter().any(|key| {
-        delta
-            .get(*key)
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty())
-    }) || delta
-        .get("tool_calls")
-        .and_then(Value::as_array)
-        .is_some_and(|calls| !calls.is_empty())
+    ["content", "reasoning_content", "reasoning"]
+        .iter()
+        .any(|key| {
+            delta
+                .get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|s| !s.is_empty())
+        })
+        || delta
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .is_some_and(|calls| !calls.is_empty())
 }
 
-/// exclude:true 时剥除流式 delta 中的思考增量。
+/// exclude:true 时剥除流式 delta 中的思考增量（两种字段名都要剥：直通上游用
+/// `reasoning`，转换协议用 `reasoning_content`）。
 pub(crate) fn strip_reasoning_delta(chunk: &mut Value) {
     if let Some(delta) = chunk
         .pointer_mut("/choices/0/delta")
         .and_then(Value::as_object_mut)
     {
         delta.remove("reasoning_content");
+        delta.remove("reasoning");
         delta.remove("reasoning_details");
     }
 }
@@ -223,15 +233,29 @@ impl PumpSource {
         }
     }
 
+    /// 只喂指标、不产出帧：供测速这类「只要采样不要转发」的旁路消费者复用
+    /// 同一套事件解析（测速若另写一份扫描，转发的 bug 修复不会传导到它）。
+    /// 返回 `Err` = 转换失败（与泵内 `PumpStep::Failed` 同源）。
+    pub(crate) fn feed_for_metrics(
+        &mut self,
+        event: &str,
+        stream_metrics: &mut StreamMetrics,
+    ) -> Result<(), String> {
+        match self.on_event(event, stream_metrics) {
+            PumpStep::Frames(_) => Ok(()),
+            PumpStep::FramesThenFailed(_, message) | PumpStep::Failed(message) => Err(message),
+        }
+    }
+
     /// 事件源是否已标记流结束（含最终内容的事件先发帧、再查此态，帧不丢）。
-    fn finished(&self) -> bool {
+    pub(crate) fn finished(&self) -> bool {
         match self {
             PumpSource::OpenAi { .. } => false,
             PumpSource::Convert { converter, .. } => converter.is_finished(),
         }
     }
 
-    fn usage(&self) -> Option<Usage> {
+    pub(crate) fn usage(&self) -> Option<Usage> {
         match self {
             PumpSource::OpenAi { scanner, .. } => scanner.usage.clone(),
             PumpSource::Convert { converter, .. } => converter.usage(),
@@ -246,7 +270,7 @@ impl PumpSource {
     }
 
     /// 是否已收到上游 [DONE]（仅 OpenAI 直通有该语义）。
-    fn saw_done(&self) -> bool {
+    pub(crate) fn saw_done(&self) -> bool {
         match self {
             PumpSource::OpenAi { scanner, .. } => scanner.saw_done,
             PumpSource::Convert { .. } => false,

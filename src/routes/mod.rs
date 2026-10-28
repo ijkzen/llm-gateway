@@ -10,6 +10,7 @@ mod provider_templates;
 mod providers;
 mod request_logs;
 mod settings;
+mod speed_test;
 mod stats;
 mod v1_providers;
 mod virtual_models;
@@ -42,6 +43,7 @@ pub fn create_app(state: &AppState) -> Router {
         .nest("/api/stats", stats::routes())
         .nest("/api/chat", chat::routes())
         .nest("/api/request-logs", request_logs::routes())
+        .nest("/api/speed-test", speed_test::routes())
         .nest("/v1", openai_compat::routes().merge(v1_providers::routes()))
         .fallback(api_aware_fallback)
         // 不限制请求体大小；必须显式 disable——直接删除本层会退回 axum 默认的 2MB，反而更严。

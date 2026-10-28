@@ -309,7 +309,7 @@ describe("ProviderDetail 额外配置 / 自定义请求头折叠", () => {
 });
 
 describe("ProviderDetail 更多菜单测速入口", () => {
-	it("菜单含「模型测速」项（位于删除上方），点击触发 onSpeedTest", async () => {
+	it("菜单含「连通性测试（时延）」项（位于删除上方），点击触发 onSpeedTest", async () => {
 		const onSpeedTest = vi.fn();
 		render(
 			<MemoryRouter>
@@ -326,7 +326,7 @@ describe("ProviderDetail 更多菜单测速入口", () => {
 		fireEvent.keyDown(screen.getByRole("button", { name: "更多操作" }), { key: "Enter" });
 
 		const editItem = await screen.findByRole("menuitem", { name: "编辑" });
-		const speedTestItem = screen.getByRole("menuitem", { name: "模型测速" });
+		const speedTestItem = screen.getByRole("menuitem", { name: "连通性测试（时延）" });
 		const deleteItem = screen.getByRole("menuitem", { name: "删除" });
 		// 测速项位于编辑之后、删除之前。
 		expect(
@@ -379,7 +379,7 @@ describe("ProviderSpeedTestDialog 测速弹窗", () => {
 
 		expect(screen.getByRole("dialog")).toBeTruthy();
 		// 标题带供应商名称（插值 speedTestTitle）。
-		expect(screen.getByText("OpenAI · 模型测速")).toBeTruthy();
+		expect(screen.getByText("OpenAI · 连通性测试（时延）")).toBeTruthy();
 		expect(screen.getByText("gpt-4o")).toBeTruthy();
 		expect(screen.getByText("gpt-4o-mini")).toBeTruthy();
 		const testButtons = screen.getAllByRole("button", { name: "测试" });

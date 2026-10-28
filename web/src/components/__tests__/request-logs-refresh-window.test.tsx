@@ -2,6 +2,7 @@ import { PageRefreshButton } from "@/components/page-refresh-button";
 import { RequestLogsTable } from "@/components/request-logs/RequestLogsTable";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
@@ -54,10 +55,12 @@ function startTimeOf(url: string): number {
 function renderPage() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(
-		<QueryClientProvider client={client}>
-			<PageRefreshButton />
-			<RequestLogsTable />
-		</QueryClientProvider>,
+		<MemoryRouter>
+			<QueryClientProvider client={client}>
+				<PageRefreshButton />
+				<RequestLogsTable />
+			</QueryClientProvider>
+		</MemoryRouter>,
 	);
 }
 

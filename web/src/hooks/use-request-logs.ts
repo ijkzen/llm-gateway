@@ -47,6 +47,8 @@ export interface RequestLogFilters {
 	/** 按结果状态过滤：省略 = 全部，true = 成功，false = 失败。 */
 	success?: boolean;
 	apiKey?: string[];
+	/** 按请求 ID 精确过滤（测速结果行跳转审计用）。 */
+	requestId?: string;
 	sortBy?: string;
 	sortOrder?: "asc" | "desc";
 }
@@ -78,6 +80,7 @@ function buildQuery(filters: RequestLogFilters, bounds: { startTime: number; end
 	if (filters.providerId?.length) params.set("providerId", filters.providerId.join(","));
 	if (filters.modelId?.length) params.set("modelId", filters.modelId.join(","));
 	if (filters.success !== undefined) params.set("success", String(filters.success));
+	if (filters.requestId) params.set("requestId", filters.requestId);
 	const apiKeyCsv = csvValue(filters.apiKey);
 	if (apiKeyCsv) params.set("apiKey", apiKeyCsv);
 	params.set("startTime", String(bounds.startTime));

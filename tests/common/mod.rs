@@ -97,6 +97,7 @@ pub fn build_app_with_settings(
         usage_mem: Default::default(),
         settings,
         feishu_registration: Default::default(),
+        speed_test: Default::default(),
     };
     routes::create_app(&state)
 }

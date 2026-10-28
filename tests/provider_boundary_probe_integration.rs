@@ -160,6 +160,7 @@ fn test_state(
         settings: Default::default(),
         usage_mem: Default::default(),
         feishu_registration: Default::default(),
+        speed_test: Default::default(),
     }
 }
 

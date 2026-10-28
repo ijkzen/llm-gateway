@@ -41,6 +41,7 @@ import {
 import { RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 
 const PLAIN_HEADER_CLASS = "text-xs font-medium uppercase tracking-wider text-muted-foreground";
 
@@ -101,6 +102,23 @@ function defaultTimeWindow(): RaceWindowState {
 	};
 }
 
+/**
+ * 从测速结果跳转过来的初始时间窗：用近 7 天自定义窗口。
+ *
+ * 默认「今天」会把跨零点的测速行挡在窗口外（跳转后查不到那条请求，用户会以为
+ * 记录丢了）；而单条 request_id 查询本就极窄，宽窗口没有副作用。
+ */
+function requestIdTimeWindow(): RaceWindowState {
+	const now = Date.now();
+	return {
+		period: "custom",
+		offset: 0,
+		customStart: now - 7 * 24 * 60 * 60 * 1000,
+		customEnd: now,
+		appliedCustom: null,
+	};
+}
+
 function fmtTime(ms: number): string {
 	return new Date(ms).toLocaleString("zh-CN", { hour12: false });
 }
@@ -117,6 +135,10 @@ function fmtMs(v: number | null | undefined): string {
 
 export function RequestLogsTable() {
 	const { t } = useTranslation();
+	// 由测速结果行跳转而来时带 `requestId`：只查那一条，并用近 7 天窗口兜底
+	// （默认「今天」会漏掉跨零点的测速行）。
+	const [searchParams, setSearchParams] = useSearchParams();
+	const requestId = searchParams.get("requestId") ?? undefined;
 	// 默认按时间降序（最新在前），列头显示排序指示，亦显式通知后端。
 	const [sorting, setSorting] = useState<SortingState>([{ id: "startTime", desc: true }]);
 	// 列显隐与每页条数从 localStorage 恢复；无数据时默认全部列 + 20 条。
@@ -141,8 +163,10 @@ export function RequestLogsTable() {
 	const [selectedModelKeys, setSelectedModelKeys] = useState<string[]>([]);
 	const [success, setSuccess] = useState<boolean | undefined>(undefined);
 	const [selectedApiKeys, setSelectedApiKeys] = useState<string[]>([]);
-	// 时间过滤：通用时间组件（天/周/月/年/自定义），默认今天。
-	const [timeWindow, setTimeWindow] = useState<RaceWindowState>(defaultTimeWindow);
+	// 时间过滤：通用时间组件（天/周/月/年/自定义），默认今天；带 requestId 时用近 7 天。
+	const [timeWindow, setTimeWindow] = useState<RaceWindowState>(() =>
+		requestId ? requestIdTimeWindow() : defaultTimeWindow(),
+	);
 	// 展示用 now（窗口控件标签）；取数窗口的终点在取数时现算，不依赖它。
 	const [now] = useState(() => Date.now());
 	const tz = useStatsTimeZone();
@@ -233,6 +257,7 @@ export function RequestLogsTable() {
 			modelId: modelIds.length > 0 ? modelIds : undefined,
 			success,
 			apiKey: selectedApiKeys.length > 0 ? selectedApiKeys : undefined,
+			requestId,
 			sortBy,
 			sortOrder,
 		},
@@ -248,6 +273,12 @@ export function RequestLogsTable() {
 		setSuccess(undefined);
 		setSelectedApiKeys([]);
 		setPage(1);
+		// 同时清掉 URL 上的 requestId（跳转过滤），否则重置后仍只显示那一条。
+		if (requestId) {
+			const params = new URLSearchParams(searchParams);
+			params.delete("requestId");
+			setSearchParams(params, { replace: true });
+		}
 		// 重置兼有「把窗口终点推到现在」的刷新语义：过滤与窗口已在默认态时
 		// query key 不变，React Query 不会自动重取（ADR-0022 只覆盖真正的重取路径），
 		// 显式 refetch 让终点按点击时刻重新解析；key 变化时这次重取 redundant 但无害。

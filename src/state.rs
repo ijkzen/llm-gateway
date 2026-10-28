@@ -33,4 +33,6 @@ pub struct AppState {
     pub settings: AppSettings,
     /// 飞书扫码创建的注册会话槽（单槽位，内存态，见 `notification::register`）。
     pub feishu_registration: crate::notification::register::RegistrationSlot,
+    /// 模型测速运行槽（单槽位 + 取消旗标，见 `speedtest`）：有值即表示有运行占位。
+    pub speed_test: crate::speedtest::SpeedTestSlot,
 }

@@ -114,7 +114,7 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     use crate::entity::{
         api_key, cron_job, cron_job_log, cron_job_run, notification_channel, provider,
         provider_model, provider_template, request, session, setting, snapshot, snapshot_meta,
-        usage_cache, user, virtual_model, virtual_model_item,
+        speed_test_result, speed_test_run, usage_cache, user, virtual_model, virtual_model_item,
     };
     use sea_orm::ConnectionTrait;
 
@@ -185,6 +185,14 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     db.execute(&stmt).await?;
 
     let mut stmt = Schema::new(backend).create_table_from_entity(notification_channel::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(speed_test_run::Entity);
+    stmt.if_not_exists();
+    db.execute(&stmt).await?;
+
+    let mut stmt = Schema::new(backend).create_table_from_entity(speed_test_result::Entity);
     stmt.if_not_exists();
     db.execute(&stmt).await?;
 
@@ -593,6 +601,46 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
         &[
             "DROP INDEX IF EXISTS uq_virtual_model_items_model_id",
             "CREATE INDEX IF NOT EXISTS idx_virtual_model_items_model_id ON virtual_model_item (model_id)",
+        ],
+    )
+    .await?;
+
+    // Migration 29: 测速运行与结果两张表（模型测速页，ADR-0027）。运行表是单行
+    // 语义（开始新运行即删旧运行与结果），结果表每模型一行、带供应商名等快照
+    // 字段，故页面读一张表即可渲染、不依赖 request 表的保留期。新库已由第一遍
+    // create_table_from_entity 建表，此处 CREATE IF NOT EXISTS 兜底历史库。
+    changed |= ensure_migration(
+        db,
+        29,
+        &[
+            "CREATE TABLE IF NOT EXISTS speed_test_run (\
+             id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, \
+             status varchar NOT NULL, \
+             started_at bigint NOT NULL, \
+             finished_at bigint, \
+             total integer NOT NULL, \
+             provider_ids varchar NOT NULL, \
+             vm_ids varchar NOT NULL, \
+             keyword varchar NOT NULL, \
+             prompt varchar NOT NULL, \
+             max_tokens integer NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS speed_test_result (\
+             id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, \
+             run_id integer NOT NULL, \
+             provider_id integer NOT NULL, \
+             provider_name varchar NOT NULL, \
+             provider_model_pk integer NOT NULL, \
+             model_id varchar NOT NULL, \
+             status varchar NOT NULL, \
+             ttft_ms bigint, \
+             output_tokens bigint, \
+             output_tokens_time_ms bigint, \
+             total_ms bigint, \
+             tps real, \
+             request_id varchar, \
+             fail_reason varchar, \
+             finished_at bigint)",
+            "CREATE INDEX IF NOT EXISTS idx_speed_test_result_run ON speed_test_result (run_id)",
         ],
     )
     .await?;
