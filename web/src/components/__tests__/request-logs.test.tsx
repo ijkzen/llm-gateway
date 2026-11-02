@@ -310,6 +310,37 @@ describe("RequestLogsTable", () => {
 		vi.useRealTimers();
 	});
 
+	it("TPS 列渲染两位小数且走服务端排序（16-04 白名单内）", () => {
+		mockQuery({ items: [makeRow({ tps: 123.456 })], total: 1 });
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByText("123.46")).toBeInTheDocument();
+		// tps 在后端 SORTABLE_COLUMNS 白名单内：表头是可排序按钮。
+		expect(screen.getByRole("button", { name: "TPS" })).toBeTruthy();
+	});
+
+	it("TPS 列可经「显示列」隐藏并写入 localStorage", () => {
+		mockQuery({ items: [makeRow()], total: 1 });
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
+
+		// 列显隐下拉由 getAllColumns() 生成，新列自动出现。
+		fireEvent.keyDown(screen.getByRole("button", { name: /显示列/ }), { key: "ArrowDown" });
+		fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "TPS" }));
+
+		expect(screen.queryByRole("button", { name: "TPS" })).toBeNull();
+		expect(
+			JSON.parse(window.localStorage.getItem("request-logs:column-visibility") ?? "{}"),
+		).toEqual({ tps: false });
+	});
+
 	it("localStorage 无数据时默认全部列 + 每页 20", () => {
 		mockQuery({ items: [makeRow()], total: 1 });
 		render(

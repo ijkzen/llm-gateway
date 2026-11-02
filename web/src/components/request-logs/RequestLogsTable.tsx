@@ -133,6 +133,12 @@ function fmtMs(v: number | null | undefined): string {
 	return `${v} ms`;
 }
 
+/** TPS 保留两位小数（后端已按 0 兜底不可计算的请求，故 0 照常显示）。 */
+function fmtTps(v: number | null | undefined): string {
+	if (v === null || v === undefined) return "—";
+	return v.toFixed(2);
+}
+
 export function RequestLogsTable() {
 	const { t } = useTranslation();
 	// 由测速结果行跳转而来时带 `requestId`：只查那一条，并用近 7 天窗口兜底
@@ -394,6 +400,18 @@ export function RequestLogsTable() {
 					/>
 				),
 				cell: ({ row }) => fmtTokens(row.original.outputTokens),
+			},
+			{
+				accessorKey: "tps",
+				meta: { title: t("requestLogs.tps") },
+				header: ({ column }) => (
+					<DataTableColumnHeader
+						column={column}
+						title={t("requestLogs.tps")}
+						className={PLAIN_HEADER_CLASS}
+					/>
+				),
+				cell: ({ row }) => fmtTps(row.original.tps),
 			},
 			{
 				accessorKey: "requestTime",
