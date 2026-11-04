@@ -295,6 +295,15 @@ describe("ISO 周界（16-15：简化公式的实际行为钉死）", () => {
 		}
 	});
 
+	it("设置时区分支的周数同样按 7 天一档（不返回年内天数）", () => {
+		// 2026-11-02（周一）所在周 = 第 45 周；曾因少除 7 显示为「第 310 周」。
+		const nov2Start = Date.UTC(2026, 10, 1, 16); // 2026-11-02 00:00 CST
+		expect(formatPeriodLabel("week", 0, nov2Start, "zh", "Asia/Shanghai")).toBe(
+			"2026年第45周（当前）",
+		);
+		expect(formatCompactPeriodLabel("week", 0, nov2Start, "Asia/Shanghai")).toBe("2026-45W");
+	});
+
 	it("同一 ISO 周内两天给出一致的周编号", () => {
 		// 2026-08-25（周二）与 2026-08-30（周日）同属一周。
 		const tue = new Date("2026-08-25T12:00:00+08:00").getTime();

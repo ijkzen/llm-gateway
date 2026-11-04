@@ -428,7 +428,7 @@ function isoWeekNumberInTz(tz: string, startMs: number): number {
 	const p = wallParts(tz, startMs);
 	const jan1 = wallDayStart(tz, p.y, 1, 1);
 	const jan1Weekday = new Date(Date.UTC(p.y, 0, 1)).getUTCDay();
-	return Math.ceil((startMs - jan1) / DAY_MS + jan1Weekday + 1);
+	return Math.ceil(((startMs - jan1) / DAY_MS + jan1Weekday + 1) / 7);
 }
 
 /** 英文月份短名（指定时区，如 Aug）。 */
