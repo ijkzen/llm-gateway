@@ -22,7 +22,7 @@ use super::types::UsageData;
 type FetchResult = Result<UsageData, UsageError>;
 
 /// 并发抓取 in-flight 表：provider_id → 完成通知通道。
-type InFlightMap = tokio::sync::Mutex<HashMap<i32, tokio::sync::watch::Sender<FetchResult>>>;
+type InFlightMap = std::sync::Mutex<HashMap<i32, tokio::sync::watch::Sender<FetchResult>>>;
 
 #[derive(Clone, Default)]
 pub struct UsageMemCache {
@@ -39,6 +39,10 @@ pub struct UsageMemCache {
 
 /// 抓取失败后的负缓存窗口（窗口内读侧按「无数据」处理，不再真抓）。
 const NEGATIVE_CACHE_TTL: chrono::TimeDelta = chrono::TimeDelta::minutes(1);
+
+/// 等待单飞创建者结果的最长时限：异常创建者不得把本 provider 的全部调用
+/// 永久拖在等待上，超时后按通道当前值返回（初始值即失败）。
+const SINGLE_FLIGHT_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl UsageMemCache {
     /// 读内存缓存（新鲜才返回）。
@@ -99,7 +103,10 @@ impl UsageMemCache {
     /// 同时自增失效代次：在途抓取写回前比对不一致即丢弃（11-02）。
     pub async fn invalidate(&self, provider_id: i32) {
         self.entries.lock().await.remove(&provider_id);
-        self.in_flight.lock().await.remove(&provider_id);
+        self.in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&provider_id);
         self.last_attempt.lock().await.remove(&provider_id);
         let seq = self.generation_seq.fetch_add(1, Ordering::SeqCst) + 1;
         self.generations.lock().await.insert(provider_id, seq);
@@ -110,7 +117,10 @@ impl UsageMemCache {
     pub async fn invalidate_all(&self) {
         self.entries.lock().await.clear();
         self.last_attempt.lock().await.clear();
-        self.in_flight.lock().await.clear();
+        self.in_flight
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
         let mut generations = self.generations.lock().await;
         let mut seq = self.generation_seq.load(Ordering::SeqCst);
         for generation in generations.values_mut() {
@@ -178,7 +188,7 @@ impl UsageMemCache {
         let generation = self.generation(provider_id).await;
         let mut waiter: Option<tokio::sync::watch::Receiver<FetchResult>> = None;
         let creator_tx = {
-            let mut in_flight = self.in_flight.lock().await;
+            let mut in_flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
             match in_flight.get(&provider_id) {
                 Some(tx) => {
                     waiter = Some(tx.subscribe());
@@ -193,8 +203,10 @@ impl UsageMemCache {
         };
 
         if let Some(mut rx) = waiter {
-            // 等待创建者完成；创建者被取消时 guard 也会通知，不会悬挂。
-            let _ = rx.changed().await;
+            // 等待创建者完成；创建者被取消时 guard 会关闭通道并通知。
+            // 超时兜底：异常创建者不得把本 provider 的全部调用拖死在等待上，
+            // 超时后按通道当前值返回（初始值即失败，调用方按无用量数据处理）。
+            let _ = tokio::time::timeout(SINGLE_FLIGHT_WAIT_TIMEOUT, rx.changed()).await;
             return rx.borrow().clone();
         }
 
@@ -208,10 +220,13 @@ impl UsageMemCache {
         }
         impl Drop for Cleanup<'_> {
             fn drop(&mut self) {
-                // 尽力清理：锁竞争时放弃（等待者仍有 10 分钟新鲜度回退路径）。
-                if let Ok(mut in_flight) = self.in_flight.try_lock() {
-                    in_flight.remove(&self.provider_id);
-                }
+                // 清理必须完成：std Mutex 的临界区只有 HashMap 操作，短暂阻塞
+                // 可接受。若放任锁竞争时跳过，条目与已发送的结果会一起残留，
+                // 后续调用者将永远等不到下一次变化。
+                self.in_flight
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&self.provider_id);
                 if !self.sent && self.tx.borrow().is_err() {
                     let _ = self.tx.send(Err(UsageError::Auth));
                 }
@@ -513,5 +528,74 @@ mod tests {
             .expect("等待者不得悬挂（Cleanup guard 应通知）")
             .unwrap();
         assert!(waiter_result.is_err(), "创建者被取消时等待者应收到失败");
+    }
+
+    /// 回归：结果已发送但条目残留时，调用者不得永久等待（超时兜底返回当前值）。
+    #[tokio::test(start_paused = true)]
+    async fn mem_cache_stale_in_flight_entry_does_not_hang() {
+        let cache = UsageMemCache::default();
+        let (tx, _rx) = tokio::sync::watch::channel(Err(UsageError::Auth));
+        tx.send(Ok(balance_data(42, &[1.0]))).unwrap();
+        cache.in_flight.lock().unwrap().insert(42, tx);
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            cache.fetch_shared_result(42, || async { Ok(balance_data(42, &[2.0])) }),
+        )
+        .await
+        .expect("残留条目不得让调用者永久等待");
+        assert!(result.is_ok(), "已发送的结果应直接返回");
+    }
+
+    /// 回归：创建者完成时即使有锁竞争，in-flight 条目也必须被移除。
+    #[tokio::test]
+    async fn mem_cache_cleanup_removes_entry_under_contention() {
+        let cache = UsageMemCache::default();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let creator = cache.clone();
+        let handle = tokio::spawn(async move {
+            creator
+                .fetch_shared_result(77, move || async move {
+                    finish_rx.await.ok();
+                    Ok(balance_data(77, &[1.0]))
+                })
+                .await
+        });
+
+        loop {
+            let present = cache.in_flight.lock().unwrap().contains_key(&77);
+            if present {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        // 另一个线程持锁，制造清理时的锁竞争；locked 信号保证创建者结束时
+        // 锁确实被占用。锁由 blocker 自己定时释放，不依赖 async 任务推进，
+        // 避免 current_thread 运行时里 Drop 阻塞导致测试自身死锁。
+        let cache_block = cache.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let blocker = std::thread::spawn(move || {
+            let _guard = cache_block.in_flight.lock().unwrap();
+            locked_tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        });
+        locked_rx.recv().unwrap();
+
+        finish_tx.send(()).unwrap();
+        let _ = handle.await.unwrap();
+        blocker.join().unwrap();
+
+        assert!(
+            !cache.in_flight.lock().unwrap().contains_key(&77),
+            "清理完成后 in-flight 不得残留条目"
+        );
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            cache.fetch_shared_result(77, || async { Ok(balance_data(77, &[2.0])) }),
+        )
+        .await;
+        assert!(result.is_ok(), "后续调用不得挂在残留条目上");
     }
 }
