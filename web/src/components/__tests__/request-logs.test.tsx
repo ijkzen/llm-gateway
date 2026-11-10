@@ -136,6 +136,8 @@ describe("RequestLogsTable", () => {
 		// 弹窗包含失败原因等字段。
 		expect(within(dialog).getByText("首 token 耗时 (TTFT)")).toBeInTheDocument();
 		expect(within(dialog).getByText("缓存命中率")).toBeInTheDocument();
+		// 总耗时与表格同口径：毫秒 ÷ 1000，保留两位小数。
+		expect(within(dialog).getByText("1.00 s")).toBeInTheDocument();
 		// 供应商名称通过详情接口查询展示（限定弹窗内，避免与表格新列文本混淆）。
 		expect(within(dialog).getAllByText("Provider Beta").length).toBeGreaterThan(0);
 	});
@@ -321,6 +323,17 @@ describe("RequestLogsTable", () => {
 		expect(screen.getByText("123.46")).toBeInTheDocument();
 		// tps 在后端 SORTABLE_COLUMNS 白名单内：表头是可排序按钮。
 		expect(screen.getByRole("button", { name: "TPS" })).toBeTruthy();
+	});
+
+	it("总耗时列以秒展示（毫秒 ÷ 1000，保留两位小数）", () => {
+		mockQuery({ items: [makeRow({ requestTime: 12345 })], total: 1 });
+		render(
+			<MemoryRouter>
+				<RequestLogsTable />
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByText("12.35 s")).toBeInTheDocument();
 	});
 
 	it("TPS 列可经「显示列」隐藏并写入 localStorage", () => {

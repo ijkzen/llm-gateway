@@ -128,9 +128,9 @@ function fmtTokens(v: number | null | undefined): string {
 	return v.toLocaleString("zh-CN");
 }
 
-function fmtMs(v: number | null | undefined): string {
-	if (v === null || v === undefined) return "—";
-	return `${v} ms`;
+/** 总耗时以秒展示（入参为毫秒，保留两位小数）。 */
+function fmtSeconds(ms: number): string {
+	return `${(ms / 1000).toFixed(2)} s`;
 }
 
 /** TPS 保留两位小数（后端已按 0 兜底不可计算的请求，故 0 照常显示）。 */
@@ -423,7 +423,7 @@ export function RequestLogsTable() {
 						className={PLAIN_HEADER_CLASS}
 					/>
 				),
-				cell: ({ row }) => fmtMs(row.original.requestTime),
+				cell: ({ row }) => fmtSeconds(row.original.requestTime),
 			},
 			{
 				accessorKey: "startTime",

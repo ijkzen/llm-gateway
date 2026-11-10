@@ -27,6 +27,11 @@ function fmtMs(ms: number | null | undefined): string {
 	return `${ms.toLocaleString("zh-CN")} ms`;
 }
 
+/** 总耗时以秒展示（入参为毫秒，保留两位小数）。 */
+function fmtSeconds(ms: number): string {
+	return `${(ms / 1000).toFixed(2)} s`;
+}
+
 function fmtTime(ms: number | null | undefined): string {
 	if (ms === null || ms === undefined) return "—";
 	const d = new Date(ms);
@@ -84,7 +89,7 @@ export function RequestLogDetailDialog({ row, onOpenChange }: RequestLogDetailDi
 							<Field label={t("requestLogs.upstreamModel")}>{fmt(row.modelId)}</Field>
 							<Field label={t("cronJobs.startedAt")}>{fmtTime(row.startTime)}</Field>
 							<Field label={t("cronJobs.endedAt")}>{fmtTime(row.endTime)}</Field>
-							<Field label={t("requestLogs.totalTime")}>{fmtMs(row.requestTime)}</Field>
+							<Field label={t("requestLogs.totalTime")}>{fmtSeconds(row.requestTime)}</Field>
 							<Field label={t("requestLogs.ttftDetail")}>{fmtMs(row.ttft)}</Field>
 							<Field label={t("requestLogs.outputTime")}>{fmtMs(row.outputTokensTime)}</Field>
 							<Field label={t("requestLogs.inputTokens")}>
