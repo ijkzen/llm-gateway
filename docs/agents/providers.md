@@ -15,8 +15,9 @@
 内置定时任务 `usage_refresh`（`@every 5m`，种子行见 `src/cron/seed.rs`）刷新全部用量供应商（**不含 enable 过滤**，停用的也持续监测）并落库，随后执行门控：
 
 - 订阅制供应商额度耗尽（任一厂商已提供的窗口剩余为 0）→ 自动停用该 Provider 及名下全部虚拟模型子模型；恢复后自动启用。
+- **模型级豁免（ADR-0028）**：模型可标记 `quota_exempt=true`（管理后台「不计入额度」，免费模型）。Provider 存在豁免模型时，额度耗尽不停用整家 Provider，只级联停用非豁免模型的虚拟模型条目；豁免模型继续参与 LB 选路（`proxy::lb::subscription_member_usable`）。没有任何豁免模型时仍是整家停用/恢复。全豁免 Provider 的边界探活直接跳过，部分豁免时探活优先选非豁免模型。
 - 窗口剩余百分比落在 (0,1) 边界区 → 先发最小测试请求实测：失败同样停用、成功保持/解除停用。恢复有双通道：窗口余量回升离开边界区，或实测成功。
-- 实现：`src/usage/persist.rs::apply_usage_gate` / `probe_boundary_providers`。实测请求与模型弹窗测速同口径记入 request 表（`api_key_name='test'`），但不计入数据面板统计（见 `stats.md`）。
+- 实现：`src/usage/persist.rs::apply_usage_gate` / `probe_boundary_providers`；模型级门控动作在 `src/availability.rs::gate_items_for_quota_exempt` / `recover_quota_exempt_items`。实测请求与模型弹窗测速同口径记入 request 表（`api_key_name='test'`），但不计入数据面板统计（见 `stats.md`）。
 
 连续失败熔断与自动恢复探测见 ADR-0012（每小时 handler 业务体在 `src/failure_recovery.rs`）。
 
