@@ -4,6 +4,7 @@
 //! - `fetch_and_store`：真实抓取一次用量并落库（供接口缓存过期与 LB 选路兜底）。
 //! - `refresh_all_usage`：定时任务主体，刷新全部「已开启用量展示」的供应商并执行额度门控。
 //! - `apply_usage_gate`：订阅制额度耗尽或按量余额耗尽 → 停用 Provider 及其全部虚拟模型子模型；
+//!   存在「不计入额度」的免费模型时改为模型级门控（Provider 保持启用，仅停用计费模型条目），
 //!   恢复可用 → 反向启用（「不可用」= 订阅任一已提供窗口剩余为 0，或按量查得到余额且合计为 0）。
 
 use std::collections::HashMap;
@@ -215,6 +216,9 @@ pub async fn refresh_all_usage(
 ///
 /// - 订阅制（billing_mode=1）：按 `subscription_usable` 判定（任一已提供窗口剩余为 0 即不可用）。
 /// - 按量付费（billing_mode=0）：按 `balance_usable` 判定（查得到余额且合计为 0 即不可用）。
+/// - **模型级豁免**（ADR-0028）：供应商存在 `provider_model.quota_exempt=true` 的
+///   免费模型时，耗尽不停用整家 Provider，只级联停用非豁免模型的虚拟模型条目；
+///   免费模型继续参与选路。没有豁免模型时保持原有整家停用行为。
 ///
 /// **边界区不恢复**：`subscription_usable` 只要求「无窗口剩余 ≤ 0」，边界区
 /// (0, 1) 的剩余百分比同样满足——若据此恢复，会把边界探活刚用真实请求判定耗尽
@@ -245,7 +249,12 @@ pub async fn apply_usage_gate(
         // 钱包兜底时探活已跳过，这里直接恢复。
         if !data.has_low_remaining_window() || data.has_positive_balance() {
             crate::availability::recover_quota(db, p.id, &p.name, label).await?;
+            // 模型级豁免的部分停用：Provider 已是可用态时，恢复被条目级门控
+            // 停用的计费模型（整家恢复路径已由 recover_quota 处理，这里幂等）。
+            crate::availability::recover_quota_exempt_items(db, p.id).await?;
         }
+    } else if crate::availability::has_quota_exempt_model(db, p.id).await? {
+        crate::availability::gate_items_for_quota_exempt(db, p.id, &p.name, label).await?;
     } else {
         crate::availability::disable_for_quota(db, p.id, &p.name, label).await?;
     }
@@ -345,6 +354,14 @@ async fn probe_one_boundary(state: &crate::state::AppState, p: &provider::Model)
                     p.name
                 );
             }
+            if let Err(e) = crate::availability::recover_quota_exempt_items(&state.db, p.id).await {
+                tracing::warn!(
+                    provider_id = p.id,
+                    provider_name = &p.name,
+                    "供应商「{}」边界探活恢复豁免条目失败：{e}",
+                    p.name
+                );
+            }
         }
         Err(crate::proxy::ProbeFailure::Failed(reason)) => {
             tracing::warn!(
@@ -353,9 +370,35 @@ async fn probe_one_boundary(state: &crate::state::AppState, p: &provider::Model)
                 "供应商「{}」边界探活失败（{reason}），按订阅额度耗尽自动停用",
                 p.name
             );
-            if let Err(e) =
-                crate::availability::disable_for_quota(&state.db, p.id, &p.name, "订阅额度").await
-            {
+            // 有免费模型时只停计费模型条目，Provider 保持启用（ADR-0028）。
+            let has_exempt =
+                match crate::availability::has_quota_exempt_model(&state.db, p.id).await {
+                    Ok(value) => value,
+                    Err(e) => {
+                        tracing::warn!(
+                            provider_id = p.id,
+                            provider_name = &p.name,
+                            "供应商「{}」边界探活停用判定失败：{e}",
+                            p.name
+                        );
+                        return 1;
+                    }
+                };
+            let result = if has_exempt {
+                crate::availability::gate_items_for_quota_exempt(
+                    &state.db,
+                    p.id,
+                    &p.name,
+                    "订阅额度",
+                )
+                .await
+                .map(|_| ())
+            } else {
+                crate::availability::disable_for_quota(&state.db, p.id, &p.name, "订阅额度")
+                    .await
+                    .map(|_| ())
+            };
+            if let Err(e) = result {
                 tracing::warn!(
                     provider_id = p.id,
                     provider_name = &p.name,

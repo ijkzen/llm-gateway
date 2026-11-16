@@ -86,6 +86,9 @@ pub struct BackupProviderModel {
     pub protocol_type: Option<i32>,
     pub proxy_enabled: bool,
     pub proxy_addr: String,
+    /// 不计入供应商额度（免费模型）；旧备份缺省 false（ADR-0028）。
+    #[serde(default)]
+    pub quota_exempt: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,6 +215,7 @@ pub async fn build_export(db: &DatabaseConnection) -> Result<BackupFile, DbErr> 
                 protocol_type: m.protocol_type,
                 proxy_enabled: m.proxy_enabled,
                 proxy_addr: m.proxy_addr.clone(),
+                quota_exempt: m.quota_exempt,
             })
             .collect();
         providers_out.push(BackupProvider {
@@ -622,6 +626,7 @@ pub async fn apply_import(
                 protocol_type: Set(m.protocol_type),
                 proxy_enabled: Set(m.proxy_enabled),
                 proxy_addr: Set(m.proxy_addr.trim().to_string()),
+                quota_exempt: Set(m.quota_exempt),
                 created_at: Set(now),
                 updated_at: Set(now),
                 ..Default::default()
@@ -817,6 +822,7 @@ mod tests {
                 protocol_type: None,
                 proxy_enabled: false,
                 proxy_addr: String::new(),
+                quota_exempt: false,
             }],
         }
     }

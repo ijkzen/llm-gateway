@@ -37,6 +37,7 @@ fn model(proxy_enabled: bool, proxy_addr: &str) -> provider_model::Model {
         protocol_type: None,
         proxy_enabled,
         proxy_addr: proxy_addr.to_string(),
+        quota_exempt: false,
         created_at: now,
         updated_at: now,
     }
@@ -115,6 +116,7 @@ fn member_with_base_url(protocol: Protocol, custom_header: &str, base_url: &str)
         custom_header: custom_header.to_string(),
         proxy_enabled: false,
         proxy_addr: String::new(),
+        quota_exempt: false,
     }
 }
 

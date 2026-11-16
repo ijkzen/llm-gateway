@@ -91,6 +91,8 @@ pub(crate) struct Member {
     pub(crate) proxy_enabled: bool,
     /// HTTP 代理地址（如 `http://127.0.0.1:7890`）。
     pub(crate) proxy_addr: String,
+    /// 不计入供应商额度（免费模型）：订阅额度耗尽时仍参与选路（ADR-0028）。
+    pub(crate) quota_exempt: bool,
 }
 
 /// 解析成员最终代理：模型级开启且地址有效 → 用模型地址；否则供应商级开启
@@ -165,6 +167,7 @@ pub(crate) async fn load_members(
                 custom_header: p.custom_header.clone(),
                 proxy_enabled,
                 proxy_addr,
+                quota_exempt: model.quota_exempt,
             })
         })
         .collect())
@@ -172,7 +175,7 @@ pub(crate) async fn load_members(
 
 /// 把用量数据格式化为可读字符串，用于 LB 决策日志：
 /// - 订阅制：`quota[5h:92.4%,week:70.3%,mon:85.2%]`（无数据的窗口显示 `-`）
-/// - 按量：`balance=7.65`（余额合计）
+/// - 按量：`balance=7.65`（主余额字段）
 /// - 无数据：`no-usage`
 pub(crate) fn format_usage(data: Option<&UsageData>) -> String {
     let Some(data) = data else {
@@ -202,6 +205,13 @@ pub(crate) fn format_usage(data: Option<&UsageData>) -> String {
         }
         UsageKind::Balance => format!("balance={:.2}", usage_rank::balance_amount(Some(data))),
     }
+}
+
+/// 订阅成员在当前用量下是否可参与选路：`quota_exempt` 免费模型恒可用
+/// （不消耗订阅额度，ADR-0028）；其余按 `subscription_usable` 判定，
+/// 无法判定（None）保持可用，避免上游抖动误伤。
+pub(crate) fn subscription_member_usable(member: &Member, usage: Option<&UsageData>) -> bool {
+    member.quota_exempt || usage.and_then(UsageData::subscription_usable) != Some(false)
 }
 
 /// 按虚拟模型的负载均衡策略排序成员。
@@ -244,10 +254,11 @@ pub(crate) async fn order_members(
             .await;
             let member_detail = |member: &Member, usage: &HashMap<i32, Option<UsageData>>| {
                 format!(
-                    "{}:{} billing={} {}",
+                    "{}:{} billing={} exempt={} {}",
                     member.provider_id,
                     member.model_id,
                     member.billing_mode,
+                    member.quota_exempt,
                     format_usage(usage.get(&member.provider_id).and_then(Option::as_ref)),
                 )
             };
@@ -271,21 +282,21 @@ pub(crate) async fn order_members(
             // 不可用，从候选里剔除，让位给还有额度的订阅成员或按量成员；无法
             // 判定（无窗口数据）的保持原状。判定口径唯一来源：
             // `UsageData::subscription_usable`（用量门控与恢复探测同源调用）。
+            // 例外：`quota_exempt` 免费模型不消耗订阅额度，耗尽时仍可服务
+            // （ADR-0028；条目级停用由额度门控负责，这里只防缓存未及刷新的窗口）。
             let mut skipped: Vec<String> = Vec::new();
             subs.retain(|m| {
-                let usable = usage_map
-                    .get(&m.provider_id)
-                    .and_then(Option::as_ref)
-                    .and_then(UsageData::subscription_usable);
-                match usable {
-                    Some(false) => {
-                        skipped.push(member_detail(m, &usage_map));
-                        false
-                    }
-                    _ => true,
+                if subscription_member_usable(
+                    m,
+                    usage_map.get(&m.provider_id).and_then(Option::as_ref),
+                ) {
+                    true
+                } else {
+                    skipped.push(member_detail(m, &usage_map));
+                    false
                 }
             });
-            // 按量付费余额耗尽即跳过：查得到余额且合计为 0 的按量成员不可用
+            // 按量付费余额耗尽即跳过：查得到余额且主余额字段为 0 的按量成员不可用
             // （口径同 `UsageData::balance_usable`），从候选剔除；查不到余额
             // （无法判定）的保持原状。
             let mut skipped_balance: Vec<String> = Vec::new();
@@ -474,5 +485,50 @@ impl Member {
             Protocol::Anthropic => crate::provider_model::refresh::PROTOCOL_ANTHROPIC,
             Protocol::Gemini => crate::provider_model::refresh::PROTOCOL_GEMINI,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::usage::types::{QuotaWindow, UsageKind, WindowKind};
+
+    fn member(quota_exempt: bool) -> Member {
+        Member {
+            provider_id: 1,
+            model_id: "m".to_string(),
+            protocol: Protocol::OpenAiCompat,
+            billing_mode: 1,
+            base_url: "https://api.example.com".to_string(),
+            api_key_encrypted: "enc".to_string(),
+            custom_header: "{}".to_string(),
+            proxy_enabled: false,
+            proxy_addr: String::new(),
+            quota_exempt,
+        }
+    }
+
+    fn exhausted_quota() -> UsageData {
+        UsageData {
+            provider_id: 1,
+            fetched_at: chrono::Utc::now(),
+            kind: UsageKind::Quota,
+            plan: None,
+            windows: vec![
+                QuotaWindow::from_remaining_percent(WindowKind::FiveHour, 0.0, None),
+                QuotaWindow::from_remaining_percent(WindowKind::Weekly, 50.0, None),
+            ],
+            balances: vec![],
+        }
+    }
+
+    /// ADR-0028：订阅额度耗尽时只剔除计费成员，免费模型（quota_exempt）保留。
+    #[test]
+    fn subscription_member_usable_keeps_exempt_members_when_exhausted() {
+        let usage = exhausted_quota();
+        assert!(!subscription_member_usable(&member(false), Some(&usage)));
+        assert!(subscription_member_usable(&member(true), Some(&usage)));
+        // 无法判定（无用量数据）保持可用，口径与 subscription_usable 一致。
+        assert!(subscription_member_usable(&member(false), None));
     }
 }

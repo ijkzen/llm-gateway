@@ -184,15 +184,17 @@ impl ProbePreambleFailure {
     }
 }
 
-/// 探活前奏（probe_provider / failure_recovery 共用同一实现）：取该供应商
-/// `model_id` 最小的模型并解密 API Key。调用方负责日志（failure_recovery
-/// 每阶段点名供应商）与后续 `test_model`。
+/// 探活前奏（probe_provider / failure_recovery 共用同一实现）：优先取该供应商
+/// **非豁免**（正常计入额度）且 `model_id` 最小的模型并解密 API Key——订阅额度
+/// 边界探活若命中免费模型，一次成功会把计费额度误判为已恢复（ADR-0028）。
+/// 没有非豁免模型时回退到最小 `model_id` 的模型（失败恢复探测仍可用）。
 pub async fn probe_preamble(
     state: &AppState,
     provider_row: &provider::Model,
 ) -> Result<(provider_model::Model, String), ProbePreambleFailure> {
     let model = provider_model::Entity::find()
         .filter(provider_model::Column::ProviderId.eq(provider_row.id))
+        .order_by_asc(provider_model::Column::QuotaExempt)
         .order_by_asc(provider_model::Column::ModelId)
         .one(&state.db)
         .await
@@ -206,9 +208,11 @@ pub async fn probe_preamble(
     Ok((model, api_key))
 }
 
-/// 自动探活：取该供应商 model_id 最小的模型发最小测试请求（与模型弹窗测速、
-/// 失败恢复探测同一 `test_model` 入口）。用于用量刷新的订阅制边界探活：
-/// 成功返回耗时；无法探活返回 `Skipped`；请求失败返回 `Failed` 与人类可读原因。
+/// 自动探活：取该供应商优先非豁免、`model_id` 最小的模型发最小测试请求（与
+/// 模型弹窗测速、失败恢复探测同一 `test_model` 入口）。用于用量刷新的订阅制
+/// 边界探活：成功返回耗时；无法探活返回 `Skipped`；请求失败返回 `Failed` 与
+/// 人类可读原因。全部模型均为额度豁免时跳过——免费模型可用不能证明计费额度
+/// 已恢复（ADR-0028）。
 pub async fn probe_provider(
     state: &AppState,
     provider_row: &provider::Model,
@@ -216,6 +220,11 @@ pub async fn probe_provider(
     let (model, api_key) = probe_preamble(state, provider_row)
         .await
         .map_err(|e| ProbeFailure::Skipped(e.message()))?;
+    if model.quota_exempt {
+        return Err(ProbeFailure::Skipped(
+            "供应商全部模型均标记为不计入额度，跳过订阅额度探活".to_string(),
+        ));
+    }
     test_model(state, provider_row, &model, &api_key)
         .await
         .map_err(ProbeFailure::Failed)

@@ -733,3 +733,37 @@ async fn ensure_migration_is_noop_when_version_recorded() {
     let second = ensure_migration(&db, 9102, &["SELECT 1"]).await.unwrap();
     assert!(!second, "已记录版本应 no-op（changed=false）");
 }
+
+/// 新库从 0 迁移完必须带 Migration 30 的模型级额度豁免列（ADR-0028）。
+#[tokio::test]
+async fn migration_30_adds_quota_exempt_on_fresh_db() {
+    let db = connect("sqlite::memory:").await.unwrap();
+    migrate(&db).await.unwrap();
+    assert!(
+        column_exists(&db, "provider_model", "quota_exempt")
+            .await
+            .unwrap()
+    );
+}
+
+/// 历史库迁移：quota_exempt 列缺失 + 版本记录移除后，migrate() 必须补列。
+#[tokio::test]
+async fn migration_30_backfills_quota_exempt_on_legacy_db() {
+    let db = connect("sqlite::memory:").await.unwrap();
+    migrate(&db).await.unwrap();
+
+    db.execute_unprepared("ALTER TABLE provider_model DROP COLUMN quota_exempt")
+        .await
+        .unwrap();
+    db.execute_unprepared("DELETE FROM schema_migrations WHERE version = 30")
+        .await
+        .unwrap();
+
+    let changed = migrate(&db).await.unwrap();
+    assert!(changed, "migrate 应报告有变更");
+    assert!(
+        column_exists(&db, "provider_model", "quota_exempt")
+            .await
+            .unwrap()
+    );
+}

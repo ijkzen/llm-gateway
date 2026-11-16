@@ -159,6 +159,7 @@ pub(crate) fn build_member(provider: &provider::Model, model: &provider_model::M
         custom_header: provider.custom_header.clone(),
         proxy_enabled,
         proxy_addr,
+        quota_exempt: model.quota_exempt,
     }
 }
 

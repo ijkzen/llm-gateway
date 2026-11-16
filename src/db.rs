@@ -645,6 +645,21 @@ pub(crate) async fn migrate(db: &DatabaseConnection) -> Result<bool, DbErr> {
     )
     .await?;
 
+    // Migration 30: provider_model.quota_exempt —— 模型级额度豁免（ADR-0028）。
+    // 标记为 true 的模型不计入供应商订阅额度/按量余额：额度耗尽时 Provider
+    // 保持启用，仅停用其余模型的虚拟模型条目；新库已由 create_table_from_entity
+    // 建表带该列，此处兜底历史库。
+    changed |= ensure_columns(
+        db,
+        30,
+        &[(
+            "provider_model",
+            "quota_exempt",
+            "ALTER TABLE provider_model ADD COLUMN quota_exempt boolean NOT NULL DEFAULT '0'",
+        )],
+    )
+    .await?;
+
     tracing::info!("Database tables migrated");
 
     Ok(changed)

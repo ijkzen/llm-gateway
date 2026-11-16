@@ -18,7 +18,7 @@
 //! 各动作自带幂等、级联（见 [`set_items_enabled`] 的 `cascade_disabled` 标记语义）
 //! 与结构化日志。额度刷新只解除 `quota` 态；`manual` 态不被任何自动流程触碰。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use sea_orm::sea_query::Expr;
@@ -99,6 +99,155 @@ impl FailureCounter {
             .expect("failure counters lock")
             .remove(&provider_id);
     }
+}
+
+/// 模型级额度豁免的条目级门控（ADR-0028）：Provider 保持/恢复启用，仅停用
+/// 「非豁免」模型（`provider_model.quota_exempt=false`）对应的虚拟模型条目，
+/// 豁免模型（免费模型）继续参与选路。
+///
+/// - 仅处理可用态或 `quota` 停用态；`manual`/`failure` 不触碰（额度刷新无权解除）。
+/// - `quota` 停用态先原子恢复 Provider 本身（`enable=true`、`disabled_reason=NULL`），
+///   但**不走** `set_items_enabled(true)`——随后按模型豁免精确启用/停用，避免计费
+///   条目出现瞬时可用窗口。
+/// - 豁免条目：只恢复带 `cascade_disabled` 标记的（用户手动关闭的不动）。
+/// - 非豁免条目：只停用当前启用的，并打 `cascade_disabled` 标记。
+///
+/// 返回是否发生变化（调用方据此决定日志，避免每轮刷新重复输出）。
+pub async fn gate_items_for_quota_exempt(
+    db: &DatabaseConnection,
+    provider_id: i32,
+    provider_name: &str,
+    label: &str,
+) -> Result<bool, DbErr> {
+    let txn = db.begin().await?;
+    let Some(row) = provider::Entity::find_by_id(provider_id).one(&txn).await? else {
+        txn.rollback().await?;
+        return Ok(false);
+    };
+    if let Some(reason) = row.disabled_reason.as_deref()
+        && reason != DisabledReason::Quota.as_str()
+    {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    let now = chrono::Utc::now();
+    // quota 停用 → 仅解除 Provider 本身；条目按下面的豁免集合精确处理。
+    let recovered_provider = if !row.enable {
+        provider::Entity::update_many()
+            .col_expr(provider::Column::Enable, Expr::value(true))
+            .col_expr(
+                provider::Column::DisabledReason,
+                Expr::value(Option::<String>::None),
+            )
+            .col_expr(provider::Column::UpdatedAt, Expr::value(now))
+            .filter(provider::Column::Id.eq(provider_id))
+            .filter(provider::Column::DisabledReason.eq(DisabledReason::Quota.as_str()))
+            .exec(&txn)
+            .await?
+            .rows_affected
+            > 0
+    } else {
+        false
+    };
+
+    let models = crate::entity::provider_model::Entity::find()
+        .filter(crate::entity::provider_model::Column::ProviderId.eq(provider_id))
+        .all(&txn)
+        .await?;
+    let mut exempt_ids: HashSet<i32> = HashSet::new();
+    let mut non_exempt_ids: Vec<i32> = Vec::new();
+    for model in models {
+        if model.quota_exempt {
+            exempt_ids.insert(model.model_id);
+        } else {
+            non_exempt_ids.push(model.model_id);
+        }
+    }
+    if exempt_ids.is_empty() {
+        // 兜底：调用方应已判定存在豁免模型；这里不做「全停」误伤。
+        txn.rollback().await?;
+        return Ok(false);
+    }
+
+    // 豁免条目：恢复此前被整家停用级联打标的条目。
+    let mut enabled_items = 0;
+    let exempt_items = virtual_model_item::Entity::find()
+        .filter(virtual_model_item::Column::ModelId.is_in(exempt_ids.iter().copied()))
+        .filter(virtual_model_item::Column::CascadeDisabled.eq(true))
+        .all(&txn)
+        .await?;
+    for item in exempt_items {
+        let mut active: virtual_model_item::ActiveModel = item.into();
+        active.enable = sea_orm::Set(true);
+        active.cascade_disabled = sea_orm::Set(false);
+        active.updated_at = sea_orm::Set(now);
+        active.update(&txn).await?;
+        enabled_items += 1;
+    }
+
+    // 非豁免条目：停用当前启用的，打级联标记供恢复。
+    let mut disabled_items = 0;
+    if !non_exempt_ids.is_empty() {
+        let billing_items = virtual_model_item::Entity::find()
+            .filter(virtual_model_item::Column::ModelId.is_in(non_exempt_ids))
+            .filter(virtual_model_item::Column::Enable.eq(true))
+            .all(&txn)
+            .await?;
+        for item in billing_items {
+            let mut active: virtual_model_item::ActiveModel = item.into();
+            active.enable = sea_orm::Set(false);
+            active.cascade_disabled = sea_orm::Set(true);
+            active.updated_at = sea_orm::Set(now);
+            active.update(&txn).await?;
+            disabled_items += 1;
+        }
+    }
+    txn.commit().await?;
+
+    let changed = recovered_provider || enabled_items > 0 || disabled_items > 0;
+    if changed {
+        tracing::info!(
+            provider_id,
+            provider_name,
+            exempt_models = exempt_ids.len(),
+            disabled_items,
+            enabled_items,
+            recovered_provider,
+            "{label}已耗尽，供应商「{provider_name}」改为模型级门控：停用 {disabled_items} 个计费模型条目，保留 {} 个免费模型",
+            exempt_ids.len()
+        );
+    }
+    Ok(changed)
+}
+
+/// 额度恢复后的条目级恢复：Provider 处于可用态时，恢复
+/// [`gate_items_for_quota_exempt`] 打标的全部条目（Provider 本身无需变更）。
+/// `manual`/`failure` 停用态不触碰。返回恢复的条目数。
+pub async fn recover_quota_exempt_items(
+    db: &DatabaseConnection,
+    provider_id: i32,
+) -> Result<usize, DbErr> {
+    let Some(row) = provider::Entity::find_by_id(provider_id).one(db).await? else {
+        return Ok(0);
+    };
+    if !traffic_available(&row) {
+        return Ok(0);
+    }
+    set_items_enabled(db, provider_id, true).await
+}
+
+/// 该供应商是否存在「不计入额度」的免费模型（ADR-0028）：
+/// 额度耗尽时是否走模型级门控而非整家停用的判定入口。
+pub async fn has_quota_exempt_model(
+    db: &DatabaseConnection,
+    provider_id: i32,
+) -> Result<bool, DbErr> {
+    Ok(crate::entity::provider_model::Entity::find()
+        .filter(crate::entity::provider_model::Column::ProviderId.eq(provider_id))
+        .filter(crate::entity::provider_model::Column::QuotaExempt.eq(true))
+        .one(db)
+        .await?
+        .is_some())
 }
 
 /// 级联开关该供应商名下全部虚拟模型条目，返回实际变更的条目数。

@@ -21,6 +21,8 @@ export interface ProviderModel {
 	proxyAddr: string;
 	/** 模型单独选择的协议：null=跟随供应商，0=OpenAI Compatible、1=OpenAI Responses、2=Anthropic、3=Gemini。 */
 	protocolType: number | null;
+	/** 不计入供应商额度（免费模型）：额度耗尽时仍可参与选路。 */
+	quotaExempt?: boolean;
 	createdAt: string;
 	updatedAt: string;
 }
@@ -63,6 +65,8 @@ export interface ProviderModelPayload {
 	proxyEnabled: boolean;
 	proxyAddr: string;
 	protocolType?: number | null;
+	/** 不计入供应商额度（免费模型）；创建时缺省 false。 */
+	quotaExempt?: boolean;
 }
 
 export const providerModelKeys = {

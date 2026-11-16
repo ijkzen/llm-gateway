@@ -37,7 +37,12 @@ export function ProviderModelCard({ model, onOpen }: ProviderModelCardProps) {
 				<MidEllipsis text={model.providerModelId} className="min-w-0 text-sm font-medium" />
 				<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 			</span>
-			<span data-static className="flex shrink-0 items-center">
+			<span data-static className="flex shrink-0 items-center gap-2">
+				{model.quotaExempt && (
+					<span className="rounded-full border border-success/40 bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
+						{t("providerModels.quotaExemptBadge")}
+					</span>
+				)}
 				<CapabilityIcons model={model} />
 			</span>
 		</button>

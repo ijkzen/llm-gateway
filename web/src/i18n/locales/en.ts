@@ -320,6 +320,12 @@ const en: Translation = {
 		followProviderWith: "Follow provider ({{protocol}})",
 		selectProtocol: "Select protocol",
 		close: "Close",
+		quotaExempt: "Quota-exempt",
+		quotaExemptHint:
+			"Free model: keeps serving after the subscription quota or balance is exhausted",
+		quotaExemptYes: "Yes (free model)",
+		quotaExemptNo: "No",
+		quotaExemptBadge: "Quota-free",
 		overviewLoadingTitle: "Model Overview",
 		overviewNotFoundTitle: "Model Overview Unavailable",
 		overviewNotFoundDesc: "This model may have been deleted, or the link is incorrect.",

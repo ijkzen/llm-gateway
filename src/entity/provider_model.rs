@@ -39,6 +39,10 @@ pub struct Model {
     /// HTTP 代理地址（如 `http://127.0.0.1:7890`，无认证）。
     #[sea_orm(default_value = "")]
     pub proxy_addr: String,
+    /// 是否不计入供应商额度（免费模型）：订阅额度/按量余额耗尽时仍可参与选路。
+    /// 额度门控按此标记做模型级豁免，Provider 本身保持启用（见 ADR-0028）。
+    #[sea_orm(default_value = "0")]
+    pub quota_exempt: bool,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

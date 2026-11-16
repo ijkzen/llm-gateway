@@ -84,6 +84,49 @@ async fn seed_boundary_provider(db: &sea_orm::DatabaseConnection, base_url: &str
     (p.id, m.model_id)
 }
 
+/// 给已有边界供应商追加一个模型并挂到同一虚拟模型，返回新模型主键。
+/// `quota_exempt=true` 表示免费模型（额度耗尽仍可转发，ADR-0028）。
+async fn add_model(
+    db: &sea_orm::DatabaseConnection,
+    provider_id: i32,
+    vm_display_id: &str,
+    provider_model_id: &str,
+    quota_exempt: bool,
+) -> i32 {
+    let now = chrono::Utc::now();
+    let model = provider_model::ActiveModel {
+        provider_id: Set(provider_id),
+        provider_model_id: Set(provider_model_id.to_string()),
+        context_length: Set(128000),
+        max_output_tokens: Set(8192),
+        quota_exempt: Set(quota_exempt),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+    let vm = virtual_model::Entity::find()
+        .filter(virtual_model::Column::DisplayId.eq(vm_display_id))
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap();
+    virtual_model_item::ActiveModel {
+        virtual_model_id: Set(vm.virtual_model_id),
+        model_id: Set(model.model_id),
+        enable: Set(true),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+    model.model_id
+}
+
 /// 订阅制窗口数据：5h/周/月三个槽位各给剩余百分比。
 fn quota_data(provider_id: i32, five_hour: f64, weekly: f64, monthly: f64) -> UsageData {
     UsageData {
@@ -397,4 +440,135 @@ async fn manual_disabled_provider_not_probed() {
     assert_eq!(shared.lock().unwrap().1, 0, "manual 停用态不应探活");
     assert!(!provider_enabled(&db, pid).await);
     assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("manual"));
+}
+
+// ─── ADR-0028：模型级额度豁免 ───
+
+/// 订阅额度耗尽 + 存在免费模型：Provider 保持启用，只停用计费模型条目；
+/// 额度恢复后计费条目自动恢复。
+#[tokio::test]
+async fn exhausted_subscription_with_exempt_model_disables_only_billing_models() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (url, _shared) = spawn_probe_mock().await;
+    let (pid, paid_model_id) = seed_boundary_provider(&db, &url).await;
+    let free_model_id = add_model(&db, pid, "vm-boundary", "free-model", true).await;
+
+    let load = async || {
+        provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    apply_usage_gate(&db, &load().await, &quota_data(pid, 0.0, 50.0, 100.0))
+        .await
+        .unwrap();
+    assert!(provider_enabled(&db, pid).await, "有免费模型时不应停用整家");
+    assert_eq!(disabled_reason(&db, pid).await, None);
+    let paid = item_row(&db, paid_model_id).await;
+    assert!(!paid.enable, "计费模型应被停用");
+    assert!(paid.cascade_disabled, "计费模型应带级联标记");
+    assert!(
+        item_row(&db, free_model_id).await.enable,
+        "免费模型应继续可用"
+    );
+
+    // 额度恢复（离开边界区）→ 计费条目恢复。
+    apply_usage_gate(&db, &load().await, &quota_data(pid, 50.0, 50.0, 100.0))
+        .await
+        .unwrap();
+    assert!(item_row(&db, paid_model_id).await.enable);
+    assert!(item_row(&db, free_model_id).await.enable);
+}
+
+/// 已整家 quota 停用的供应商补登免费模型后，下一轮门控转为模型级门控：
+/// Provider 恢复启用，免费条目恢复，计费条目保持停用。
+#[tokio::test]
+async fn quota_disabled_provider_transitions_to_partial_when_exempt_model_added() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (url, _shared) = spawn_probe_mock().await;
+    let (pid, paid_model_id) = seed_boundary_provider(&db, &url).await;
+    let load = async || {
+        provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+    // 先按无免费模型的旧口径整家停用。
+    apply_usage_gate(&db, &load().await, &quota_data(pid, 0.0, 50.0, 100.0))
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("quota"));
+
+    // 补登免费模型（新条目默认启用）后再次门控。
+    let free_model_id = add_model(&db, pid, "vm-boundary", "free-model", true).await;
+    apply_usage_gate(&db, &load().await, &quota_data(pid, 0.0, 50.0, 100.0))
+        .await
+        .unwrap();
+    assert!(
+        provider_enabled(&db, pid).await,
+        "应转为模型级门控并恢复 Provider"
+    );
+    assert_eq!(disabled_reason(&db, pid).await, None);
+    assert!(
+        item_row(&db, free_model_id).await.enable,
+        "免费模型应恢复可用"
+    );
+    assert!(
+        !item_row(&db, paid_model_id).await.enable,
+        "计费模型应保持停用"
+    );
+}
+
+/// 边界探活失败 + 存在免费模型：只停计费模型，Provider 与免费模型保持可用。
+#[tokio::test]
+async fn boundary_probe_failure_with_exempt_model_keeps_provider_and_free_model() {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    let (url, shared) = spawn_probe_mock().await;
+    shared.lock().unwrap().0 = 402;
+    let (pid, paid_model_id) = seed_boundary_provider(&db, &url).await;
+    let free_model_id = add_model(&db, pid, "vm-boundary", "free-model", true).await;
+    write_usage_cache(&db, &quota_data(pid, 0.5, 50.0, 100.0))
+        .await
+        .unwrap();
+
+    let n = probe_boundary_providers(&test_state(db.clone(), scheduler, log_tx))
+        .await
+        .unwrap();
+    assert_eq!(n, 1, "边界供应商仍应被探活");
+    assert_eq!(shared.lock().unwrap().1, 1);
+    assert!(provider_enabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await, None);
+    assert!(!item_row(&db, paid_model_id).await.enable);
+    assert!(item_row(&db, free_model_id).await.enable);
+}
+
+/// 全部模型均为免费模型：探活跳过，不发请求，状态不变（免费模型可用不能
+/// 证明计费额度恢复）。
+#[tokio::test]
+async fn all_exempt_models_skip_boundary_probe() {
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    let (url, shared) = spawn_probe_mock().await;
+    let (pid, model_id) = seed_boundary_provider(&db, &url).await;
+    let model = provider_model::Entity::find_by_id(model_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut active: provider_model::ActiveModel = model.into();
+    active.quota_exempt = Set(true);
+    active.update(&db).await.unwrap();
+    write_usage_cache(&db, &quota_data(pid, 0.5, 50.0, 100.0))
+        .await
+        .unwrap();
+
+    let n = probe_boundary_providers(&test_state(db.clone(), scheduler, log_tx))
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "全部模型豁免时不应探活");
+    assert_eq!(shared.lock().unwrap().1, 0, "不应发出探活请求");
+    assert!(provider_enabled(&db, pid).await);
+    assert!(item_row(&db, model_id).await.enable);
 }

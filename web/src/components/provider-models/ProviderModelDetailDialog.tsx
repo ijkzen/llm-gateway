@@ -35,6 +35,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
 	type ProviderModel,
 	useDeleteProviderModel,
@@ -59,6 +60,8 @@ function makeFormSchema(t: (key: string) => string) {
 			// 模型级网络代理：开启时地址必填且需 http:// 开头（与供应商代理同规则）。
 			proxyEnabled: z.boolean(),
 			proxyAddr: z.string(),
+			// 不计入供应商额度（免费模型）：额度耗尽时仍可继续转发。
+			quotaExempt: z.boolean(),
 		})
 		.superRefine(proxySuperRefine(t));
 }
@@ -110,6 +113,7 @@ export function ProviderModelDetailDialog({
 			protocolType: null,
 			proxyEnabled: false,
 			proxyAddr: "",
+			quotaExempt: false,
 		},
 	});
 
@@ -133,6 +137,7 @@ export function ProviderModelDetailDialog({
 			protocolType: current.protocolType ?? null,
 			proxyEnabled: current.proxyEnabled,
 			proxyAddr: current.proxyAddr,
+			quotaExempt: current.quotaExempt ?? false,
 		});
 		setEditing(false);
 		setConfirmingDelete(false);
@@ -294,6 +299,25 @@ export function ProviderModelDetailDialog({
 									</div>
 									<CapabilitySwitchGrid control={form.control} />
 
+									{/* 模型级额度豁免：免费模型在订阅额度/余额耗尽时仍可继续转发。 */}
+									<FormField
+										control={form.control}
+										name="quotaExempt"
+										render={({ field }) => (
+											<FormItem className="flex items-center justify-between gap-3 rounded-md border p-3">
+												<div className="min-w-0">
+													<FormLabel>{t("providerModels.quotaExempt")}</FormLabel>
+													<p className="mt-1 text-xs text-muted-foreground">
+														{t("providerModels.quotaExemptHint")}
+													</p>
+												</div>
+												<FormControl>
+													<Switch checked={field.value} onCheckedChange={field.onChange} />
+												</FormControl>
+											</FormItem>
+										)}
+									/>
+
 									{/* 模型级网络代理：开关 + 条件显示地址输入（优先于供应商代理）。 */}
 									<ProxyConfigFields control={form.control} />
 								</form>
@@ -359,6 +383,16 @@ export function ProviderModelDetailDialog({
 												t("providerModels.followProviderWith", {
 													protocol: protocolLabel(providerProtocolType),
 												})}
+									</dd>
+								</div>
+								<div className="flex items-center justify-between rounded-md border px-4 py-2.5">
+									<dt className="text-sm text-muted-foreground">
+										{t("providerModels.quotaExempt")}
+									</dt>
+									<dd className="text-sm font-medium">
+										{model.quotaExempt
+											? t("providerModels.quotaExemptYes")
+											: t("providerModels.quotaExemptNo")}
 									</dd>
 								</div>
 								<div className="flex items-center justify-between rounded-md border px-4 py-2.5">
