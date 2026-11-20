@@ -264,7 +264,7 @@ curl http://localhost:4007/v1/chat/completions \
 
 ### 11.1 系统设置项
 
-设置页以键值表列出系统设置（键/值/类型/更新时间），支持搜索与按类型筛选。目前内置 4 个键（其中 `language` 与 `timezone` 禁止删除；其余两个删除后重启会按默认值重建）：
+设置页以键值表列出系统设置（键/值/类型/更新时间），支持搜索与按类型筛选。目前内置 5 个键（其中 `language` 与 `timezone` 禁止删除；其余删除后重启会按默认值重建）：
 
 | 键 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -272,6 +272,7 @@ curl http://localhost:4007/v1/chat/completions \
 | `timezone` | String | `Asia/Shanghai` | 时区（IANA 名）：定时任务调度语义、统计分桶与用量窗口均按它解释；修改会按新时区重建定时任务并重算下次执行时间 |
 | `max_consecutive_failures` | Int | `5` | 供应商连续失败熔断阈值：达到后自动停用该供应商（见 14 节） |
 | `downstream_request_header_allow_list` | Json | `["traceparent","tracestate","x-opencode-session","user-agent"]` | `/v1/chat/completions` 允许透传给上游的下游请求头白名单（凭据类/框架类/hop-by-hop 头始终不会透传；黑名单头也无法写入） |
+| `opencode_session_header_names` | Json | `["x-claude-code-session-id","session-id","session_id","x-session-id","x-session-affinity","n-session"]` | 识别为 OpenCode 会话 ID 的原生请求头名（按数组顺序决定优先级）：命中后映射为出站 `x-opencode-session`，让同一对话稳定路由并复用 prompt cache；可补充 ZCode 等其它客户端的头名（黑名单头无法写入） |
 
 编辑按声明类型校验：String/数值/Bool 为单值输入；Json 类型走结构化编辑器——纯字符串数组逐行编辑，对象逐行增删键值，嵌套或不规则结构退回原文编辑。
 

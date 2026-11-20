@@ -203,6 +203,10 @@ _Avoid_: 维度、实体行
 上游思考输出的客户端侧载体（OpenRouter 兼容格式，ADR-0006）：非流式装 `message`、流式装 `delta.reasoning_details`，条目为 `reasoning.text`（明文）/ `reasoning.encrypted`（加密签名）并带 `format` 标记来源（anthropic-claude-v1 / openai-responses-v1 / google-gemini-v1）。网关把 Anthropic thinking+signature/redacted_thinking、Responses reasoning item encrypted_content（请求侧恒带 include）、Gemini thoughtSignature 捕获装入该载体；客户端把 assistant 消息原样回传后按 format 注入对应上游载体，跨 format/failover 换厂商 debug 丢弃，OpenAI Compat 直通剥离该字段（存量 `reasoning_content` 归一不受影响）。
 _Avoid_: 思考块（裸称）、thinking 字段（实现指代）
 
+**会话亲和 (Session Affinity)**:
+把同一对话的多轮请求固定到同一上游、以复用 prompt cache 的机制（ADR-0030）。对外载体是出站头 `x-opencode-session`（OpenCode Go 要求，任意稳定唯一字符串即可）；网关按分层优先级解析会话身份：客户端显式头 → coding agent 原生会话头（`opencode_session_header_names` 设置）→ body 会话字段 → 首条用户消息内容指纹 → 按 Key/日的 UUIDv5 回退。解析值每请求算一次并贯穿 failover，仅对 `opencode.ai` 上游注入。
+_Avoid_: session（裸称，与管理员登录会话混淆）、会话 ID（不说明来源与优先级）
+
 ### 前端域
 
 **页面刷新 (Page Refresh)**:
