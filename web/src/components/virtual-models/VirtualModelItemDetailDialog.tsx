@@ -56,7 +56,10 @@ export function VirtualModelItemDetailDialog({
 	// 以虚拟模型成员集合为准定位当前条目（渲染快照，弹窗只读不依赖查询实时性）。
 	const currentItem =
 		virtualModel.items.find((i) => i.virtualModelItemId === item.virtualModelItemId) ?? item;
-	const providerDisabled = !currentItem.providerEnable;
+	const quotaExempt = currentItem.quotaExempt === true;
+	// 额度停用不影响免费模型（ADR-0028/0029），manual/failure 停用仍照实标注。
+	const quotaBlocked = quotaExempt && currentItem.providerDisabledReason === "quota";
+	const providerDisabled = !currentItem.providerEnable && !quotaBlocked;
 
 	// 开关提交用点击瞬间的成员集合快照。成功后关闭弹窗：让列表经查询失效
 	// 重取最新成员序与启用位，避免弹窗继续渲染旧快照导致二次翻转错位。
@@ -105,6 +108,11 @@ export function VirtualModelItemDetailDialog({
 					<DialogDescription>
 						{t("providerModels.belongsToProvider")}
 						{currentItem.providerName}
+						{quotaExempt && (
+							<span className="ml-1.5 rounded-full border border-success/40 bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
+								{t("providerModels.quotaExemptBadge")}
+							</span>
+						)}
 						{providerDisabled && (
 							<span className="ml-1.5 text-warning">{t("virtualModels.disabledWithProvider")}</span>
 						)}

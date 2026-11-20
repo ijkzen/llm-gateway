@@ -382,7 +382,14 @@ export function VirtualModelEditDialog({
 										)}
 									>
 										<div className="min-w-0 flex-1">
-											<MidEllipsis text={model.providerModelId} className="font-mono text-sm" />
+											<div className="flex min-w-0 items-center gap-2">
+												<MidEllipsis text={model.providerModelId} className="font-mono text-sm" />
+												{model.quotaExempt && (
+													<span className="shrink-0 rounded-full border border-success/40 bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
+														{t("providerModels.quotaExemptBadge")}
+													</span>
+												)}
+											</div>
 											<p className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
 												<span className="shrink-0">{formatContextLength(model.contextLength)}</span>
 												{providerDisabled && (

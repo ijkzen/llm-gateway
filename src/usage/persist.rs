@@ -261,6 +261,61 @@ pub async fn apply_usage_gate(
     Ok(())
 }
 
+/// 模型级豁免标记（`provider_model.quota_exempt`）变更后立即用现有用量缓存重跑
+/// 一次额度门控（ADR-0029）：否则 Provider 仍停在 `quota` 停用态，免费模型要等
+/// 下一轮 `usage_refresh`（5 分钟）才真正可用，期间 `load_members` 的
+/// `traffic_available` 过滤会让它收不到流量。
+///
+/// 只读新鲜缓存（`read_usage_cache`），不发厂商网络请求；缓存缺失/过期或供应商
+/// 未开启用量查询时跳过，由下一轮定时刷新兜底。门控失败只记日志，不让管理接口的
+/// 「模型已保存」返回 5xx。
+pub async fn regate_after_model_change(db: &DatabaseConnection, provider_id: i32) {
+    let Ok(Some(p)) = provider::Entity::find_by_id(provider_id).one(db).await else {
+        return;
+    };
+    if !crate::usage::usage_enabled(&p.extra) {
+        return;
+    }
+    let Ok(Some(data)) = read_usage_cache(db, provider_id).await else {
+        return;
+    };
+    // Provider 当前处于 quota 停用态且已存在免费模型时，直接切到模型级门控：
+    // 边界区（usable=true 但剩余落在 (0,1)）的常规路径把裁决权留给探活，不会
+    // 翻正 Provider；但既然已标记免费模型，就应按 ADR-0028 立即恢复 Provider
+    // 并只停计费条目，否则免费模型仍被 `traffic_available` 挡在选路之外。
+    // 取消标记（不再有免费模型）时不走此分支，交回常规门控按额度判定。
+    if p.disabled_reason.as_deref() == Some(crate::availability::DisabledReason::Quota.as_str())
+        && crate::availability::has_quota_exempt_model(db, provider_id)
+            .await
+            .unwrap_or(false)
+    {
+        let label = if p.billing_mode == 1 {
+            "订阅额度"
+        } else {
+            "余额"
+        };
+        if let Err(e) =
+            crate::availability::gate_items_for_quota_exempt(db, p.id, &p.name, label).await
+        {
+            tracing::warn!(
+                provider_id,
+                provider_name = &p.name,
+                "供应商「{}」豁免标记变化后切换模型级门控失败：{e}",
+                p.name
+            );
+        }
+        return;
+    }
+    if let Err(e) = apply_usage_gate(db, &p, &data).await {
+        tracing::warn!(
+            provider_id,
+            provider_name = &p.name,
+            "供应商「{}」豁免标记变化后重跑额度门控失败：{e}",
+            p.name
+        );
+    }
+}
+
 /// 边界探活的候选过滤（纯判定，无序读 DB）：订阅制 + 可探活态（可用或 quota
 /// 停用；manual/failure 停用无权解除）+ 已开启用量展示。
 pub(crate) fn boundary_probe_eligible(p: &provider::Model) -> bool {

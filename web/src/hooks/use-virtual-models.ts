@@ -10,6 +10,10 @@ export interface VirtualModelItem {
 	providerName: string;
 	/** 供应商启用状态；false 时该成员实际不可用。 */
 	providerEnable: boolean;
+	/** 供应商停用原因（null=启用 / failure / quota / manual）；用于区分额度停用（ADR-0029）。 */
+	providerDisabledReason: string | null;
+	/** 不计入供应商额度（免费模型）：额度耗尽时仍应可用（ADR-0028）。 */
+	quotaExempt: boolean;
 	/** 供应商付费模式：0=按量付费，1=订阅制。 */
 	billingMode: number;
 	/** 远端模型 ID 字符串，如 `gpt-4o`。 */

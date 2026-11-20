@@ -412,6 +412,10 @@ async fn create_provider_model(
                 protocol_type = ?model.protocol_type,
                 "创建供应商模型",
             );
+            // 新建免费模型可能让已额度停用的 Provider 立即进入模型级门控（ADR-0029）。
+            if model.quota_exempt {
+                crate::usage::persist::regate_after_model_change(&state.db, provider_id).await;
+            }
             let response = ProviderModelResponse::from_model(model, &provider_name);
             (StatusCode::CREATED, Json(Response::success(response)))
         }
@@ -465,6 +469,8 @@ async fn batch_create_provider_models(
         .into_iter()
         .filter(|item| !existing.contains(&tail_key(&item.provider_model_id)))
         .collect();
+    // 批内含免费模型时，提交后立即重跑门控（ADR-0029）。
+    let has_exempt = pending.iter().any(|item| item.quota_exempt);
 
     if pending.is_empty() {
         return (
@@ -519,6 +525,9 @@ async fn batch_create_provider_models(
                     .collect::<Vec<_>>(),
                 "批量创建供应商模型",
             );
+            if has_exempt {
+                crate::usage::persist::regate_after_model_change(&state.db, provider_id).await;
+            }
             (StatusCode::CREATED, Json(Response::success(created)))
         }
         Err(e) => response::db_error(e.to_string()),
@@ -549,6 +558,9 @@ async fn update_provider_model(
         Ok(None) => return not_found_provider(lang, model.provider_id),
         Err(e) => return response::db_error(e.to_string()),
     };
+    // 豁免标记变化（含取消）都要重跑门控：前者让 Provider 立即翻正，
+    // 后者在额度仍耗尽时重新整家停用（ADR-0029）。
+    let quota_exempt_changed = model.quota_exempt != req.quota_exempt;
 
     let mut active: ActiveModel = model.into();
     active.provider_model_id = Set(req.provider_model_id.trim().to_string());
@@ -599,6 +611,9 @@ async fn update_provider_model(
                 }
                 Ok(_) => {}
             }
+            if quota_exempt_changed {
+                crate::usage::persist::regate_after_model_change(&state.db, provider_id).await;
+            }
             let response = ProviderModelResponse::from_model(model, &provider_name);
             (StatusCode::OK, Json(Response::success(response)))
         }
@@ -614,6 +629,17 @@ async fn delete_provider_model(
     Path((provider_id, model_id)): Path<(i32, i32)>,
 ) -> impl IntoResponse {
     let lang = state.settings.lang().await;
+    // 删除前先读出豁免标记：删掉最后一个免费模型时需立即恢复整家额度门控（ADR-0029）。
+    let deleted_was_exempt = match Entity::find()
+        .filter(provider_model::Column::ProviderId.eq(provider_id))
+        .filter(provider_model::Column::ModelId.eq(model_id))
+        .one(&state.db)
+        .await
+    {
+        Ok(Some(model)) => model.quota_exempt,
+        Ok(None) => return not_found_model(lang, model_id),
+        Err(e) => return response::db_error(e.to_string()),
+    };
     // 级联清理引用该模型的虚拟模型成员，避免 virtual_model_item 悬空；
     // 与删除供应商的事务模式一致，模型不存在时回滚不误删成员。
     let txn = match state.db.begin().await {
@@ -642,6 +668,9 @@ async fn delete_provider_model(
                     deleted_virtual_item_count = deleted_item_count,
                     "删除供应商模型（级联清理虚拟模型成员）"
                 );
+                if deleted_was_exempt {
+                    crate::usage::persist::regate_after_model_change(&state.db, provider_id).await;
+                }
                 (StatusCode::OK, Json(Response::success(())))
             }
             Err(e) => response::db_error(e.to_string()),

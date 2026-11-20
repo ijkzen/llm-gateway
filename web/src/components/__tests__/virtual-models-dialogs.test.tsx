@@ -114,6 +114,8 @@ function makeItem(overrides: Partial<VirtualModelItem> = {}): VirtualModelItem {
 		providerId: 7,
 		providerName: "OpenAI",
 		providerEnable: true,
+		providerDisabledReason: null,
+		quotaExempt: false,
 		billingMode: 0,
 		providerModelId: "gpt-4o",
 		contextLength: 128000,
@@ -448,6 +450,28 @@ describe("VirtualModelItemDetailDialog", () => {
 		expect(screen.queryByRole("button", { name: /编辑/ })).toBeNull();
 		expect(screen.queryByRole("button", { name: /删除/ })).toBeNull();
 		expect(screen.getByRole("button", { name: "测试" })).toBeTruthy();
+	});
+
+	it("免费模型在额度停用下展示免额度徽标，不误标为随供应商禁用", () => {
+		const item = makeItem({
+			providerModelId: "hy4-flash-free",
+			providerEnable: false,
+			providerDisabledReason: "quota",
+			quotaExempt: true,
+		});
+		render(
+			<MemoryRouter>
+				<VirtualModelItemDetailDialog
+					open
+					onOpenChange={vi.fn()}
+					virtualModel={makeVm({ displayId: "hy4-flash", items: [item] })}
+					item={item}
+				/>
+			</MemoryRouter>,
+		);
+
+		expect(screen.getByText("免额度")).toBeTruthy();
+		expect(screen.queryByText(/随供应商禁用/)).toBeNull();
 	});
 
 	it("模型级开启代理时展示地址；关闭但供应商级开启时展示「继承上层代理」", () => {

@@ -112,6 +112,8 @@ function makeItem(overrides: Partial<VirtualModelItem> = {}): VirtualModelItem {
 		providerId: 7,
 		providerName: "OpenAI",
 		providerEnable: true,
+		providerDisabledReason: null,
+		quotaExempt: false,
 		billingMode: 0,
 		providerModelId: "gpt-4o@openai",
 		contextLength: 128000,
@@ -364,6 +366,40 @@ describe("VirtualModelsPage", () => {
 		fireEvent.click(screen.getByRole("button", { name: /claude-sonnet@anthropic/ }));
 		expect(mocks.detailDialogOpen).toBe(true);
 		expect(mocks.detailVirtualModel?.virtualModelId).toBe(2);
+	});
+
+	it("免费模型在额度停用下显示免额度徽标而非随供应商禁用；manual 停用仍标注", () => {
+		mocks.virtualModels = [
+			makeVm({
+				virtualModelId: 1,
+				displayId: "gpt-4o",
+				items: [
+					makeItem({
+						virtualModelItemId: 1,
+						providerModelId: "free-on-quota",
+						providerEnable: false,
+						providerDisabledReason: "quota",
+						quotaExempt: true,
+					}),
+					makeItem({
+						virtualModelItemId: 2,
+						providerModelId: "free-on-manual",
+						providerEnable: false,
+						providerDisabledReason: "manual",
+						quotaExempt: true,
+					}),
+				],
+			}),
+		];
+		renderPage();
+
+		const quotaCard = screen.getByRole("button", { name: /free-on-quota/ });
+		expect(quotaCard).toHaveTextContent("免额度");
+		expect(quotaCard).not.toHaveTextContent("随供应商禁用");
+
+		const manualCard = screen.getByRole("button", { name: /free-on-manual/ });
+		expect(manualCard).toHaveTextContent("免额度");
+		expect(manualCard).toHaveTextContent("随供应商禁用");
 	});
 
 	it("按成员 providerModelId 搜索，结果按所属虚拟模型分组（含停用虚拟模型与停用成员）", () => {

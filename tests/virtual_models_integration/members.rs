@@ -109,6 +109,47 @@ async fn test_member_item_echoes_proxy_fields() {
     assert_eq!(item["providerProxyAddr"], "http://proxy.example.com:7890");
 }
 
+/// 成员响应透传免费模型标记与供应商停用原因（ADR-0029）：前端据此区分
+/// 额度停用与手动/失败停用，避免给免费模型误标「随供应商禁用」。
+#[tokio::test]
+async fn test_member_item_echoes_quota_exempt_and_disabled_reason() {
+    let (app, db) = setup_app().await;
+    let p = seed_provider(&db, "quota-p").await;
+    provider::ActiveModel {
+        id: Set(p),
+        enable: Set(false),
+        disabled_reason: Set(Some("quota".to_string())),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    let m = seed_provider_model(&db, p, "free-model").await;
+    provider_model::ActiveModel {
+        model_id: Set(m),
+        quota_exempt: Set(true),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+
+    let (status, created) = send_json(
+        app.clone(),
+        "POST",
+        "/api/virtual-models",
+        vm_payload("vm", &[m]),
+    )
+    .await;
+    assert_eq!(status, 201);
+    assert_eq!(created["code"], "0");
+    let (_, body) = send_json(app, "GET", "/api/virtual-models", Value::Null).await;
+    let item = &body["data"][0]["items"][0];
+    assert_eq!(item["quotaExempt"], true);
+    assert_eq!(item["providerDisabledReason"], "quota");
+    assert_eq!(item["providerEnable"], false);
+}
+
 /// 成员排序：启用成员在前、组内无用量数据时按 virtualModelItemId 升序
 /// （LB 静态基础序，与「无数据排后 + id 决平局」一致）。
 #[tokio::test]

@@ -36,7 +36,11 @@ function MemberCard({
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
-	const providerDisabled = !item.providerEnable;
+	const quotaExempt = item.quotaExempt === true;
+	// 额度停用不影响免费模型（ADR-0028/0029）：不打「随供应商禁用」，改由
+	// 「免额度」徽标说明；manual/failure 停用仍照实标注（此时确实收不到流量）。
+	const quotaBlocked = quotaExempt && item.providerDisabledReason === "quota";
+	const providerDisabled = !item.providerEnable && !quotaBlocked;
 	return (
 		<button
 			type="button"
@@ -68,7 +72,12 @@ function MemberCard({
 					/>
 					<ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 				</span>
-				<span data-static className="flex shrink-0 items-center">
+				<span data-static className="flex shrink-0 items-center gap-1.5">
+					{quotaExempt && (
+						<span className="rounded-full border border-success/40 bg-success/10 px-1.5 py-0.5 text-[10px] font-medium text-success">
+							{t("providerModels.quotaExemptBadge")}
+						</span>
+					)}
 					<CapabilityIcons model={item} className="shrink-0" />
 				</span>
 			</div>

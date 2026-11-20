@@ -43,6 +43,11 @@ struct VirtualModelItemResponse {
     provider_name: String,
     /// 供应商启用状态；false 时该成员实际不可用。
     provider_enable: bool,
+    /// 供应商停用原因（NULL=启用 / failure / quota / manual）；供前端区分
+    /// 额度停用与手动/失败停用（ADR-0029）。
+    provider_disabled_reason: Option<String>,
+    /// 是否不计入供应商额度（免费模型，ADR-0028）：额度耗尽时仍应可用。
+    quota_exempt: bool,
     /// 供应商付费模式：0=按量付费，1=订阅制。
     billing_mode: i32,
     /// 远端模型 ID 字符串，如 `gpt-4o`。
@@ -373,6 +378,7 @@ async fn load_item_responses<C: ConnectionTrait>(
                 provider_id: p.id,
                 provider_name: p.name.clone(),
                 provider_enable: p.enable,
+                provider_disabled_reason: p.disabled_reason.clone(),
                 billing_mode: p.billing_mode,
                 provider_model_id: pm.provider_model_id.clone(),
                 context_length: pm.context_length,
@@ -381,6 +387,7 @@ async fn load_item_responses<C: ConnectionTrait>(
                 tool_use: pm.tool_use,
                 image_understand: pm.image_understand,
                 video_understand: pm.video_understand,
+                quota_exempt: pm.quota_exempt,
                 model_proxy_enabled: pm.proxy_enabled,
                 model_proxy_addr: pm.proxy_addr.clone(),
                 provider_proxy_enabled: p.proxy_enabled,

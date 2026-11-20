@@ -15,7 +15,9 @@ use serde_json::json;
 
 use llm_gateway::entity::{provider, provider_model, virtual_model, virtual_model_item};
 use llm_gateway::state::AppState;
-use llm_gateway::usage::persist::{apply_usage_gate, probe_boundary_providers, write_usage_cache};
+use llm_gateway::usage::persist::{
+    apply_usage_gate, probe_boundary_providers, regate_after_model_change, write_usage_cache,
+};
 use llm_gateway::usage::types::{QuotaWindow, UsageData, UsageKind, WindowKind};
 
 /// 订阅制边界供应商 + 名下模型 + 虚拟模型条目（直连本地 mock，无代理）。
@@ -520,6 +522,81 @@ async fn quota_disabled_provider_transitions_to_partial_when_exempt_model_added(
         !item_row(&db, paid_model_id).await.enable,
         "计费模型应保持停用"
     );
+}
+
+/// ADR-0029：标记免费模型后立即用现有用量缓存重跑门控，Provider 当场翻正，
+/// 不必等下一轮 usage_refresh（原窗口期内免费模型实际收不到流量）。
+#[tokio::test]
+async fn regate_after_model_change_flips_quota_disabled_provider_immediately() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (url, _shared) = spawn_probe_mock().await;
+    let (pid, paid_model_id) = seed_boundary_provider(&db, &url).await;
+    let load = async || {
+        provider::Entity::find_by_id(pid)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+
+    // 先按旧口径整家 quota 停用。
+    apply_usage_gate(&db, &load().await, &quota_data(pid, 0.0, 50.0, 100.0))
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await.as_deref(), Some("quota"));
+
+    // 落一份"额度耗尽"的新鲜缓存（模拟保存标记时已存在的用量数据）。
+    write_usage_cache(&db, &quota_data(pid, 0.0, 50.0, 100.0))
+        .await
+        .unwrap();
+
+    // 补登免费模型后立即重跑门控，不调用 apply_usage_gate / 等定时刷新。
+    let free_model_id = add_model(&db, pid, "vm-boundary", "free-model", true).await;
+    regate_after_model_change(&db, pid).await;
+
+    assert!(provider_enabled(&db, pid).await, "应立即翻正，无需等刷新");
+    assert_eq!(disabled_reason(&db, pid).await, None);
+    assert!(!item_row(&db, paid_model_id).await.enable);
+    assert!(item_row(&db, free_model_id).await.enable);
+}
+
+/// 边界区被探活停用的 Provider（窗口剩 0.5%，常规门控把裁决权留给探活）标记
+/// 免费模型后也立即切到模型级门控；否则 `traffic_available` 仍会挡住免费模型。
+#[tokio::test]
+async fn regate_after_model_change_flips_boundary_quota_disabled_provider() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (url, _shared) = spawn_probe_mock().await;
+    let (pid, paid_model_id) = seed_boundary_provider(&db, &url).await;
+    // 边界区数据：窗口未耗尽但落在 (0,1)，apply_usage_gate 不会翻正。
+    write_usage_cache(&db, &quota_data(pid, 0.5, 50.0, 100.0))
+        .await
+        .unwrap();
+    // 模拟边界探活失败后的整家 quota 停用。
+    llm_gateway::availability::disable_for_quota(&db, pid, "边界供应商", "订阅额度")
+        .await
+        .unwrap();
+    assert!(!provider_enabled(&db, pid).await);
+
+    let free_model_id = add_model(&db, pid, "vm-boundary", "free-model", true).await;
+    regate_after_model_change(&db, pid).await;
+
+    assert!(provider_enabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await, None);
+    assert!(!item_row(&db, paid_model_id).await.enable);
+    assert!(item_row(&db, free_model_id).await.enable);
+}
+
+/// 无用量缓存时重跑门控是空操作：不报错、不改状态，由下一轮刷新兜底。
+#[tokio::test]
+async fn regate_after_model_change_without_cache_is_noop() {
+    let (db, _scheduler, _log_tx) = common::setup_db_and_scheduler().await;
+    let (url, _shared) = spawn_probe_mock().await;
+    let (pid, _model_id) = seed_boundary_provider(&db, &url).await;
+    // 未写用量缓存。
+    regate_after_model_change(&db, pid).await;
+    assert!(provider_enabled(&db, pid).await);
+    assert_eq!(disabled_reason(&db, pid).await, None);
 }
 
 /// 边界探活失败 + 存在免费模型：只停计费模型，Provider 与免费模型保持可用。
