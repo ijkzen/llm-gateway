@@ -33,6 +33,14 @@ pub const KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST: &str = "downstream_request_h
 pub const DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST: &str =
     r#"["traceparent","tracestate","x-opencode-session","user-agent"]"#;
 
+/// 设置项 key：识别为 OpenCode 会话 ID 的原生请求头名（JSON 字符串数组）。
+/// 用于把 Claude Code / Codex / OpenCode 等 coding agent 自带的会话标识
+/// 映射为出站 `x-opencode-session`，让同一对话稳定路由到同一上游并复用
+/// prompt cache。命中顺序即优先级。
+pub const KEY_OPENCODE_SESSION_HEADER_NAMES: &str = "opencode_session_header_names";
+/// 原生会话头名的种子默认值：主流 coding agent 已观察到的头名。
+pub const DEFAULT_OPENCODE_SESSION_HEADER_NAMES: &str = r#"["x-claude-code-session-id","session-id","session_id","x-session-id","x-session-affinity","n-session"]"#;
+
 /// 种子的默认时区：与生产容器 `TZ=Asia/Shanghai` 语义一致。
 /// 引导页初始化后会用浏览器时区覆盖该值。
 pub const DEFAULT_TIMEZONE: &str = "Asia/Shanghai";
@@ -61,6 +69,8 @@ struct AppSettingsInner {
     max_consecutive_failures: u32,
     /// `/v1` 下游请求头透传 allowlist。
     downstream_header_allow_list: Vec<HeaderName>,
+    /// 识别为 OpenCode 会话 ID 的原生请求头名（按优先级）。
+    opencode_session_header_names: Vec<HeaderName>,
 }
 
 /// 语言/时区设置的可克隆句柄。内部用 `RwLock` 支持运行时热更新
@@ -79,6 +89,10 @@ impl Default for AppSettings {
                 max_consecutive_failures: DEFAULT_MAX_CONSECUTIVE_FAILURES,
                 downstream_header_allow_list: parse_header_allow_list(
                     DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST,
+                )
+                .unwrap_or_default(),
+                opencode_session_header_names: parse_header_allow_list(
+                    DEFAULT_OPENCODE_SESSION_HEADER_NAMES,
                 )
                 .unwrap_or_default(),
             })),
@@ -117,6 +131,8 @@ impl AppSettings {
         let mut downstream_header_allow_list =
             parse_header_allow_list(DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST)
                 .unwrap_or_default();
+        let mut opencode_session_header_names =
+            parse_header_allow_list(DEFAULT_OPENCODE_SESSION_HEADER_NAMES).unwrap_or_default();
 
         for model in setting::Entity::find().all(db).await? {
             match model.key.as_str() {
@@ -140,6 +156,11 @@ impl AppSettings {
                         downstream_header_allow_list = list;
                     }
                 }
+                KEY_OPENCODE_SESSION_HEADER_NAMES => {
+                    if let Some(list) = parse_header_allow_list(&model.value) {
+                        opencode_session_header_names = list;
+                    }
+                }
                 _ => {}
             }
         }
@@ -153,6 +174,7 @@ impl AppSettings {
                 timezone,
                 max_consecutive_failures,
                 downstream_header_allow_list,
+                opencode_session_header_names,
             })),
         };
         Ok(settings)
@@ -179,6 +201,11 @@ impl AppSettings {
             (
                 KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST,
                 DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST.to_string(),
+                SettingType::Json,
+            ),
+            (
+                KEY_OPENCODE_SESSION_HEADER_NAMES,
+                DEFAULT_OPENCODE_SESSION_HEADER_NAMES.to_string(),
                 SettingType::Json,
             ),
         ] {
@@ -221,6 +248,15 @@ impl AppSettings {
         self.inner.read().await.downstream_header_allow_list.clone()
     }
 
+    /// 当前识别为 OpenCode 会话 ID 的原生请求头名（按优先级）。
+    pub async fn opencode_session_header_names(&self) -> Vec<HeaderName> {
+        self.inner
+            .read()
+            .await
+            .opencode_session_header_names
+            .clone()
+    }
+
     /// 删除设置键后恢复该键的默认值（由 `DELETE /api/settings/{key}` 调用，11-09）。
     /// 设置表已无该行，若缓存仍持旧值会与界面/重启后的种子默认值不一致。
     pub async fn reset_key(&self, key: &str) {
@@ -232,6 +268,11 @@ impl AppSettings {
             KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST => {
                 self.inner.write().await.downstream_header_allow_list =
                     parse_header_allow_list(DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST)
+                        .unwrap_or_default();
+            }
+            KEY_OPENCODE_SESSION_HEADER_NAMES => {
+                self.inner.write().await.opencode_session_header_names =
+                    parse_header_allow_list(DEFAULT_OPENCODE_SESSION_HEADER_NAMES)
                         .unwrap_or_default();
             }
             // language/timezone 是受保护键（删除被上层拒绝），其余键不参与缓存。
@@ -264,6 +305,11 @@ impl AppSettings {
             KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST => {
                 if let Some(list) = parse_header_allow_list(value) {
                     inner.downstream_header_allow_list = list;
+                }
+            }
+            KEY_OPENCODE_SESSION_HEADER_NAMES => {
+                if let Some(list) = parse_header_allow_list(value) {
+                    inner.opencode_session_header_names = list;
                 }
             }
             _ => {}
@@ -320,5 +366,22 @@ mod tests {
     fn default_allowlist_value_parses_to_four_entries() {
         let list = parse_header_allow_list(DEFAULT_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST).unwrap();
         assert_eq!(list.len(), 4);
+    }
+
+    #[test]
+    fn default_opencode_session_header_names_parse_in_priority_order() {
+        let list = parse_header_allow_list(DEFAULT_OPENCODE_SESSION_HEADER_NAMES).unwrap();
+        let names: Vec<&str> = list.iter().map(|n| n.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "x-claude-code-session-id",
+                "session-id",
+                "session_id",
+                "x-session-id",
+                "x-session-affinity",
+                "n-session",
+            ]
+        );
     }
 }
