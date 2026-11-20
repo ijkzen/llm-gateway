@@ -415,3 +415,63 @@ async fn test_update_allowlist_accepts_valid_array_and_persists() {
         r#"["user-agent", "traceparent"]"#
     );
 }
+
+// ── opencode_session_header_names（Json 类型 + 头名校验）──
+
+async fn setup_app_with_session_header_names_setting() -> (axum::Router, sea_orm::DatabaseConnection)
+{
+    let (db, scheduler, log_tx) = common::setup_db_and_scheduler().await;
+    insert_setting(
+        &db,
+        llm_gateway::app_settings::KEY_OPENCODE_SESSION_HEADER_NAMES,
+        llm_gateway::app_settings::DEFAULT_OPENCODE_SESSION_HEADER_NAMES,
+        4,
+    )
+    .await;
+    scheduler.start().await.unwrap();
+    let app = common::build_authed_app(db.clone(), scheduler, log_tx).await;
+    (app, db)
+}
+
+async fn session_header_names_value(db: &sea_orm::DatabaseConnection) -> String {
+    setting::Entity::find_by_id(llm_gateway::app_settings::KEY_OPENCODE_SESSION_HEADER_NAMES)
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap()
+        .value
+}
+
+#[tokio::test]
+async fn test_update_session_header_names_rejects_blacklisted_header() {
+    let (app, db) = setup_app_with_session_header_names_setting().await;
+
+    let response = put_setting(
+        app,
+        "opencode_session_header_names",
+        r#"[\"x-zcode-session\", \"authorization\"]"#,
+    )
+    .await;
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        session_header_names_value(&db).await,
+        llm_gateway::app_settings::DEFAULT_OPENCODE_SESSION_HEADER_NAMES
+    );
+}
+
+#[tokio::test]
+async fn test_update_session_header_names_accepts_custom_names() {
+    let (app, db) = setup_app_with_session_header_names_setting().await;
+
+    let response = put_setting(
+        app,
+        "opencode_session_header_names",
+        r#"[\"x-zcode-session\", \"x-session-id\"]"#,
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        session_header_names_value(&db).await,
+        r#"["x-zcode-session", "x-session-id"]"#
+    );
+}

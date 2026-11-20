@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_settings::{
     KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST, KEY_LANGUAGE, KEY_MAX_CONSECUTIVE_FAILURES,
-    KEY_TIMEZONE,
+    KEY_OPENCODE_SESSION_HEADER_NAMES, KEY_TIMEZONE,
 };
 use crate::entity::setting;
 use crate::i18n::Lang;
@@ -125,24 +125,23 @@ pub(crate) fn validate_setting_value(
             )
             .to_string());
     }
-    if key == KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST {
-        return validate_header_allow_list(value, lang);
+    if key == KEY_DOWNSTREAM_REQUEST_HEADER_ALLOW_LIST || key == KEY_OPENCODE_SESSION_HEADER_NAMES {
+        return validate_header_name_list(value, lang, key);
     }
     Ok(())
 }
 
-/// 透传 allowlist 附加校验：必须是 JSON 字符串数组，每个条目为合法 HTTP
-/// 头名，且不得命中剥离清单（黑名单头绝不入站，读侧还会再兜底过滤）。
-fn validate_header_allow_list(value: &str, lang: Lang) -> Result<(), String> {
+/// 头名数组附加校验：必须是 JSON 字符串数组，每个条目为合法 HTTP 头名，
+/// 且不得命中剥离清单（黑名单头绝不入站，读侧还会再兜底过滤）。
+/// 供透传 allowlist 与 OpenCode 原生会话头名列表共用。
+fn validate_header_name_list(value: &str, lang: Lang, key: &str) -> Result<(), String> {
     let entries: Vec<String> = match serde_json::from_str(value.trim()) {
         Ok(entries) => entries,
         Err(_) => {
-            return Err(lang
-                .tr(
-                    "downstream_request_header_allow_list 必须是 JSON 字符串数组",
-                    "downstream_request_header_allow_list must be a JSON array of strings",
-                )
-                .to_string());
+            return Err(format!(
+                "{key} {}",
+                lang.tr("必须是 JSON 字符串数组", "must be a JSON array of strings")
+            ));
         }
     };
     for entry in entries {

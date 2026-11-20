@@ -468,6 +468,223 @@ fn non_opencode_member_does_not_inject_session_fallback() {
     );
 }
 
+// ─── 会话身份分层解析单测 ───
+
+/// 与设置项 `opencode_session_header_names` 的种子默认值同构的测试名单。
+fn session_header_names() -> Vec<HeaderName> {
+    let entries: Vec<String> =
+        serde_json::from_str(crate::app_settings::DEFAULT_OPENCODE_SESSION_HEADER_NAMES).unwrap();
+    entries
+        .iter()
+        .map(|n| HeaderName::from_bytes(n.as_bytes()).unwrap())
+        .collect()
+}
+
+fn chat_with_first_message(content: serde_json::Value) -> Value {
+    json!({
+        "model": "m",
+        "messages": [
+            {"role": "system", "content": "you are helpful"},
+            {"role": "user", "content": content}
+        ]
+    })
+}
+
+#[test]
+fn resolve_session_prefers_explicit_client_header() {
+    let headers = header_map(&[
+        ("X-OpenCode-Session", "from-client"),
+        ("X-Claude-Code-Session-Id", "native-claude"),
+    ]);
+    let body = chat_with_first_message(json!("hello"));
+    let body_with_session = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hello"}],
+        "session_id": "from-body"
+    });
+    assert_eq!(
+        resolve_opencode_session(&headers, &body, "key", &session_header_names()),
+        "from-client"
+    );
+    assert_eq!(
+        resolve_opencode_session(&headers, &body_with_session, "key", &session_header_names()),
+        "from-client"
+    );
+}
+
+#[test]
+fn resolve_session_native_headers_follow_setting_priority_and_ignore_case() {
+    let names = session_header_names();
+    // 头名大小写不敏感（HeaderMap::get 语义）；命中顺序由设置项数组顺序决定。
+    let headers = header_map(&[
+        ("X-Claude-Code-Session-Id", "claude-sess"),
+        ("session-id", "codex-sess"),
+        ("X-Session-Id", "pi-sess"),
+    ]);
+    let body = chat_with_first_message(json!("hello"));
+    assert_eq!(
+        resolve_opencode_session(&headers, &body, "key", &names),
+        "claude-sess"
+    );
+
+    let headers = header_map(&[("SESSION_ID", "codex-compat"), ("n-session", "pi-n")]);
+    assert_eq!(
+        resolve_opencode_session(&headers, &body, "key", &names),
+        "codex-compat"
+    );
+
+    // 自定义名单可识别未内置头名（如 ZCode 的未来头）。
+    let custom = allowlist(&["x-zcode-session"]);
+    let headers = header_map(&[("x-zcode-session", "zcode-sess")]);
+    assert_eq!(
+        resolve_opencode_session(&headers, &body, "key", &custom),
+        "zcode-sess"
+    );
+}
+
+#[test]
+fn resolve_session_reads_body_session_fields() {
+    let names = session_header_names();
+    let empty_headers = HeaderMap::new();
+
+    // Claude Code：metadata.user_id 为 JSON 字符串，取其中的 session_id。
+    let body = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"user_id": r#"{"session_id":"claude-json","account_uuid":"a"}"#}
+    });
+    assert_eq!(
+        resolve_opencode_session(&empty_headers, &body, "key", &names),
+        "claude-json"
+    );
+
+    // 原生透传：metadata.user_id 直接是对象。
+    let body = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"user_id": {"session_id": "claude-object"}}
+    });
+    assert_eq!(
+        resolve_opencode_session(&empty_headers, &body, "key", &names),
+        "claude-object"
+    );
+
+    // 旧版整串形态与 Codex 的 prompt_cache_key / session_id。
+    let body = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"user_id": "legacy_session_abc"}
+    });
+    assert_eq!(
+        resolve_opencode_session(&empty_headers, &body, "key", &names),
+        "legacy_session_abc"
+    );
+
+    let body = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hello"}],
+        "prompt_cache_key": "codex-pck",
+        "session_id": "codex-body"
+    });
+    assert_eq!(
+        resolve_opencode_session(&empty_headers, &body, "key", &names),
+        "codex-pck"
+    );
+}
+
+#[test]
+fn resolve_session_falls_back_to_content_fingerprint() {
+    let names = session_header_names();
+    let empty_headers = HeaderMap::new();
+    let body = chat_with_first_message(json!("同样的问题"));
+    let first = resolve_opencode_session(&empty_headers, &body, "key", &names);
+    assert!(first.starts_with("auto-"), "{first}");
+    assert_eq!(
+        first,
+        resolve_opencode_session(&empty_headers, &body, "key", &names),
+        "同一首条消息应稳定"
+    );
+    let other = chat_with_first_message(json!("另一个问题"));
+    assert_ne!(
+        first,
+        resolve_opencode_session(&empty_headers, &other, "key", &names)
+    );
+    assert_ne!(
+        first,
+        resolve_opencode_session(&empty_headers, &body, "other-key", &names)
+    );
+
+    // content part 数组取 text；空文本跳过到下一个 user message。
+    let parts = chat_with_first_message(json!([
+        {"type": "text", "text": "带附件的提问"},
+        {"type": "image_url", "image_url": {"url": "x"}}
+    ]));
+    assert!(resolve_opencode_session(&empty_headers, &parts, "key", &names).starts_with("auto-"));
+    let empty_then = json!({
+        "model": "m",
+        "messages": [
+            {"role": "user", "content": ""},
+            {"role": "user", "content": "第二条"}
+        ]
+    });
+    assert!(
+        resolve_opencode_session(&empty_headers, &empty_then, "key", &names).starts_with("auto-")
+    );
+}
+
+#[test]
+fn resolve_session_falls_back_to_per_key_day_without_any_signal() {
+    let names = session_header_names();
+    let empty_headers = HeaderMap::new();
+    let body = json!({"model": "m", "messages": []});
+    assert_eq!(
+        resolve_opencode_session(&empty_headers, &body, "key", &names),
+        opencode_session_fallback("key")
+    );
+}
+
+#[test]
+fn resolve_session_skips_invalid_candidate_values() {
+    let names = session_header_names();
+    let empty_headers = HeaderMap::new();
+    // 空白与含 CRLF 的脏值被跳过，落到内容指纹而不是被注入层静默丢弃。
+    let body = json!({
+        "model": "m",
+        "messages": [{"role": "user", "content": "hello"}],
+        "session_id": "bad\r\nvalue",
+        "prompt_cache_key": "   "
+    });
+    let resolved = resolve_opencode_session(&empty_headers, &body, "key", &names);
+    assert!(resolved.starts_with("auto-"), "{resolved}");
+}
+
+#[test]
+fn resolved_native_session_is_injected_into_opencode_upstream_call() {
+    // 组合验证「入口解析 → 出站注入」整段：原生会话头经解析后作为会话值，
+    // 由 assemble_outbound_headers 注入 opencode.ai 上游。
+    let headers = header_map(&[("X-Claude-Code-Session-Id", "claude-conversation-1")]);
+    let body = chat_with_first_message(json!("hello"));
+    let session = resolve_opencode_session(&headers, &body, "key", &session_header_names());
+    assert_eq!(session, "claude-conversation-1");
+
+    let m = member_with_base_url(
+        Protocol::OpenAiCompat,
+        "{}",
+        "https://opencode.ai/zen/go/v1",
+    );
+    let (call, _) = build_call_sync(&m, &body, &[], &session);
+    let map: std::collections::HashMap<&str, &str> = call
+        .headers
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.to_str().unwrap()))
+        .collect();
+    assert_eq!(
+        map.get("x-opencode-session").copied(),
+        Some("claude-conversation-1")
+    );
+    assert!(!has_duplicate_names(&call));
+}
+
 #[test]
 fn template_default_user_agent_fills_opencode_and_kimi_hosts() {
     let chat = json!({"model":"m","messages":[{"role":"user","content":"hi"}]});

@@ -80,6 +80,132 @@ pub(crate) fn opencode_session_fallback(api_key_name: &str) -> String {
     opencode_session_for_day(api_key_name, &day)
 }
 
+/// 候选会话值的统一校验：trim、非空、且可作为 HTTP 头值（拒绝 CRLF 与
+/// 非 ASCII，避免脏值进入出站头或被注入层静默丢弃）。
+fn clean_session_value(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    HeaderValue::from_str(trimmed).ok()?;
+    Some(trimmed)
+}
+
+/// body 中的会话字段：
+/// `metadata.user_id`（JSON 对象的 `session_id`，或整串本身）→
+/// `prompt_cache_key`（Codex）→ `session_id`。
+fn body_session_value(body: &Value) -> Option<String> {
+    if let Some(user) = body.pointer("/metadata/user_id") {
+        // Claude Code 的 `metadata.user_id` 可能是 JSON 字符串（内含 session_id），
+        // 也可能是对象（原生透传场景）；旧版为 `..._session_<uuid>` 整串。
+        let json = match user {
+            Value::String(s) => serde_json::from_str::<Value>(s.trim()).ok(),
+            Value::Object(_) => Some(user.clone()),
+            _ => None,
+        };
+        if let Some(sid) = json
+            .as_ref()
+            .and_then(|v| v.get("session_id"))
+            .and_then(Value::as_str)
+            && let Some(clean) = clean_session_value(sid)
+        {
+            return Some(clean.to_string());
+        }
+        if let Value::String(s) = user
+            && let Some(clean) = clean_session_value(s)
+        {
+            return Some(clean.to_string());
+        }
+    }
+    for pointer in ["/prompt_cache_key", "/session_id"] {
+        if let Some(value) = body.pointer(pointer).and_then(Value::as_str)
+            && let Some(clean) = clean_session_value(value)
+        {
+            return Some(clean.to_string());
+        }
+    }
+    None
+}
+
+/// 取首条 user message 的文本（string 或 content part 数组），作为无显式
+/// 会话信号时的内容指纹输入。空内容跳过，截断到 4096 字节避免长首消息
+/// 抬高派生成本。
+fn first_user_message_text(body: &Value) -> Option<String> {
+    let messages = body.get("messages")?.as_array()?;
+    for message in messages {
+        if message.get("role").and_then(Value::as_str) != Some("user") {
+            continue;
+        }
+        let text = match message.get("content") {
+            Some(Value::String(s)) => s.clone(),
+            Some(Value::Array(parts)) => parts
+                .iter()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join(" "),
+            _ => String::new(),
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let mut end = text.len().min(4096);
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        return Some(text[..end].to_string());
+    }
+    None
+}
+
+/// 内容指纹：按 API Key + 首条用户消息派生稳定 ID（`auto-` 前缀）。
+/// 同一会话首条消息不变即稳定，不同首条消息则区分，优于按 Key/日把全部
+/// 对话折叠成一个会话。
+fn content_session_fingerprint(api_key_name: &str, body: &Value) -> Option<String> {
+    let text = first_user_message_text(body)?;
+    let id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("llm-gateway/opencode-session/auto/{api_key_name}/{text}").as_bytes(),
+    );
+    Some(format!("auto-{id}"))
+}
+
+/// 解析本请求的 OpenCode 会话 ID，按优先级取第一个有效值：
+/// 客户端显式 `x-opencode-session` → 原生会话头 → body 会话字段 →
+/// 首条用户消息内容指纹 → 按 API Key/日的稳定 UUID 回退。
+///
+/// 返回的字符串在入口计算一次并贯穿整个 failover；实际注入仍受
+/// `assemble_outbound_headers` 的门禁约束——仅 `opencode.ai` 上游且出站表
+/// 无同名头（下游透传 / 用户 custom_header 优先）时才写入。
+pub fn resolve_opencode_session(
+    downstream: &HeaderMap,
+    body: &Value,
+    api_key_name: &str,
+    native_header_names: &[HeaderName],
+) -> String {
+    if let Some(value) = downstream
+        .get(OPENCODE_SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+        && let Some(clean) = clean_session_value(value)
+    {
+        return clean.to_string();
+    }
+    for name in native_header_names {
+        if let Some(value) = downstream.get(name).and_then(|v| v.to_str().ok())
+            && let Some(clean) = clean_session_value(value)
+        {
+            return clean.to_string();
+        }
+    }
+    if let Some(value) = body_session_value(body) {
+        return value;
+    }
+    if let Some(value) = content_session_fingerprint(api_key_name, body) {
+        return value;
+    }
+    opencode_session_fallback(api_key_name)
+}
+
 /// 判定 header 名是否落在剥离/禁止清单。
 pub fn is_never_outbound(name: &HeaderName) -> bool {
     NEVER_OUTBOUND

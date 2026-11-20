@@ -34,7 +34,10 @@ mod route;
 
 pub use dispatch::accumulate_chunks;
 pub use forward::{forward_chat, forward_chat_direct};
-pub use headers::{is_never_outbound, select_forwardable_headers, select_passthrough_headers};
+pub use headers::{
+    is_never_outbound, resolve_opencode_session, select_forwardable_headers,
+    select_passthrough_headers,
+};
 pub use lb::{LbState, Protocol};
 pub use native::{NativeEndpoint, forward_native};
 pub use probe::{ProbeFailure, probe_provider, test_model};

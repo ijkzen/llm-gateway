@@ -17,7 +17,7 @@
 3. provider `custom_header`
 4. 模板默认头：`provider_template::template_default_headers` 按 base_url host 查漏补缺——`opencode.ai` 兜底 pi 同款动态 UA、`api.kimi.com` 兜底 `KimiCLI/1.50.0`；模板匹配接口同步返回供前端预填
 
-另对 `opencode.ai` 上游注入 `x-opencode-session` 会话头（OpenCode Go 会话亲和）：缺失时按 API Key + 本地日期（设置表时区，缺省 Asia/Shanghai）派生当日稳定 UUID 回退，当日内恒定、跨日零点轮换。
+另对 `opencode.ai` 上游注入 `x-opencode-session` 会话头（OpenCode Go 会话亲和，ADR-0030）。值在请求入口按原始下游头 + body 分层解析一次并贯穿 failover，优先级：客户端显式 `x-opencode-session` → 原生会话头（设置项 `opencode_session_header_names`，默认 `x-claude-code-session-id`/`session-id`/`session_id`/`x-session-id`/`x-session-affinity`/`n-session`）→ body 字段（`metadata.user_id` 内的 `session_id`/整串、`prompt_cache_key`、`session_id`）→ 首条用户消息内容指纹（`auto-` 前缀 UUIDv5）→ 按 API Key + 本地日期（设置表时区，缺省 Asia/Shanghai）派生当日稳定 UUID 回退。所有候选值需通过 HTTP 头值校验。实际注入仍仅发生在 `opencode.ai` 上游且出站表无同名头时（下游透传 / 用户 custom_header 优先）。
 
 ## 思考块无损透传（ADR-0006）
 

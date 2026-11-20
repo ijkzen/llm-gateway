@@ -38,7 +38,12 @@ async fn chat_completions(
     // failover 出站共用同一快照。
     let allowlist = state.settings.downstream_header_allow_list().await;
     let forwarded = proxy::select_forwardable_headers(&headers, &allowlist);
-    proxy::forward_chat(&state, api_key, body, forwarded).await
+    // 会话身份在入口按原始头 + body 解析一次（含客户端原生会话头与内容
+    // 指纹），结果贯穿 failover；出站仅对 opencode.ai 上游注入。
+    let session_names = state.settings.opencode_session_header_names().await;
+    let opencode_session =
+        proxy::resolve_opencode_session(&headers, &body, &api_key.name, &session_names);
+    proxy::forward_chat(&state, api_key, body, forwarded, opencode_session).await
 }
 
 /// POST /v1/messages：Anthropic Messages 原生透传（仅 Messages 类型虚拟模型；

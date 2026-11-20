@@ -70,7 +70,6 @@ pub async fn forward_native(
     body_bytes: Bytes,
 ) -> Response {
     let request_id = Uuid::new_v4().to_string();
-    let opencode_session = opencode_session_fallback(&api_key.name);
     let body: Value = match serde_json::from_slice::<Value>(&body_bytes) {
         Ok(value) if value.is_object() => value,
         _ => {
@@ -81,6 +80,11 @@ pub async fn forward_native(
             );
         }
     };
+    // 会话 ID 按原始下游头 + 已解析 body 解析一次（与 chat 入口同口径），
+    // 结果贯穿 failover。原生端点全量透传头，原生会话头也能被识别。
+    let session_names = state.settings.opencode_session_header_names().await;
+    let opencode_session =
+        resolve_opencode_session(downstream_headers, &body, &api_key.name, &session_names);
     let requested_model = body
         .get("model")
         .and_then(Value::as_str)

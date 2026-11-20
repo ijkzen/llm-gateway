@@ -5,10 +5,11 @@ pub async fn forward_chat(
     api_key: AuthedApiKey,
     client_body: Value,
     forwarded: Vec<(HeaderName, HeaderValue)>,
+    opencode_session: String,
 ) -> Response {
     let request_id = Uuid::new_v4().to_string();
-    // OpenCode Go 会话亲和：客户端自带值经 allowlist 透传，缺失时用回退值。
-    let opencode_session = opencode_session_fallback(&api_key.name);
+    // 会话 ID 由入口（routes/openai_compat.rs）按原始头 + body 解析后传入，
+    // 贯穿整个 failover；原生透传入口同理，见 native.rs。
     let requested_model = client_body
         .get("model")
         .and_then(Value::as_str)
